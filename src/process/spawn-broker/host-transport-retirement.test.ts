@@ -166,6 +166,19 @@ it.each([true, false])(
   },
 );
 
+it("reports disconnected native authority before the IPC event is delivered", async () => {
+  const fixture = brokerFixture();
+  await fixture.ready();
+  expect(fixture.host.nativeResourceAdmissionClosed).toBe(false);
+  // Bun exposes the native disconnect before delivering its JavaScript callback.
+  Object.defineProperty(fixture.worker, "connected", { value: false });
+  try {
+    expect(fixture.host.nativeResourceAdmissionClosed).toBe(true);
+  } finally {
+    fixture.worker.emit("disconnect");
+  }
+});
+
 it.each(["before", "after disconnect"] as const)(
   "classifies a nonzero broker exit %s close while waiting for late stderr",
   async (exitTiming) => {

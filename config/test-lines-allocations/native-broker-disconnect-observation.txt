@@ -1,0 +1,2 @@
+13
+# Reproduce native disconnect visibility before callback delivery without adding a real timer.

@@ -140,7 +140,8 @@ export class SpawnBrokerHost {
     return this.resourceClaims?.hasOpenClaims ?? false;
   }
   get nativeResourceAdmissionClosed(): boolean {
-    return this.resourceClaims?.admissionClosed ?? false;
+    // Native IPC state can change before Bun delivers the disconnect callback.
+    return (this.resourceClaims?.admissionClosed ?? false) || this.process?.connected === false;
   }
   ready(): Promise<void> {
     return this.closing
