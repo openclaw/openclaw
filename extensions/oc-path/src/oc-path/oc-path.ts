@@ -462,6 +462,9 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
     case "<=":
     case ">":
     case ">=": {
+      if (actual.trim() === "" || pred.value.trim() === "") {
+        return false;
+      }
       const a = Number(actual);
       const b = Number(pred.value);
       if (!Number.isFinite(a) || !Number.isFinite(b)) {
