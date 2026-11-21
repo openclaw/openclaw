@@ -175,6 +175,24 @@ describe("sweepCronRunSessions", () => {
     expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
   });
 
+  it("wakes retention for a committed base row that never had a run key", async () => {
+    await writeEntry("agent:main:main", { sessionId: "interactive", updatedAt: now });
+    // An inventory-aware sweep with no cron rows records an infinite deadline.
+    await expectSweep(now, 0, true, { knownJobIds: new Set(["stored-job"]) });
+    await expectSweep(now + 5 * 60_000, 0, false, { knownJobIds: new Set(["stored-job"]) });
+    // A hook persists its base row and fails before its :run: row exists; the
+    // base insertion alone must invalidate the idle deadline so retention can
+    // prune it after expiry instead of leaving it until a restart.
+    const baseKey = "agent:main:cron:hook-base-only";
+    await writeEntry(baseKey, {
+      sessionId: "base-only",
+      updatedAt: now - 25 * 3_600_000,
+      delivery: { kind: "none" },
+    });
+    await expectSweep(now + 10 * 60_000, 1, true, { knownJobIds: new Set(["stored-job"]) });
+    expect(readSessionEntries(storePath)[baseKey]).toBeUndefined();
+  });
+
   it("waits for the next cron run expiry and observes an earlier committed timestamp", async () => {
     const sessionKey = "agent:main:cron:job:run:rescheduled";
     await writeEntry(sessionKey, { sessionId: "rescheduled", updatedAt: now });

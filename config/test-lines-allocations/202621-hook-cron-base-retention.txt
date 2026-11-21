@@ -1,2 +1,2 @@
-# Exact net regression-test lines for #202621: cron reaper prunes expired jobless hook base sessions (red/green regression for the webhook base-session leak) plus review-repair coverage: canonical inventory identity, durable-quarantine preservation, quarantine-read failure ordering, and inventory-recovery sweep deadlines.
-118
+# Exact net regression-test lines for #202621: cron reaper prunes expired jobless hook base sessions (red/green regression for the webhook base-session leak) plus review-repair coverage: canonical inventory identity, durable-quarantine preservation, quarantine-read failure ordering, inventory-recovery sweep deadlines, and base-key commit wake-ups.
+137

@@ -62,7 +62,14 @@ function ensureReaperSubscription(): void {
     if (!sessionChangeScopeAffectsStoredRows(change)) {
       return;
     }
-    if (!("all" in change) && !isCronRunSessionKey(change.sessionKey)) {
+    // Base-key commits also invalidate deadlines: a hook that persists its base
+    // row and then fails before its :run: row exists would otherwise never wake
+    // retention, and the base would outlive its retention deadline unpruned.
+    if (
+      !("all" in change) &&
+      !isCronRunSessionKey(change.sessionKey) &&
+      parseCronBaseSessionJobId(change.sessionKey) === undefined
+    ) {
       return;
     }
     const agentId = "all" in change ? undefined : parseAgentSessionKey(change.sessionKey)?.agentId;
