@@ -35,6 +35,8 @@ export type AppSidebarProps = {
   activePluginTabId: string;
   enabledRouteIds: readonly NavigationRouteId[] | undefined;
   connected: boolean;
+  /** First-use setup ran on this page; promotions wait for the next open. */
+  firstUse: boolean;
   connectionStatus: GatewayStatus | null;
   gatewayStatus: GatewayStatusProps | null;
   connectionRecovery: boolean;
@@ -79,6 +81,7 @@ export const appSidebarProperties = {
   activePluginTabId: { default: "", attribute: false },
   enabledRouteIds: { default: undefined, attribute: false },
   connected: { default: false, attribute: false },
+  firstUse: { default: false, attribute: false },
   connectionStatus: { default: null, attribute: false },
   gatewayStatus: { default: null, attribute: false },
   connectionRecovery: { default: false, attribute: false },
@@ -127,6 +130,7 @@ export abstract class AppSidebarBase {
   declare activePluginTabId: AppSidebarProps["activePluginTabId"];
   declare enabledRouteIds: AppSidebarProps["enabledRouteIds"];
   declare connected: AppSidebarProps["connected"];
+  declare firstUse: AppSidebarProps["firstUse"];
   declare connectionStatus: AppSidebarProps["connectionStatus"];
   declare gatewayStatus: AppSidebarProps["gatewayStatus"];
   declare connectionRecovery: AppSidebarProps["connectionRecovery"];
