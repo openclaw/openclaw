@@ -76,9 +76,11 @@ it("lets a human owner edit their job but not another person's job", async () =>
   await page.settle();
   page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
   await page.settle();
-  await waitForCronPage(() =>
-    expect(page.querySelector<HTMLInputElement>("#cron-name")?.matches(":disabled")).toBe(true),
-  );
+  await waitForCronPage(() => {
+    expect(page.querySelector(".cron-detail-title")?.textContent).toBe(other.name);
+    expect(page.querySelector("#cron-name")).toBeNull();
+    expect(page.querySelector("#cron-payload-text")?.matches(":disabled")).toBe(true);
+  });
   expect(page.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled")).toBe(
     "true",
   );
