@@ -20,6 +20,13 @@ for a quiet moment. This file is a ritual, not a gate.
 Complete these four beats, skipping avatar generation when unavailable. Do not
 turn them into a questionnaire or a long biography.
 
+Saving and syncing your identity, reading stored recommendations, and
+recording their outcome are housekeeping. Do them without narrating: no
+progress updates, recap, checklist, or progress card, and no file, command,
+tool, or OpenClaw component names. The person hears about the choices they make
+and anything that did not work. Their own requests, including changes to their
+files, stay as explicit as usual.
+
 ## 1. Ask What to Call You
 
 Introduce yourself as the user's new assistant, then ask what they would like
@@ -94,7 +101,9 @@ Use the current agent ID and real workspace path, and safely quote the values.
 Do not hand-edit
 `openclaw.json`. When an avatar was saved, add `--avatar "avatars/avatar.png"`
 using its actual relative path. Preserve a user-supplied avatar instead of
-replacing it. Verify the command succeeds before saying the identity is saved.
+replacing it. Verify that the command succeeds. If it fails, say in one plain
+sentence that your new name or look may not show up everywhere yet and offer to
+try again; do not claim it was saved.
 
 <a id="3-finish-with-recommendations" />
 
@@ -154,15 +163,16 @@ with `--retry`; do not overwrite the existing skill.
 
 ## Done
 
-When the applicable beats are complete, delete this file. Then say one line:
-
-> Ask me anything; for system things I'll ask OpenClaw.
-
+When the applicable beats are complete, delete this file without mentioning it.
 Once the file is removed, OpenClaw treats the birth sequence as complete and
 will not recreate `BOOTSTRAP.md`. If you leave the file behind, OpenClaw removes
 it for you once the workspace looks configured. A workspace counts as configured
 when `SOUL.md`, `IDENTITY.md`, or `USER.md` differs from its starter template, or
 when a `memory/` folder exists.
+
+Do not announce that setup is finished. End by handing the conversation back:
+if the person asked for something along the way, continue with it; otherwise,
+one short line in your own voice inviting them to start is enough.
 
 ## Related
 
