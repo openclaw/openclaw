@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 
 const observer = vi.hoisted(() => ({
@@ -6,11 +7,18 @@ const observer = vi.hoisted(() => ({
   write: vi.fn(),
   connect: vi.fn(),
   post: vi.fn(),
-  message: vi.fn(),
+  message: vi.fn<(sample: unknown) => void>(),
 }));
 vi.mock("node:fs", async (original) => ({
   ...(await original<typeof import("node:fs")>()),
   writeSync: observer.write,
+}));
+vi.mock("node:fs/promises", async (original) => ({
+  ...(await original<typeof import("node:fs/promises")>()),
+  open: async () => ({
+    read: async () => ({ bytesRead: 0 }),
+    close: async () => undefined,
+  }),
 }));
 vi.mock("node:worker_threads", async (original) => ({
   ...(await original<typeof import("node:worker_threads")>()),
@@ -100,6 +108,10 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
     vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     observer.heartbeat.set([1_000n, 0n, 3n]);
     observer.message.mockReset();
+    const stacks = () =>
+      observer.message.mock.calls.filter(
+        ([sample]) => isRecord(sample) && Array.isArray(sample.frames),
+      );
     observer.connect.mockClear();
     observer.post.mockReset();
     let dispatchDelay = 101;
@@ -119,15 +131,18 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
     await vi.advanceTimersByTimeAsync(1);
     expect(observer.connect).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(observer.message).not.toHaveBeenCalled();
+    expect(stacks()).toHaveLength(0);
+    expect(observer.message).toHaveBeenCalledWith(
+      expect.objectContaining({ state: expect.any(String) }),
+    );
     expect(observer.heartbeat[2]).toBe(3n);
     dispatchDelay = 0;
     observer.heartbeat[0] = BigInt(Date.now());
     await vi.advanceTimersByTimeAsync(1_250);
-    expect(observer.message).toHaveBeenCalledTimes(3);
+    expect(stacks()).toHaveLength(3);
     expect(observer.heartbeat[2]).toBe(0n);
     observer.heartbeat[0] = BigInt(Date.now());
     await vi.advanceTimersByTimeAsync(1_250);
-    expect(observer.message).toHaveBeenCalledTimes(3);
+    expect(stacks()).toHaveLength(3);
   },
 );
