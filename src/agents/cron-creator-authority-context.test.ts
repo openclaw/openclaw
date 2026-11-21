@@ -187,7 +187,14 @@ it.each([
       ).toBeUndefined();
       const management = bindCronManagementGrant(runId)!;
       expect(management.managementOnly).toBe(kind === "unknown" && !callerScopedCreation);
-      for (const method of ["cron.list", "cron.get", "cron.update", "cron.run", "cron.remove"]) {
+      for (const method of [
+        "cron.list",
+        "cron.get",
+        "cron.runs",
+        "cron.update",
+        "cron.run",
+        "cron.remove",
+      ]) {
         expect(management.mint(method)).toMatchObject({ runId, token: expect.any(String) });
       }
       const operator = bindActiveOperatorTurnAuthority(runId);
@@ -203,7 +210,7 @@ it.each([
           "Automation creation is not granted",
         );
       }
-      for (const method of ["cron.add", "cron.status", "cron.runs", "wake"]) {
+      for (const method of ["cron.add", "cron.status", "cron.history", "wake"]) {
         if (kind === "local" || callerScopedCreation) {
           expect(management.mint(method)).toBeUndefined();
         } else {
