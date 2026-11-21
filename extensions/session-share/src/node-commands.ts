@@ -91,7 +91,6 @@ function withSharedEntries<T>(
       // Configuration can be edited in place while either worker prepares its facts.
       const current = api.runtime.config.current();
       if (
-        current !== config ||
         JSON.stringify(sourceSelection(api, authority)) !== selectionKey ||
         stores.some(
           ({ agentId, storePath }) =>
@@ -148,7 +147,6 @@ export function createSessionShareNodeCommands(
       const snapshot = await (await read)();
       const current = api.runtime.config.current();
       if (
-        current !== config ||
         JSON.stringify(sourceSelection(api, authority)) !== selectionKey ||
         !listAgentIds(current).includes(agentId) ||
         api.runtime.agent.session.resolveStorePath(current.session?.store, { agentId }) !==

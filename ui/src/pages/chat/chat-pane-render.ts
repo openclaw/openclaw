@@ -340,7 +340,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       disabledReasonBusy: placementComposer.busyMessage !== null,
       disabledBanner:
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
-      ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation),
+      ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation, selectedSession),
     };
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
     const conversationAttention = this.projectConversationAttention(

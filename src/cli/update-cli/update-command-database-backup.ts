@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
@@ -218,15 +217,7 @@ export async function captureUpdateDatabases(params: {
         params.assertCurrent();
         maintenance.assertCurrent();
       }
-      let backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
-      if (execution.updateInstallKind === "git" && !execution.switchToGit) {
-        // Database recovery outlives runtime retirement and stays outside the Git source fence.
-        const artifactRoot = path.join(execution.root, ".artifacts");
-        await fs.mkdir(artifactRoot, { recursive: true });
-        const physicalArtifactRoot = await fs.realpath(artifactRoot);
-        params.assertCurrent();
-        backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
-      }
+      const backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
       backupDirectory = `${backupRoot}.databases`;
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
@@ -249,10 +240,6 @@ export async function captureUpdateDatabases(params: {
         postgresOffline: maintenance !== null && unavailable === undefined,
         postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
       });
-      if (execution.updateInstallKind === "git") {
-        // Git runtime transactions have no package journal; retire these snapshots with them.
-        transaction.databaseBackupRoot = backupRoot;
-      }
       params.assertCurrent();
       maintenance?.assertCurrent();
       return captured;

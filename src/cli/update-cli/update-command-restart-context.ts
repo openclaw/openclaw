@@ -1,3 +1,4 @@
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import {
   readDaemonRuntimePin,
@@ -8,8 +9,12 @@ import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-typ
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatCliCommand } from "../command-format.js";
+import { gatewayMaintenanceBlock } from "./update-command-handoff.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
-import type { UpdateRestartParams } from "./update-command-service-context-types.js";
+import type {
+  UpdateRestartParams,
+  UpdateServiceRestartParams,
+} from "./update-command-service-context-types.js";
 import {
   resolveServiceRefreshEnv,
   stripGatewayServiceMarkerEnv,
@@ -49,6 +54,10 @@ export async function prepareUpdateRestart(
       resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
       resolveGatewayServiceManagementBlockMessageForUpdate(serviceStateReadEnv))
     : undefined;
+  let gitReleaseRestartMode: NonNullable<UpdateServiceRestartParams["gitReleaseRestartMode"]> =
+    restartConfigSnapshot.valid && isRestartEnabled(restartConfigSnapshot.config)
+      ? "signal"
+      : "observe";
   let serviceStartRefused = false;
   let gatewayPort = await resolveUpdatedGatewayRestartPort({
     config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
@@ -69,6 +78,21 @@ export async function prepareUpdateRestart(
         preManagedServiceStop: params.preManagedServiceStop,
         allowInstallRootChange: true,
       });
+      // commands.restart disables the signal, not the terminal's native service command.
+      // Only select that route on a valid config and after checking actual service membership.
+      if (
+        params.result.mode === "git" &&
+        restartConfigSnapshot.valid &&
+        gitReleaseRestartMode === "observe" &&
+        serviceUpdateVerdict.kind === "owned" &&
+        !serviceUpdateVerdict.refreshDefinition &&
+        serviceState.running &&
+        serviceState.runtime?.pid &&
+        process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" &&
+        !gatewayMaintenanceBlock(serviceState, params.result.root ?? params.root)
+      ) {
+        gitReleaseRestartMode = "native";
+      }
       const original = params.originalManagedServiceRuntime;
       if (original && !original.definition.runtimePin) {
         // Doctor may have completed the legacy handoff since pre-update capture.
@@ -169,6 +193,7 @@ export async function prepareUpdateRestart(
     );
   }
   return {
+    gitReleaseRestartMode,
     refreshGatewayServiceEnv,
     gatewayServiceEnv,
     gatewayServiceInstallEnv,
