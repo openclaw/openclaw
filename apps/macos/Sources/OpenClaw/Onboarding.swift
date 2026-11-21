@@ -888,6 +888,12 @@ struct OnboardingView: View {
     struct LocalGatewayProbe: Equatable {
         let subtitle: String
 
+        /// A probe that could not read the port. It must not promise an automatic
+        /// install, because startup refuses to run while the port is unreadable.
+        init(unreadablePort port: Int) {
+            self.subtitle = "Could not check whether port \(port) is free. Startup waits until it can."
+        }
+
         init(
             port: Int,
             pid: Int32,

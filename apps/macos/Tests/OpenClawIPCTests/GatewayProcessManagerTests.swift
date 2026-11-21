@@ -2315,6 +2315,22 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `defers persistence when port inspection is inconclusive`() async throws {
+        let port = 19111
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
+        {
+            await PortGuardian.shared.setTestingInconclusive(true, forPort: port)
+
+            _ = await self.manager.enableLaunchAgentIfNeeded(port: port).error
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.filter { $0.first == "status" }.count == 1)
+            #expect(calls.filter { $0.first == "install" }.isEmpty)
+            await PortGuardian.shared.setTestingInconclusive(false, forPort: port)
+        }
+    }
+
     @Test func `does not force install when launchd starts during ownership inspection`() async throws {
         let port = 19102
         let statuses = [
@@ -3845,6 +3861,43 @@ struct GatewayProcessManagerTests {
             #expect(!reason.contains("rejected auth"))
             #expect(!reason.contains("gateway.auth.token"))
         }
+    }
+
+    @Test func `unreadable port attach failure stops an app hosted start`() async throws {
+        let port = try self.availableGatewayPort()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            // A deadline, not a refusal: the probe never reaches the Gateway.
+            GatewayTestWebSocketTask(receiveHook: { _, _ in throw URLError(.cannotConnectToHost) })
+        }
+        manager.desiredActive = true
+        defer {
+            manager.desiredActive = false
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+        }
+        try await self.withLaunchAgentEnvironment(port: port) {
+            try #require(GatewayEnvironment.gatewayPort() == port)
+            // The last observed endpoint PID makes the start generation current for this attach.
+            manager._testSetLastObservedGatewayPID(4242)
+            defer { manager._testSetLastObservedGatewayPID(nil) }
+            await PortGuardian.shared.setTestingInconclusive(true, forPort: port)
+            defer { Task { await PortGuardian.shared.setTestingInconclusive(false, forPort: port) } }
+
+            // The child-start owner must not read a published failure as permission to start.
+            let started = await manager._testAttachExistingGatewayIfAvailable(port: port)
+
+            #expect(started)
+            #expect(!manager.childSupervisor.isActive)
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("an unreadable attach must publish its health failure")
+                return
+            }
+            #expect(reason.contains("Could not inspect port \(port)"))
+            // A published failure is not a retained repair candidate.
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+        }
+        await connection.shutdown()
     }
 
     @Test func `attaches to existing gateway without spawning launchd`() async throws {

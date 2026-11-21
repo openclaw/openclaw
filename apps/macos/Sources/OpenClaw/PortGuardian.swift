@@ -16,10 +16,23 @@ actor PortGuardian {
         let timestamp: TimeInterval
     }
 
-    struct Descriptor {
+    struct Descriptor: Sendable {
         let pid: Int32
         let command: String
         let executablePath: String?
+    }
+
+    /// Three-state port lookup. `unknown` means the probe could not decide, so
+    /// callers must treat the port as possibly occupied instead of free.
+    enum PortInspection: Sendable {
+        case free
+        case owned(Descriptor)
+        case unknown
+
+        var ownedDescriptor: Descriptor? {
+            if case let .owned(descriptor) = self { return descriptor }
+            return nil
+        }
     }
 
     struct SpawnPreparation: Sendable {
@@ -36,6 +49,7 @@ actor PortGuardian {
     private let postSpawnCompatibilityCheck: @Sendable () throws -> Void
     #if DEBUG
     private var testingDescriptors: [Int: Descriptor] = [:]
+    private var testingInconclusivePorts: Set<Int> = []
     #endif
     private init() {
         self.recordStoreFactory = { try PortGuardian.openRecordStore() }
@@ -337,6 +351,7 @@ actor PortGuardian {
             case ok(String)
             case missing(String)
             case interference(String, offenders: [ReportListener])
+            case unknown(String)
         }
 
         let port: Int
@@ -355,28 +370,44 @@ actor PortGuardian {
 
         var summary: String {
             switch self.status {
-            case let .ok(text), let .missing(text), let .interference(text, _): text
+            case let .ok(text), let .missing(text), let .interference(text, _), let .unknown(text): text
             }
         }
     }
 
-    func describe(port: Int) async -> Descriptor? {
+    func inspect(port: Int) async -> PortInspection {
         #if DEBUG
         if let descriptor = self.testingDescriptors[port] {
-            return descriptor
+            return .owned(descriptor)
+        }
+        if self.testingInconclusivePorts.contains(port) {
+            return .unknown
         }
         #endif
-        guard let listener = await self.listeners(on: port).first else { return nil }
-        let path = ProcessIdentity.executablePath(pid: listener.pid)
-        return Descriptor(pid: listener.pid, command: listener.command, executablePath: path)
+        let inspection = await self.listeners(on: port)
+        switch inspection {
+        case .inconclusive:
+            return .unknown
+        case let .listeners(listeners):
+            guard let listener = listeners.first else { return .free }
+            let path = ProcessIdentity.executablePath(pid: listener.pid)
+            return .owned(Descriptor(pid: listener.pid, command: listener.command, executablePath: path))
+        }
     }
 
     // MARK: - Internals
 
-    private struct Listener {
+    struct Listener {
         let pid: Int32
         let command: String
         let fullCommand: String
+    }
+
+    /// A listener probe either produced rows or failed to decide. An empty row
+    /// list is authoritative only when lsof exited with its "no matches" status.
+    enum ListenerInspection {
+        case listeners([Listener])
+        case inconclusive
     }
 
     struct ReportListener: Identifiable {
@@ -410,14 +441,18 @@ actor PortGuardian {
         }
         var reports: [PortReport] = []
         for (port, portMode) in ports {
-            let listeners = await self.listeners(on: port)
+            let inspection = await self.listeners(on: port)
+            let listeners = switch inspection {
+            case let .listeners(parsed): parsed
+            case .inconclusive: [Listener]()
+            }
             let tunnelHealthy = await self.probeGatewayHealthIfNeeded(
                 port: port,
                 mode: portMode,
                 listeners: listeners)
             reports.append(Self.buildReport(
                 port: port,
-                listeners: listeners,
+                inspection: inspection,
                 mode: portMode,
                 tunnelHealthy: tunnelHealthy))
         }
@@ -448,18 +483,48 @@ actor PortGuardian {
             // sockets in-process so each poll does not launch lsof and ps.
             return ProcessSocketListenerInspector.isListening(pid: pid, port: port)
         }
-        return await !(self.listeners(on: port)).isEmpty
+        let inspection = await self.listeners(on: port)
+        switch inspection {
+        case .inconclusive:
+            // A failed probe is not proof the port is idle.
+            return true
+        case let .listeners(listeners):
+            return !listeners.isEmpty
+        }
     }
 
-    private func listeners(on port: Int) async -> [Listener] {
-        let res = await ShellExecutor.run(
-            command: ["lsof", "-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpcn"],
+    private func listeners(on port: Int) async -> ListenerInspection {
+        // `-b` skips kernel calls that block on stalled mounts, so a wedged
+        // filesystem cannot push this probe past its deadline.
+        let result = await ShellExecutor.runDetailed(
+            command: ["lsof", "-b", "-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpcn"],
             cwd: nil,
             env: nil,
             timeout: 5)
-        guard res.ok, let data = res.payload, !data.isEmpty else { return [] }
-        let text = String(data: data, encoding: .utf8) ?? ""
-        return Self.parseListeners(from: text)
+        return Self.classifyListenerInspection(result)
+    }
+
+    nonisolated static func classifyListenerInspection(_ result: ShellExecutor.ShellResult) -> ListenerInspection {
+        if result.timedOut || result.preflightError != nil {
+            return .inconclusive
+        }
+        if result.success || !result.stdout.isEmpty {
+            let listeners = Self.parseListeners(from: result.stdout)
+            // Rows that failed to parse are a format surprise, not an empty port.
+            return listeners.isEmpty && !result.stdout.isEmpty ? .inconclusive : .listeners(listeners)
+        }
+        // lsof exits 1 when nothing matches the filter, but also exits 1 on its own
+        // errors (for example proc_listpids failing) after printing a diagnostic.
+        // `-b` makes lsof note skipped readlinks on that stream even for a clean run,
+        // so only diagnostics that are not that note count as a failed probe.
+        let ignorable = ["lsof: WARNING:", "lsof: avoiding readlink(", "lsof: avoiding stat("]
+        let hasErrorDiagnostic = result.stderr
+            .split(separator: "\n")
+            .contains { line in
+                let text = line.trimmingCharacters(in: .whitespaces)
+                return text.hasPrefix("lsof:") && !ignorable.contains { text.hasPrefix($0) }
+            }
+        return result.exitCode == 1 && !hasErrorDiagnostic ? .listeners([]) : .inconclusive
     }
 
     private static func readFullCommand(pid: Int32) -> String? {
@@ -499,7 +564,7 @@ actor PortGuardian {
 
     private static func buildReport(
         port: Int,
-        listeners: [Listener],
+        inspection: ListenerInspection,
         mode: AppState.ConnectionMode,
         tunnelHealthy: Bool?) -> PortReport
     {
@@ -509,6 +574,15 @@ actor PortGuardian {
         case .unconfigured: "Gateway not configured"
         }
         let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
+
+        let listeners: [Listener]
+        switch inspection {
+        case let .listeners(parsed):
+            listeners = parsed
+        case .inconclusive:
+            let text = "Could not inspect port \(port) (\(expectedDesc)); verify manually."
+            return .init(port: port, expected: expectedDesc, status: .unknown(text), listeners: [])
+        }
 
         if listeners.isEmpty {
             let text = "Nothing is listening on \(port) (\(expectedDesc))."
@@ -700,6 +774,14 @@ extension PortGuardian {
         self.testingDescriptors[port] = descriptor
     }
 
+    func setTestingInconclusive(_ inconclusive: Bool, forPort port: Int) {
+        if inconclusive {
+            self.testingInconclusivePorts.insert(port)
+        } else {
+            self.testingInconclusivePorts.remove(port)
+        }
+    }
+
     static func _testTunnelProcessInfo(pid: Int32) -> TunnelProcessInfo? {
         self.tunnelProcessInfo(pid: pid)
     }
@@ -721,7 +803,7 @@ extension PortGuardian {
             pid: $0.pid,
             command: $0.command,
             fullCommand: $0.fullCommand) }
-        return Self.buildReport(port: port, listeners: mapped, mode: mode, tunnelHealthy: nil)
+        return Self.buildReport(port: port, inspection: .listeners(mapped), mode: mode, tunnelHealthy: nil)
     }
 }
 #endif
