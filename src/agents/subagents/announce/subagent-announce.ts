@@ -273,12 +273,12 @@ async function runSubagentAnnounceFlowBound(
           ? 0
           : await countPendingDescendantRuns(params.childSessionKey, assertChildSessionCurrent);
       if (pendingChildDescendantRuns > 0) {
-        // Suspended descendants keep the child session for recovery but cannot hold this completion.
+        // Settled descendant delivery may retain cleanup but cannot hold this completion.
         shouldDeleteChildSession = false;
         const unsettledDescendantRuns = await countPendingDescendantRuns(
           params.childSessionKey,
           assertChildSessionCurrent,
-          { excludeSuspendedDelivery: true },
+          { excludeSettledDelivery: true },
         );
         if (unsettledDescendantRuns > 0) {
           return "retryable";

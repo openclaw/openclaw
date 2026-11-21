@@ -393,7 +393,7 @@ export function getSubagentSessionListRunByChildSessionKey(
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
-  options?: { excludeSuspendedDelivery?: boolean },
+  options?: { excludeSettledDelivery?: boolean },
 ): Promise<number> {
   assertCurrent();
   await prepareSubagentSessionListReadCache();
