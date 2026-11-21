@@ -64,7 +64,11 @@ async function mockAcpSessionMetaUpsert(params: AcpMetaUpsertInput) {
       acp: current,
     });
   }
-  return result;
+  // The real writer returns the stored entry, which strict callers require.
+  const stored = hoistedMocks.upsertObservations.get(observed)?.next;
+  return result === undefined && stored
+    ? { sessionId: "session-1", updatedAt: stored.lastActivityAt, acp: stored }
+    : result;
 }
 
 // mock-isolation: ACP manager cases own metadata mutations in memory and must not acquire session database actors.
@@ -313,7 +317,7 @@ export function installAcpSessionManagerTestLifecycle(): void {
       .mockReset()
       .mockImplementation(async (params: unknown) => hoisted.readAcpSessionEntryMock(params));
     hoisted.upsertObservations = new WeakMap();
-    hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
+    hoisted.upsertAcpSessionMetaMock.mockReset();
     hoisted.requireAcpRuntimeBackendMock.mockReset();
     hoisted.getAcpRuntimeBackendMock.mockReset().mockImplementation((backendId?: string) => {
       try {
