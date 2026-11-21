@@ -297,12 +297,12 @@ async function prepareSpawnParentWorktreeSource(
       sessionRoot === spawnedCwd &&
       !execNode &&
       !deviceFolder
-        ? await resolveRecordedProjectRoot(sessionRoot, options)
+        ? await resolveRecordedProjectRoot(sessionRoot)
         : undefined;
     const projectId =
       normalizeOptionalString(parent.entry.projectId) ??
       (recordedRoot
-        ? (await listProjectRegistry(parent.cfg, options)).find(
+        ? (await listProjectRegistry(parent.cfg)).find(
             (project) => project.source !== "workspace" && project.repoRoot === recordedRoot,
           )?.id
         : undefined);
