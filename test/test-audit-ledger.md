@@ -13,6 +13,8 @@ Candidates below still need execution or landing. d / c = declarations / expande
 
 Stable publish recovery / `369cdbaede9f`: D3 orphan fixtures, −74 support lines / −3,586 bytes; no test cases or production changes. Their sole reader, `verify-stable-main-closeout.test.ts`, was removed in [198936](https://github.com/openclaw/openclaw/pull/198936). Full-tree reference and history review, independently rechecked at this base, found no remaining consumers. Keep the runtime verifier and its downloaded-log hashes. The earlier consolidation's file-level mapping does not establish coverage of every historical-header case; that pre-existing proof gap remains separate. Validation and landing pending.
 
+Gateway reply routing / `f4f365140c10`: D1 duplicate closed-Gateway case, −10 test lines. The real plugin/borrowed-registry keeper in `route-reply.retired-turn-registry.test.ts` preserves failed/non-delivered, typed no-dispatch and zero sends after actual owner closure; the closed-Gateway guard precedes the native/legacy transport split. Success and preparation-time authority cases remain. Independent source/history review passed. Boat baseline 7/7, candidate 6/6; the keeper caught an untyped-error guard mutation, then production bytes were restored. Lint, types, format, line-cap and all seven deadcode scans passed. Local review found no defects; landing pending.
+
 ## Frozen source census
 
 Census 7c99ae1dd417: owner / support / caller / history / static routing; bounded transitive dependencies. Closed = source-only.
