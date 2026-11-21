@@ -482,6 +482,11 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 
     const abortController = new AbortController();
     const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
+    const sessionKey = resolveCronDeliverySessionKey(params.job);
+    const payload = {
+      ...params.payload,
+      text: appendCronFailureAlertDetails(params.payload.text ?? "", params.runAtMs, runtimeConfig),
+    };
     // Release Gateway admission on deadline even when a transport ignores abort.
     const result = await withTimeout(
       (async () => {
@@ -495,12 +500,32 @@ async function sendGatewayCronFailureAlertUnderAdmission(
             to: params.to,
             accountId: params.accountId,
             threadId: params.threadId,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
+            sessionKey,
+            sessionTarget: params.job.sessionTarget,
           },
           { inheritSessionThread: params.inheritSessionThread },
         );
         if (!resolved.ok) {
-          throw resolved.error;
+          // Like its results, a conversation-bound job without an external route is
+          // notified in the conversation that created it.
+          if (resolved.channel || params.job.sessionTarget !== "current" || !sessionKey) {
+            throw resolved.error;
+          }
+          const committed = await commitCronConversationResult({
+            config: runtimeConfig,
+            agentId,
+            jobId: params.job.id,
+            runStartedAt: params.runAtMs ?? params.job.state.lastRunAtMs ?? Date.now(),
+            idempotencyKey: `cron-failure-alert:${params.job.id}:${params.job.state.lastFailureNotificationId ?? params.runAtMs}`,
+            conversation: { sessionKey },
+            payloads: [payload],
+            signal: abortController.signal,
+            deliveryAttemptFence: null,
+          });
+          if (!committed.ok) {
+            throw new Error(committed.reason);
+          }
+          return { status: "sent" as const };
         }
         return await sendCronAnnouncePayloadStrict({
           deps: params.deps,
@@ -512,14 +537,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           onTranscriptDiagnostic: (message) => {
             params.logger.warn({ jobId: params.job.id }, message);
           },
-          payload: {
-            ...params.payload,
-            text: appendCronFailureAlertDetails(
-              params.payload.text ?? "",
-              params.runAtMs,
-              runtimeConfig,
-            ),
-          },
+          payload,
           inspectionUrl: resolveControlUiAutomationRunUrl(runtimeConfig, {
             jobId: params.job.id,
             runId:
