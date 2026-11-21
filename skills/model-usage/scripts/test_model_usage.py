@@ -5,7 +5,12 @@ Tests for model_usage helpers.
 
 import argparse
 import io
+import json
+import os
+import subprocess
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 from unittest import TestCase, main
 from unittest.mock import patch
 
@@ -22,11 +27,52 @@ from model_usage import (
 
 class TestModelUsage(TestCase):
     def test_load_payload_rejects_mismatched_provider_object(self):
-        with patch("sys.stdin", io.StringIO('{"provider":"claude","daily":[]}')):
+        with io.TextIOWrapper(io.BytesIO(b'{"provider":"claude","daily":[]}')) as stdin, patch(
+            "sys.stdin", stdin
+        ):
             with self.assertRaisesRegex(
                 RuntimeError, "^Provider 'codex' not found in codexbar payload\\.$"
             ):
                 load_payload("-", "codex")
+
+    def test_imports_utf8_json_from_stdin_with_legacy_stdio_encoding(self):
+        report = {
+            "provider": "claude",
+            "projects": [{"name": "東京支店"}],
+            "daily": [
+                {
+                    "date": "2026-11-20",
+                    "modelBreakdowns": [{"modelName": "claude-sonnet-4-6", "cost": 1.25}],
+                }
+            ],
+        }
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("model_usage.py")),
+            "--provider",
+            "claude",
+            "--input",
+            "-",
+            "--mode",
+            "all",
+            "--format",
+            "json",
+        ]
+
+        for encoding in ("utf-8", "utf-8-sig"):
+            with self.subTest(encoding=encoding):
+                result = subprocess.run(
+                    command,
+                    input=json.dumps(report, ensure_ascii=False).encode(encoding),
+                    env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+                    capture_output=True,
+                    timeout=5,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    json.loads(result.stdout)["models"],
+                    [{"model": "claude-sonnet-4-6", "totalCostUSD": 1.25}],
+                )
 
     def test_positive_int_accepts_valid_numbers(self):
         self.assertEqual(positive_int("1"), 1)
