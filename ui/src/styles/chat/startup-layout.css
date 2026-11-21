@@ -1523,7 +1523,10 @@ html:not(.openclaw-native-macos, .openclaw-native-desktop, .openclaw-native-web-
 html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .shell:not(.shell--mobile-nav)
   .sidebar-region--desktop {
-  --desktop-header-height: var(--openclaw-native-titlebar-height, 50px);
+  --desktop-header-height: var(
+    --shell-native-titlebar-band,
+    var(--openclaw-native-titlebar-height, 50px)
+  );
 }
 
 /* Native pane headers share the window controls' centerline. Drawer layouts
@@ -1532,6 +1535,17 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .shell:not(.shell--mobile-nav)
   .chat-pane__header {
   min-height: var(--desktop-header-height, var(--openclaw-native-titlebar-height, 50px));
+}
+
+/* Keep the Mac header's controls on the native centerline as its pane moves up. */
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed, .shell--onboarding)
+  .sidebar-region--desktop {
+  > .sidebar-region__header .chat-pane__header,
+  > .sidebar-region__panels-toggle,
+  > .side-panel__header {
+    padding-top: var(--shell-native-titlebar-trim);
+  }
 }
 
 /* Only the visible top-right header shares the Linux/Windows caption buttons.

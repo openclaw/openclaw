@@ -325,6 +325,11 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   );
   --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
   --shell-native-titlebar-controls-width: 124px;
+  /* Trim the empty space below the controls without moving AppKit's centerline. */
+  --shell-native-titlebar-trim: 4px;
+  --shell-native-titlebar-band: calc(
+    var(--openclaw-native-titlebar-height, 52px) - var(--shell-native-titlebar-trim)
+  );
   --shell-titlebar-inset: max(
     12px,
     calc(
@@ -341,7 +346,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   &::after {
     position: absolute;
     z-index: 30;
-    inset: var(--openclaw-native-titlebar-height, 52px) 0 0 var(--shell-nav-rail-width, 0px);
+    inset: var(--shell-native-titlebar-band) 0 0 var(--shell-nav-rail-width, 0px);
     border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
     box-shadow:
       0 0 0 var(--radius-lg) var(--sidebar-rail-surface),
@@ -361,17 +366,17 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   .shell-nav {
     min-height: 0;
-    padding-top: var(--openclaw-native-titlebar-height, 52px);
+    padding-top: var(--shell-native-titlebar-band);
     background-color: var(--sidebar-rail-surface);
     border-image: linear-gradient(
-        transparent var(--openclaw-native-titlebar-height, 52px),
+        transparent var(--shell-native-titlebar-band),
         var(--resize-handle-rest-color) 0
       )
       0 1;
   }
 
   .sidebar-resizer {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    margin-top: var(--shell-native-titlebar-band);
   }
 
   .settings-sidebar__header {
@@ -411,7 +416,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   /* New session has no chat header, but keeps the same native titlebar surface. */
   .content--new-session .new-session-page::before {
-    flex: 0 0 var(--openclaw-native-titlebar-height, 52px);
+    flex: 0 0 var(--shell-native-titlebar-band);
     margin-inline: calc(0px - var(--content-inline-padding));
     background: var(--sidebar-rail-surface);
     content: "";
@@ -431,24 +436,27 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   /* Keep the native drag band outside page scrollports, including Settings. */
   background-image:
     linear-gradient(
-      var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
-      transparent var(--openclaw-native-titlebar-height, 52px)
+      var(--sidebar-rail-surface) var(--shell-native-titlebar-band),
+      transparent var(--shell-native-titlebar-band)
     ),
     var(--app-background-image);
 
   .content--plugin-embed .plugin-tab-embed {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    margin-top: var(--shell-native-titlebar-band);
   }
 
   .content:not(.content--chat, .content--custodian, .content--workboard, .content--plugin-embed) {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    /* This scrollport already starts below chrome; don't reserve the toolbar again. */
+    --page-toolbar-preclearance: var(--page-toolbar-height);
+    margin-top: var(--shell-native-titlebar-band);
     padding-top: max(
       0px,
-      calc(
-        var(--settings-content-block-start-padding, var(--openclaw-native-titlebar-height, 52px)) -
-          var(--openclaw-native-titlebar-height, 52px)
-      )
+      calc(var(--settings-content-block-start-padding, 0px) - var(--shell-native-titlebar-band))
     );
+
+    &::-webkit-scrollbar-track {
+      margin-top: var(--radius-lg);
+    }
   }
 }
 
@@ -4005,7 +4013,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
      hosts float chrome there; on the web the rail holds those controls. */
   :is(html.openclaw-native-macos, html.openclaw-native-nav)
     &:not(.content--toolbar-header, .content--plugin-embed) {
-    padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
+    padding-top: calc(
+      var(--page-toolbar-height) - var(--page-toolbar-preclearance, 0px) +
+        var(--page-toolbar-clearance) + 16px
+    );
   }
 
   html.openclaw-native-nav & {
@@ -4029,7 +4040,7 @@ html.openclaw-native-web-chrome
   );
 
   &:not(.content--toolbar-header, .content--plugin-embed) {
-    padding-top: calc(var(--page-toolbar-height) + 16px);
+    padding-top: calc(var(--page-toolbar-height) - var(--page-toolbar-preclearance, 0px) + 16px);
   }
 }
 
