@@ -323,7 +323,9 @@ configured default model is never replaced.
 
     The device-login flow stores a protected-store `tokenRef` in the Copilot
     auth profile. An explicitly selected profile stays selected; an unscoped
-    lookup can use `COPILOT_GITHUB_TOKEN` before the first saved profile.
+    lookup can use `COPILOT_GITHUB_TOKEN` before saved profiles. Otherwise, model
+    discovery follows the configured account order and normal credential
+    eligibility, skipping inactive setup replacements and expired tokens.
 
   </Accordion>
 
