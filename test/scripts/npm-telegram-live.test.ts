@@ -559,6 +559,7 @@ if (args[0] === 'run' && process.env.CHECK_WRITABLE_OUTPUT === '1') {
   }
 }
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
+if (args.includes('-i') && args.some(arg => arg.endsWith(':/app/.artifacts/qa-e2e/npm-telegram-live-output'))) process.exit(Number(process.env.MOCK_SUITE_EXIT || 0));
 `,
   );
   const result = run({
@@ -589,6 +590,30 @@ it.each(["PREFIX", "OUTPUT"])("makes the mounted %s writable to the container us
   expect(result.status, result.stderr).toBe(0);
 });
 
+it.each([0, 23])(
+  "returns private artifacts to the host owner while preserving suite exit %s",
+  (suiteExit) => {
+    const { root, result, runs } = captureDocker({ MOCK_SUITE_EXIT: String(suiteExit) });
+    expect(result.status, result.stderr).toBe(suiteExit);
+    expect(runs[2]).toEqual(
+      expect.arrayContaining([
+        "--user",
+        "0:0",
+        "--network",
+        "none",
+        "--entrypoint",
+        "chown",
+        `${path.join(root, "output")}:/qa-output`,
+        "-hR",
+        `${process.getuid?.()}:${process.getgid?.()}`,
+        "/npm-global",
+        "/qa-output",
+      ]),
+    );
+    expect(runs[2]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
+  },
+);
+
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
   const { root, candidate, result, runs } = captureDocker({
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: upgrade ? scenario : "",
@@ -608,6 +633,7 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
       `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
       `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
     ]),
+    expect.arrayContaining(["--entrypoint", "chown", "/npm-global", "/qa-output"]),
   ]);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);

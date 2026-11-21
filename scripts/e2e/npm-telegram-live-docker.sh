@@ -235,6 +235,16 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.m
 cleanup() {
   local rc=$?
   trap - EXIT
+  # QA intentionally creates private (0700/0600) artifacts. Return only these
+  # two owned mounts to the host UID before reading evidence or removing npm.
+  # Keep their modes private; do not grant other users access to live evidence.
+  if ! docker_e2e_docker_with_timeout 60s run --rm --network none --user 0:0 \
+    --entrypoint chown \
+    -v "$npm_prefix_host:/npm-global" -v "$OUTPUT_DIR_HOST:/qa-output" \
+    "$IMAGE_NAME" -hR "$(id -u):$(id -g)" /npm-global /qa-output; then
+    echo "Could not return Telegram package artifacts to the host owner" >&2
+    if [ "$rc" -eq 0 ]; then rc=1; fi
+  fi
   printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
   rm -rf "$npm_prefix_host"
   rm -rf "$harness_root"
