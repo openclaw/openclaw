@@ -76,7 +76,7 @@ describe("media defaults", () => {
       "hook-only",
       "a-tie",
       "z-tie",
-      "google",
+      "gemini",
       "google",
     ]);
   });
