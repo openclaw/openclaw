@@ -12,16 +12,18 @@ import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
+import { undoHeldArchive } from "./session-archive-hold.ts";
 
 setupSidebarTest();
 
 it.each([
-  [false, false],
-  [false, true],
-  [true, false],
+  { reducedMotion: false, delayedLayout: false, earlyUndo: false },
+  { reducedMotion: false, delayedLayout: true, earlyUndo: false },
+  { reducedMotion: true, delayedLayout: false, earlyUndo: false },
+  { reducedMotion: false, delayedLayout: false, earlyUndo: true },
 ])(
-  "hides an archived row immediately with a presentation-only exit (reduced motion: %s, delayed layout: %s)",
-  async (reducedMotion, delayedLayout) => {
+  "hides an archived row with a presentation-only exit (reduced motion: $reducedMotion, delayed layout: $delayedLayout, early undo: $earlyUndo)",
+  async ({ reducedMotion, delayedLayout, earlyUndo }) => {
     await emulateOverlayMedia({ reducedMotion: reducedMotion ? "reduce" : "no-preference" });
     onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
     const sessions = createSessionsHarness("main", ["agent:main:b", "agent:main:a"]);
@@ -96,6 +98,16 @@ it.each([
       fade!.currentTime = 190;
       const halfway = next.getBoundingClientRect().top;
       expect(halfway).toBeLessThan(beforeTop);
+      if (earlyUndo) {
+        undoHeldArchive(archivedKey);
+        await waitForSolid(() => {
+          expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).not.toBeNull();
+          expect(exit!.isConnected).toBe(false);
+          expect(next.getBoundingClientRect().top).toBeCloseTo(beforeTop, 0);
+        });
+        expect(sessions.patch).not.toHaveBeenCalled();
+        return;
+      }
       fade!.finish();
       await fade!.finished;
       expect(next.getBoundingClientRect().top).toBeLessThan(halfway);
