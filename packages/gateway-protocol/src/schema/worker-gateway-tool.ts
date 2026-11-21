@@ -10,6 +10,7 @@ import {
   LiveTextSchema,
   workerContentSchemas,
   workerResponseSchema,
+  WorkerProviderToolCallIdSchema,
 } from "./worker-protocol-primitives.js";
 
 export const WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE = "worker-gateway-tools-v1";
@@ -152,12 +153,12 @@ export const WorkerToolSurfaceSchema = closedObject({
 export const WorkerGatewayToolInvokeParamsSchema = closedObject({
   generation: WorkerIdentifierSchema,
   toolId: WorkerIdentifierSchema,
-  toolCallId: WorkerIdentifierSchema,
+  toolCallId: WorkerProviderToolCallIdSchema,
   arguments: JsonObjectSchema,
 });
 export const WorkerGatewayToolCancelParamsSchema = closedObject({
   generation: WorkerIdentifierSchema,
-  toolCallId: WorkerIdentifierSchema,
+  toolCallId: WorkerProviderToolCallIdSchema,
 });
 const toolContent = workerContentSchemas(
   LiveTextSchema,
@@ -196,7 +197,7 @@ export const WorkerGatewayToolUpdateFrameSchema = closedObject({
   event: Type.Literal("worker.gatewayTool.update"),
   payload: closedObject({
     generation: WorkerIdentifierSchema,
-    toolCallId: WorkerIdentifierSchema,
+    toolCallId: WorkerProviderToolCallIdSchema,
     seq: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
     result: WorkerGatewayToolResultSchema,
   }),
