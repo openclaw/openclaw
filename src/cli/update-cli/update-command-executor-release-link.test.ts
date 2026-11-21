@@ -113,8 +113,17 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
       "export {};\n",
     );
     const store = createManagedHandoffLeaseStore();
-    const outcome: { forwarding?: string; unrelated?: string } = {};
+    const outcome: { forwarding?: string; unrelated?: string; otherInstall?: string } = {};
 
+    // Another installation sharing the state directory cannot take this install's package.
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(unrelated);
+      try {
+        reserveUpdateCommandExecutorSlot(fence, forwarding);
+      } catch (error) {
+        outcome.otherInstall = (error as Error).message;
+      }
+    });
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(gitReleaseSlot(prefix));
       try {
@@ -128,5 +137,6 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
 
     expect(outcome.forwarding).toBe("current");
     expect(outcome.unrelated).toMatch(/does not resolve to its original installation/u);
+    expect(outcome.otherInstall).toMatch(/does not resolve to its original installation/u);
   });
 });
