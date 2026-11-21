@@ -74,6 +74,10 @@ resource payload.
 - ✅ Stickers previously received by the same bot (requires `actions.sticker`)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
+Message creation and replies retry transient network and server failures up to twice,
+reusing the same UUID to prevent duplicate messages. Uploads and streaming-card
+entity creation do not retry ambiguous failures.
+
 Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
 Ogg/Opus upload media (`file_type: "opus"`). Existing `.opus` and `.ogg` media
 is sent directly as native audio. MP3/WAV/M4A and other likely audio formats are
