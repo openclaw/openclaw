@@ -23,7 +23,10 @@
 // 7. A delegate whose child session entry is missing has no spawn lineage to follow (🌊's ruling
 //    on upstream #201970's root walk): no root is inferred or resumed for it. While its row still
 //    binds its requester, its one outcome says "lineage missing; election outcome unknown", once,
-//    through its return mode. Without that binding it is recorded unresolved and delivers nothing.
+//    through its return mode. Without that binding it is recorded unresolved and its outcome
+//    suspended, not closed: nothing is sent or retried, and the sweeper discards it with a warning
+//    when suspended-delivery retention ends. Only an existing terminal policy, its requester's
+//    election to stop it, closes it as intentional non-delivery.
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { childOutcomeText, gracefulStopStatus, parent, recordRequesterMessages, resolveGateway, restartInterruptedStatus, useRestartCustodyWorld } from "./subagent-registry.restart-custody.test-support.js";
@@ -31,7 +34,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { loadExactSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  loadExactSessionEntry,
+  loadTranscriptEvents,
+} from "../../../config/sessions/session-accessor.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "../../../gateway/session-restart-resume-prompt.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -46,6 +52,7 @@ import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS } from "./subagent-registry-suspended-delivery.js";
 import {
   activateSubagentRegistry,
   isSubagentRunLive,
@@ -784,7 +791,7 @@ const UNBOUND = [
 ] as const;
 
 it.each(UNBOUND)(
-  "7: with no requester binding left ($reason), a missing child session entry is recorded unresolved: no notice, no root resume",
+  "7: with no requester binding left ($reason), a missing child session entry is recorded unresolved and its outcome suspended, not closed: no notice, no root resume, no retry, a warned discard when retention ends",
   async ({ reason, requester, writesParent }) => {
     if (writesParent) {
       await writeParentSession();
@@ -807,11 +814,18 @@ it.each(UNBOUND)(
     expect(fixture.gateway).not.toHaveBeenCalled();
     const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
     expectGracefullyStopped(durable);
-    expect(durable).toMatchObject({
-      continuationLineageMissing: { recordedAt: expect.any(Number), unresolved: reason },
-      cleanupCompletedAt: expect.any(Number),
-      delivery: { status: "not_required", disposition: "intentional_non_delivery" },
+    const lineage = { recordedAt: expect.any(Number), unresolved: reason };
+    expect(durable?.continuationLineageMissing).toEqual(lineage);
+    // Unresolved, not intentional non-delivery: nothing suppresses the outcome and its cleanup
+    // stays unfinished; it is suspended, which stops retries and keeps the row inspectable.
+    const lastError = `lineage missing; no requester binding (${reason})`;
+    expect(durable?.delivery).toEqual({
+      status: "suspended",
+      suspendedAt: durable?.continuationLineageMissing?.recordedAt,
+      lastError,
     });
+    expect(durable?.suppressCompletionDelivery).toBeUndefined();
+    expect(durable?.cleanupCompletedAt).toBeUndefined();
     expect(registryWarn).toHaveBeenCalledWith(
       "continuation delegate restart lineage missing; outcome left unresolved",
       {
@@ -822,8 +836,109 @@ it.each(UNBOUND)(
         reason,
       },
     );
+
+    // Not pending forever: a second restart and its sweeps neither decide again nor send, and
+    // the sweeper discards the suspended outcome with a warning when its retention ends.
+    await restartGateway();
+    await resumeRoots();
+    expect(loadSubagentRegistryFromSqlite().get(delegate.runId)).toEqual(durable);
+    vi.spyOn(Date, "now").mockReturnValue(
+      durable!.delivery!.suspendedAt! + SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
+    );
+    await testing.sweepOnceForTests();
+    await fixture.settle();
+
+    const discarded = loadSubagentRegistryFromSqlite().get(delegate.runId);
+    expect(discarded?.continuationLineageMissing).toEqual(lineage);
+    expect(discarded?.delivery).toMatchObject({
+      status: "discarded",
+      discardReason: "expired",
+      discardedPayloadSummary: { lastError },
+    });
+    expect(registryWarn).toHaveBeenCalledWith(
+      "subagent suspended delivery discarded",
+      expect.objectContaining({ runId: delegate.runId, reason: "expired", lastError }),
+    );
+    expect(messages).toEqual([]);
+    expect(fixture.announce).not.toHaveBeenCalled();
+    // The discard's own expiry notice: display-only, for a session at the recorded requester key.
+    const transcript = await loadTranscriptEvents({
+      agentId: "main",
+      sessionKey: parent,
+      sessionId: "sess-parent",
+    });
+    expect(transcript.filter((event) => event.type === "custom_message")).toEqual(
+      writesParent
+        ? [expect.objectContaining({ customType: "run-failed-before-reply", display: true })]
+        : [],
+    );
   },
 );
+
+it("7: an in-process restart suspends an unbound delegate it settles, and starts no delivery attempt", async () => {
+  const delegate = productionDelegate("in-process-unbound");
+  const child = await addRunningChild(delegate.runId, {
+    childSessionKey: delegate.childSessionKey,
+  });
+  await removeChildSession(child);
+  // An in-process restart keeps completion custody live; only the lifecycle generation rotates.
+  rotateAgentEventLifecycleGeneration();
+  const messages = recordRequesterMessages();
+
+  await activateSubagentRegistry(resolveGateway);
+  await fixture.settle();
+  for (let sweep = 0; sweep < 3; sweep += 1) {
+    await testing.sweepOnceForTests();
+    await fixture.settle();
+  }
+
+  const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
+  expectInterrupted(durable);
+  expect(durable?.continuationLineageMissing).toEqual({
+    recordedAt: expect.any(Number),
+    unresolved: "requester-session-missing",
+  });
+  expect(durable?.delivery).toEqual({
+    status: "suspended",
+    suspendedAt: durable?.continuationLineageMissing?.recordedAt,
+    lastError: "lineage missing; no requester binding (requester-session-missing)",
+  });
+  expect(messages).toEqual([]);
+  expect(fixture.announce).not.toHaveBeenCalled();
+});
+
+it("7: a requester that elected to stop its delegate still gets intentional non-delivery when lineage and requester are both missing", async () => {
+  // As in the unbound case, neither the requester's session nor the child's entry remains; but the
+  // requester asked to stop this delegate before the crash, an election that stands (item 2).
+  const delegate = productionDelegate("stopped-unbound");
+  const child = await addRunningChild(delegate.runId, {
+    childSessionKey: delegate.childSessionKey,
+    killIntent: {
+      requestedAt: Date.now() - 500,
+      reason: "killed by requester",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    },
+  });
+  await removeChildSession(child);
+  const messages = recordRequesterMessages();
+  const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
+
+  await restartGateway();
+  await resumeRoots();
+
+  const settled = loadSubagentRegistryFromSqlite().get(delegate.runId);
+  expectInterrupted(settled);
+  expect(settled?.continuationLineageMissing).toBeUndefined();
+  expect(settled).toMatchObject({
+    cleanupCompletedAt: expect.any(Number),
+    delivery: { status: "not_required", disposition: "intentional_non_delivery" },
+  });
+  expect(messages).toEqual([]);
+  expect(registryWarn).not.toHaveBeenCalledWith(
+    "continuation delegate restart lineage missing; outcome left unresolved",
+    expect.anything(),
+  );
+});
 
 it("7: a delegate whose delivery already failed for good keeps that outcome: no lineage decision, no notice", async () => {
   await writeParentSession();

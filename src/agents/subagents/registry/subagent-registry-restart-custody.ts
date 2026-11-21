@@ -15,7 +15,9 @@
 // root was inferred or resumed for the delegate. While its row still binds a requester that
 // restart completion recovery admits, its one outcome says the lineage is missing and the
 // election's outcome unknown, once, through its return mode. Otherwise the row records why no
-// binding survived and closes without delivering anything.
+// binding survived and its outcome is suspended, unresolved rather than closed: nothing is sent
+// or retried, and the sweeper discards it with a warning when suspended-delivery retention ends.
+// Only a delegate its requester had asked to stop closes as intentional non-delivery (above).
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -236,8 +238,17 @@ async function recordMissingContinuationLineage(): Promise<SubagentRunRecord[]> 
         entry.continuationLineageMissing = { recordedAt, ...lineage };
         if (lineage.unresolved) {
           // Nothing binds a recipient: no notice is broadcast, and none is sent to a guessed one.
-          entry.suppressCompletionDelivery = true;
-          ensureDeliveryState(entry).disposition = "intentional_non_delivery";
+          // A missing binding is not a requester's election, so the outcome is suspended rather
+          // than closed: retries stop, the row stays inspectable, and the sweeper discards it with
+          // a warning when suspended-delivery retention ends. No transport ran, so no disposition.
+          Object.assign(ensureDeliveryState(entry), {
+            status: "suspended",
+            suspendedAt: recordedAt,
+            lastError: `lineage missing; no requester binding (${lineage.unresolved})`,
+            disposition: undefined,
+            nextAttemptAt: undefined,
+            queueId: undefined,
+          });
         }
         postimages.set(entry.runId, entry);
       }
@@ -283,8 +294,11 @@ export async function settleContinuationRestartCustody(
   const settled = await settleOwnerlessContinuationChildren();
   const latest = new Map(settled.map((entry) => [entry.runId, entry]));
   for (const entry of await recordMissingContinuationLineage()) {
-    // An unresolved row closes quietly now; a notice keeps the delivery path its row already had.
-    if (entry.continuationLineageMissing?.unresolved || latest.has(entry.runId)) {
+    if (entry.continuationLineageMissing?.unresolved) {
+      // Suspended: the sweeper owns its retention and expiry, so no cleanup starts now.
+      latest.delete(entry.runId);
+    } else if (latest.has(entry.runId)) {
+      // A notice keeps the delivery path its row already had.
       latest.set(entry.runId, entry);
     }
   }
