@@ -17,11 +17,12 @@ its isolated state, worktree, logs and timeline in the new output directory.
 Stop and remove its guest through the sandbox owner before retiring that directory
 through the native filesystem owner. Never reuse an output directory.
 
-Two undelayed sends warm the session before the measured sends. Before each send,
-wait for native turn completion and the session's projected idle state; a chat
-final event alone can precede ownership release and send the next input through
-the queued admission path. Record that settling time separately, before arming
-the delay or starting CPU and wall measurements. The preload holds
+Two undelayed sends warm the session before the measured sends. Each send waits
+for native turn completion and the session's projected idle state before ending
+its CPU/allocation/wall window or disarming the delay, including the last sample.
+A chat final event alone can precede ownership release and send the next input
+through the queued admission path. Record chat-final latency and subsequent
+settling time separately within the complete measurement. The preload holds
 each explicit SQLite COMMIT for the selected delay while its transaction remains
 open, then performs the real commit. This includes read-snapshot COMMITs; the
 record count is not a write or fsync count. Use the recorded stacks to distinguish
@@ -37,6 +38,10 @@ samples per arm, plus unchanged A/A controls. Repeat with `--commit-delay-ms 0`
 to measure ordinary overhead. Use `--allocations` in separate runs for sampled
 main-isolate allocations through the existing benchmark owner, or `--cpu-profile`
 for main/worker CPU attribution. Neither profiled run supplies timing acceptance.
+Use `--diagnostics` for the existing lightweight worker queue/run, storage, GC,
+and event-loop counters without starting a CPU or allocation profiler. Capture
+setup and aggregation stay outside the reported CPU/wall window. Keep these
+diagnostic runs separate from the uninstrumented timing cohort.
 CPU counters include the complete send, inference, and settlement. Model latency
 is variable; use the `detail.*` fields in the existing slow-chat-send lines in
 `gateway.log` for startup attribution. `timeline.jsonl` supplies enclosing request

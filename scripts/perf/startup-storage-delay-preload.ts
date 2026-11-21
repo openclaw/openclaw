@@ -12,10 +12,9 @@ if (!state) {
 const control = path.join(state, "benchmark-commit-delay.json");
 const output = path.join(state, `benchmark-commits.${threadId}.jsonl`);
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
-/* oxlint-disable typescript/unbound-method -- The bound call takes the database receiver explicitly below. */
-const exec = Function.prototype.call.bind(DatabaseSync.prototype.exec);
-/* oxlint-enable typescript/unbound-method */
-DatabaseSync.prototype.exec = function (sql) {
+// oxlint-disable-next-line typescript/unbound-method -- Reflect.apply forwards the native database receiver.
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function (this: DatabaseSync, sql: string) {
   let settings;
   if (/^\s*COMMIT(?:\s+TRANSACTION)?\s*;?\s*$/iu.test(sql) && this.isTransaction) {
     try {
@@ -25,7 +24,7 @@ DatabaseSync.prototype.exec = function (sql) {
     }
   }
   if (!settings) {
-    return exec(this, sql);
+    return Reflect.apply(exec, this, [sql]);
   }
   const { delayMs, sample } = settings;
   if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 5_000) {
@@ -38,7 +37,7 @@ DatabaseSync.prototype.exec = function (sql) {
   Error.stackTraceLimit = stackLimit;
   Atomics.wait(sleeper, 0, 0, delayMs);
   try {
-    return exec(this, sql);
+    return Reflect.apply(exec, this, [sql]);
   } finally {
     appendFileSync(
       output,

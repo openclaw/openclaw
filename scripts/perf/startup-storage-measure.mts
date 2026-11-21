@@ -19,6 +19,7 @@ import {
   measureGatewayAllocations,
   measureGatewayCpuUsage,
   readGatewayCpuUsage,
+  startGatewayDiagnostics,
 } from "../lib/gateway-bench-profile.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
@@ -38,6 +39,7 @@ const { values } = parseArgs({
     "sandbox-image": { type: "string" },
     allocations: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    diagnostics: { type: "boolean", default: false },
   },
 });
 assert(values.output && values.workspace, "--output and --workspace are required");
@@ -107,7 +109,7 @@ const child = spawn(
     env: createGatewayBenchEnv(path.join(output, "home"), configPath, {
       startupTrace: false,
       caseEnv: {
-        NODE_OPTIONS: `--import=${new URL("./startup-storage-delay-preload.mjs", import.meta.url).href}`,
+        NODE_OPTIONS: `--import=${new URL("./startup-storage-delay-preload.ts", import.meta.url).href}`,
         OPENCLAW_STATE_DIR: state,
         TMPDIR: path.join(output, "tmp"),
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -182,13 +184,11 @@ try {
     worktree: true,
     worktreeName: `storage-proof-${randomUUID()}`,
   });
-  let previousRunId: string | undefined;
-  for (let index = -2; index < samples; index++) {
-    // A chat final can precede ownership release and change the next input's admission path.
+  const settle = async (runId?: string) => {
     const settleStarted = performance.now();
-    if (previousRunId) {
+    if (runId) {
       const completion = (await rpc("agent.wait", {
-        runId: previousRunId,
+        runId,
         timeoutMs: 120_000,
       })) as { status: string };
       assert.equal(completion.status, "ok");
@@ -204,9 +204,14 @@ try {
       assert(performance.now() - settleStarted < 120_000, "Session did not become idle");
       await delay(50);
     }
-    const settleMs = performance.now() - settleStarted;
+    return performance.now() - settleStarted;
+  };
+  await settle();
+  for (let index = -2; index < samples; index++) {
     const sample = `storage-${index}`,
       beforeLog = logs.length;
+    const stopDiagnostics =
+      values.diagnostics && index >= 0 ? await startGatewayDiagnostics(child, sample) : undefined;
     const begin = performance.now(),
       startedAt = Date.now();
     const beforeCpu = await readGatewayCpuUsage(child);
@@ -215,6 +220,7 @@ try {
     if (values["cpu-profile"] && index >= 0) {
       await controlGatewayProfile(child, "cpu", "start", profilePath, { includeWorkers: true });
     }
+    let chatFinalMs: number | undefined, settleMs: number | undefined;
     const send = async () => {
       const sent = (await rpc("chat.send", {
         sessionKey,
@@ -227,6 +233,9 @@ try {
         await delay(50);
       }
       assert.equal(terminal.get(sent.runId), "final");
+      chatFinalMs = performance.now() - begin;
+      // Chat final precedes ownership release; include this turn's storage tail in every sample.
+      settleMs = await settle(sent.runId);
       return sent.runId;
     };
     try {
@@ -243,12 +252,12 @@ try {
             )
           : undefined;
       runId ??= await send();
-      previousRunId = runId;
       const cpu = measureGatewayCpuUsage(beforeCpu, await readGatewayCpuUsage(child));
       results.push({
         sample,
         runId,
         measured: index >= 0,
+        chatFinalMs,
         settleMs,
         startedAt,
         endedAt: Date.now(),
@@ -260,6 +269,7 @@ try {
           .slice(beforeLog)
           .split("\n")
           .find((line) => line.includes("slow chat send") && line.includes("stage=startup")),
+        diagnostics: await stopDiagnostics?.(),
       });
     } finally {
       await fs.rm(control, { force: true });
