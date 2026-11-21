@@ -1,0 +1,3 @@
+# Real admitted Stop -> attempt cleanup -> paired node owner -> successor regression,
+# plus exact-execution isolation and Gateway replacement / pairing revocation before node I/O.
+598
