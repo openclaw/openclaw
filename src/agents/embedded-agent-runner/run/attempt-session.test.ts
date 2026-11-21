@@ -308,6 +308,87 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it("recovers a deferred structured call only through dispatch_action", async () => {
+    const actualWrapper = await vi.importActual<
+      typeof import("../../sessions/tools/tool-definition-wrapper.js")
+    >("../../sessions/tools/tool-definition-wrapper.js");
+    hoisted.wrapToolDefinition.mockImplementation(actualWrapper.wrapToolDefinition);
+    const workspace = tempDirs.make("tool-search-direct-recovery-");
+    const target = { ...createWriteTool(workspace), name: "probe_write" };
+    const execute = vi.spyOn(target, "execute");
+    const config = { tools: { toolSearch: { mode: "tools" as const } } };
+    const catalogRef = toolSearch.createToolSearchCatalogRef();
+    const ctx = { config, catalogRef };
+    onTestFinished(() => toolSearch.clearToolSearchCatalog(ctx));
+    const { tools } = toolSearch.applyToolSearchCatalog({
+      ...ctx,
+      tools: [...toolSearch.createToolSearchTools(ctx), target, jsonTool("denied_write", {})],
+    });
+    toolSearch.restrictToolSearchCatalog({
+      catalogRef,
+      allowedToolNames: new Set(["probe_write"]),
+    });
+    const fixture = createInput();
+    hoisted.getGlobalHookRunner.mockReturnValue(undefined);
+    fixture.input.attempt = { ...fixture.input.attempt, config };
+    Object.assign(fixture.input.clientToolPreparation, {
+      codeModeControlsEnabledForRun: false,
+      deferredDirectoryToolsCallable: false,
+      toolSearchCatalogRef: catalogRef,
+    });
+    const actualToolSearch = await import("../../tool-search-directory.js");
+    hoisted.resolveToolSearchCatalogTool.mockImplementation(
+      actualToolSearch.resolveToolSearchCatalogTool,
+    );
+    hoisted.prepareEmbeddedAttemptClientTools.mockReturnValue({
+      allCustomTools: tools,
+      sessionToolAllowlist: [],
+      refreshTools: vi.fn(),
+    });
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    const resolveDeferredTool = hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool;
+    const input = { path: "result.txt", content: "written through dispatch_action\n" };
+    const { agent } = captureAgent(tools, {
+      resolveDeferredTool,
+      streamFn: createTurnSequenceStream(
+        [
+          [
+            { ...makeCall("probe_write"), arguments: input },
+            makeCall("denied_write"),
+            makeCall("unknown_tool"),
+          ],
+          [{ ...makeCall("dispatch_action"), arguments: { id: "probe_write", args: input } }],
+          [{ type: "text", text: "done" }],
+        ],
+        [],
+        (context, turn) => {
+          expect(context.tools?.some((tool) => tool.name === "probe_write")).toBe(false);
+          if (turn === 2) {
+            expect(execute).not.toHaveBeenCalled();
+          }
+        },
+      ),
+    });
+    await agent.prompt("write the result");
+    const results = agent.state.messages.filter((message) => message.role === "toolResult");
+    expect(results[0]).toMatchObject({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining('Call dispatch_action with id "probe_write"'),
+        },
+      ],
+    });
+    expect(results.slice(1, 3).map((result) => result.content)).toEqual([
+      [{ type: "text", text: "Tool denied_write not found" }],
+      [{ type: "text", text: "Tool unknown_tool not found" }],
+    ]);
+    expect(results[3]).toMatchObject({ toolName: "dispatch_action", isError: false });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe(input.content);
+  });
+
   it("recovers a native hidden write through exec without executing or exposing it directly", async () => {
     const harness = createCodeModeHarness();
     const fixture = createInput({ codeModeCatalogRef: harness.catalogRef });
