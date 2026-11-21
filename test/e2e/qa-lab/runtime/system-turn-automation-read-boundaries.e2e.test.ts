@@ -463,7 +463,8 @@ it(
         const scopes = ["operator.read", "operator.write"];
         const device = pairedOperator();
         device.approvedScopes = scopes;
-        device.tokens!.operator.scopes = scopes;
+        assert(device.tokens?.operator);
+        device.tokens.operator.scopes = scopes;
         const recovery = await recoveryFixture(
           stateDir,
           ensureProfileForEmail("automation-read-requester@example.test").id,
