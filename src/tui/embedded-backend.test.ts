@@ -293,7 +293,6 @@ vi.mock("../agents/tools/embedded-gateway-stub.runtime.js", () => ({
 
 vi.mock("../gateway/chat-display-projection.js", () => ({
   projectChatDisplayMessages: (messages: unknown[]) => messages,
-  resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 
 vi.mock("../gateway/chat-history-budget.js", async (importOriginal) => ({
@@ -1369,7 +1368,9 @@ describe("EmbeddedTuiBackend", () => {
       canonicalKey: "agent:main:main",
       max: 200,
       maxHistoryBytes: 100_000,
-      effectiveMaxChars: 100_000,
+      // Whole replies: the TUI cannot expand a display-capped history row.
+      effectiveMaxChars: 500_000,
+      toolResultMaxChars: 8_000,
       offset: undefined,
       messageId: undefined,
     });

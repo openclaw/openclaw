@@ -329,6 +329,7 @@ disabled by default inside tmux and GNU Screen. Sixel is not supported.
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
+- Loaded history shows each reply in full, up to 500,000 characters. Tool results keep the Gateway's default preview length.
 - Reconnect and event-gap recovery reconcile active runs with history. They retain concurrent and newly observed runs. They do not revive runs that exact history has excluded.
 - Streaming responses update in place until finalized.
 - Long words, email addresses, and identifiers wrap to the terminal width without inserting spaces into message text.
