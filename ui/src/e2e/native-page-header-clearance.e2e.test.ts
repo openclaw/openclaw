@@ -98,11 +98,11 @@ suite.define(() => {
           const corner = getComputedStyle(element.closest(".shell")!, "::after");
           return {
             contentTop: top,
-            cornerTop: parseFloat(corner.top),
+            cornerTop: Number.parseFloat(corner.top),
             headerGap: header.top - top,
             trackClearsCorner:
-              parseFloat(getComputedStyle(element, "::-webkit-scrollbar-track").marginTop) >=
-              parseFloat(corner.borderTopRightRadius),
+              Number.parseFloat(getComputedStyle(element, "::-webkit-scrollbar-track").marginTop) >=
+              Number.parseFloat(corner.borderTopRightRadius),
           };
         }),
       )

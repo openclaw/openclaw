@@ -471,37 +471,23 @@
 
 html.openclaw-native-macos,
 html.openclaw-native-desktop[data-native-platform="macos"] {
-  .shell {
-    --sidebar-rail-titlebar-band: var(
-      --shell-native-titlebar-band,
-      var(--openclaw-native-titlebar-height, 52px)
-    );
-  }
-
   /* The traffic lights are wider than the rail: start its edge below the
      titlebar row so no divider runs between the window controls. */
   .shell:not(.shell--mobile-nav) .sidebar-rail {
-    padding-top: var(--sidebar-rail-titlebar-band);
-    border-image: linear-gradient(transparent var(--sidebar-rail-titlebar-band), var(--border) 0) 0
-      1;
+    padding-top: var(--rail-band);
+    border-image: linear-gradient(transparent var(--rail-band), var(--border) 0) 0 1;
   }
 
   /* A collapsed rail is the only nav surface left, so the titlebar row
      shows the shell background edge to edge. */
   .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
     .shell-nav {
-      border-image: linear-gradient(
-          transparent var(--sidebar-rail-titlebar-band),
-          var(--resize-handle-rest-color) 0
-        )
+      border-image: linear-gradient(transparent var(--rail-band), var(--resize-handle-rest-color) 0)
         0 1;
     }
 
     .sidebar {
-      background: linear-gradient(
-        transparent var(--sidebar-rail-titlebar-band),
-        var(--sidebar-bg) 0
-      );
+      background: linear-gradient(transparent var(--rail-band), var(--sidebar-bg) 0);
     }
   }
 }
