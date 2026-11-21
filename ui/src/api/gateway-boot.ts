@@ -232,7 +232,10 @@ export class EarlyGateway {
       if (!this.active || !runtime) {
         throw new Error("Early Gateway retired");
       }
-      if ((options.includeLiveToolOutput === true) !== !!subscription.includeLiveToolOutput) {
+      if (
+        (options.includeLiveToolOutput === true) !==
+        Boolean(subscription.includeLiveToolOutput)
+      ) {
         // The early handle already owns approvals from this connection's hello.
         // Changed presentation demand needs a matching lease and a fresh snapshot;
         // unchanged demand transfers the already buffered history and live output.

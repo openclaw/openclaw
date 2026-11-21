@@ -228,10 +228,7 @@ it("prepares a presentation enabled while its startup snapshot is pending", asyn
   const held = createDeferred();
   const loading = vi
     .spyOn(presentation, "inlineCommandPresentation")
-    .mockImplementation(async () => {
-      await held.promise;
-      return loadPresentation();
-    });
+    .mockReturnValue(held.promise.then(loadPresentation));
   onTestFinished(() => held.resolve());
   const { pane, request } = savedInlinePane(false);
   await vi.waitFor(() => expect(snapshots.waitForPrewarmedChatSnapshot).toHaveBeenCalled());
