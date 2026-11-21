@@ -21,6 +21,23 @@ contract. Audit existing matches:
 - Negative controls passing on unrelated guard or unreachable rejection.
 - Names promising behavior inputs/assertions never exercise.
 
+- "Complete", "all", or "every" gates backed by hand-picked lists instead of the
+  owner's schema, type union, registry, or runtime discovery.
+- Helper parity standing in for live callers and their input projections. Negotiated
+  protocols need supported capability combinations and both deployment directions.
+- Diagnostics copying production projections instead of reusing canonicalizers and
+  registries, unless independence is the intended oracle and divergence is detectable.
+
+## Quality gates
+
+Validators, linters, and static analyzers must derive their universe from the owner,
+prove the complete path they name, and reject inputs they cannot analyze.
+
+- Negative fixtures independently break discovery, classification, wiring, and output.
+  A green self-test is insufficient unless representative defects fail for the intended reason.
+- Unsupported syntax, unresolved module identities, uninspected test roots, and opaque
+  replacements produce actionable errors instead of silent exemptions.
+
 ## Retention bar
 
 - Keep independent public API, SDK, protocol, config, migration, storage,
@@ -61,6 +78,10 @@ contract. Audit existing matches:
   `pnpm deadcode:unused-files`, and `pnpm deadcode:exports` (all phases): removed
   tests orphan support files/exports that ordinary PR CI misses and main's
   `check-dependencies` catches.
+- CI retries need evidence: inspect the failed step, run its exact case or smallest
+  lane in isolation, and check whether changed paths intersect it. One targeted retry
+  can classify a transient failure. If it recurs, investigate within bounds and record
+  the remaining uncertainty under the normal CI and review gates; never blanket-retry.
 - Inspect `git diff --numstat`; get final autoreview.
 - Report causes, removed categories/seams, retained false positives, proof/cost,
   production versus test/support LOC, PR state, follow-ups.
