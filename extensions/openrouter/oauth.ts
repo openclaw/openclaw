@@ -160,7 +160,7 @@ async function loginOpenRouterOAuth(ctx: ProviderAuthContext): Promise<ProviderA
               if (!portBusy) {
                 progress.update("OAuth callback not detected; waiting for redirect URL...");
               }
-              const code = promptForCode();
+              const pasted = promptForCode();
               // Said once the paste prompt is open, so setup apps show it beside that field.
               if (portBusy) {
                 progress.update(
@@ -168,7 +168,7 @@ async function loginOpenRouterOAuth(ctx: ProviderAuthContext): Promise<ProviderA
                   "callback_port_busy",
                 );
               }
-              return await code;
+              return await pasted;
             },
           );
       await ctx.openUrl(authorizeUrl).catch(() => undefined);
