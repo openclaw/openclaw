@@ -1,5 +1,5 @@
 ---
-summary: "Adds Microsoft Foundry model provider support to OpenClaw."
+summary: "Adds Microsoft Foundry, Microsoft Foundry Systemone model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the microsoft-foundry plugin
 title: "Microsoft Foundry plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds Microsoft Foundry model provider support to OpenClaw.
+Adds Microsoft Foundry, Microsoft Foundry Systemone model provider support to OpenClaw.
 
 ## Distribution
 
@@ -19,8 +19,8 @@ Adds Microsoft Foundry model provider support to OpenClaw.
 
 ## Surface
 
-- Providers: `microsoft-foundry`
-- Contracts: `imageGenerationProviders`
+- Providers: `microsoft-foundry`, `microsoft-foundry-systemone`
+- Contracts: `decisionProviders`, `imageGenerationProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -59,6 +59,40 @@ native Anthropic runtime. When the Foundry deployment name differs from the
 Claude model ID, set `params.canonicalModelId` on the model entry so OpenClaw
 can apply model-specific wire contracts, map `/think off` correctly, and
 preserve signed thinking safely.
+
+## Typed decisions
+
+[Deploy Microsoft-Decision-1.1](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision) in a Foundry resource. Use `microsoft-foundry-systemone/microsoft-decision-1.1` for the agent's Decision model, and put the deployment alias and the resource's DNS name in the plugin config:
+
+```json5
+{
+  agents: {
+    entries: {
+      main: { decisionModel: "microsoft-foundry-systemone/microsoft-decision-1.1" },
+    },
+  },
+  plugins: {
+    entries: {
+      "microsoft-foundry": {
+        enabled: true,
+        config: {
+          decision: {
+            resourceHost: "example.services.ai.azure.com",
+            deployment: "example-decision-deployment",
+            apiKey: { source: "env", provider: "default", id: "FOUNDRY_DECISION_API_KEY" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The Decision route accepts an API-key SecretRef for that resource. It does not
+reuse chat or image credentials, change the chat model, or enable automatic
+assistance. The request uses the resource's `/providers/microsoft/v1/systemone`
+endpoint. Boolean, Choice, and Score questions accept supplied text or JSON
+evidence; images and Entra ID are outside this route's initial scope.
 
 ## MAI image generation
 

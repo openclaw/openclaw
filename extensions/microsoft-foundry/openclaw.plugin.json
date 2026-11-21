@@ -5,7 +5,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["microsoft-foundry"],
+  "providers": ["microsoft-foundry", "microsoft-foundry-systemone"],
   "setup": {
     "providers": [
       {
@@ -15,7 +15,54 @@
     ]
   },
   "contracts": {
+    "decisionProviders": ["microsoft-foundry-systemone"],
     "imageGenerationProviders": ["microsoft-foundry"]
+  },
+  "modelCatalog": {
+    "providers": {
+      "microsoft-foundry-systemone": {
+        "authScope": "plugin",
+        "models": [
+          {
+            "id": "microsoft-decision-1.1",
+            "name": "Microsoft Decision 1.1 (Foundry)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "microsoft-foundry-systemone",
+                "input": ["text"],
+                "questions": {
+                  "boolean": { "probabilities": "boolean", "abstention": false },
+                  "choice": { "probabilities": "categorical", "abstention": false, "minOptions": 2, "maxOptions": 16 },
+                  "score": { "probabilities": "categorical", "abstention": false, "minOptions": 2, "maxOptions": 10 }
+                },
+                "confidence": "provider-specific",
+                "reasoning": { "modes": ["auto"] },
+                "limits": { "maxQuestions": 16 }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": true,
+      "paths": [{ "path": "decision.apiKey", "expected": "string", "ownerKind": "capability" }]
+    }
+  },
+  "uiHints": {
+    "decision.resourceHost": {
+      "label": "Decision resource host",
+      "help": "Foundry resource DNS name only, for example example.services.ai.azure.com."
+    },
+    "decision.deployment": { "label": "Microsoft Decision deployment name" },
+    "decision.apiKey": {
+      "label": "Foundry Decision API key",
+      "help": "Select a SecretRef for this resource. Chat and image credentials are not used.",
+      "sensitive": true
+    }
   },
   "imageGenerationProviderMetadata": {
     "microsoft-foundry": {
@@ -53,6 +100,32 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "decision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["resourceHost", "deployment", "apiKey"],
+        "properties": {
+          "resourceHost": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.services\\.ai\\.azure\\.com$"
+          },
+          "deployment": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          },
+          "apiKey": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "provider", "id"],
+            "properties": {
+              "source": { "type": "string", "enum": ["env", "store", "file", "exec"] },
+              "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "id": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            }
+          }
+        }
+      }
+    }
   }
 }
