@@ -1104,7 +1104,7 @@ Beyond `api.runtime`, the API object also provides:
   Scoped logger (`debug`, `info`, `warn`, `error`).
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
-  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
+  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), `"cli-metadata"` (CLI command metadata collection), or `"memory-backend"` (passive memory backend for the slot owner).
 </ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.
