@@ -50,12 +50,6 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
 /** Classifies cron execution errors against the configured retryable transient categories. */
 export function resolveCronExecutionRetryHint(input: CronRetryHintInput): CronRetryHint {
   const { error, retryOn, classifiedReason, executionStarted } = input;
-  if (!error || typeof error !== "string") {
-    return { retryable: false };
-  }
-  if (SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN.test(error)) {
-    return { retryable: executionStarted !== true };
-  }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
   const classified = classifiedReason ?? undefined;
   if (classified) {
@@ -64,6 +58,12 @@ export function resolveCronExecutionRetryHint(input: CronRetryHintInput): CronRe
     return keys.includes(classified as CronRetryOn)
       ? { retryable: true, category: classified as CronRetryOn }
       : { retryable: false };
+  }
+  if (!error) {
+    return { retryable: false };
+  }
+  if (SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN.test(error)) {
+    return { retryable: executionStarted !== true };
   }
   for (const key of keys) {
     if (TRANSIENT_PATTERNS[key]?.test(error)) {

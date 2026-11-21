@@ -263,3 +263,29 @@ it("only offers personal instructions search on a multi-user Gateway", () => {
     personal(true).some((block) => block.hash === "#settings-profile-personal-instructions"),
   ).toBe(true);
 });
+
+it("keeps the ID schema out of ordinary settings and search until enabled", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      gateway: {
+        type: "object",
+        properties: {
+          openclawId: {
+            type: "object",
+            title: "OpenClaw ID",
+            properties: { enabled: { type: "boolean", title: "OpenClaw ID remote access" } },
+          },
+          port: { type: "number", title: "Gateway Port" },
+        },
+      },
+    },
+  };
+  const params = { query: "OpenClaw ID", schema, value: {}, uiHints: {} };
+  expect(findSettingsSearchBlocks(params)).toEqual([]);
+  expect(findSettingsSearchBlocks({ ...params, openclawIdEnabled: true }).length).toBeGreaterThan(
+    0,
+  );
+  expect(findSettingsSearchBlocks({ ...params, openclawIdEnabled: false })).toEqual([]);
+  expect(schema.properties.gateway.properties).toHaveProperty("openclawId");
+});

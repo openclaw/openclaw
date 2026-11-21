@@ -31,6 +31,12 @@ import {
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
+import {
+  createToolSearchTools,
+  registerHeadlessToolSearchCatalog,
+  TOOL_CALL_RAW_TOOL_NAME,
+} from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
 type Params = SubscribeEmbeddedAgentSessionParams;
@@ -70,6 +76,72 @@ function deliveryHarness(params: Omit<Params, "session" | "runId"> = {}) {
 }
 
 describe("tool result ordering", () => {
+  it("retires accepted dispatcher wrappers before the provider turn ends", async () => {
+    const h = createSubscribedCodeModeHarness({ name: "spawn-progress" });
+    const items: AgentActivityItem[] = [];
+    const stop = subscribeToAgentEvents((event) => {
+      if (
+        event.runId === h.runId &&
+        event.stream === "item" &&
+        Value.Check(AgentActivityItemSchema, event.data)
+      ) {
+        items.push(event.data);
+      }
+    });
+    const receipt = jsonResult({
+      status: "accepted",
+      runId: "00000000-0000-4000-8000-000000002633",
+      childSessionKey: "agent:main:subagent:00000000-0000-4000-8000-000000002633",
+      expectsCompletionMessage: true,
+    });
+    registerHeadlessToolSearchCatalog({
+      catalogRef: h.catalogRef,
+      tools: [{ ...createStubTool("sessions_spawn"), execute: async () => receipt }],
+    });
+    const dispatcher = expectDefined(
+      createToolSearchTools(h).find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME),
+      "dispatcher",
+    );
+    const args = { id: "sessions_spawn", args: { label: "Verify fixture" } };
+    try {
+      const result = await h.subscription.runToolLifecycle({
+        toolName: dispatcher.name,
+        toolCallId: "outer-spawn",
+        args,
+        execute: async (started) => {
+          started();
+          return dispatcher.execute("outer-spawn", args);
+        },
+      });
+      expect(result.details).toMatchObject({ tool: { name: "sessions_spawn" }, result: receipt });
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          name: "sessions_spawn",
+          phase: "end",
+          status: "completed",
+          meta: "Verify fixture …2633",
+        }),
+      );
+      // A real nested receipt replaced the dispatcher, not a second worker.
+      // This must happen while the provider is still composing/yielding, not at agent_end.
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          itemId: "tool:outer-spawn",
+          phase: "end",
+          hideFromChannelProgress: true,
+        }),
+      );
+      expect(h.subscription.getItemLifecycle()).toEqual({
+        startedCount: 2,
+        completedCount: 2,
+        activeCount: 0,
+      });
+    } finally {
+      stop();
+      h.dispose();
+    }
+  });
+
   it.each(["discarded", "rejected"] as const)(
     "settles nested lifecycle accounting when terminal presentation is %s",
     async (outcome) => {
@@ -174,10 +246,17 @@ describe("tool result ordering", () => {
         completedCount: 4,
         activeCount: 0,
       });
-      expect(summarizeAgentActivity(liveItems).total).toBe(4);
+      expect(summarizeAgentActivity(liveItems).total).toBe(2);
       emitAssistantTextDeltaAndEnd({ emit: h.emit, text: "Both stages finished." });
       h.emit({ type: "agent_end", messages: [], willRetry: false });
       await h.subscription.waitForPendingEvents();
+      const retractions = liveItems.filter(
+        (item) => item.hideFromChannelProgress && /^tool:code-call-stage-\d$/.test(item.itemId),
+      );
+      expect(retractions.map((item) => item.itemId)).toEqual([
+        "tool:code-call-stage-0",
+        "tool:code-call-stage-1",
+      ]);
       expect(summarizeAgentActivity(liveItems).total).toBe(2);
       expect(h.subscription.getItemLifecycle()).toEqual({
         startedCount: 4,
@@ -254,6 +333,98 @@ describe("tool result ordering", () => {
           : { status: active ? "running" : "failed" },
       );
       expect(h.subscription.getItemLifecycle()).toEqual(counters);
+    },
+  );
+
+  it("finishes a nested tool without revisiting unrelated completed activities", async () => {
+    const h = harness();
+    h.start("read", "unrelated", { path: "fixture.txt" });
+    h.end("read", "unrelated", jsonResult({ done: true }));
+    await h.subscription.waitForPendingEvents();
+    const unrelated = h.subscription.toolMetas[0]!;
+    const activity = unrelated.activity;
+    let reads = 0;
+    Object.defineProperty(unrelated, "activity", {
+      configurable: true,
+      get: () => {
+        reads += 1;
+        return activity;
+      },
+    });
+    h.start("exec", "outer");
+    for (let index = 0; index < 100; index += 1) {
+      h.start("read", `child-${index}`, { path: "fixture.txt" }, "outer");
+      h.end("read", `child-${index}`, jsonResult({ done: true }));
+    }
+    h.end("exec", "outer", jsonResult({ done: true }));
+    await h.subscription.waitForPendingEvents();
+    expect(reads).toBe(0);
+  });
+
+  it.each(["completed", "failed", "cancelled", "routine", "parallel"])(
+    "preserves nested presentation snapshots for %s tools",
+    async (outcome) => {
+      const events: AgentActivityItem[] = [];
+      const h = harness({
+        onAgentEvent: (event) => {
+          if (event.stream === "item" && Value.Check(AgentActivityItemSchema, event.data)) {
+            events.push(event.data);
+          }
+        },
+      });
+      const name = outcome === "routine" ? "progress_card" : "read";
+      h.start("exec", "outer");
+      h.start("exec", "inner", {}, "outer");
+      if (outcome !== "cancelled") {
+        h.start(name, "leaf", { path: "fixture.txt" }, "inner");
+      }
+      if (outcome === "parallel") {
+        h.start("read", "sibling", { path: "fixture.txt" }, "inner");
+      }
+      h.end("exec", "outer", jsonResult({ done: true }));
+      h.end("exec", "inner", jsonResult({ done: true }));
+      await h.subscription.waitForPendingEvents();
+      const before = events.map((event) => ({ ...event }));
+      if (outcome === "cancelled") {
+        await expect(
+          h.subscription.runToolLifecycle({
+            toolName: name,
+            toolCallId: "leaf",
+            parentToolCallId: "inner",
+            args: { path: "fixture.txt" },
+            execute: async (started) => {
+              started();
+              throw new DOMException("Cancelled", "AbortError");
+            },
+          }),
+        ).rejects.toThrow("Cancelled");
+      } else {
+        h.end(name, "leaf", jsonResult({ done: true }), outcome === "failed");
+      }
+      if (outcome === "parallel") {
+        h.end("read", "sibling", jsonResult({ done: true }));
+      }
+      await h.subscription.waitForPendingEvents();
+      expect(events.slice(0, before.length)).toEqual(before);
+      const latest = new Map(events.map((event) => [event.toolCallId, event]));
+      expect(
+        [...latest].map(([id, item]) => [id, item.status, Boolean(item.hideFromChannelProgress)]),
+      ).toEqual([
+        ["outer", "completed", true],
+        ["inner", "completed", outcome !== "routine"],
+        [
+          "leaf",
+          outcome === "failed" || outcome === "cancelled" ? "failed" : "completed",
+          outcome === "routine",
+        ],
+        ...(outcome === "parallel" ? [["sibling", "completed", false]] : []),
+      ]);
+      const retractions = events.filter(
+        (item) => item.hideFromChannelProgress && item.name === "exec",
+      );
+      expect(retractions.map((item) => item.toolCallId)).toEqual(
+        outcome === "routine" ? ["outer"] : ["outer", "inner"],
+      );
     },
   );
 

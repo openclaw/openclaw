@@ -36,6 +36,7 @@ export function isSystemCreatedSessionRow(row: {
   key: string;
   createdActor?: { type: string };
   createdVia?: string;
+  createdSurface?: string;
   label?: string;
   displayName?: string;
   subject?: string;
@@ -43,6 +44,9 @@ export function isSystemCreatedSessionRow(row: {
 }): boolean {
   if (isCronSessionDisplayKey(row.key)) {
     return false;
+  }
+  if (row.classification === "github-publication" || row.createdSurface === "github-publication") {
+    return true;
   }
   // Recall rows predate creation provenance. Their producer-owned suffix also
   // identifies existing rows while the recall is running or awaiting cleanup.

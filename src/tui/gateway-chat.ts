@@ -44,6 +44,7 @@ import {
 } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
 import {
+  GATEWAY_PAIRING_APPROVAL_HINT,
   resolveGatewayDeviceAuthRoute,
   type GatewaySshRoute,
 } from "../gateway/connection-details.js";
@@ -105,10 +106,11 @@ function throwGatewayAuthResolutionError(reason: string): never {
   );
 }
 
-async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boolean> {
+async function hasStoredOriginDeviceAuth(deviceAuthScope: string | undefined): Promise<boolean> {
   try {
     const identity = await loadDeviceIdentityIfPresentAsync();
     return Boolean(
+      deviceAuthScope &&
       identity &&
       (
         await loadOriginDeviceToken({
@@ -268,10 +270,7 @@ export class GatewayChatClient implements TuiBackend {
         ConnectErrorDetailCodes.PAIRING_REQUIRED &&
       !error.message.includes("Pairing request sent.")
     ) {
-      error.message = [
-        error.message,
-        "Pairing request sent. Approve it in that gateway's Control UI (Settings -> Devices), or run `openclaw devices approve --latest` on the gateway host, then retry.",
-      ].join("\n");
+      error.message = `${error.message}\nPairing request sent. ${GATEWAY_PAIRING_APPROVAL_HINT}`;
     }
     materializeErrorStack(error);
     this.pendingConnectError = error;
@@ -735,14 +734,14 @@ async function resolveGatewayConnection(
       "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
     buildConnectionDetails: buildGatewayConnectionDetails,
   });
-  const hasStoredOriginAuth = Boolean(
-    bootstrap.deviceAuthScope && (await hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope)),
-  );
+  const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);
+  const canConnectWithoutSharedAuth =
+    Boolean(edgeAuthHeaders) || (await hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope));
   const missingSharedAuth =
     bootstrap.authFailureReason === "Missing gateway auth credentials." ||
     bootstrap.authFailureReason === "Missing gateway auth token." ||
     bootstrap.authFailureReason === "Missing gateway auth password.";
-  if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
+  if (bootstrap.authFailureReason && (!missingSharedAuth || !canConnectWithoutSharedAuth)) {
     // A local Gateway pairs this CLI at startup; without one, a token hint misdirects.
     if (missingSharedAuth && !hasExplicitGatewayTarget && activeLocalGatewayPort === undefined) {
       throw new Error(
@@ -755,7 +754,6 @@ async function resolveGatewayConnection(
     }
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
-  const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);
   return {
     url: bootstrap.url,
     deviceAuthScope: bootstrap.deviceAuthScope,

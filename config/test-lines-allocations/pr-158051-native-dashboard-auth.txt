@@ -1,2 +1,0 @@
-# Reject malformed native authentication and preserve tokenless signed Dashboard challenges.
-32

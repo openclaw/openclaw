@@ -17,6 +17,7 @@ import {
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
@@ -25,12 +26,16 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
-import { readGatewayLastShutdownAsync } from "../../infra/gateway-boot-lifecycle.js";
+import {
+  readGatewayLastShutdownAsync,
+  readGatewayRecentCrashesAsync,
+} from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
 import type { PortConnection } from "../../infra/ports-types.js";
+import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { readGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
 import { describeUnreadableStateDatabase } from "../../infra/state-repair-message.js";
 import { inspectWindowsGatewayFirewall } from "../../infra/windows-gateway-firewall-diagnostics.js";
@@ -45,7 +50,11 @@ import {
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import { formatGatewayServiceInstallationDrift, normalizeListenerAddress } from "./shared.js";
+import {
+  formatGatewayServiceInstallationDrift,
+  normalizeListenerAddress,
+  type GatewayCrashHistory,
+} from "./shared.js";
 import { readDaemonStatusConfig } from "./status.config.js";
 import { inspectDaemonPortStatuses, resolveGatewayStatusSummary } from "./status.gateway.js";
 import { projectDaemonRuntimeStatus } from "./status.projection.js";
@@ -142,8 +151,10 @@ function hasActiveGatewayExecProbeCredential(params: {
 async function gatherDaemonStatusImpl(
   opts: {
     rpc: GatewayRpcOpts;
+    dashboardTarget?: { port: number; probeUrl: string };
     probe: boolean;
     requireRpc?: boolean;
+    signal?: AbortSignal;
     deep?: boolean;
     allowExecSecretRefs?: boolean;
     pluginVersionTarget?: "running" | "restart";
@@ -187,8 +198,11 @@ async function gatherDaemonStatusImpl(
       )
     : undefined;
   if (opts.deep && !trimToUndefined(opts.rpc.url)) {
-    const { preflightOpenClawDatabaseSchemas, OpenClawDatabaseSchemaPreflightError } =
-      await import("../../state/openclaw-database-preflight.js");
+    const {
+      preflightOpenClawDatabaseSchemas,
+      OpenClawDatabaseSchemaPreflightError,
+      getOpenClawDatabaseReadinessFailure,
+    } = await import("../../state/openclaw-database-preflight.js");
     // Diagnose a refused database before config and lifecycle readers try to open it.
     const schemas = await preflightOpenClawDatabaseSchemas({
       env: mergeGatewayServiceEnv(process.env, targetServiceCommand),
@@ -205,6 +219,7 @@ async function gatherDaemonStatusImpl(
       const { problem, recovery } = describeUnreadableStateDatabase(
         unreadableStateDatabase.path,
         unreadableStateDatabase.reason,
+        { cause: getOpenClawDatabaseReadinessFailure(unreadableStateDatabase) },
       );
       throw new Error(`${problem}. ${recovery}`);
     }
@@ -228,22 +243,60 @@ async function gatherDaemonStatusImpl(
   } = await loadDaemonConfigContext(targetServiceCommand, {
     deep: opts.deep,
   });
-  const { gateway, daemonPort, cliPort, probeUrl, probeUrlOverride } =
-    await resolveGatewayStatusSummary({
-      cliCfg,
-      daemonCfg,
-      mergedDaemonEnv,
-      commandProgramArguments: targetServiceCommand?.programArguments,
-      rpcUrlOverride: opts.rpc.url,
-      localPortOverride,
-    });
+  const { dashboardTarget } = opts;
+  const summary = await resolveGatewayStatusSummary({
+    cliCfg,
+    daemonCfg,
+    // A caller's port override is not evidence of where an installed unit listens.
+    mergedDaemonEnv:
+      dashboardTarget && targetServiceCommand
+        ? {
+            ...mergedDaemonEnv,
+            OPENCLAW_GATEWAY_PORT: resolveEnvironmentValue(
+              targetServiceCommand.environment,
+              "OPENCLAW_GATEWAY_PORT",
+            ),
+          }
+        : mergedDaemonEnv,
+    commandProgramArguments: targetServiceCommand?.programArguments,
+    rpcUrlOverride: opts.rpc.url,
+    localPortOverride,
+  });
+  const { daemonPort } = summary;
+  const cliPort = dashboardTarget?.port ?? summary.cliPort;
+  const selectedUrl = dashboardTarget && new URL(dashboardTarget.probeUrl);
+  const dashboardMatchesNative =
+    selectedUrl !== undefined &&
+    (loadState.status === "not-loaded" || targetServiceCommand !== null) &&
+    dashboardTarget?.port === daemonPort &&
+    selectedUrl.protocol === (summary.gateway.tlsEnabled ? "wss:" : "ws:") &&
+    (selectedUrl.hostname === "127.0.0.1" || selectedUrl.hostname === summary.gateway.bindHost);
+  // Use the existing explicit-URL transport policy for alternate endpoints. Only
+  // the matching loopback probe may borrow native service credentials or TLS pins.
+  const probeUrlOverride =
+    summary.probeUrlOverride ??
+    (dashboardTarget && !(dashboardMatchesNative && dashboardTarget.probeUrl === summary.probeUrl)
+      ? dashboardTarget.probeUrl
+      : null);
+  const probeUrl = probeUrlOverride ?? summary.probeUrl;
+  const gateway = dashboardTarget
+    ? { ...summary.gateway, probeUrl: projectGatewayUrlForDiagnostics(probeUrl) }
+    : summary.gateway;
   const hasUrlOverride = Boolean(probeUrlOverride);
-  const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
+  const serviceTargetsProbe =
+    useNativeServiceTargetContext &&
+    (dashboardTarget ? dashboardMatchesNative && !summary.probeUrlOverride : !hasUrlOverride);
   const shouldInspectLocalGateway = !hasUrlOverride;
   const lastShutdown =
     opts.deep && shouldInspectLocalGateway
       ? await readGatewayLastShutdownAsync(mergedDaemonEnv).catch(() => undefined)
       : undefined;
+  const crashHistory: GatewayCrashHistory | undefined = shouldInspectLocalGateway
+    ? await readGatewayRecentCrashesAsync(mergedDaemonEnv).then(
+        (recentCrashes) => ({ recentCrashes }),
+        (error: unknown) => ({ crashHistoryError: String(error) }),
+      )
+    : undefined;
   let duelingScopesWarning: string | null = null;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
@@ -378,6 +431,7 @@ async function gatherDaemonStatusImpl(
             ? localCertificate.value.fingerprintSha256
             : undefined,
           timeoutMs,
+          ...(opts.signal ? { signal: opts.signal } : {}),
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
           allowRpcConfigCredentials,
@@ -508,7 +562,7 @@ async function gatherDaemonStatusImpl(
 
   return {
     cli: projection.cli,
-    logFile: resolveConfiguredLogFilePath(cliCfg),
+    logFile: await resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
       label: formatServiceLabel(service.label, runtime),
@@ -524,7 +578,13 @@ async function gatherDaemonStatusImpl(
       ...projection.runtimeIntent,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
       ...(installationDrift
-        ? { installationDrift: formatGatewayServiceInstallationDrift(installationDrift) }
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(
+              installationDrift,
+              process.env,
+              { command },
+            ),
+          }
         : {}),
       runtime: runtime?.inspectionFailure
         ? {
@@ -551,6 +611,7 @@ async function gatherDaemonStatusImpl(
     },
     gateway: {
       ...gateway,
+      ...crashHistory,
       ...(lastShutdown ? { lastShutdown } : {}),
       ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+import { isVisibleSpawnedSession } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions.js";
 import {
@@ -62,6 +63,7 @@ export function resolveCodexGoalAdmission(
     isDirectChatGoalSession({
       entry: current.entry,
       allowAborted: request.goalOperation.action === "resume",
+      allowVisibleSpawn: true,
       acpMeta,
       requestedSessionId: session.requestedSessionId,
       sessionKey: current.canonicalKey,
@@ -80,6 +82,7 @@ export function resolveCodexGoalAdmission(
 
 export function isDirectChatGoalSession(params: {
   allowAborted?: boolean;
+  allowVisibleSpawn?: boolean;
   entry?: SessionEntry;
   acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
@@ -94,9 +97,11 @@ export function isDirectChatGoalSession(params: {
     entry.initializationPending !== true &&
     entry.pendingFinalDelivery === undefined &&
     entry.pluginOwnerId === undefined &&
-    entry.spawnedBy === undefined &&
+    // Interactive spawned tasks retain lineage; only Goal input opts into this path.
+    ((entry.spawnedBy === undefined && (entry.spawnDepth ?? 0) === 0) ||
+      (params.allowVisibleSpawn === true &&
+        isVisibleSpawnedSession(params.sessionKey, { entry }))) &&
     entry.subagentRole === undefined &&
-    (entry.spawnDepth ?? 0) === 0 &&
     params.acpMeta == null &&
     entry.cronRunContinuation === undefined &&
     !isSubagentSessionKey(params.sessionKey) &&
@@ -135,6 +140,7 @@ export function isLocalChatInputAdmission(
       sessionKey: current.canonicalKey,
       requestedSessionId: session.requestedSessionId,
       allowAborted: request.goalOperation?.action === "resume",
+      allowVisibleSpawn: Boolean(request.goalOperation),
     }) ||
     (entry.agentHarnessId !== undefined && entry.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID)
   ) {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -21,6 +21,25 @@ const {
 const fixture = (changes: Parameters<typeof configureMerge>[1] = {}) =>
   configuredFixture(createFixture, changes);
 const clean = { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" };
+
+describePosix("merge fixture state publication", () => {
+  it.each(["save", "GitHub request"])("preserves an open reader during %s", (writer) => {
+    const f = fixture();
+    const before = f.state();
+    const reader = openSync(join(f.root, "server.json"), "r");
+    try {
+      if (writer === "save") {
+        f.save({ ...before, reads: 1 });
+      } else {
+        expect(f.ordinaryRead().state).toBe("OPEN");
+      }
+      expect(f.state()).not.toEqual(before);
+      expect(JSON.parse(readFileSync(reader, "utf8"))).toEqual(before);
+    } finally {
+      closeSync(reader);
+    }
+  });
+});
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
   it("lands green CI with MAINTAIN authority", () => {

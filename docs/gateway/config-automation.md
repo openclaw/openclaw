@@ -102,14 +102,14 @@ See [Automation delivery](/automation/cron-jobs/delivery#default-destinations).
 ```
 
 `cron.failureAlert` owns the global alert policy and its default destination. Jobs
-with an existing failure route are covered by default after 2 consecutive
-execution failures with a 1-hour cooldown; a `cron.failureAlert` object explicitly
+with an existing failure route are covered by default from the first
+execution failure, with a 1-hour cooldown; a `cron.failureAlert` object explicitly
 activates/tunes the policy even when no route existed. The retired
 `cron.failureDestination` block is merged into it by
 [`openclaw doctor --fix`](/cli/doctor).
 
 - `enabled`: explicitly enable or disable the global policy. `false` disables inherited notifications unless a job has its own `failureAlert` object; `true` explicitly enables globally. Omitting it preserves route-backed defaults.
-- `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
+- `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `1`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
 - `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the target in `to`. Defaults to `"announce"` when enough target data exists.

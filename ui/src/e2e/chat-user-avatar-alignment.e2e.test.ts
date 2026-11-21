@@ -114,9 +114,11 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await expect.poll(() => pending.length).toBeGreaterThan(0);
-      const slot = page.locator(".chat-group.user .chat-avatar-slot");
-      await expect.poll(() => slot.getAttribute("data-avatar-state")).toBe("pending");
-      const loading = await slot.evaluate((element) => {
+      const avatar = page
+        .locator(".chat-group.user")
+        .getByRole("img", { name: "Riley", exact: true });
+      await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("pending");
+      const loading = await avatar.evaluate((element) => {
         const { width, height } = element.getBoundingClientRect();
         const style = getComputedStyle(element);
         const radius = style.borderTopLeftRadius;
@@ -134,12 +136,22 @@ suite.define(() => {
       expect.soft(loading.rounded).toBe(true);
       expect.soft(loading.background).not.toBe("rgba(0, 0, 0, 0)");
       await Promise.all(pending.map((route) => route.fulfill({ status: 404, body: "Not found" })));
-      const fallback = slot.locator(".chat-avatar:visible");
-      await expect.poll(() => fallback.textContent()).toBe("R");
-      const bounds = await fallback.boundingBox();
-      expect(bounds?.width).toBe(loading.width);
-      expect(bounds?.height).toBe(loading.height);
-      expect(await slot.ariaSnapshot()).toBe('- img "Riley"');
+      // A cached miss can replace the image frame with standalone initials.
+      // Read the named image and its painted fallback together across that replacement.
+      await expect
+        .poll(() =>
+          avatar.evaluate((element) => {
+            const fallback = element.querySelector(".chat-avatar--sender-initials") ?? element;
+            const { width, height } = fallback.getBoundingClientRect();
+            return {
+              initials: fallback.textContent,
+              width,
+              height,
+              visible: fallback.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+            };
+          }),
+        )
+        .toEqual({ initials: "R", width: loading.width, height: loading.height, visible: true });
     });
   });
 

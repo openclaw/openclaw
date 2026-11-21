@@ -10,6 +10,7 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { describeSystemAgentConfigConflict } from "../system-agent/setup-config-snapshot.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHintAsync } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
@@ -76,6 +77,7 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
     renderParams.promptMode !== "minimal" && renderParams.promptMode !== "none";
   return buildAgentSystemPrompt({
     ...renderParams,
+    openClawSetupIssue: describeSystemAgentConfigConflict(config),
     restartCommandsEnabled: isRestartEnabled(config),
     reasoningCommandsEnabled:
       shouldHandleTextCommands({ cfg: config, surface: channel }) ||

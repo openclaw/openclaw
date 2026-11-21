@@ -4,7 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { generateBashCompletion } from "./completion-bash.js";
 import {
   collectShellCompletionCommandTree,
@@ -52,7 +52,7 @@ function createCompletionScriptGenerator(program: Command): (shell: CompletionSh
 
 function writeCompletionRegistrationWarning(message: string): void {
   const diagnostic = `[completion] ${message}`;
-  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
+  writeConsoleDiagnosticWarning(diagnostic);
 }
 
 export function registerCompletionCli(program: Command) {
@@ -368,9 +368,21 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $valueOptions = ${formatPowerShellArray(root.valueOptions)}
     $requiredValueOptions = ${formatPowerShellArray(root.requiredValueOptions)}
     $pendingRequiredValue = $false
-    $previousElementIndex = if ($wordToComplete -eq '') { $commandElements.Count - 1 } else { $commandElements.Count - 2 }
+    $hasCurrentWord = $wordToComplete -ne ''
+    $previousElementIndex = if ($hasCurrentWord) { $commandElements.Count - 2 } else { $commandElements.Count - 1 }
     $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
     $choiceFlag = $previousElement
+    # Native completion includes the suffix after the cursor in both the word and AST.
+    if ($hasCurrentWord -and $commandElements[-1].Extent.EndOffset -gt $cursorPosition) {
+        $wordPrefix = $commandElements[-1].Extent.Text.Substring(0, $cursorPosition - $commandElements[-1].Extent.StartOffset)
+        $prefixAst = [System.Management.Automation.Language.Parser]::ParseInput("openclaw $wordPrefix", [ref]$null, [ref]$null)
+        $commandElements[-1] = $prefixAst.EndBlock.Statements[0].PipelineElements[0].CommandElements[-1]
+        $wordToComplete = if ($commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $commandElements[-1].Value
+        } else {
+            $wordPrefix
+        }
+    }
     $choicePrefix = $wordToComplete
     # PowerShell retains quotes in wordToComplete, even for an unfinished literal.
     if ($wordToComplete -ne '' -and $commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
@@ -389,7 +401,7 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
         } else {
             $commandElements[$i].Extent.Text
         }
-        if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
+        if ($i -eq $commandElements.Count - 1 -and $hasCurrentWord) { break }
         if ($element -like "-*") {
             $flag = ($element -split '=', 2)[0]
             if ($element -notlike '*=*' -and $valueOptions -contains $flag) {

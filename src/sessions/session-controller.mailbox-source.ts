@@ -59,11 +59,12 @@ export function settleSessionControllerSourceInjectionOrder(
 /** Retains an early source through the exact native outcome, not just its ACK. */
 export function beginSessionControllerSourceInjection(
   input: SessionControllerInput,
-  options: { keepOrderOnDecline?: boolean } = {},
+  options: { keepOrderOnDecline?: boolean; retryWithdrawnSteer?: boolean } = {},
 ): SessionControllerSourceInjection {
   if (
     (input.phase !== "preparing" && input.phase !== "waiting") ||
-    input.injectionAttempted ||
+    (input.injectionAttempted &&
+      !(options.retryWithdrawnSteer && input.steerNow && input.custody.enqueued)) ||
     input.injection ||
     input.claim ||
     input.withdrawalHolds ||
@@ -183,10 +184,6 @@ export function beginSessionControllerSourceInjection(
         });
         return true;
       } catch (error) {
-        // A failed live-authority assertion cannot return a queued-ready source
-        // to selection. Retire before releasing the injection receipt: finish
-        // can synchronously wake the mailbox and enter a backend.
-        retireSessionControllerInput(input);
         finish(false);
         if (input.abortSignal.aborted) {
           return false;
@@ -272,6 +269,7 @@ export function retireSessionControllerInput(input: SessionControllerInput): voi
     return;
   }
   input.retirementRequested = true;
+  input.steerNow = undefined;
   if (
     input.cancelling ||
     input.withdrawalHolds ||

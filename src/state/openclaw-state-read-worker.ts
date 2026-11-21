@@ -12,9 +12,10 @@ import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
 } from "../infra/worker-native-lifecycle.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -227,6 +228,7 @@ class StateReadSource {
 
   constructor(readonly state: ReadRuntime) {}
 
+  /** Adopts the producer's command; borrowed mutable inputs must be captured by that producer. */
   createTransport(
     command: OpenClawStateReadCommand,
     onChunk?: OpenClawStateReadOptions["onChunk"],
@@ -263,7 +265,6 @@ type ReadTask = ReturnType<ReadPool["runTask"]>;
 
 // Methods are shared; cancellation, command bytes, and failed cleanup remain per read.
 class StateReadTransport {
-  private readonly capturedCommand: OpenClawStateReadCommand;
   private readonly tasks = new Map<ReadTask, { retire: boolean }>();
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -271,15 +272,12 @@ class StateReadTransport {
   private chunksDrained: (() => void) | undefined;
 
   constructor(
-    command: OpenClawStateReadCommand,
+    private readonly capturedCommand: OpenClawStateReadCommand,
     private readonly source: StateReadSource,
     private readonly onChunk?: OpenClawStateReadOptions["onChunk"],
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
-  ) {
-    // Immutable owner snapshots can cross preparation waits without another private copy.
-    this.capturedCommand = isDeeplyFrozenPlainData(command) ? command : structuredClone(command);
-  }
+  ) {}
 
   private async closeTask(task: ReadTask): Promise<void> {
     await task.close(this.tasks.get(task)?.retire ? { retire: true } : undefined);
@@ -326,13 +324,28 @@ class StateReadTransport {
         command: readCommand,
       };
       const pool = readPool(this.source.state, this.source.ownsAdmission(), this.awaitedOnly);
+      if (
+        getDatabaseProcessRole() === "gateway" &&
+        !getPluginExecutionFrame()?.canUseInteractiveStateReadCapacity
+      ) {
+        const { pendingTasks, maxWorkers } = pool.pool.getSnapshot();
+        // Leave two reads per worker for authenticated UI requests; the pool keeps its hard caps.
+        if (pendingTasks >= DEFAULT_WORKER_PENDING_TASKS - 2 * maxWorkers) {
+          throw new WorkerTaskError(
+            "worker task capacity reached (shared-state interactive reserve)",
+            "overloaded",
+          );
+        }
+      }
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
       const task = pool.pool.runTask(
         async () => {
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () =>
+            authority.assertCurrent(),
+          );
           if (turn) {
             releaseAdmission = await turn;
           }

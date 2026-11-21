@@ -103,6 +103,7 @@ export function applyMemorySessionEntryCleanup(
           maintenance,
           initialUnarchivedCount: countUnarchivedSessionEntries(store),
           forceMaintenance: params.maintenanceOverride !== undefined,
+          deferArchiving: snapshot.archivingDeferred === true,
           readPreserveKeys: () =>
             resolveSessionMaintenancePreserveKeys({
               store,

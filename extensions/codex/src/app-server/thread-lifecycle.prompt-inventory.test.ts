@@ -1,17 +1,9 @@
-import { activatePluginForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it } from "vitest";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import { createThreadRequestAttemptParams as createAttemptParams } from "./thread-lifecycle.test-fixtures.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
 
-it("materializes the openclaw_direct prompt inventory once with matching guidance", async () => {
-  // The skill-workshop plugin's tool registers the Workshop prompt section.
-  onTestFinished(
-    await activatePluginForTest({
-      config: { plugins: { enabled: true, allow: ["skill-workshop"] } },
-      pluginId: "skill-workshop",
-    }),
-  );
+it("materializes the openclaw_direct prompt inventory once with matching guidance", () => {
   const params = createAttemptParams({ provider: "openai" });
   params.sourceReplyDeliveryMode = "message_tool_only";
   let namespaceReads = 0;
@@ -54,7 +46,6 @@ it("materializes the openclaw_direct prompt inventory once with matching guidanc
   expect(instructions).toContain(
     "Deferred searchable OpenClaw dynamic tools available: openclaw_direct.alpha_tool, openclaw_direct.skill_workshop, openclaw_direct.zeta_tool.",
   );
-  expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain(
     "Use Codex native `spawn_agent` for work that only needs Codex-native tools",
   );

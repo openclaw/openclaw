@@ -50,6 +50,7 @@ const TENCENT_PROVIDERS = [
     aliases: [
       { modelRef: `${TOKENHUB_PROVIDER_ID}/hy4-preview`, alias: "Hy4 preview (TokenHub)" },
       { modelRef: `${TOKENHUB_PROVIDER_ID}/hy4`, alias: "Hy4 (TokenHub)" },
+      { modelRef: `${TOKENHUB_PROVIDER_ID}/hy4-flash`, alias: "Hy4 flash (TokenHub)" },
       { modelRef: `${TOKENHUB_PROVIDER_ID}/hy3`, alias: "Hy3 (TokenHub)" },
       { modelRef: `${TOKENHUB_PROVIDER_ID}/hy3-preview`, alias: "Hy3 preview (TokenHub)" },
     ],
@@ -68,6 +69,7 @@ const TENCENT_PROVIDERS = [
     aliases: [
       { modelRef: `${TOKENPLAN_PROVIDER_ID}/hy4-preview`, alias: "Hy4 preview (TokenPlan)" },
       { modelRef: `${TOKENPLAN_PROVIDER_ID}/hy4`, alias: "Hy4 (TokenPlan)" },
+      { modelRef: `${TOKENPLAN_PROVIDER_ID}/hy4-flash`, alias: "Hy4 flash (TokenPlan)" },
       { modelRef: `${TOKENPLAN_PROVIDER_ID}/hy3`, alias: "Hy3 (TokenPlan)" },
     ],
     choiceId: "tokenplan-api-key",
@@ -126,6 +128,10 @@ export default definePluginEntry({
               ctx,
               providerId: provider.providerId,
               buildProvider: provider.buildProvider,
+              // Tencent's model list carries IDs and status only and includes TTS models
+              // (#198288), so an uncatalogued ID stays out of default pickers until the
+              // catalog describes it; typed and configured refs still run.
+              modelDiscovery: { unknownModelChatEvidence: "unlikely" },
             }),
         },
         staticCatalog: {

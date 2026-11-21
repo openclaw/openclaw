@@ -92,9 +92,15 @@ describe("Telegram formatting", () => {
       "**start https://example.com** end",
       '<b>start <a href="https://example.com">https://example.com</a></b> end',
     ],
+    ["Use the <b> tag to make text **bold**.", "Use the &lt;b&gt; tag to make text <b>bold</b>."],
+    ["<i>one <i>two</i>", "&lt;i&gt;one <i>two</i>"],
+    ["<y <b>z</b>", "&lt;y <b>z</b>"],
+    ['<a href="https://example.com">docs', '&lt;a href="https://example.com"&gt;docs'],
+    ['<pre><code class="language-js">x', '&lt;pre&gt;&lt;code class="language-js"&gt;x'],
+    ["[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)", "<code>Nova_Core.md</code>"],
   ])("renders code, escaping, and nested formatting: %s", (input, expected) => {
     expect(markdownToTelegramHtml(input)).toBe(expected);
-    if (input.startsWith('<b class="x">')) {
+    if (input.startsWith("<")) {
       expect(htmlText(input)).toBe(expected);
     }
   });
@@ -127,12 +133,6 @@ describe("Telegram formatting", () => {
       );
     },
   );
-
-  it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
-    const res = markdownToTelegramHtml("[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)");
-    expect(res).not.toContain("file://");
-    expect(res).toContain("Nova_Core.md");
-  });
 
   it.each([".", ")"])("keeps section gaps and ordered children tight: %s", (marker) => {
     for (const [input, expected] of [
@@ -306,7 +306,6 @@ describe("Telegram formatting", () => {
 describe("file references", () => {
   it("keeps native HTML text, tags and file refs intact", () => {
     expect(htmlText("Check README.md")).toBe("Check README.md");
-    expect(htmlText("x<y <b>z</b>")).toBe("x&lt;y <b>z</b>");
     expect(htmlText("<code>i<n</code>")).toBe("<code>i&lt;n</code>");
     expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
   });

@@ -24,7 +24,7 @@ vi.mock("./file-state.js", () => ({
   refreshAuthProfileFileState: async () => {},
   authProfileSourceExists: () => false,
   readAuthProfileDatabaseIdentity: vi.fn(),
-  captureAuthProfileFileIdentity: vi.fn(),
+  captureAuthProfileFileIdentityAsync: vi.fn(),
   authProfileFileChanges: observation,
 }));
 

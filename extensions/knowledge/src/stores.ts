@@ -48,6 +48,8 @@ const NO_GRANTS: ConversationGrants = Object.freeze({});
  * registry bindings; each physical store gets one lazily started runtime. */
 export class Stores {
   readonly registry: RegistryClient;
+  /** One activation per service lifetime, including use of cached registry facts. */
+  onFirstUse?: () => void;
   private readonly runtimes = new Map<string, StoreRuntime>();
   private readonly provisioning = new Map<string, Promise<RegistrySnapshot>>();
   private readonly fenced = new Set<string>();
@@ -122,6 +124,9 @@ export class Stores {
    * against the new assignment. */
   async ensure(): Promise<RegistrySnapshot> {
     this.assertLive(this.epoch);
+    const firstUse = this.onFirstUse;
+    this.onFirstUse = undefined;
+    firstUse?.();
     if (!this.registry.current) {
       await this.registry.load();
     }
@@ -248,7 +253,7 @@ export class Stores {
     }
     await this.retireUnused();
   }
-  // A runtime stops once its store serves no agent (no idle timer; spec §5.3).
+  // Assignment retirement releases runtimes whose stores serve no agent (spec §5.3).
   private async retireUnused() {
     const inUse = new Set(this.agents().map((agent) => this.vaultFor(agent)));
     await Promise.all(
@@ -408,13 +413,9 @@ export class Stores {
           writesEnabled: this.policy.writesEnabled,
           hubPercentile: this.policy.hubPercentile,
         },
-        this.changed,
+        this.policy.operatorRead ? this.changed : undefined,
       );
       this.runtimes.set(vaultId, runtime);
-      // Change hints carry no data; operator reads reconcile through authorized calls.
-      if (this.policy.operatorRead) {
-        runtime.live.start();
-      }
     }
     return runtime;
   }
@@ -450,6 +451,7 @@ export class Stores {
     this.current = true;
   }
   stop(settled: Promise<unknown> = Promise.resolve()): Promise<void> {
+    this.onFirstUse = undefined;
     ++this.epoch;
     this.current = false;
     const runtimes = [...this.runtimes.values()];

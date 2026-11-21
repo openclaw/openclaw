@@ -75,6 +75,7 @@ describe("OpenClaw ID with the Labs switch off", () => {
     const service = createOpenClawIdService({
       getConfig: () => config,
       getStateDir: () => "/nonexistent/openclaw-id-inert-test",
+      getGatewayServer: () => undefined,
       log,
     });
 
@@ -93,6 +94,7 @@ describe("OpenClaw ID with the Labs switch off", () => {
     const service = createOpenClawIdService({
       getConfig: () => ({ enabled: false, relayUrl: "https://relay.example.test/" }),
       getStateDir: () => "/nonexistent/openclaw-id-inert-test",
+      getGatewayServer: () => undefined,
       log,
       createAuthority: async () => createOpenClawIdAuthority(memoryStore()),
     });
@@ -105,11 +107,15 @@ describe("OpenClaw ID with the Labs switch off", () => {
   });
 
   it("returns to inert after the switch turns off again", async () => {
+    const { createOpenClawIdAuthority } = await import("./authority.js");
+    const { memoryStore } = await import("./openclaw-id.test-support.js");
     let config: GatewayOpenClawIdConfig | undefined = { enabled: true };
     const service = createOpenClawIdService({
       getConfig: () => config,
       getStateDir: () => "/nonexistent/openclaw-id-inert-test",
+      getGatewayServer: () => undefined,
       log,
+      createAuthority: async () => createOpenClawIdAuthority(memoryStore()),
     });
     await service.reconcileRuntimePolicy();
     vi.clearAllMocks();

@@ -231,6 +231,8 @@ Markdown frontmatter string reads decode YAML quoting and inline comments:
 `key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
 `a#b` remains part of the string, and non-string scalar spelling such as
 `00123` is preserved. Reads leave the source bytes unchanged.
+Block-style lists and maps resolve to YAML text, and multi-line string scalars
+retain YAML folding and chomping. Cross-key aliases remain alias text.
 
 ## Mutation contract
 

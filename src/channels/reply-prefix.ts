@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentIdentity, resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {
-  extractShortModelName,
+  resolveModelResponsePrefixContext,
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,10 +37,10 @@ export function createReplyPrefixContext(params: {
 
   const onModelSelected = (ctx: ModelSelectionContext) => {
     // Mutate the object directly instead of reassigning to ensure closures see updates.
-    prefixContext.provider = ctx.provider;
-    prefixContext.model = extractShortModelName(ctx.model);
-    prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-    prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+    Object.assign(
+      prefixContext,
+      resolveModelResponsePrefixContext({ ...ctx, thinkLevel: ctx.thinkLevel ?? "off" }),
+    );
   };
 
   return {

@@ -1,6 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
@@ -11,10 +10,18 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { lstatSync: vi.fn(actual.lstatSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
+  vi.mocked(fs.lstatSync).mockReset();
 });
 
 function seed(filename: string) {
@@ -99,6 +106,23 @@ it("omits only disposable core migration backups for the shipped flag", async ()
   expectBackup(foreign);
 });
 
+it("keeps the shared image a legacy credential cutover can fall back to", async () => {
+  f.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  await owned(() =>
+    backupDoctorMigrationDatabases({
+      env: f.env,
+      pendingDatabasePaths: [f.shared, f.agent],
+      pendingMigrations: [
+        { kind: "state", path: f.shared, foundVersion: 22, supportedVersion: 40 },
+        { kind: "agent", path: f.agent, foundVersion: 27, supportedVersion: 39 },
+      ],
+      databasePaths: [f.shared, f.agent],
+    }),
+  );
+  expectBackup(f.shared);
+  expect(f.backups(f.agent)).toEqual([]);
+});
+
 it.each(["flag-only", "foreign-temp"])("retains ordinary backups for %s Doctor", async (kind) => {
   const env =
     kind === "flag-only"
@@ -129,9 +153,9 @@ it.each(["symlink", "hardlink"])("does not admit a %s family as disposable", asy
 });
 
 it("requires a known bigint inode before omitting an image", async () => {
+  const { lstatSync: lstat } = await vi.importActual<typeof import("node:fs")>("node:fs");
   await owned(() => {
-    const lstat = fs.lstatSync;
-    vi.spyOn(fs, "lstatSync").mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
+    vi.mocked(fs.lstatSync).mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
       const stat = lstat(...args);
       if (String(args[0]) === f.agent && stat && typeof stat.ino === "bigint") {
         return new Proxy(stat, {
@@ -140,7 +164,6 @@ it("requires a known bigint inode before omitting an image", async () => {
       }
       return stat;
     });
-    syncBuiltinESMExports();
     const coverage = createDoctorRehearsalDatabaseCoverage(f.env)!;
     expect(coverage.admit([f.agent])).toEqual([]);
     expect(coverage.excludes(f.agent)).toBe(false);

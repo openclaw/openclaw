@@ -657,7 +657,7 @@ describe("runAgentHarnessAttempt", () => {
         await runAgentHarnessAttempt({ ...params, suppressNextUserMessagePersistence: true });
         expect(await loadTranscriptEvents(target)).toEqual(committed);
       } finally {
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
       }
     },
   );
@@ -2207,7 +2207,7 @@ describe("selectAgentHarness", () => {
                   baseUrl,
                   compat: {
                     supportsReasoningEffort: true,
-                    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+                    supportedReasoningEfforts: "none,low,medium,high,xhigh,max,ultra".split(","),
                   },
                 },
               ],

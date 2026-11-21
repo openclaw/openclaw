@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { assertAgentInitializationComplete } from "../../config/sessions/agent-initialization.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.reset.js";
@@ -53,6 +54,21 @@ export type InitSessionStateAttemptContext = {
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
+
+export async function loadReplySessionInitializationForAttempt(
+  target: Parameters<typeof loadReplySessionInitializationSnapshot>[0],
+  params: InitSessionStateParams,
+  attemptContext: InitSessionStateAttemptContext,
+  mainSessionKey: string,
+) {
+  const snapshot = await loadReplySessionInitializationSnapshot(target, {
+    reader: resolveInitializationSessionReader(params, attemptContext),
+    includeLifecycle: true,
+    assertCurrent: () => params.signal?.throwIfAborted(),
+  });
+  assertAgentInitializationComplete(snapshot.readEntry(mainSessionKey));
+  return snapshot;
+}
 
 export function assertReplySessionInitializationAllowed(
   sessionKey: string,
@@ -130,7 +146,7 @@ export async function resolveInitSessionStateAttemptContext(
   };
 }
 
-export function resolveInitializationSessionReader(
+function resolveInitializationSessionReader(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
 ) {

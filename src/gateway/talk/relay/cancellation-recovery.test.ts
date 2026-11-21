@@ -12,6 +12,7 @@ import {
   cancelTalkRealtimeRelayTurn,
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession,
+  submitTalkRealtimeRelayToolResult,
 } from "./operations.js";
 import { relaySessions } from "./state.js";
 
@@ -74,6 +75,19 @@ async function createFixture(transportOverrides: Partial<RealtimeVoiceBridge> = 
     doneEvent: (responseId?: string) =>
       request.onEvent?.({ direction: "server", type: "response.done", responseId }),
     stop: () => stopTalkRealtimeRelaySession(target),
+    consult: async () => {
+      await send();
+      request.onToolCall?.({
+        itemId: "call-1",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "Save a summary to notes.txt" },
+      });
+    },
+    cancelConsult: () =>
+      request.onEvent?.({ direction: "server", type: "tool.call.cancelled", itemId: "call-1" }),
+    submitConsult: (result: unknown) =>
+      submitTalkRealtimeRelayToolResult({ ...target, callId: "call-1", result }),
     cancelWithoutTurn: () => cancelTalkRealtimeRelayTurn(target),
     fresh: async () => {
       await send();
@@ -316,4 +330,28 @@ describe("talk realtime relay cancellation recovery", () => {
       ).toEqual(phase === "normal" ? [finalText] : []);
     },
   );
+
+  it("tells the voice model once that a provider-cancelled consult has an unknown outcome", async () => {
+    const sendUserMessage = vi.fn();
+    const f = await createFixture({ sendUserMessage });
+    await f.consult();
+
+    f.cancelConsult();
+    f.cancelConsult();
+
+    expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("interrupted before it reported back"),
+    );
+  });
+
+  it("sends no cancellation notice after the consult result was accepted", async () => {
+    const sendUserMessage = vi.fn();
+    const f = await createFixture({ sendUserMessage });
+    await f.consult();
+    await f.submitConsult({ text: "Saved." });
+
+    f.cancelConsult();
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
 });

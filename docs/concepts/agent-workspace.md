@@ -116,7 +116,7 @@ Standard files OpenClaw expects inside the workspace:
     Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
   </Accordion>
   <Accordion title="USER.md - directive-based user model (optional)">
-    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
+    Stable preferences, communication style, relationships, and active-project context. Write current directives without date/status metadata; keep preference history in daily memory. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
   </Accordion>
   <Accordion title="IDENTITY.md - name, vibe, emoji">
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual. Template: [IDENTITY.md](/reference/templates/IDENTITY).

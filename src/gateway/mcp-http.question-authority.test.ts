@@ -7,7 +7,6 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../agents/cli-runner.test-helpers.js";
-import { createCliRunCurrentAssertion } from "../agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -226,9 +225,8 @@ function createQuestionFixture(
           context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
           "prepared CLI grant",
         );
-        context.preparedBackend.mcpClientGrantCapture?.activate(
-          captureKey,
-          createCliRunCurrentAssertion(context.params),
+        context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, () =>
+          context.params.abortSignal?.throwIfAborted(),
         );
         expect(resolveGrant(token, runtime.ownerToken)?.isCurrent()).toBe(true);
         return { token, context, source, admission };
@@ -292,7 +290,7 @@ function createQuestionFixture(
 function expectAnswered({ result }: McpResponse) {
   expect(result).toMatchObject({
     isError: false,
-    content: [{ type: "text", text: expect.stringContaining('"status": "answered"') }],
+    content: [{ type: "text", text: expect.stringContaining('"status":"answered"') }],
   });
 }
 

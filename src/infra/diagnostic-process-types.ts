@@ -85,6 +85,12 @@ export type DiagnosticWorkerRequestFields = {
       | "posted"
       | "postFinished"
       | "received"
+      | "backendLoadStarted"
+      | "backendLoadFinished"
+      | "openGrantStarted"
+      | "openGrantFinished"
+      | "factoryStarted"
+      | "factoryFinished"
       | "inputReady"
       | "executeStarted"
       | "executeFinished"
@@ -131,6 +137,22 @@ export type DiagnosticWorkerRetainedData = {
   providers?: number;
   accounts?: number;
   truncated?: boolean;
+};
+
+/** Direct physical workers; unknown external policies and missing heap samples stay explicit. */
+export type DiagnosticWorkerCensus = {
+  kind: string;
+  poolId?: number;
+  workerClass: WorkerPoolClass | "other";
+  count: number;
+  floor: number | null;
+  cap: number | null;
+  pointReadCap?: number;
+  idlePolicy: "timeout" | "retain-one" | "until-close" | "unknown";
+  idleTimeoutMs?: number;
+  burstIdleTimeoutMs?: number;
+  heapUsedBytes: number | null;
+  heapSampledCount: number;
 };
 
 export type DiagnosticMemoryUsage = {
@@ -194,11 +216,12 @@ export type DiagnosticMemoryUsage = {
     started: number;
     retired: { reason: string; count: number }[];
   }[];
-  /** Process-lifetime pool totals; completed workers remain represented after native exit. */
+  /** Process-lifetime worker totals; retired workers remain represented after native exit. */
   workerTaskMetrics?: {
     workerClass: WorkerPoolClass | "other";
     script: string;
-    tasksCompleted: number;
+    /** Absent for broker workers, which do not use the pool task-reply protocol. */
+    tasksCompleted?: number;
     heapUsedHighWaterBytes: number;
     gc: { kind: GcSample["kind"]; count: number; durationMs: number; reclaimedBytes: number }[];
   }[];

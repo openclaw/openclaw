@@ -97,12 +97,11 @@
 }
 
 .chat-details-processes__spinner {
+  --spinner-art: var(--spinner-mask-small);
   display: block;
   width: 8px;
   height: 8px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-small);
   border-radius: 50%;
   corner-shape: round;
   animation: btn-spinner-spin 1.5s linear infinite;

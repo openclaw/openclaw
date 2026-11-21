@@ -7,6 +7,7 @@ import {
   createGateway,
   createRequest,
   cronListResponse,
+  openJob,
   operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
@@ -123,11 +124,12 @@ it.each([
     );
     expect(runRequests.at(-1)).toMatchObject({ id: linked.id, runId: undefined });
   } else if (intent === "close" || intent === "another job") {
-    page.querySelector<HTMLButtonElement>('[data-test-id="cron-back"]')!.click();
+    page.closePanel();
     await page.settle();
     expected = null;
     if (intent === "another job") {
-      page.querySelector<HTMLElement>('[data-test-id="cron-row-other"]')!.click();
+      // The automation opens on its history.
+      await openJob(page, other.id);
       await page.settle();
       expected = other;
     }

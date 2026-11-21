@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import {
   releaseSessionTestDirectories,
   removeChatTestDirectory,
@@ -20,6 +22,27 @@ export const writeStoredMainSession = (entry: StoredChatSessionEntry = {}) =>
   });
 
 export const futureFixtureUpdatedAt = (): number => Date.now() + 60_000;
+
+export async function holdSessionMutation(
+  scope: string,
+  release: ReturnType<typeof createDeferred<void>>,
+  options: {
+    kind?: Parameters<typeof runSessionMutation>[0]["kind"];
+    identities: Iterable<string | undefined>;
+  } = { identities: ["sess-main"] },
+) {
+  const started = createDeferred();
+  const mutation = runSessionMutation({
+    scope,
+    ...options,
+    run: async () => {
+      started.resolve();
+      await release.promise;
+    },
+  });
+  await started.promise;
+  return { mutation };
+}
 
 export const writeMainSessionStore = (sessionId = "sess-main") =>
   writeStoredMainSession({ sessionId, updatedAt: futureFixtureUpdatedAt() });

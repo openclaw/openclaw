@@ -1,3 +1,0 @@
-# Real HTTP MCP question delivery, pending-answer revocation and pairing replacement.
-# Includes mixed-peer fallback, grant issuance and the app worker's generation-fenced response.
-489
