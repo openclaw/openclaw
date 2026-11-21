@@ -2488,10 +2488,12 @@ async function createChatPickerScenario(
       "desktop.observe",
       "environments.list",
       "terminal.open",
+      // Every supported Gateway serves dashboards and portals.
+      "board.get",
+      "portal.list",
       ...(updateFixture ? ["update.hold", "update.run", "update.status"] : []),
       ...(fixture === "workboard" || fixture === "workboard-states"
         ? [
-            "board.get",
             "workboard.boards.list",
             "workboard.boards.upsert",
             "workboard.cards.list",
@@ -3392,6 +3394,12 @@ async function createChatPickerScenario(
         ],
       },
       "sessions.search": { results: [] },
+      "portal.list": { portals: [] },
+      "board.get": {
+        revision: 1,
+        tabs: [{ tabId: "main", title: "Dashboard", position: 0, chatDock: "hidden" }],
+        widgets: [],
+      },
       ...(fixture === "workboard" || fixture === "workboard-states"
         ? workboardMocks.methodResponses
         : {}),
