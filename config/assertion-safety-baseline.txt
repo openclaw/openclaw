@@ -2246,7 +2246,6 @@ src/tui/tui.ts	2
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	1
 src/utils/string-readers.ts	2
-src/utils/usage-format.ts	1
 src/version.ts	4
 src/web-fetch/runtime.ts	2
 src/web-search/runtime.ts	1
