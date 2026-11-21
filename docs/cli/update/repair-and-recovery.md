@@ -1228,7 +1228,8 @@ The update result's `recovery-artifact-cleanup` step lists what was removed with
 logical size and the total (file lengths; sparse or cloned files can release less disk
 space), what was kept and why, and each file kept as
 `Kept: not provably ours` with its size. To decide about those, ask your agent with
-`openclaw triage`; an unmanifested backup can also be removed with
+`openclaw triage`; an unmanifested backup can also be removed by stopping the Gateway
+(`openclaw gateway stop`) and running
 `openclaw update cleanup --include-unmanifested <path>`. A deletion that fails is a
 warning on the update and never changes its outcome; the next update retries it.
 The run record keeps the summary line and any warning; a cleanup that runs again after
