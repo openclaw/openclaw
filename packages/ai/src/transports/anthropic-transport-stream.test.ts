@@ -1809,12 +1809,16 @@ describe("anthropic transport stream", () => {
   });
   describe("terminal tool-argument repair over loopback HTTP", () => {
     let server: Server | undefined;
-    beforeEach(() =>
+    const logWarn = vi.fn();
+    beforeEach(() => {
+      logWarn.mockClear();
       configureAiTransportHost({
         ...getAiTransportHost(),
         buildModelFetch: () => globalThis.fetch,
-      }),
-    );
+        isLogEnabled: () => true,
+        logWarn,
+      });
+    });
     afterEach(async () => {
       if (server) {
         await new Promise<void>((resolve, reject) => {
@@ -1914,17 +1918,34 @@ describe("anthropic transport stream", () => {
           { path: "README.md" },
           { path: "a.py", oldText: "C:\nnext", newText: "x = 1\ny = 2" },
         ]);
+        expect(logWarn.mock.calls.filter(([topic]) => topic === "provider-error")).toHaveLength(0);
       } else {
         expect(result.stopReason).toBe("error");
         expect(result.errorMessage).toBe(
           "Provider completed tool call with malformed JSON arguments",
         );
         expect(result.errorCode).toBe("malformed_tool_call_arguments");
-        expect(JSON.parse(result.errorBody ?? "{}")).toMatchObject({
+        const diagnostics = JSON.parse(result.errorBody ?? "{}");
+        expect(diagnostics).toMatchObject({
           code: "malformed_tool_call_arguments",
           argumentChars: block.partialJson.length,
           repairAttempted: true,
         });
+        expect(logWarn).toHaveBeenCalledWith(
+          "provider-error",
+          "Model request failed",
+          expect.objectContaining({
+            code: "malformed_tool_call_arguments",
+            argumentChars: block.partialJson.length,
+            argumentHash: diagnostics.argumentHash,
+            repairAttempted: true,
+          }),
+        );
+        expect(logWarn.mock.calls.filter(([topic]) => topic === "provider-error")).toHaveLength(1);
+        const loggedMetadata = logWarn.mock.calls.find(
+          ([topic]) => topic === "provider-error",
+        )?.[2];
+        expect(JSON.stringify(loggedMetadata)).not.toContain("SECRET.md");
         expect(`${result.errorMessage}${result.errorBody}`).not.toContain("SECRET.md");
         expect(toolCallEnds).toEqual([]);
         expect(eventTypes).not.toContain("toolcall_end");

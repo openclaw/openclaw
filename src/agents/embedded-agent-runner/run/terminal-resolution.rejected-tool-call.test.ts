@@ -171,6 +171,34 @@ it.each(["message", "error code", "gateway diagnostic", "exec refusal"])(
   },
 );
 
+it("continues once for a parser-proven malformed call with no dispatched tool event", async () => {
+  const assistant = buildEmbeddedRunnerAssistant({
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    stopReason: "error",
+    errorCode: "malformed_tool_call_arguments",
+    errorMessage: MALFORMED_ARGS,
+    content: [],
+  });
+  const attempt = makeEmbeddedRunnerAttempt({
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+  });
+  const { resolve, activateInternalPrompt } = terminalCase({
+    attempt,
+    attemptAssistant: assistant,
+  });
+
+  await expect(resolve()).resolves.toEqual({ action: "retry" });
+  expect(activateInternalPrompt).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("re-issue the call you need through the tool interface"),
+  );
+  await expect(resolve()).resolves.toMatchObject({ action: "complete" });
+  expect(activateInternalPrompt).toHaveBeenCalledOnce();
+});
+
 it("continues once when the rejected call followed visible progress text", async () => {
   const turn = rejectedCallAfterSettledTool(
     {},

@@ -126,6 +126,25 @@ describe("resolveRunFailoverDecision", () => {
   ] as const)("assistant: %j", (params, expected) => {
     expect(resolveAssistantDecision(params)).toEqual(expected);
   });
+
+  it("routes a replay-safe malformed tool-call rejection to a configured model fallback", () => {
+    expect(
+      resolveAssistantDecision({
+        malformedToolCallArguments: true,
+        failoverFailure: false,
+      }),
+    ).toEqual(fallback("format"));
+  });
+
+  it("leaves malformed tool-call repair to terminal recovery when no fallback exists", () => {
+    expect(
+      resolveAssistantDecision({
+        malformedToolCallArguments: true,
+        fallbackConfigured: false,
+        failoverFailure: false,
+      }),
+    ).toEqual(normal);
+  });
 });
 
 describe("mergeRetryFailoverReason", () => {

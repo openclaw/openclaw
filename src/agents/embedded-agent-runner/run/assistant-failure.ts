@@ -1,6 +1,7 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
+import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import {
   isModelInCredentialListing,
@@ -238,9 +239,20 @@ export async function handleEmbeddedAssistantFailure(input: {
       attempt,
       assistant: failedAssistant,
     });
+  const replaySafeMalformedToolCallFailure =
+    failedAssistant?.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE &&
+    !authFailure &&
+    !rateLimitFailure &&
+    !billingFailure &&
+    !cloudCodeAssistFormatError &&
+    !imageDimensionError &&
+    !terminalInterrupted &&
+    !promptError &&
+    shouldRetrySilentErrorAssistantTurn({ attempt, assistant: failedAssistant });
   if (
     replaySafeSilentErrorFailure &&
     unclassifiedError &&
+    !replaySafeMalformedToolCallFailure &&
     input.emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
   ) {
     const emptyErrorRetries = input.emptyErrorRetries + 1;
@@ -264,12 +276,15 @@ export async function handleEmbeddedAssistantFailure(input: {
     runInput.fallbackConfigured &&
     assistantFailoverReason === null &&
     replaySafeSilentErrorFailure &&
+    !replaySafeMalformedToolCallFailure &&
     input.emptyErrorRetries >= MAX_EMPTY_ERROR_RETRIES;
-  const effectiveFailoverReason = exhaustedUnclassifiedSilentError
-    ? ("unknown" as const)
-    : listedModelRejection
-      ? ("format" as const)
-      : assistantFailoverReason;
+  const effectiveFailoverReason = replaySafeMalformedToolCallFailure
+    ? ("format" as const)
+    : exhaustedUnclassifiedSilentError
+      ? ("unknown" as const)
+      : listedModelRejection
+        ? ("format" as const)
+        : assistantFailoverReason;
 
   const logFailoverDecision = createFailoverDecisionLogger({
     stage: "assistant",
@@ -335,6 +350,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       errorMessage: failedAssistant?.errorMessage,
       harnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       listedModelRejected: listedModelRejection,
+      malformedToolCallArguments: replaySafeMalformedToolCallFailure,
       profileRotated,
     });
   const initialDecision = exhaustedUnclassifiedSilentError
