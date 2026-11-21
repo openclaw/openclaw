@@ -35,10 +35,18 @@ function expectNoEmptyFencedChunks(chunks: string[]) {
   }
 }
 
+// The markdown chunker still trims each cut, so it keeps its own trimmed rows.
 const parentheticalCases: ChunkCase[] = [
   ["Heads up now (Though now I'm curious)ok", 35, ["Heads up now", "(Though now I'm curious)ok"]],
   ["Hello (outer (inner) end) world", 26, ["Hello (outer (inner) end)", "world"]],
   ["Hello) world (ok)", 12, ["Hello)", "world (ok)"]],
+];
+
+// Prose chunking keeps the separator at a cut, so the same inputs split differently.
+const parentheticalProseCases: ChunkCase[] = [
+  ["Heads up now (Though now I'm curious)ok", 35, ["Heads up now ", "(Though now I'm curious)ok"]],
+  ["Hello (outer (inner) end) world", 26, ["Hello (outer (inner) end) ", "world"]],
+  ["Hello) world (ok)", 12, ["Hello) ", "world (ok)"]],
 ];
 
 const newlineModeFence =
@@ -51,11 +59,11 @@ describe("chunkText", () => {
     [
       "paragraph one line\n\nparagraph two starts here and continues",
       40,
-      ["paragraph one line", "paragraph two starts here and continues"],
+      ["paragraph one line\n\n", "paragraph two starts here and continues"],
     ],
-    ...parentheticalCases,
-    ["\na bcd", 5, ["\na", "bcd"]],
-    ["ab\u00a0cdef", 5, ["ab", "cdef"]],
+    ...parentheticalProseCases,
+    ["\na bcd", 5, ["\na ", "bcd"]],
+    ["ab\u00a0cdef", 5, ["ab\u00a0", "cdef"]],
   ]);
 });
 
