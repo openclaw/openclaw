@@ -37,6 +37,14 @@ export type DecisionHttpRoute<T> = {
   readonly authHeaders?: (apiKey: string) => ModelRequestHeaders;
   /** Non-secret headers that describe this body; they win, and `null` removes one. */
   readonly requestHeaders?: ModelRequestHeaders;
+  /**
+   * Bind an HTTPS route and its provider-owned credential to the current resource.
+   * Prepared proxy/TLS options still apply, but prepared model headers/auth and
+   * address-policy overrides do not. Recheck the binding just before dispatch.
+   */
+  readonly isBoundResourceCurrent?: () => boolean;
+  /** Opt out of HTTP debug capture when the route must not persist supplied evidence. */
+  readonly capture?: false;
   /** Decodes the bounded JSON response. A throw means an invalid response. */
   readonly decode: (payload: unknown) => T | DecisionHttpUnavailable;
   /** Documented provider statuses that differ from the shared mapping. */
@@ -102,19 +110,25 @@ function failureForStatus(
 
 /**
  * Execute one provider-owned JSON Decision request with prepared auth.
- * Admission is checked once when the request starts; a request that passed may finish.
+ * Admission is checked at the start; resource-bound routes also check at dispatch.
  */
 export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
   execution: DecisionHttpExecution<T>,
 ): Promise<T | DecisionHttpUnavailable> {
   execution.signal.throwIfAborted();
-  const { auth, request: preparedRequest } = execution;
+  const { auth, request: preparedRequest, isBoundResourceCurrent } = execution;
+  const preparedHeaders = isBoundResourceCurrent ? undefined : execution.headers;
+  const preparedAuth = isBoundResourceCurrent ? undefined : preparedRequest?.auth;
   if (auth.mode !== "api-key" || !auth.apiKey) {
     return unavailable("credentials-unavailable");
   }
   const timeoutMs = execution.deadlineMonotonicMs - performance.now();
   // A thrown caller authority assertion is terminal and passes through.
-  if (timeoutMs <= 0 || !execution.isAdmissible()) {
+  if (
+    timeoutMs <= 0 ||
+    !execution.isAdmissible() ||
+    (isBoundResourceCurrent && !isBoundResourceCurrent())
+  ) {
     return unavailable("transport");
   }
   const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
@@ -123,10 +137,21 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
     operation: `${execution.provider} decision`,
   });
   const signal = timeoutSignal ?? execution.signal;
+  let dispatchAdmissionError: { error: unknown } | undefined;
+  const checkDispatchAdmission = () => {
+    try {
+      return execution.isAdmissible();
+    } catch (error) {
+      // Transport cleanup must not turn a revoked caller grant into a retryable failure.
+      dispatchAdmissionError = { error };
+      throw error;
+    }
+  };
   try {
     const base = new URL(execution.baseUrl);
     if (
       !["http:", "https:"].includes(base.protocol) ||
+      (isBoundResourceCurrent && base.protocol !== "https:") ||
       base.username ||
       base.password ||
       base.search ||
@@ -145,13 +170,13 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
       defaultBaseUrl: execution.baseUrl,
       defaultHeaders: {
         // Prepared auth overrides already own the header; never restore a removed credential.
-        ...(!preparedRequest?.auth || preparedRequest.auth.mode === "provider-default"
+        ...(!preparedAuth || preparedAuth.mode === "provider-default"
           ? (execution.authHeaders?.(auth.apiKey) ?? { Authorization: `Bearer ${auth.apiKey}` })
           : {}),
         ...(execution.body === undefined ? {} : { "Content-Type": "application/json" }),
         Accept: "application/json",
       },
-      headers: execution.headers,
+      headers: preparedHeaders,
       request: preparedRequest
         ? {
             proxy: preparedRequest.proxy,
@@ -182,13 +207,31 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
       url,
       signal,
       maxRedirects: 0,
+      ...(execution.capture === false ? { capture: false as const } : {}),
+      ...(isBoundResourceCurrent
+        ? {
+            requireHttps: true,
+            beforeRequest: () => {
+              signal.throwIfAborted();
+              if (
+                performance.now() >= execution.deadlineMonotonicMs ||
+                !checkDispatchAdmission() ||
+                !isBoundResourceCurrent()
+              ) {
+                throw new Error("Decision resource is no longer admitted.");
+              }
+            },
+          }
+        : {}),
       dispatcherPolicy,
-      policy: resolveProviderTransportSsrFPolicy({
-        baseUrl,
-        url,
-        allowPrivateNetwork,
-        trustConfiguredBaseUrlOrigin,
-      }),
+      policy: isBoundResourceCurrent
+        ? { hostnameAllowlist: [base.hostname] }
+        : resolveProviderTransportSsrFPolicy({
+            baseUrl,
+            url,
+            allowPrivateNetwork,
+            trustConfiguredBaseUrlOrigin,
+          }),
       auditContext: `${execution.provider}-decisions`,
       init: {
         method: execution.body === undefined ? "GET" : "POST",
@@ -228,8 +271,8 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
         serialized.includes(auth.apiKey) ||
         createProviderCredentialMatcher({
           headers: credentialHeaders,
-          request: preparedRequest,
-          configuredHeaderNames: Object.keys(execution.headers ?? {}),
+          request: isBoundResourceCurrent ? undefined : preparedRequest,
+          configuredHeaderNames: Object.keys(preparedHeaders ?? {}),
           defaultAuthHeader: "Authorization",
           defaultAuthPrefix: "Bearer ",
         })(serialized)
@@ -245,6 +288,9 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
       await release();
     }
   } catch {
+    if (dispatchAdmissionError) {
+      throw dispatchAdmissionError.error;
+    }
     execution.signal.throwIfAborted();
     return unavailable("transport");
   } finally {

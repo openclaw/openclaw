@@ -7,6 +7,7 @@ type GuardedRequest = {
   url: string;
   maxRedirects?: number;
   mode?: string;
+  beforeRequest?: () => void;
   signal: AbortSignal;
   init: RequestInit;
 };
@@ -236,4 +237,23 @@ it("passes caller cancellation through instead of reporting transport failure", 
   await expect(evaluate({ signal: controller.signal })).rejects.toThrow("caller cancelled");
   mocks.fetch.mockRejectedValue(new Error("socket closed"));
   await expect(evaluate()).resolves.toEqual({ status: "unavailable", reason: "transport" });
+});
+
+it("keeps late authority errors terminal on a resource-bound request", async () => {
+  const revoked = new Error("grant revoked during transport preparation");
+  const isAdmissible = vi.fn(() => true);
+  const send = vi.fn(() => Response.json({ answer: true }));
+  mocks.fetch.mockImplementationOnce(async ({ beforeRequest }) => {
+    isAdmissible.mockImplementationOnce(() => {
+      throw revoked;
+    });
+    beforeRequest?.();
+    return send();
+  });
+
+  await expect(evaluate({ isAdmissible }, { isBoundResourceCurrent: () => true })).rejects.toBe(
+    revoked,
+  );
+  expect(isAdmissible).toHaveBeenCalledTimes(2);
+  expect(send).not.toHaveBeenCalled();
 });
