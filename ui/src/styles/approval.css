@@ -338,6 +338,10 @@
   text-align: center;
 }
 
+.question-page .chat-question-summary {
+  text-align: start;
+}
+
 .approval-page__state p {
   margin-inline: auto;
 }
@@ -641,7 +645,6 @@
     border-radius: 0;
     background: none;
     font-size: var(--control-ui-text-md);
-    text-align: start;
   }
 
   .question-page .chat-question-summary__prompt {
