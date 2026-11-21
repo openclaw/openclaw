@@ -49,6 +49,8 @@ export type ImageGenerationProvider = {
   defaultTimeoutMs?: number;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
+  /** Exact model overrides for providers serving more than one native image protocol. */
+  capabilitiesByModel?: Readonly<Record<string, ImageGenerationProviderCapabilities>>;
   /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: ImageGenerationProviderConfiguredContext) => Promise<boolean>;

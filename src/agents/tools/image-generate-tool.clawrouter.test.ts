@@ -79,7 +79,13 @@ it("edits an inbound PNG with the exact OpenAI model and router credential, then
           });
           response.setHeader("Content-Type", "application/json");
           if (request.url === "/v1/catalog") {
-            response.end(JSON.stringify(inventory));
+            response.end(
+              JSON.stringify({
+                ...inventory,
+                observedAt: new Date().toISOString(),
+                scope: { authType: "proxy_key", credentialId: "synthetic-router-id" },
+              }),
+            );
           } else if (request.url === "/v1/images/edits") {
             response.end(JSON.stringify({ data: [{ b64_json: PNG.toString("base64") }] }));
           } else {
