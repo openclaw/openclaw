@@ -8,6 +8,7 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+  SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
   SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS,
   SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
@@ -36,16 +37,6 @@ export {
   type SystemAgentAssistantPlan,
   type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
-
-const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    reply: { type: "string" },
-    command: { type: "string" },
-  },
-  required: ["reply"],
-  additionalProperties: false,
-} as const;
 
 /** Plan only through the configured default agent's verified route. */
 export async function planSystemAgentCommand(params: {
