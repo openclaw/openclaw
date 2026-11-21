@@ -16,7 +16,6 @@ import {
   formatCompactionModelRef,
   deliverCompactionNoticePayload as deliverNotice,
 } from "./compaction-notice.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
 
 const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
 const CODEX_APP_SERVER_COMPACTION_BACKEND = "codex-app-server";
@@ -93,12 +92,6 @@ export function createAgentRunEventHandler(params: {
             : {}),
         });
       }
-    }
-    if (readGroupParticipationRun(params.turn.replyOperation)?.isPrivate) {
-      if (evt.stream === "compaction" && evt.data.phase === "end" && evt.data.completed === true) {
-        params.onCompactionCompleted();
-      }
-      return;
     }
     if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
       const phase = readStringValue(evt.data.phase) ?? "";

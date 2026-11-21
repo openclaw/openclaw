@@ -173,21 +173,6 @@ store, identity, binding, and live authority, removes only the exact upstream
 link, then invokes backend cleanup. Queue selection, native protocol/policy,
 and resource cleanup remain with the backend; core owns host session lifecycle.
 
-## Evidence across attempts
-
-`continuationMessages` carries completed work into the next ordinary attempt of
-the same logical turn. Append it after the admission-fenced history; do not
-resubmit the original user input or repeat completed actions. The field carries
-evidence, not tool permissions or delivery authority.
-
-When `captureContinuationMessages` is true, a native harness returns the current
-attempt's completed model messages in `continuationMessages`. Include the admitted user
-message on the first handoff if it is absent from the native snapshot.
-
-The SDK also accepts and returns `pluginRuntimeRefreshMessages` for compatibility.
-When both names are supplied, `continuationMessages` takes precedence, including
-an empty array. Plugin refresh uses the same evidence contract.
-
 ## Tool and media results
 
 ### Same-turn retry context

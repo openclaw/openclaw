@@ -11,7 +11,6 @@ import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingr
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
-import type { GroupParticipationContext } from "../group-participation-inputs.js";
 import {
   resolveReplyOperatorAuthorityKey,
   resolveReplyPersonalToolTargets,
@@ -24,8 +23,6 @@ import {
   type InternalFollowupRun,
   type QueuedFollowupReplyBatch,
 } from "./types.js";
-
-type GroupFollowupRun = FollowupRun & { groupParticipation?: GroupParticipationContext };
 
 export function hasPreparedCurrentTurnImages(run: InternalFollowupRun): boolean {
   return run.currentTurnImagesPrepared === true;
@@ -309,13 +306,57 @@ export function collectCurrentInboundContext(
 
 function collectReplyDisposition(
   items: FollowupRun[],
-  abortSignal?: AbortSignal,
-): FollowupRuntimeMetadata & Pick<GroupFollowupRun, "groupParticipation"> {
-  const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+): FollowupRun["queuedFollowupReplyDisposition"] {
+  const primary = items.at(-1)?.queuedFollowupReplyDisposition;
+  const terminalRecipients = items.slice(0, -1).flatMap((item) => {
+    const disposition = item.queuedFollowupReplyDisposition;
+    return disposition?.kind === "deliver" ? [disposition.deliver] : [];
+  });
+  if (terminalRecipients.length === 0) {
+    return primary;
+  }
+  const deliver = primary?.kind === "deliver" ? primary.deliver : undefined;
+  return {
+    kind: "deliver",
+    deliver: Object.assign(
+      async (batch: QueuedFollowupReplyBatch) => {
+        if (batch.completion.kind === "progress") {
+          await deliver?.(batch);
+          return;
+        }
+        // The content owner publishes once; every consumed source receives the outcome.
+        const results = await Promise.allSettled([
+          ...terminalRecipients.map(async (recipient) => recipient({ ...batch, payloads: [] })),
+          Promise.resolve().then(() => deliver?.(batch)),
+        ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
+        }
+      },
+      {
+        ownsCompletion: deliver?.ownsCompletion,
+        createSourceRetry: deliver?.createSourceRetry,
+      },
+    ),
+  };
+}
+
+export function collectRuntimeMetadata(items: InternalFollowupRun[], abortSignal?: AbortSignal) {
+  const currentTurnSource = items.find(
+    (item) =>
+      item.currentInboundEventKind === "room_event" ||
+      item.currentInboundAudio === true ||
+      Boolean(item.currentInboundContext),
+  );
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
-  const groupSources: GroupFollowupRun[] = items;
+  const terminalObservers = items.flatMap((item) =>
+    item.runObservers?.onAgentRunTerminalOutcome
+      ? [item.runObservers.onAgentRunTerminalOutcome]
+      : [],
+  );
   const groupParticipation =
     items.length > 0 && items.every((item) => item.groupParticipation)
       ? items.at(-1)?.groupParticipation
@@ -329,7 +370,7 @@ function collectReplyDisposition(
     ).values(),
   ];
   return {
-    ...(groupParticipation ? { groupParticipation } : {}),
+    groupParticipation,
     sourceTurnId: authoritySource?.sourceTurnId,
     createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
     readAdmissionConfig: authoritySource?.readAdmissionConfig,
@@ -394,10 +435,11 @@ export function getFollowupOriginRouting(source: FollowupRun) {
   };
 }
 
-export function createOverflowSummaryRetrySource(source: FollowupRun): GroupFollowupRun {
-  const internalSource: GroupFollowupRun = source;
+export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
-    groupParticipation: internalSource.groupParticipation,
+    controllerInput: source.controllerInput,
+    groupParticipation: source.groupParticipation,
+    ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     createChannelCronAuthority: source.createChannelCronAuthority,

@@ -211,8 +211,8 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Producer-specific durable recovery attempt budget. */
   maxRetries?: number;
-  /** @internal Recovery may reconcile a previous send, but cannot publish a new draft. */
-  recoveryMode?: "reconcile-only";
+  /** @internal Marks an agent final; ordinary text may be resent once when its send is unconfirmed. */
+  retryAmbiguousFinalText?: true;
   /** @internal Retry this producer's pending intent only when no platform send began. */
   reusePendingDeliveryIntent?: boolean;
   /** @internal Serializable owner state finalized after live or recovered delivery. */

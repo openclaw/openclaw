@@ -226,9 +226,7 @@ Silent maintenance turns suppress streamed text, attachments, locations, and int
 
 The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work.
 
-- Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
-- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. With a configured [Decision Model](/concepts/decision-models#group-participation), embedded harnesses use participation decisions for groups with mention gating disabled: invited replies retain their obligation, and unsolicited contributions are optional and reviewed before delivery. For ordinary behavior, set `silentReply.group: "allow"` at one of the configuration scopes below to allow unaddressed requests to finish silently; mentions and authorized commands still require a response.
-- [Ambient room events](/channels/ambient-room-events) and internal helper turns can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
+Direct-message prompts omit silent-reply guidance. An exact `NO_REPLY` emitted by the model still follows this protocol; omitting the prompt guidance does not force an additional answer.
 
 A truncated response or an unfinished tool turn is not a successful silent ending, even if its partial text is `NO_REPLY`. A completed final result already delivered to the current WebChat transcript satisfies the result requirement; a later `NO_REPLY` does not invalidate that delivered answer. Progress updates do not satisfy that requirement. Direct system-agent chat in the Control UI also requires a result: `NO_REPLY` or empty output follows the existing recovery or failure path, rather than silently completing the request.
 
@@ -241,6 +239,7 @@ The terminal producer prepares the reply once and records whether it is visible 
 Conversation policy still controls admission and default reply expectations:
 
 - Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently. The legacy `HEARTBEAT_OK` marker does not request silence: presentation removes it, so it cannot satisfy a required reply.
+- With Decision assistance enabled and a configured [Decision Model](/concepts/decision-models#group-participation), embedded harnesses assess unmentioned group requests before generation. Positive assessments run ordinary replies; negative assessments skip generation.
 - Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`. In `message_tool` mode, optional bot messages get quiet-room participation guidance: stay silent unless there is something useful to add. Explicit bot mentions and required replies keep their normal delivery guidance.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 

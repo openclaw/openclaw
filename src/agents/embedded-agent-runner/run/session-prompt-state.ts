@@ -140,7 +140,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
     });
     suppressNextUserMessagePersistence = true;
   };
-  if (params.turnContinuation || params.pluginRuntimeRefreshContinuation) {
+  if (params.pluginRuntimeRefreshContinuation) {
     activateInternalPrompt(params.prompt);
   }
   const activateCompactionContinuation = (instruction: string) => {

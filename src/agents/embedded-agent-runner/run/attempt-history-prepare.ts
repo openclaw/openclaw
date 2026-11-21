@@ -19,18 +19,49 @@ import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
-import { readEmbeddedContinuationPrefix } from "./attempt-continuation.js";
+import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 
-type PreparedEmbeddedAttemptHistory = {
-  contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
-  contextEngineAssemblySucceeded: boolean;
-  retainedCurrentTurnMessageCount?: number;
-  unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
-};
+function boundSettledFinalizationMessages(attempt: EmbeddedRunAttemptInternalParams) {
+  // Selection never reads entry timestamps, and these entries are neither persisted nor
+  // sent to the model. Context-engine messages may omit timestamps, so use a fixed value.
+  const timestamp = new Date(0).toISOString();
+  const requests: ModelContextRequest[] = attempt.settledTurnFinalizationMessages!.map(
+    (message, index) => ({
+      entry: {
+        type: "message",
+        id: String(index),
+        parentId: index ? String(index - 1) : null,
+        timestamp,
+        message,
+        seq: index,
+      },
+      omitCheckpoint: false,
+    }),
+  );
+  const project = (request: ModelContextRequest) => {
+    const message = request.entry.type === "message" ? request.entry.message : undefined;
+    return message?.role === "toolResult" && request.toolResultOmission
+      ? { ...message, content: [{ type: "text" as const, text: request.toolResultOmission }] }
+      : message!;
+  };
+  // Reuse hydration's byte/event and tool-body omission policy on the selected view.
+  // Only model input changes; the receipt-bearing writer remains the original manager.
+  return selectBoundedModelRequests(
+    requests,
+    (selected) =>
+      new Map(
+        selected.map((request) => [
+          request.entry,
+          Buffer.byteLength(JSON.stringify(project(request)), "utf8") + 1,
+        ]),
+      ),
+    resolveEmbeddedSessionContextLimits(attempt),
+  ).map(project);
+}
 
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
@@ -51,7 +82,6 @@ export async function prepareEmbeddedAttemptHistory(
   const { effectiveWorkspace, sessionAgentId } = input.setup;
   const sandboxed = input.setup.sandbox?.enabled === true;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
-  const continuation = await readEmbeddedContinuationPrefix(attempt);
   let systemPromptText = input.prepared.sessionRuntime.state.systemPromptText;
   const setSystemPrompt = (nextSystemPrompt: string) => {
     systemPromptText = nextSystemPrompt;
@@ -62,7 +92,7 @@ export async function prepareEmbeddedAttemptHistory(
     activeSession.agent.reset();
     setSystemPrompt("");
     cacheTrace?.recordStage("session:raw-model-run", {
-      messages: continuation?.prefix ?? activeSession.messages,
+      messages: activeSession.messages,
       system: systemPromptText,
     });
   } else {
@@ -79,7 +109,12 @@ export async function prepareEmbeddedAttemptHistory(
     });
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
-      messages: continuation?.prefix ?? activeSession.messages,
+      messages: bindToolResultPromptProjectionKeys(
+        isSettledTurnFinalization && attempt.settledTurnFinalizationMessages
+          ? boundSettledFinalizationMessages(attempt)
+          : activeSession.messages,
+        input.prepared.sessionRuntime.toolResultPromptProjectionState,
+      ),
       allowedToolNames: replayAllowedToolNames,
       sessionManager,
     });
@@ -210,108 +245,52 @@ export async function prepareEmbeddedAttemptHistory(
     }
     input.setup.prepStages.mark("history-window");
     cacheTrace?.recordStage("session:limited", { messages: limited });
-    if (continuation || limited.length > 0 || prior.length > 0) {
+    if (limited.length > 0 || prior.length > 0 || isSettledTurnFinalization) {
       activeSession.agent.state.messages = limited;
     }
   }
 
-  let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> = "assembled";
-  let contextEngineAssemblySucceeded = false;
-  let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
-  if (activeContextEngine) {
-    try {
-      // Assemble may window the input in place. Preserve the original history for
-      // the overflow precheck when the engine says preassembly can still overflow.
-      const preassemblyMessages = [
-        ...activeSession.messages,
-        ...(continuation?.currentTurnMessages ?? []),
-      ];
-      const reserveTokens = Math.max(0, Math.floor(settingsManager.getCompactionReserveTokens()));
-      const contextTokenBudget = Math.max(
-        1,
-        Math.floor(
-          attempt.contextTokenBudget ??
-            attempt.model.contextWindow ??
-            attempt.model.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
-        ),
-      );
-      const promptBudget = Math.max(1, contextTokenBudget - reserveTokens);
-      const prompt = orphanRepair?.contextEnginePrompt ?? attempt.prompt ?? "";
-      const renderedPromptTokens = estimateRenderedLlmBoundaryTokenPressure({
-        systemPrompt: systemPromptText,
-        prompt,
-      });
-      const messageBudget = Math.max(1, promptBudget - renderedPromptTokens);
-      const transcriptReadFence = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const assembled = await assembleHarnessContextEngine({
-        contextEngine: activeContextEngine,
-        sessionId: attempt.sessionId,
-        sessionKey: attempt.sessionKey,
-        agentId: sessionAgentId,
-        appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
-        messages: activeSession.messages,
-        currentTurnMessages: continuation?.currentTurnMessages,
-        tokenBudget: messageBudget,
-        availableTools: new Set(capabilityToolNames),
-        citationsMode: attempt.config?.memory?.citations,
-        sandboxed,
-        modelId: attempt.modelId,
-        maxOutputTokens: reserveTokens,
-        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        providerId: attempt.provider,
-        requestedModelId: attempt.requestedModelId,
-        fallbackReason: attempt.fallbackReason,
-        degradedReason: attempt.degradedReason,
-        transcriptReadFence,
-        ...(attempt.prompt !== undefined ? { prompt } : {}),
-      });
-      if (!assembled) {
-        throw new Error("context engine assemble returned no result");
-      }
-      const assembledMessages = transcriptPolicy.repairToolUseResultPairing
-        ? sanitizeToolUseResultPairingForModel(assembled.messages, isOpenAIResponsesApi)
-        : assembled.messages;
-      if (assembledMessages !== activeSession.messages) {
-        activeSession.agent.state.messages = assembledMessages;
-      }
-      contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
-      contextEngineAssemblySucceeded = true;
-      if (contextEnginePromptAuthority === "preassembly_may_overflow") {
-        unwindowedContextEngineMessagesForPrecheck = preassemblyMessages;
-      }
-      if (assembled.systemPromptAddition) {
-        setSystemPrompt(
-          prependSystemPromptAdditionAfterCacheBoundary({
-            systemPrompt: systemPromptText,
-            systemPromptAddition: assembled.systemPromptAddition,
-          }),
-        );
-        log.debug(
-          `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
-        );
-      }
-    } catch (error) {
-      if (continuation) {
-        throw error;
-      }
-      log.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
+  const prompt = orphanRepair?.contextEnginePrompt ?? attempt.prompt ?? "";
+  const { messages, systemPrompt, ...prepared } = await prepareHarnessContextEnginePrompt({
+    ...attempt,
+    contextEngine: activeContextEngine,
+    agentId: sessionAgentId,
+    appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
+    clearsTurnScopedSystemUpdates:
+      transcriptPolicy.inHistorySystemUpdates && attempt.model.api === "anthropic-messages",
+    messages: activeSession.messages,
+    availableTools: new Set(capabilityToolNames),
+    citationsMode: attempt.config?.memory?.citations,
+    sandboxed,
+    memoryProjectKey: attempt.preparedModelRuntime?.projectKey ?? undefined,
+    promptBudget: {
+      contextTokens:
+        attempt.contextTokenBudget ?? attempt.model.contextWindow ?? attempt.model.maxTokens,
+      reserveTokens: settingsManager.getCompactionReserveTokens(),
+      systemPrompt: systemPromptText,
+      prompt,
+    },
+    contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+    providerId: attempt.provider,
+    transcriptReadFence: attempt.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+    ...(attempt.prompt !== undefined ? { prompt } : {}),
+    repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
+    isOpenAIResponsesApi,
+    warn: (message) => log.warn(message),
+  });
+  input.setup.prepStages.mark("context-engine");
+  // Seal restored model history once; transcript admission already seals retained messages.
+  for (const message of messages) {
+    if (
+      (message.role === "assistant" || message.role === "user" || message.role === "toolResult") &&
+      !isOwnedTranscriptPayload(message)
+    ) {
+      freezeJsonSnapshot(message);
     }
   }
-
-  if (!activeContextEngine && continuation) {
-    activeSession.agent.state.messages = [
-      ...activeSession.messages,
-      ...continuation.currentTurnMessages,
-    ];
+  activeSession.agent.state.messages = messages;
+  if (systemPrompt !== systemPromptText) {
+    setSystemPrompt(systemPrompt);
   }
-
-  return {
-    contextEnginePromptAuthority,
-    contextEngineAssemblySucceeded,
-    retainedCurrentTurnMessageCount: continuation?.currentTurnMessages.length ?? 0,
-    ...(unwindowedContextEngineMessagesForPrecheck
-      ? { unwindowedContextEngineMessagesForPrecheck }
-      : {}),
-  };
+  return prepared;
 }

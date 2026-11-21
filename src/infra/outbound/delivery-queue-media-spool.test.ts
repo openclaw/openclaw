@@ -14,10 +14,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import {
-  COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME,
-  outboundDeliveryQueueName,
-} from "./delivery-queue-namespaces.js";
+import { COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 const storeSpy = vi.hoisted(() => ({
@@ -139,108 +136,48 @@ it("reclaims expired custody off-thread and preserves pending media across reope
   await pruneOrphanedDeliveryQueueMedia({ stateDir });
   await closeOpenClawStateDatabaseAsync();
 
-  it("retains media from generation-bound and migration namespaces in one inventory", async () => {
-    const reconcileOnlyQueueName = outboundDeliveryQueueName({ recoveryMode: "reconcile-only" });
-    const queueNames = [
-      COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME,
-      reconcileOnlyQueueName,
-      OUTBOUND_DELIVERY_QUEUE_NAME,
-      "outbound-session-generation-v1",
-      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-    ];
-    const retained = await Promise.all(
-      queueNames.map(async (queueName, index) => {
-        const generationBound = queueName === "outbound-session-generation-v1";
-        const artifact = await seedArtifact(
-          `${queueName === reconcileOnlyQueueName ? "r1-" : queueName === COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME ? "c1-" : generationBound ? "g1-" : ""}00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}.ogg`,
-          30 * DAY_MS,
-        );
-        const entry = {
+  const mainSql = observeMainThreadSql();
+  try {
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
+    mainSql.expectIdle();
+  } finally {
+    mainSql.restore();
+    await closeOpenClawStateDatabaseAsync();
+  }
+
+  expect(await loadPendingDeliveries(stateDir)).toMatchObject([{ id }]);
+  expect(
+    loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, "expired-receipt", stateDir, "all"),
+  ).toBeNull();
+  expectArtifacts([retained, staged, fresh], [orphan]);
+});
+
+it("retains media from generation-bound and migration namespaces in one inventory", async () => {
+  const retained = await Promise.all(
+    (
+      [
+        [COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME, "c1-"],
+        [OUTBOUND_DELIVERY_QUEUE_NAME, ""],
+        ["outbound-session-generation-v1", "g1-"],
+        [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, ""],
+        [OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, ""],
+        [OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, ""],
+      ] as const
+    ).map(async ([queueName, prefix], index) => {
+      const artifact = await seedArtifact(
+        `${prefix}00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}.ogg`,
+      );
+      const payload = { mediaUrl: artifact };
+      seedDeliveryQueueEntry({
+        queueName,
+        entry: {
           id: `retained-${index}`,
           enqueuedAt: Date.now(),
           retryCount: 0,
-          ...(generationBound ||
-          queueName === COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME ||
-          queueName === reconcileOnlyQueueName
-            ? {
-                preparedBatch: {
-                  entries: [{ status: "accepted", payload: { mediaUrl: artifact } }],
-                },
-              }
-            : { payloads: [{ mediaUrl: artifact }] }),
-        };
-        seedDeliveryQueueEntry({
-          queueName,
-          entry,
-          stateDir,
-        });
-        return artifact;
-      }),
-    );
-    const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
-    const generationOrphan = await seedArtifact(`g1-${ARTIFACT_B}`, 30 * DAY_MS);
-    const ownerOrphan = await seedArtifact(`c1-${ARTIFACT_B}`, 30 * DAY_MS);
-
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
-
-    await expect(
-      Promise.all(retained.map(async (artifact) => await exists(artifact))),
-    ).resolves.toEqual([true, true, true, true, true, true, true]);
-    expect(await exists(orphan)).toBe(false);
-    expect(await exists(generationOrphan)).toBe(false);
-    expect(await exists(ownerOrphan)).toBe(false);
-  });
-
-  it("reclaims stale partial writes but ignores foreign files and symlinks", async () => {
-    const partial = await seedArtifact(PART_ARTIFACT, 2 * DAY_MS);
-    const generationPartial = await seedArtifact(`g1-${PART_ARTIFACT}`, 2 * DAY_MS);
-    const freshGenerationPartial = await seedArtifact(`g1-${ARTIFACT_B}.part`, DAY_MS / 2);
-    const foreign = await seedArtifact("operator-note.txt", 2 * DAY_MS);
-    const unknownFormat = await seedArtifact(`g2-${PART_ARTIFACT}`, 2 * DAY_MS);
-    const outside = path.join(sourceDir, "precious.txt");
-    await fs.writeFile(outside, "keep");
-    await fs.symlink(outside, path.join(spoolRoot, ARTIFACT_A));
-
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
-
-    expect(await exists(partial)).toBe(false);
-    expect(await exists(generationPartial)).toBe(false);
-    expect(await exists(freshGenerationPartial)).toBe(true);
-    expect(await exists(foreign)).toBe(true);
-    expect(await exists(unknownFormat)).toBe(true);
-    expect(await fs.readFile(outside, "utf8")).toBe("keep");
-  });
-
-  it("expires abandoned stages and rejects a producer that resumes too late", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-    const staged = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: source, audioAsVoice: true }],
-      mediaAccess: { localRoots: [sourceDir] },
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-    expect(staged.status).toBe("staged");
-    if (staged.status !== "staged") {
-      return;
-    }
-
-    // Simulate a producer suspended beyond the one-day staging lease. GC wins
-    // the SQLite transaction, so the resumed producer cannot publish a broken row.
-    await pruneOrphanedDeliveryQueueMedia({
-      stateDir,
-      nowMs: Date.now() + 2 * DAY_MS,
-    });
-
-    await expect(fs.stat(staged.artifacts[0] as string)).rejects.toThrow();
-    await expect(
-      enqueueDelivery(
-        {
-          channel: "matrix",
-          to: "!room:example",
-          payloads: staged.payloads,
+          ...(prefix
+            ? { preparedBatch: { entries: [{ status: "accepted", payload }] } }
+            : { payloads: [payload] }),
         },
         stateDir,
       });
@@ -363,114 +300,18 @@ it("replays converted PNG bytes with a matching public name and unchanged spool 
   await enqueue(staged.payloads, staged.mediaStageId);
   await fs.rm(imagePath);
 
-  it("stages local media while a competing writer needs the host to release its lock", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const writer = new DatabaseSync(database.path);
-    try {
-      writer.exec("BEGIN IMMEDIATE");
-      // A worker can hold this lock while waiting for host admission. Staging
-      // must yield so the host can let that writer finish.
-      const staged = stageQueuePayloadMedia({
-        payloads: [{ mediaUrl: source }],
-        mediaAccess: mediaAccessFor([sourceDir]),
-        maxBytes: 1024 * 1024,
-        stateDir,
-      });
-      writer.exec("COMMIT");
-      const result = await staged;
-      expect(result.status).toBe("staged");
-      if (result.status !== "staged") {
-        return;
-      }
-      expect(await fs.readFile(result.artifacts[0]!, "utf8")).toBe("opus-bytes");
-      const id = await enqueueDelivery(
-        { channel: "telegram", to: "synthetic", payloads: result.payloads },
-        stateDir,
-        result.mediaStageId,
-      );
-      expect(await loadPendingDeliveries(stateDir)).toMatchObject([
-        { id, preparedBatch: { entries: [{ payload: { mediaUrl: result.artifacts[0] } }] } },
-      ]);
-    } finally {
-      if (writer.isTransaction) {
-        writer.exec("ROLLBACK");
-      }
-      await closeOpenClawStateDatabaseAsync();
-      writer.close();
-    }
-  });
-
-  it("leaves replayable remote media untouched without creating the spool", async () => {
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result).toEqual({
-      status: "staged",
-      payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
-      artifacts: [],
-    });
-    expect(await exists(spoolRoot)).toBe(false);
-  });
-
-  it("uses the live send's local-read capability", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-
-    await expect(
-      stageQueuePayloadMedia({
-        payloads: [{ mediaUrl: source }],
-        mediaAccess: mediaAccessFor([path.join(stateDir, "elsewhere")]),
-        maxBytes: 1024 * 1024,
-        stateDir,
-      }),
-    ).rejects.toThrow();
-  });
-
-  it.each([undefined, "session-generation-v1", "command-owner-v1", "reconcile-only-v1"] as const)(
-    "publishes complete media with older-reader-compatible custody (%s)",
-    async (artifactFormat) => {
-      const source = path.join(sourceDir, "voice.ogg");
-      await fs.writeFile(source, "opus-bytes");
-      const atMove: { finalExisted: boolean; partSize: number }[] = [];
-      storeSpy.onMove = (from, to, rootDir) => {
-        const knownToPublishedReader = artifactFormat === undefined;
-        expect(PUBLISHED_ARTIFACT_NAME_RE.test(from)).toBe(knownToPublishedReader);
-        expect(PUBLISHED_ARTIFACT_NAME_RE.test(to)).toBe(knownToPublishedReader);
-        expect(from).toBe(`${to}.part`);
-        if (artifactFormat) {
-          expect(to).toMatch(
-            artifactFormat === "reconcile-only-v1"
-              ? /^r1-[0-9a-f-]{36}\.ogg$/
-              : artifactFormat === "command-owner-v1"
-                ? /^c1-[0-9a-f-]{36}\.ogg$/
-                : /^g1-[0-9a-f-]{36}\.ogg$/,
-          );
-        }
-        atMove.push({
-          finalExisted: existsSync(path.join(rootDir, to)),
-          partSize: statSync(path.join(rootDir, from)).size,
-        });
-      };
-
-      const result = await stageQueuePayloadMedia({
-        payloads: [{ mediaUrl: source }],
-        mediaAccess: mediaAccessFor([sourceDir]),
-        maxBytes: 1024 * 1024,
-        stateDir,
-        artifactFormat,
-      });
-
-      expect(result.status).toBe("staged");
-      expect(atMove).toEqual([{ finalExisted: false, partSize: "opus-bytes".length }]);
-      expect(await fs.readdir(spoolRoot)).toHaveLength(1);
-    },
+  const queued = (await loadPendingDeliveries(stateDir))[0]?.preparedBatch.entries[0];
+  expect(queued?.status).toBe("accepted");
+  if (!queued || queued.status !== "accepted" || !queued.payload.mediaUrl) {
+    throw new Error("Expected queued image artifact");
+  }
+  const replayPath = queued.payload.mediaUrl;
+  expect(replayPath).toBe(staged.artifacts[0]);
+  // SQLite owns this preplanned path; only public image metadata changes.
+  expect(path.extname(replayPath)).toBe(".webp");
+  const encodedBytes = await fs.readFile(replayPath);
+  expect(encodedBytes.subarray(0, 8)).toEqual(
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
   );
 
   const replayed = await loadWebMedia(replayPath, {

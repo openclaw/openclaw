@@ -1,6 +1,5 @@
-// Covers context-engine message filtering, assemble validation, and turn finalization.
-import { estimateTokens, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it, vi } from "vitest";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildMemorySystemPromptAddition } from "../../context-engine/delegate.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import {
@@ -110,127 +109,17 @@ function toolCallMessage(id: string, timestamp: number) {
 }
 
 describe("harness context engine lifecycle", () => {
-  it("windows old history to keep completed current-turn work within the prompt budget", async () => {
-    const history = textMessage("user", "Old conversation. ".repeat(300), 1);
-    const evidence = textMessage("assistant", "Completed lookup evidence. ".repeat(300), 2);
-    const tokenBudget = Math.max(estimateTokens(history), estimateTokens(evidence)) + 100;
-    const contextEngine = createContextEngine({
-      assemble: async ({ messages, tokenBudget: assemblyBudget }) => {
-        const selected = messages.filter((message) => estimateTokens(message) <= assemblyBudget!);
-        return {
-          messages: selected,
-          estimatedTokens: selected.reduce((sum, message) => sum + estimateTokens(message), 0),
-        };
-      },
-    });
-    const result = await assembleHarnessContextEngine({
-      ...sessionParams,
-      contextEngine,
-      modelId: "test-model",
-      messages: [history],
-      currentTurnMessages: [evidence],
-      tokenBudget,
-    });
-    expect(result?.messages).toEqual([evidence]);
-    expect(result?.estimatedTokens).toBeGreaterThan(0);
-    expect(result?.estimatedTokens).toBeLessThanOrEqual(tokenBudget);
-  });
-
-  it("forwards session keys across bootstrap, assemble, and afterTurn hooks", async () => {
-    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
-    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    }));
-    const afterTurn = vi.fn(async () => {});
-    const contextEngine = createContextEngine({ bootstrap, assemble, afterTurn });
-
-    await bootstrapHarnessContextEngine({
-      hadSessionFile: true,
-      contextEngine,
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
-      runMaintenance: async () => undefined,
-      warn: () => {},
-    });
-    await assembleHarnessContextEngine({
-      contextEngine,
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      messages: [textMessage("user", "ask", 1)],
-      modelId: "gpt-test",
-    });
-    await finalizeHarnessContextEngineTurn({
-      contextEngine,
-      promptError: false,
-      aborted: false,
-      yieldAborted: false,
-      sessionIdUsed: sessionParams.sessionIdUsed,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
-      messagesSnapshot: [textMessage("assistant", "done", 2)],
-      prePromptMessageCount: 0,
-      runMaintenance: async () => undefined,
-      warn: () => {},
-    });
-
-    for (const hook of [bootstrap, assemble, afterTurn]) {
-      expect(hook).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey: sessionParams.sessionKey }),
-      );
-    }
-  });
-
-  it.each([false, true])(
-    "isolates prepared memory tools across non-legacy turns with sandboxed=%s",
-    async (sandboxed) => {
-      const prepare = vi.fn(async (params: MemoryPromptSectionParams) => {
-        const tools = [...params.availableTools].join(",");
-        params.availableTools.add("preparer-only");
-        await Promise.resolve();
-        return ["## Prepared Memory", `sandboxed=${params.sandboxed}; tools=${tools}`, ""];
-      });
-      registerTestMemoryPromptBuilder(({ availableTools }) => {
-        availableTools.add("builder-only");
-        return ["## Memory Recall", ""];
-      });
-      registerMemoryPromptPreparation("memory-wiki", prepare);
-      const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-        messages: params.messages,
-        estimatedTokens: 0,
-        systemPromptAddition: buildMemorySystemPromptAddition({
-          availableTools: params.availableTools ?? new Set(),
-          citationsMode: params.citationsMode,
-        }),
-      }));
-
-      try {
-        for (const toolNames of [undefined, [], ["wiki_search"], ["memory_search"]]) {
-          const availableTools = toolNames ? new Set(toolNames) : undefined;
-          const result = await assembleHarnessContextEngine({
-            contextEngine: createContextEngine({ assemble }),
-            sessionId: sessionParams.sessionId,
-            sessionKey: "global",
-            agentId: "support",
-            messages: [textMessage("user", "visible ask", 1)],
-            availableTools,
-            citationsMode: "on",
-            sandboxed,
-            modelId: "gpt-test",
-          });
-
-          expect(result?.systemPromptAddition).toBe(
-            `## Memory Recall\n\n## Prepared Memory\nsandboxed=${sandboxed}; tools=${(toolNames ?? []).join(",")}`,
-          );
-          expect([...(availableTools ?? [])]).toEqual(toolNames ?? []);
-          expect(prepare).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              agentId: "support",
-              agentSessionKey: "global",
-              sandboxed,
-            }),
-          );
+  it.each(["assemble", "prompt", "fallback"] as const)(
+    "shares the history budget without rescanning the rendered prompt (%s)",
+    async (operation) => {
+      const estimate = vi.spyOn(pressure, "estimateRenderedLlmBoundaryTokenPressure");
+      onTestFinished(() => estimate.mockRestore());
+      const messages = [textMessage("user", "Current request", 1)];
+      const assemble = vi.fn(async (input: Parameters<ContextEngine["assemble"]>[0]) => {
+        expect(input.tokenBudget).toBe(4952);
+        expect(input.runtimeSettings?.limits.promptTokenBudget).toBe(4952);
+        if (operation === "fallback") {
+          throw new Error("fixture assembly failure");
         }
         return { messages: input.messages, estimatedTokens: 0 };
       });
