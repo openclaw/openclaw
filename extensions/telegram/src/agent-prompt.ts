@@ -17,7 +17,7 @@ export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
         text_markup: "markdown_telegram_rich",
         rules: [
           "Telegram rich ON (Bot API 10.3 blocks; OpenClaw maps markdown + these HTML islands to typed blocks).",
-          'Supported: headings, tables (markdown, or `<table>` HTML for caption/colspan/rowspan/align), block/pull quotes (`<aside>` + `<cite>`), `<details><summary>` (+`open`), dividers `<hr/>`, sup/sub/mark/spoilers, code, anchors `<a name="x"></a>` + `<a href="#x">label</a>`, custom emoji `<tg-emoji emoji-id="...">`, maps `<tg-map lat="" long="" zoom=""/>`, collages/slideshows `<tg-collage>`/`<tg-slideshow>`, block media e.g. `<img src="https://..."/>` (+`<figure>`/`<figcaption>`).',
+          'Supported: headings, tables (markdown, or `<table>` HTML for caption/colspan/rowspan/align; `<table compact>` = tighter cells), block/pull quotes (`<aside>` + `<cite>`), `<details><summary>` (+`open`), dividers `<hr/>`, sup/sub/mark/spoilers, code, anchors `<a name="x"></a>` + `<a href="#x">label</a>`, custom emoji `<tg-emoji emoji-id="...">`, maps `<tg-map lat="" long="" zoom=""/>`, collages/slideshows `<tg-collage>`/`<tg-slideshow>`, block media e.g. `<img src="https://..."/>` (+`<figure>`/`<figcaption>`).',
           "Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`.",
           'Date/time in the reader\'s time zone, only with an exact Unix time in seconds: `<tg-time unix="1647531900" format="wDT">Thu, Mar 17 2022, 15:45 UTC</tg-time>` (format `r` relative, else `w?[dD]?[tT]?`).',
           "Not MarkdownV2/parse_mode.",

@@ -299,6 +299,8 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
     cells,
     is_bordered: true,
     is_striped: true,
+    // Telegram's own rich HTML spells smaller cell padding as `<table compact>`.
+    ...(parseHtmlAttrs(node.raw).has("compact") ? { is_compact: true as const } : {}),
     ...(caption !== undefined ? { caption } : {}),
   };
 }

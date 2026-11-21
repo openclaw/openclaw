@@ -210,6 +210,20 @@ describe("block HTML islands", () => {
     expect(block.cells[1]?.[0]).toMatchObject({ colspan: 2, rowspan: 3, align: "center" });
   });
 
+  it("marks only authored <table compact> tables as compact, across split pieces", () => {
+    const [compact, plain, markdown] = blocksFor(
+      "<table compact><tr><td>aaaa</td></tr><tr><td>bbbb</td></tr></table>\n\n<table><tr><td>c</td></tr></table>\n\n| d |\n| --- |\n| e |",
+    );
+    expect(compact).toMatchObject({ type: "table", is_compact: true, is_bordered: true });
+    assert(plain?.type === "table" && markdown?.type === "table");
+    expect(plain).not.toHaveProperty("is_compact");
+    expect(markdown).not.toHaveProperty("is_compact");
+    assert(compact);
+    const pieces = splitTelegramRichBlocks([compact], { textLimit: 5 }).flat();
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.every((piece) => piece.type === "table" && piece.is_compact === true)).toBe(true);
+  });
+
   it.each([
     ["malformed suffix", "2x", "3y"],
     ["unsafe integer", "9007199254740993", "9007199254740993"],
