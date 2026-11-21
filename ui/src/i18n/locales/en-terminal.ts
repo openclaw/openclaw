@@ -5,6 +5,14 @@ import { en } from "./en.ts";
 const enTerminal = {
   terminal: {
     title: en.terminal.title,
+    find: "Find in terminal",
+    findScope:
+      "Case-sensitive text in retained visual rows. Wrapped phrases across rows are not searched. Refresh to include new output.",
+    findCount: "{current} of {total}",
+    findPrevious: "Previous match",
+    findNext: "Next match",
+    findRefresh: "Refresh terminal matches",
+    findClose: "Close terminal find",
     availableSessions: "Available sessions",
     inputLabel: "Terminal input",
     sendInput: "Send terminal input",
