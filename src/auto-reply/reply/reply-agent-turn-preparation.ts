@@ -568,8 +568,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
               abortSignal: operation.abortSignal,
               // Compaction decides whether work is needed, then replans from the
               // checkpoint result. A queued source must not bypass this memory write.
-              beforeCompaction: async (entry) => {
+              beforeCompaction: async (entry, announceStart) => {
                 await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
+                // A scheduled turn outside its window is refused above, before any notice.
+                await announceStart();
                 const flushed = await tracePhase("reply.memory_flush", () =>
                   runMemoryFlushIfNeeded({
                     ...preparation,

@@ -434,6 +434,13 @@ exhausted but the reply still continues:
 }
 ```
 
+"Compacting context..." is sent once maintenance is allowed and before the [memory
+flush](#memory-flush), which can take minutes on a large local context. If the flush
+leaves nothing to compact, "Compaction not needed" follows, unless the chat has reached
+its transcript size limit: then the warning that older history was left out is the last
+message. Queued web-chat turns and channels that deliver only a final reply show
+compaction notices with that reply. Compaction left to ChatGPT's own servers sends none.
+
 ### Memory flush
 
 Before compaction, OpenClaw can run a **silent memory flush** turn to save durable context. Memory Core appends to a workspace memory file; another selected memory plugin can persist through its own tools and use declared read-only lookup tools to check existing memory first. The tools retain the source conversation's memory audience and sandbox restrictions. Missing lookup tools produce a warning but do not block persistence. If policy removes every declared persistence tool, OpenClaw skips the flush and continues compaction.

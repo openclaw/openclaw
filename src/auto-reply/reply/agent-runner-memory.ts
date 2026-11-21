@@ -64,8 +64,11 @@ import {
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import {
+  createCompactionNotifier,
   resolveCompactionCompletionNotice,
+  type CompactionCheckpoint,
   type CompactionNoticePhase,
+  type CompactionNotifier,
 } from "./compaction-notice.js";
 import {
   buildVisibleMemoryFlushFailure,
@@ -121,11 +124,13 @@ export async function runSessionCompactionIfNeeded(params: {
   agentHarnessId?: string;
   abortSignal?: AbortSignal;
   authorize?: () => boolean;
-  beforeCompaction?: (entry: SessionEntry) => Promise<SessionEntry | undefined>;
+  beforeCompaction?: CompactionCheckpoint<SessionEntry>;
   onCompactionStart?: () => void;
   onCompactionCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
   onSessionIdChanged?: (sessionId: string) => void;
   onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
+  /** The replan after the memory checkpoint keeps that run's notices. */
+  compactionNotifier?: CompactionNotifier;
 }): Promise<SessionEntry | undefined> {
   const operatorAuthority = params.followupRun.operatorAuthority;
   const assertActive = () => {
@@ -214,15 +219,7 @@ export async function runSessionCompactionIfNeeded(params: {
     activeTranscriptBytes !== undefined &&
     maxActiveTranscriptBytes !== undefined &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
-  let terminalCompactionNoticeSent = false;
-  const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
-    terminalCompactionNoticeSent = phase !== "start";
-    try {
-      await params.onCompactionNotice?.(phase, text);
-    } catch (err) {
-      logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
-    }
-  };
+  const notifier = params.compactionNotifier ?? createCompactionNotifier(params.onCompactionNotice);
   const latch = entry.transcriptByteCompactionLatch;
   const refreshedTranscriptByteCompactionLatch = refreshTranscriptByteCompactionLatch(
     latch,
@@ -249,7 +246,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
   if (transcriptByteCompactionLatched) {
-    await notifyCompaction("context_bounded");
+    await notifier.notify("context_bounded");
     assertActive();
   }
   const projectedTokenCount = resolveProjectedPromptTokens(
@@ -265,27 +262,31 @@ export async function runSessionCompactionIfNeeded(params: {
     threshold,
   });
   if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
-    return entry;
+    return await notifier.endWithoutCompaction(entry);
   }
 
-  if (params.beforeCompaction) {
-    const refreshed = await params.beforeCompaction(entry);
-    assertActive();
-    // Memory checkpointing may refresh source usage; replan once without repeating it.
-    return runSessionCompactionIfNeeded({
-      ...params,
-      sessionEntry: refreshed,
-      beforeCompaction: undefined,
-    });
-  }
-
-  if (
+  // Token compaction on the native ChatGPT route waits for the provider's boundary, silently.
+  const defersToProvider = async () =>
     shouldCompactByTokens &&
     !shouldCompactByTranscriptBytes &&
-    (await defersTokenCompactionToChatGPTBoundary(params.followupRun.run))
-  ) {
+    (await defersTokenCompactionToChatGPTBoundary(params.followupRun.run));
+  if (params.beforeCompaction) {
+    // The checkpoint is a full model turn that can take minutes; announce once maintenance is admitted.
+    const announceStart = () => notifier.announceStart(defersToProvider, params.cfg);
+    // Memory checkpointing may refresh source usage; replan once without repeating it.
+    const replan = { beforeCompaction: undefined, compactionNotifier: notifier };
+    const checkpoint = params.beforeCompaction(entry, announceStart);
+    const checkpointAndReplan = checkpoint.then((refreshed) => {
+      assertActive();
+      return runSessionCompactionIfNeeded({ ...params, ...replan, sessionEntry: refreshed });
+    });
+    // A failure in either settles a sent start notice; the shared notifier never repeats one.
+    return notifier.settleOnFailure(params, checkpointAndReplan);
+  }
+
+  if (await defersToProvider()) {
     assertActive();
-    return entry;
+    return await notifier.endWithoutCompaction(entry);
   }
 
   const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
@@ -337,7 +338,7 @@ export async function runSessionCompactionIfNeeded(params: {
     params.abortSignal,
   );
   try {
-    await notifyCompaction("start");
+    await notifier.notify("start");
     assertActive();
     const runtime = await embeddedAgentRuntimeLoader.load();
     const result = await runtime.compactEmbeddedAgentSession(
@@ -437,7 +438,7 @@ export async function runSessionCompactionIfNeeded(params: {
       const reason =
         (result?.ok ? normalizeOptionalString(result.reason) : result?.reason) ?? "not_compacted";
       if (!exceedsTranscriptByteThreshold && result && isBenignCompactionSkipResult(result)) {
-        await notifyCompaction("skipped");
+        await notifier.notify("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry;
       }
@@ -445,10 +446,10 @@ export async function runSessionCompactionIfNeeded(params: {
       if (exceedsTranscriptByteThreshold) {
         await recordCompactionAccounting(expectedSession, undefined, undefined, 0);
         assertActive();
-        await notifyCompaction("context_bounded");
+        await notifier.notify("context_bounded");
         return compactionStore[compactionSessionKey] ?? entry;
       }
-      await notifyCompaction("incomplete");
+      await notifier.notify("incomplete");
       return settleFailedPreflightCompaction(
         entry,
         reason,
@@ -490,7 +491,7 @@ export async function runSessionCompactionIfNeeded(params: {
       result,
       Boolean(transcriptByteCompactionLatch),
     );
-    await notifyCompaction(notice.phase, notice.text);
+    await notifier.notify(notice.phase, notice.text);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
     const previousSessionId = params.followupRun.run.sessionId;
@@ -508,8 +509,8 @@ export async function runSessionCompactionIfNeeded(params: {
     }
     return entry;
   } catch (err) {
-    if (!terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
-      await notifyCompaction("incomplete");
+    if (!notifier.ended && !notifier.cancelled(params)) {
+      await notifier.notify("incomplete");
     }
     throw err;
   } finally {

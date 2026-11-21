@@ -1,4 +1,4 @@
-import { assert, beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
@@ -16,6 +16,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+} from "../../plugins/memory-state.test-fixtures.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
 import * as configuredOwners from "../../state/user-channel-identity-operations.js";
@@ -23,6 +27,11 @@ import {
   bindCommandOwnerAuthority,
   captureCommandOwnerAssertion,
 } from "../command-owner-authority.js";
+import {
+  createFlushSessionEntry,
+  createModifiedMemoryFlushPlan,
+} from "./agent-runner-memory.test-support.js";
+import { withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 import type { FollowupRun } from "./queue/types.js";
 import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
 import type { ScheduledSessionAutomation } from "./session-event-contract.js";
@@ -33,6 +42,8 @@ const state = vi.hoisted(() => ({
   loadEntry: vi.fn(),
   queueDepth: vi.fn(() => 0),
   preflight: vi.fn(),
+  flush: vi.fn(),
+  defersToChatGPT: vi.fn(async () => false),
   recheckFallbackProbe: vi.fn(),
   refreshGoal: vi.fn(),
   resolveConfig: vi.fn(),
@@ -57,6 +68,12 @@ vi.mock("./agent-runner-auto-fallback.js", async (importOriginal) => ({
 vi.mock("./agent-runner-memory.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-memory.js")>()),
   runSessionCompactionIfNeeded: state.preflight,
+  runMemoryFlushIfNeeded: state.flush,
+}));
+
+vi.mock("./agent-runner-memory-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-memory-runtime.js")>()),
+  defersTokenCompactionToChatGPTBoundary: state.defersToChatGPT,
 }));
 
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
@@ -101,6 +118,9 @@ vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
 }));
 
 const { prepareReplyAgentTurn } = await import("./reply-agent-turn-preparation.js");
+const actualMemory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
+  "./agent-runner-memory.js",
+);
 
 let operation: ReturnType<typeof createOperation>;
 beforeEach(() => {
@@ -863,3 +883,51 @@ it("retains the preflight owner's public recovery guidance for a queued turn", a
   const turn = await admitted(prepare());
   expect(turn).toMatchObject({ preflightFailurePayload: { text: userMessage } });
 });
+
+it.each([
+  ["refuses", false, true, ["admission"], 0],
+  ["admits", true, true, ["admission", "notice start", "memory save", "notice skipped"], 1],
+] as const)(
+  "announces compaction only after a scheduled turn's maintenance admission (%s)",
+  async (_case, allowed, notifyUser, expected, probes) => {
+    const events: string[] = [];
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () =>
+        createModifiedMemoryFlushPlan({ softThresholdTokens: 1, reserveTokensFloor: 0 }),
+    });
+    onTestFinished(() => clearMemoryPluginState());
+    const queued = createRun();
+    queued.run.config = withTestModelContextTokens({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {}, notifyUser } } } },
+      followupRun: queued,
+      defaultModel: "anthropic/claude",
+      contextTokens: 100_000,
+    });
+    queued.run.internalEventExecution = {
+      onStarted: vi.fn(),
+      onTerminal: vi.fn(),
+      onFailed: vi.fn(),
+      beforeScheduledStart: async () => {
+        events.push("admission");
+        if (!allowed) {
+          throw new Error("outside the active window");
+        }
+      },
+    };
+    state.preflight.mockImplementation(actualMemory.runSessionCompactionIfNeeded);
+    state.flush.mockImplementation(async ({ sessionEntry }) => {
+      events.push("memory save");
+      // The checkpoint leaves nothing to compact, so the replan ends with "skipped".
+      return { sessionEntry: { ...sessionEntry, totalTokens: 10_000 }, outcome: "completed" };
+    });
+    state.shouldNotifyCompaction = notifyUser;
+    const entry = createFlushSessionEntry({ sessionId: "queued-session", totalTokens: 90_000 });
+    const { start } = sessionFixture(entry);
+    await start({}, queued, {
+      onCompactionNotice: async (phase) => void events.push(`notice ${phase}`),
+    });
+
+    expect(events).toEqual(expected);
+    expect(state.defersToChatGPT).toHaveBeenCalledTimes(probes);
+  },
+);
