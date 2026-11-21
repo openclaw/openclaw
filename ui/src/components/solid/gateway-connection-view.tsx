@@ -77,7 +77,7 @@ export function GatewayConnectionView(props: {
 }
 
 /** The OpenClaw mascot from the brand wordmark, split so its claws, eyes and lids can move. */
-function GatewayMascot(props: { pose: "busy" | "error" | "updated" | "rest" }): JSX.Element {
+export function GatewayMascot(props: { pose: "busy" | "error" | "updated" | "rest" }): JSX.Element {
   return (
     <span class="gateway-mascot mount-fallback__mascot" data-pose={props.pose} aria-hidden="true">
       <span class="gateway-mascot__ground mount-fallback__mascot-ground" />
