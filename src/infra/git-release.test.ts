@@ -4,8 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import * as gatewayOwner from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
@@ -14,8 +17,14 @@ import {
   resolveGitReleaseLauncherForEntrypoint,
   usesGitReleases,
 } from "./git-release-paths.js";
-import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
+import {
+  createGitReleaseDirs,
+  publishGitRelease,
+  settleGitReleaseTrial,
+  waitForGitReleaseSuccessor,
+} from "./git-release.js";
 import { listPackageReleases } from "./package-release-retention.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -31,6 +40,16 @@ async function release(prefix: string, version: string, entry: string) {
   );
   await fs.writeFile(path.join(root, "dist", "index.js"), entry);
   return root;
+}
+
+async function publishFixture(prefix: string, version: string, entry: string, trial: boolean) {
+  const releaseRoot = await release(prefix, version, entry);
+  await publishGitRelease({ prefix, releaseRoot, trial });
+}
+
+async function publishFailingTrial(prefix: string, previousTrial: boolean) {
+  await publishFixture(prefix, "1.0.0", 'console.log("old");\n', previousTrial);
+  await publishFixture(prefix, "2.0.0", 'throw new Error("boot");\n', true);
 }
 
 async function setup() {
@@ -49,6 +68,170 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
+    describe("waiting for a cooperative restart", () => {
+      const incumbent = {
+        owner: "before",
+        host: os.hostname(),
+        pid: 1234,
+        startedAt: 1,
+        port: 18789,
+        mode: "supervised",
+        supervisor: { kind: "launchd", name: "test-gateway" },
+        state: "live",
+        expired: false,
+      } as const;
+      const successor = { ...incumbent, owner: "after", pid: 2345 };
+      const unchanged = { status: "unverified", incumbentPid: incumbent.pid };
+      const waitForHandoff = (allowGitReleaseRestartSignal = true) =>
+        waitForGitReleaseSuccessor({
+          serviceEnv: {},
+          gatewayPort: incumbent.port,
+          allowGitReleaseRestartSignal,
+        });
+      const spyOnLease = () => vi.spyOn(gatewayOwner, "readGatewayOwnerLease");
+      const spyOnSignal = () => vi.spyOn(process, "kill");
+      const unreadable = () => {
+        throw new Error("owner lease temporarily unavailable");
+      };
+      beforeEach(() => void vi.useFakeTimers());
+      afterEach(() => {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      });
+      it("does not verify the incumbent while the restart is deferred for active work", async () => {
+        const owner = spyOnLease().mockReturnValue(incumbent);
+        const start = performance.now();
+        owner.mockReturnValueOnce({ ...incumbent, state: "unknown", startedAt: null });
+        owner.mockImplementation(() =>
+          performance.now() - start === 35_000 ? { ...incumbent, state: "unknown" } : incumbent,
+        );
+        const kill = spyOnSignal().mockImplementation(() => {
+          expect(performance.now() - start).toBeGreaterThan(35_000);
+          owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "new-receipt" });
+          setTimeout(() => {
+            owner.mockReturnValue(undefined);
+            setTimeout(() => owner.mockReturnValue(successor), 2_000);
+          }, resolveGatewayRestartDeferralTimeoutMs());
+          return true;
+        });
+        const verified = vi.fn();
+        const wait = waitForHandoff().then((result) => verified(result, owner()?.pid));
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+        expect(verified).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(resolveGatewayRestartDeferralTimeoutMs());
+        await wait;
+        expect(verified).toHaveBeenCalledExactlyOnceWith({ status: "changed" }, 2345);
+      });
+      it.each([undefined, "earlier-receipt"])(
+        "does not extend the wait on delivery alone (prior receipt: %s)",
+        async (prior) => {
+          spyOnLease().mockReturnValue({ ...incumbent, externalRestartReceipt: prior });
+          const kill = spyOnSignal().mockReturnValue(true);
+          const wait = waitForHandoff();
+          await vi.advanceTimersByTimeAsync(90_000);
+          await expect(wait).resolves.toEqual(unchanged);
+          expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+        },
+      );
+      it.each([
+        ["ESRCH", true],
+        ["ESRCH", false],
+        ["EPERM", true],
+        ["EPERM", false],
+      ] as const)(
+        "keeps observing until the original deadline after SIGUSR2 gets %s (successor arrives: %s)",
+        async (code, successorArrives) => {
+          const owner = spyOnLease().mockReturnValue(incumbent);
+          const kill = spyOnSignal().mockImplementation(() => {
+            throw Object.assign(new Error("signal not delivered"), { code });
+          });
+          const finished = vi.fn();
+          void waitForHandoff().then(finished);
+          await vi.advanceTimersByTimeAsync(35_000);
+          // A still-visible lease cannot justify retrying or acknowledging an undelivered signal.
+          owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "another-request" });
+          await vi.advanceTimersByTimeAsync(54_000);
+          expect(finished).not.toHaveBeenCalled();
+          if (successorArrives) {
+            owner.mockReturnValue(successor);
+          }
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(finished).toHaveBeenCalledExactlyOnceWith(
+            successorArrives ? { status: "changed" } : unchanged,
+          );
+          expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+        },
+      );
+      it("does not signal or spend the deferral budget when external restarts are disabled", async () => {
+        const owner = spyOnLease().mockReturnValue(incumbent);
+        const kill = spyOnSignal().mockReturnValue(true);
+        const wait = waitForHandoff(false);
+        await vi.advanceTimersByTimeAsync(50_000);
+        owner.mockReturnValue({ ...incumbent, owner: "watcher-successor", pid: 2345 });
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(wait).resolves.toEqual({ status: "changed" });
+        expect(kill).not.toHaveBeenCalled();
+      });
+      it.each(["listeningAt", "heartbeatAt"] as const)(
+        "recovers an incumbent whose %s predates an unreadable first poll",
+        async (timestamp) => {
+          const started = Date.now();
+          const owner = spyOnLease().mockImplementation(unreadable);
+          const kill = spyOnSignal().mockReturnValue(true);
+          const wait = waitForHandoff();
+          await vi.advanceTimersByTimeAsync(10_000);
+          owner.mockReturnValue({
+            ...incumbent,
+            heartbeatAt: Date.now(),
+            listeningAt: Date.now(),
+            [timestamp]: started - 1,
+          });
+          await vi.advanceTimersByTimeAsync(25_000);
+          expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+          owner.mockReturnValue(successor);
+          await vi.advanceTimersByTimeAsync(1_000);
+          await expect(wait).resolves.toEqual({ status: "changed" });
+        },
+      );
+      it.each([
+        ["unreadable", unreadable],
+        ["new owner", (start: number) => ({ ...incumbent, listeningAt: start + 1 })],
+        ["same millisecond", (start: number) => ({ ...incumbent, heartbeatAt: start })],
+        [
+          "wrong port",
+          (start: number) => ({ ...incumbent, port: incumbent.port + 1, listeningAt: start - 1 }),
+        ],
+        ["no timestamps", () => incumbent],
+      ] as const)(
+        "observes only to the original deadline if the initial incumbent cannot be established: %s",
+        async (_scenario, read) => {
+          const started = Date.now();
+          spyOnLease()
+            .mockImplementation(() => read(started))
+            .mockImplementationOnce(unreadable);
+          const kill = spyOnSignal().mockReturnValue(true);
+          const finished = vi.fn();
+          void waitForHandoff().then(finished);
+          await vi.advanceTimersByTimeAsync(89_000);
+          expect(finished).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(finished).toHaveBeenCalledExactlyOnceWith({ status: "unverified" });
+          expect(kill).not.toHaveBeenCalled();
+        },
+      );
+      it("honors command-scope cancellation while the initial owner lease remains unreadable", async () => {
+        spyOnLease().mockImplementation(unreadable);
+        const kill = spyOnSignal().mockReturnValue(true);
+        const controller = new AbortController();
+        const wait = withCommandProcessScope(() => waitForHandoff(), controller.signal);
+        await vi.advanceTimersByTimeAsync(1_000);
+        controller.abort();
+        await expect(wait).rejects.toThrow();
+        expect(kill).not.toHaveBeenCalled();
+      });
+    });
+
     it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
       const { prefix } = await setup();
       const root = (await createGitReleaseDirs(prefix)).releaseRoot;
@@ -80,11 +263,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         path.join(old, "package.json"),
         JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       );
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "2.0.0", ""),
-        trial: false,
-      });
+      await publishFixture(prefix, "2.0.0", "", false);
 
       const releases = await listPackageReleases(gitReleaseSlot(prefix));
       expect(releases.map(({ id, version, selected }) => ({ id, version, selected }))).toEqual(
@@ -228,10 +407,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("resumes an interrupted rollback before the link moves", async () => {
       const { stateDir, prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: true });
-      const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+      await publishFailingTrial(prefix, true);
       const db = path.join(stateDir, "state", "openclaw.sqlite");
       await fs.mkdir(db, { recursive: true });
       await fs.writeFile(path.join(db, "blocker"), "");
@@ -258,10 +434,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("keeps a family's restored WAL when a rollback resumes after partial progress", async () => {
       const { stateDir, prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: true });
-      const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+      await publishFailingTrial(prefix, true);
       const db = path.join(stateDir, "state", "openclaw.sqlite");
       await fs.mkdir(path.dirname(db), { recursive: true });
       // The previous rollback recorded the family, restored the WAL, then stopped.
@@ -299,10 +472,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       vi.stubEnv("OPENCLAW_HOME", home);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", "~/cfg/openclaw.json");
       try {
-        const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-        await publishGitRelease({ prefix, releaseRoot: good, trial: false });
-        const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-        await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+        await publishFailingTrial(prefix, false);
       } finally {
         vi.unstubAllEnvs();
       }
@@ -338,10 +508,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("keeps the applied plan and the trial when removing an addition fails", async () => {
       const { stateDir, prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: false });
-      const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+      await publishFailingTrial(prefix, false);
       // An addition that cannot be removed (here a non-empty directory).
       const stuck = path.join(stateDir, "client", "credentials.sqlite");
       await fs.mkdir(stuck, { recursive: true });
@@ -366,16 +533,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("stops counting once the trial release reports ready", async () => {
       const { prefix } = await setup();
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "1.0.0", ""),
-        trial: false,
-      });
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "2.0.0", 'console.log("new");\n'),
-        trial: true,
-      });
+      await publishFixture(prefix, "1.0.0", "", false);
+      await publishFixture(prefix, "2.0.0", 'console.log("new");\n', true);
       const trial = path.join(prefix, "releases", GIT_RELEASE_TRIAL);
       expect(JSON.parse(await fs.readFile(trial, "utf8"))).toMatchObject({ version: "2.0.0" });
 
@@ -437,11 +596,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       const { inspectManagedGatewayServiceBeforeUpdate } =
         await import("../cli/update-cli/update-command-service-plan.js");
       const { prefix } = await setup();
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "1.0.0", ""),
-        trial: false,
-      });
+      await publishFixture(prefix, "1.0.0", "", false);
       const launcher = path.join(prefix, "openclaw-launcher.mjs");
       const verdict = await inspectManagedGatewayServiceBeforeUpdate({
         root: gitReleaseSlot(prefix),
@@ -490,6 +645,26 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         // --no-restart never rewrites the definition, so the next start would run the checkout.
         service(entry);
         expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(false);
+        await withMockedPlatform("darwin", async () => {
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
+          // An interrupted conversion selected a trial without rebinding the loaded job.
+          await publishFixture(prefix, "1.0.0", "", false);
+          await publishFixture(prefix, "2.0.0", "", true);
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
+          // A later independent update must not adopt the unserved trial as its fallback.
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
+          service(await writeGitReleaseLauncher(prefix), true);
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+        });
+        await withMockedPlatform("linux", async () => {
+          service(entry);
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+        });
         // Once the unit names the launcher, switches need no definition write.
         await publishGitRelease({ prefix, releaseRoot: checkout, trial: false });
         service(await writeGitReleaseLauncher(prefix), true);
