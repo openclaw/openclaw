@@ -28,14 +28,18 @@ export function resolveCodexWebSocketAuthority(params: {
   };
 }
 
-export function buildCodexWebSocketHeaders(baseHeaders: Headers, requestId: string): Headers {
+export function buildCodexWebSocketHeaders(
+  baseHeaders: Headers,
+  requestId: string,
+  cacheAffinityId: string = requestId,
+): Headers {
   baseHeaders.delete("accept");
   baseHeaders.delete("content-type");
   baseHeaders.delete("OpenAI-Beta");
   baseHeaders.delete("openai-beta");
   baseHeaders.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
   baseHeaders.set("x-client-request-id", requestId);
-  baseHeaders.set("session_id", requestId);
+  baseHeaders.set("session_id", cacheAffinityId);
   return baseHeaders;
 }
 
