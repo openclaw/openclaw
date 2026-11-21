@@ -32,6 +32,7 @@ import {
 } from "../app-server/plugin-inventory.test-helpers.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
 import { buildCodexMigrationProvider } from "./provider.js";
+import { registerCodexMemoryProbeTests } from "./provider.memory-probe.test-support.js";
 import { discoverCodexSource } from "./source.js";
 
 type CodexFixture = Awaited<ReturnType<typeof createCodexFixture>>;
@@ -81,6 +82,8 @@ function mockSourcePlugin(
 }
 
 describe("buildCodexMigrationProvider", () => {
+  registerCodexMemoryProbeTests({ contextFor });
+
   it("preserves whitespace in nonempty CODEX_HOME values", async () => {
     const root = await createCodexTestRoot();
     const codexHome = path.join(root, " spaced ");
@@ -140,22 +143,6 @@ describe("buildCodexMigrationProvider", () => {
     await expect(
       fs.access(path.join(targetWorkspace, "memory", "imports", "codex", "private.md")),
     ).rejects.toThrow();
-  });
-
-  it("rejects non-file Codex consolidated memory candidates", async () => {
-    const fixture = await createCodexFixture();
-    await fs.mkdir(path.join(fixture.codexHome, "memories", "MEMORY.md"), {
-      recursive: true,
-    });
-    const provider = buildCodexMigrationProvider();
-
-    await expect(
-      provider.plan(
-        contextFor(fixture, {
-          itemKinds: ["memory"],
-        }),
-      ),
-    ).rejects.toThrow("must be a regular file");
   });
 
   it.runIf(process.platform !== "win32")(
