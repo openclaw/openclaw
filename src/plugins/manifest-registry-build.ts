@@ -80,6 +80,19 @@ function rejectCaseFoldedIdCollisions(
   return records.filter((record) => !rejected.has(record));
 }
 
+// Plugins that policy keeps inactive get no metadata advice they could act on.
+function isInactiveByPolicy(
+  policyId: string,
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>,
+): boolean {
+  return (
+    normalized?.enabled === false ||
+    normalized?.entries[policyId]?.enabled === false ||
+    normalized?.deny.includes(policyId) === true ||
+    Boolean(normalized?.allow.length && !normalized.allow.includes(policyId))
+  );
+}
+
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -88,14 +101,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
   }
-  const policyId = normalizePluginPolicyId(params.record.id);
-  const configuredEntry = params.normalized?.entries[policyId];
-  if (
-    params.normalized?.enabled === false ||
-    configuredEntry?.enabled === false ||
-    params.normalized?.deny.includes(policyId) ||
-    (params.normalized?.allow.length && !params.normalized.allow.includes(policyId))
-  ) {
+  if (isInactiveByPolicy(normalizePluginPolicyId(params.record.id), params.normalized)) {
     return;
   }
   const declaredChannels = params.record.channels
@@ -117,6 +123,36 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
     pluginId: sanitizeForLog(params.record.id),
     source: sanitizeForLog(params.record.manifestPath),
     message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads. Channels without channelConfigs still appear in channel listings, but setup UI may be limited.`,
+  });
+}
+
+// A manifestless load.paths file starts with the Gateway; a manifest beside it replaces that
+// intent, so an enabled file whose manifest declares no activation starts only if config does.
+function pushStandaloneFileStartupIntentDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+  explicitConfiguredFileSources: ReadonlySet<string>;
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
+}): void {
+  const { record, normalized } = params;
+  const policyId = normalizePluginPolicyId(record.id);
+  if (
+    record.origin !== "config" ||
+    Object.values(record.activation ?? {}).some((v) =>
+      Array.isArray(v) ? v.length > 0 : v !== undefined,
+    ) ||
+    !params.explicitConfiguredFileSources.has(path.resolve(record.source)) ||
+    isInactiveByPolicy(policyId, normalized) ||
+    (normalized?.entries[policyId]?.enabled !== true && !normalized?.allow.includes(policyId))
+  ) {
+    return;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: sanitizeForLog(record.id),
+    source: sanitizeForLog(record.manifestPath),
+    message:
+      "standalone plugin file has a manifest that declares no activation, so it starts with the Gateway only when its config activates it (registering hooks does not); set activation.onStartup to true to keep starting it with the Gateway, or false to keep it lazy",
   });
 }
 
@@ -519,6 +555,12 @@ export function buildPluginManifestRegistry(
       });
     }
     pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
+    pushStandaloneFileStartupIntentDiagnostic({
+      record,
+      diagnostics,
+      explicitConfiguredFileSources,
+      normalized,
+    });
   }
   return { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
 }

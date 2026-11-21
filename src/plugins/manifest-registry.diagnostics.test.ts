@@ -81,6 +81,50 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
   });
 });
 
+describe("standalone plugin file startup intent", () => {
+  const warning = "standalone plugin file has a manifest that declares no activation";
+  const enabled = { entries: { "tool-policy": { enabled: true } } };
+
+  it.each([
+    { name: "enabled, manifest declares no activation", plugins: enabled, warns: true },
+    {
+      name: "allowlisted, manifest declares no activation",
+      plugins: { allow: ["tool-policy"] },
+      warns: true,
+    },
+    {
+      name: "enabled, onStartup false",
+      plugins: enabled,
+      activation: { onStartup: false },
+      warns: false,
+    },
+    {
+      name: "entry disabled",
+      plugins: { entries: { "tool-policy": { enabled: false } } },
+      warns: false,
+    },
+    {
+      name: "enabled, onCapabilities hook",
+      plugins: enabled,
+      activation: { onCapabilities: ["hook"] },
+      warns: false,
+    },
+    { name: "plugins disabled", plugins: { ...enabled, enabled: false }, warns: false },
+    { name: "denied", plugins: { ...enabled, deny: ["tool-policy"] }, warns: false },
+    { name: "allowlist excludes it", plugins: { ...enabled, allow: ["other"] }, warns: false },
+  ])("$name: warns $warns", ({ plugins, activation, warns }) => {
+    const file = candidate("config", activation ? { activation } : {}, "tool-policy");
+    fs.writeFileSync(file.source, "export default { register() {} };", "utf-8");
+
+    const registry = loadPluginManifestRegistryCore({
+      config: { plugins: { ...plugins, load: { paths: [file.source] } } },
+      candidates: [file],
+    });
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes(warning))).toBe(warns);
+  });
+});
+
 const authChoice = (provider: string, method = "api-key") => ({
   provider,
   method,
