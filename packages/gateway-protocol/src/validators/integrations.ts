@@ -1,3 +1,4 @@
+import { Errors } from "typebox/schema";
 import * as Checks from "../compiled/protocol.generated/validators-integrations.js";
 import { createProtocolValidator } from "../protocol-validator.js";
 import * as S from "../schema-modules.js";
@@ -5,6 +6,7 @@ import type {
   WebPushSubscribeParams,
   WebPushPreferencesGetParams,
   WebPushPreferencesSetParams,
+  WebPushSendParams,
   WebPushTestParams,
   WebPushUnsubscribeParams,
   WebPushVapidPublicKeyParams,
@@ -32,6 +34,25 @@ export const validateWebPushUnsubscribeParams = createProtocolValidator<WebPushU
 export const validateWebPushTestParams = createProtocolValidator<WebPushTestParams>(
   S.WebPushTestParamsSchema,
   Checks.isWebPushTestParams,
+);
+// Names the click-path rule instead of echoing its regular expression to the caller.
+function webPushSendDiagnostics(data: unknown) {
+  const errors = Errors(S.WebPushSendParamsSchema, data)[1];
+  for (const error of errors) {
+    if (error.keyword === "pattern" && error.instancePath === "/path") {
+      error.message =
+        "must be a relative Control UI path without query, fragment, empty or dot segments, " +
+        "or approval, question, or pairing routes";
+    }
+  }
+  return errors;
+}
+
+export const validateWebPushSendParams = createProtocolValidator<WebPushSendParams>(
+  S.WebPushSendParamsSchema,
+  Checks.isWebPushSendParams,
+  undefined,
+  webPushSendDiagnostics,
 );
 export const validateWebPushPreferencesGetParams =
   createProtocolValidator<WebPushPreferencesGetParams>(

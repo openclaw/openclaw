@@ -8,7 +8,7 @@ import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.wor
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createEventWebPushDelivery } from "./event-web-push.js";
+import { createEventWebPushDelivery, sendProfileWebPush } from "./event-web-push.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
   setOpenClawIdMemberAccountLookup,
@@ -64,6 +64,13 @@ const setSubscriptions = (...subscriptions: BoundWebPushSubscription[]) =>
   mocks.subscriptions.mockReturnValue(subscriptions);
 const setPaired = (...paired: ReturnType<typeof pairedOperator>[]) =>
   mocks.paired.mockReturnValue(paired);
+function expectDelivered(subscriptions: BoundWebPushSubscription[]) {
+  if (subscriptions.length === 0) {
+    expect(mocks.send).not.toHaveBeenCalled();
+  } else {
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ subscriptions }));
+  }
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -88,7 +95,7 @@ describe("Web Push ID canonical profile policy", () => {
     "definitions only",
     "owner",
   ] as const)(
-    "uses canonical profile roles and current ID membership for completion delivery: %s",
+    "uses canonical profile roles and current ID membership for completion and profile sends: %s",
     async (membership) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const creator = ensureProfileForEmail("push-creator@example.test");
@@ -198,13 +205,21 @@ describe("Web Push ID canonical profile policy", () => {
               : membership === "removed" || membership === "off"
                 ? [localBrowser]
                 : [];
-        if (subscriptions.length === 0) {
-          expect(mocks.send).not.toHaveBeenCalled();
-        } else {
-          expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ subscriptions }),
-          );
-        }
+        // A profile-targeted send has no session to see: only role scopes and ID binding apply.
+        // An ID member without an assigned or default role has no scopes at all.
+        const profileSend =
+          membership === "scope removed" || membership === "definitions only"
+            ? []
+            : membership === "removed" || membership === "off"
+              ? [localBrowser]
+              : [idBrowser, localBrowser];
+        expectDelivered(subscriptions);
+        mocks.send.mockClear();
+        await sendProfileWebPush(() => cfg, {
+          profileId: recipient.id,
+          category: "agent-finished",
+        });
+        expectDelivered(profileSend);
       });
     },
   );

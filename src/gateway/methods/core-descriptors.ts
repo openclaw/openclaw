@@ -1,5 +1,6 @@
 import {
   CONTROL_PLANE_WRITE,
+  DEPRECATED_STEER_ALIAS,
   OBSERVATION,
   OWN_SESSION_WRITE,
   PORTAL_SESSION_WRITE,
@@ -370,17 +371,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", UNADVERTISED],
   ["sessions.usage.logs", "usage", "operator.read", "<=2026.7", UNADVERTISED],
   ["poll", "send", "operator.write", "<=2026.7", UNADVERTISED],
-  [
-    "sessions.steer",
-    "sessions-messaging",
-    "operator.write",
-    "<=2026.7",
-    {
-      advertise: false,
-      description:
-        "Deprecated alias for chat.send queueMode interrupt; removal per protocol deprecation policy.",
-    },
-  ],
+  ["sessions.steer", "sessions-messaging", "operator.write", "<=2026.7", DEPRECATED_STEER_ALIAS],
   ["push.test", "push", "operator.write", "<=2026.7", UNADVERTISED],
   ["attach.grant", "attach", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["attach.revoke", "attach", "operator.admin", "<=2026.7"],
@@ -759,4 +750,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.steerTarget", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
+  ["push.web.send", "push", "operator.write", "2026.11"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

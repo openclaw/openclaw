@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import {
   extractErrorCode,
@@ -7,7 +7,12 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
+import type {
+  WebPushDetailLevel,
+  WebPushNotificationCategory,
+  WebPushSendParams,
+  WebPushSendResult,
+} from "../../packages/gateway-protocol/src/schema/push.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import {
@@ -42,6 +47,29 @@ import { currentWebPushAgentIcon, prepareWebPushAgentIcon } from "./web-push-ava
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
 const log = createSubsystemLogger("gateway/web-push");
 
+/** Generic lock-screen text for each attention category, shared by every producer. */
+const WEB_PUSH_CATEGORY_TEXT = {
+  "agent-finished": {
+    title: "OpenClaw agent finished",
+    body: "An agent completed its response.",
+  },
+  "agent-question": {
+    title: "OpenClaw needs an answer",
+    body: "An agent has a question for you.",
+  },
+  "human-mentioned": {
+    title: "OpenClaw mention",
+    body: "Someone mentioned you in a conversation.",
+  },
+  "scheduled-task-failed": {
+    title: "OpenClaw scheduled task failed",
+    body: "A scheduled task needs attention.",
+  },
+} as const satisfies Record<
+  WebPushSendParams["category"] | "human-mentioned",
+  { title: string; body: string }
+>;
+
 type EventNotification = {
   category: WebPushNotificationCategory;
   title: string;
@@ -75,8 +103,7 @@ function resolveEventWebPushNotification(
     const questionId = normalizeOptionalString(value.id);
     return {
       category: "agent-question",
-      title: "OpenClaw needs an answer",
-      body: "An agent has a question for you.",
+      ...WEB_PUSH_CATEGORY_TEXT["agent-question"],
       tag: `openclaw-question-${id}`,
       ...(questionId ? { path: `ask/${encodeURIComponent(questionId)}` } : {}),
     };
@@ -90,8 +117,7 @@ function resolveEventWebPushNotification(
     const runId = normalizeWebPushDisplayLabel(value.runId) ?? "finished";
     return {
       category: "agent-finished",
-      title: "OpenClaw agent finished",
-      body: "An agent completed its response.",
+      ...WEB_PUSH_CATEGORY_TEXT["agent-finished"],
       tag: `openclaw-agent-finished-${runId}`,
     };
   }
@@ -116,8 +142,7 @@ function resolveEventWebPushNotification(
     }
     return {
       category: "scheduled-task-failed",
-      title: "OpenClaw scheduled task failed",
-      body: "A scheduled task needs attention.",
+      ...WEB_PUSH_CATEGORY_TEXT["scheduled-task-failed"],
       ...(jobName ? { identifiedBody: `${jobName} needs attention.` } : {}),
       tag: `openclaw-cron-failed-${jobTag}`,
       path: `automations${query.size ? `?${query}` : ""}`,
@@ -350,8 +375,7 @@ export function createEventWebPushDelivery(
       deliver(
         {
           category: "human-mentioned",
-          title: "OpenClaw mention",
-          body: "Someone mentioned you in a conversation.",
+          ...WEB_PUSH_CATEGORY_TEXT["human-mentioned"],
           identifiedBody: `${senderLabel} mentioned you${sessionTitle ? ` in ${sessionTitle}` : ""}.`,
           tag: `openclaw-mention-${id}`,
         },
@@ -362,4 +386,123 @@ export function createEventWebPushDelivery(
       );
     },
   };
+}
+
+/**
+ * Chooses lock-screen text for a profile-targeted send. This is the single switch point
+ * for caller-provided text, which only a **Detailed** recipient sees. **Names only**
+ * (`identified`) gets the category's generic text with the permitted agent label, exactly
+ * like core attention alerts, and **Private** gets the generic text alone.
+ */
+function resolveProfileWebPushText(
+  params: Pick<WebPushSendParams, "category" | "title" | "body">,
+  detailLevel: WebPushDetailLevel,
+  agentLabel: string | undefined,
+): { title: string; body: string } {
+  const generic = WEB_PUSH_CATEGORY_TEXT[params.category];
+  if (detailLevel === "private") {
+    return generic;
+  }
+  const labeledBody = agentLabel ? `${agentLabel}: ${generic.body}` : generic.body;
+  if (detailLevel !== "detailed") {
+    return { title: generic.title, body: labeledBody };
+  }
+  // Lock screens show one line: flatten line breaks and other controls to spaces before
+  // the shared sanitizer escapes the remaining spoofing characters.
+  const flatten = (text: string | undefined) =>
+    text?.replace(/ *[\p{Cc}\p{Zl}\p{Zp}][\p{Cc}\p{Zl}\p{Zp} ]*/gu, " ");
+  return {
+    title: normalizeWebPushDisplayLabel(flatten(params.title)) ?? generic.title,
+    body: normalizeWebPushDisplayLabel(flatten(params.body), 240) ?? labeledBody,
+  };
+}
+
+/**
+ * Sends one notification to a user profile's current browsers. Recipients, merged-profile
+ * aliases, OpenClaw ID grants, preferences, quiet hours and expired-endpoint cleanup all
+ * come from the same authority and transport owners as attention events.
+ */
+export async function sendProfileWebPush(
+  getRuntimeConfig: () => OpenClawConfig,
+  params: WebPushSendParams,
+): Promise<WebPushSendResult> {
+  const counts = { sent: 0, failed: 0, skipped: 0, pruned: 0 };
+  if (!(await hasBoundWebPushSubscriptions())) {
+    return counts;
+  }
+  const sender = await prepareWebPushNotificationSender();
+  const { category, agentId } = params;
+  const tag = `openclaw-send-${params.tag ?? randomUUID()}`;
+  const results = await withCurrentWebPushAuthority({ getRuntimeConfig }, (authority) => {
+    // A retried preparation sees a fresher snapshot; only its final pass counts.
+    counts.skipped = 0;
+    const recipientProfileId = authority.profile?.readCurrentIdentity(params.profileId)?.profileId;
+    if (!recipientProfileId) {
+      return undefined;
+    }
+    const { cfg } = authority;
+    const url = resolveControlUiWebPushUrl(cfg, params.path ?? "sessions");
+    const agentLabel = normalizeWebPushDisplayLabel(agentId);
+    const groups = new Map<
+      string,
+      { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
+    >();
+    const targets = listCurrentWebPushTargets({
+      ...authority,
+      requiredScopes: category === "agent-question" ? [READ_SCOPE, QUESTIONS_SCOPE] : [READ_SCOPE],
+    });
+    // The explicit recipient is the authoritative owner, so the sessionless multi-user
+    // suppression used for broadcast events does not apply here. Devices the authority
+    // drops (revoked, ID-unbound, or missing a required scope such as operator.questions
+    // for agent-question) are not the recipient's to count: they enter no counter.
+    for (const target of targets) {
+      if (target.userProfileId !== recipientProfileId) {
+        continue;
+      }
+      const { preferences } = target;
+      if (
+        !webPushCategoryEnabled(preferences, category) ||
+        isWebPushQuietHours(preferences) ||
+        !webPushAgentAllowed(preferences, agentId)
+      ) {
+        counts.skipped += 1;
+        continue;
+      }
+      const text = resolveProfileWebPushText(params, preferences.detailLevel, agentLabel);
+      const title = `${preferences.label ? `${preferences.label} · ` : ""}${text.title}`;
+      const key = JSON.stringify([title, text.body]);
+      const group = groups.get(key) ?? { title, body: text.body, subscriptions: [] };
+      group.subscriptions.push(target.subscription);
+      groups.set(key, group);
+    }
+    const topic = createHash("sha256").update(tag).digest("base64url").slice(0, 32);
+    return {
+      start: () =>
+        Promise.all(
+          [...groups.values()].map((group) =>
+            sender({
+              subscriptions: group.subscriptions,
+              payload: { title: group.title, body: group.body, tag, renotify: false, url },
+              deliveryOptions: {
+                TTL: params.ttlSeconds ?? EVENT_PUSH_TTL_SECONDS,
+                urgency: params.urgency ?? "normal",
+                topic,
+              },
+            }),
+          ),
+        ),
+    };
+  });
+  for (const result of results?.flat() ?? []) {
+    if (result.ok) {
+      counts.sent += 1;
+      continue;
+    }
+    counts.failed += 1;
+    // The transport owner already attempted conditional removal of these endpoints.
+    if (result.statusCode === 404 || result.statusCode === 410) {
+      counts.pruned += 1;
+    }
+  }
+  return counts;
 }
