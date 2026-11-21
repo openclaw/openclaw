@@ -76,7 +76,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 import { isFeishuGroupChatType, type FeishuMessageContext } from "./types.js";
-export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
+export type { FeishuMessageEvent } from "./event-types.js";
 
 // App-scoped cooldown prevents repeated permission notifications.
 const permissionErrorNotifiedAt = new Map<string, number>();
