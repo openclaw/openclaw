@@ -1,0 +1,8 @@
+68
+# Rebase onto39dabcb06b86 adds real-profile original-creator approval coverage
+# for invited-only roles and participant-created children without child membership.
+# The resolution and notification assertions failed on the combined branch before
+# the alternative participation authority was restored; ordinary requester tests
+# still pass. Exact membership writer edge/sink coverage rejects unrelated callers.
+# Separate transport/resolution boundaries cannot be established by one helper test.
+# rebase2-creator-green.log and rebase2-focused-final.log retain the owning proofs.

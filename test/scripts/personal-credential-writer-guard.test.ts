@@ -1083,10 +1083,11 @@ it("keeps session membership writes with the worker and canonical entry owners",
     [members]: `
       export function addSessionMember() { addSessionMemberInTransaction(); }
       export function addSessionMemberInTransaction() { db.insertInto('session_members'); }
+      export function setSessionMemberAccess() { db.updateTable('session_members'); }
     `,
     "src/config/sessions/session-sharing-store.worker.ts": `
-      import { addSessionMember } from './session-sharing-store.native.js';
-      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+      import { addSessionMember, setSessionMemberAccess } from './session-sharing-store.native.js';
+      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); setSessionMemberAccess(); } }; }
     `,
     "src/config/sessions/session-accessor.sqlite-involvement.worker.ts": `
       import { addSessionMemberInTransaction } from './session-sharing-store.native.js';
@@ -1109,7 +1110,11 @@ it("keeps session membership writes with the worker and canonical entry owners",
     `,
   });
 
-  for (const writer of ["addSessionMember", "addSessionMemberInTransaction"]) {
+  for (const writer of [
+    "addSessionMember",
+    "addSessionMemberInTransaction",
+    "setSessionMemberAccess",
+  ]) {
     reject(
       "src/new-writer.ts",
       `

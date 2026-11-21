@@ -262,6 +262,16 @@ export function readOperatorApprovalRequestSource(
   return { ...record.source, requestedByProfileId: record.requester.profileId };
 }
 
+export function bindApprovalReviewerDeviceIds<TPayload>(params: {
+  record: ExecApprovalRecord<TPayload>;
+  deviceIds?: readonly string[] | null;
+}): void {
+  const deviceIds = normalizeUniqueTrimmedStringList(params.deviceIds);
+  if (deviceIds.length > 0) {
+    params.record.approvalReviewerDeviceIds = deviceIds;
+  }
+}
+
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;

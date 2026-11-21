@@ -233,6 +233,7 @@ it.for(["direct", "child"] as const)(
     const fixture = await createPreparedTestApprovalManager(test);
     await fixture.run(() =>
       withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+        const creatorProfile = await ensureCanonicalUserProfileForEmail("creator@participate.test");
         const participant = await ensureCanonicalUserProfileForEmail(
           "participant@participate.test",
         );
@@ -248,7 +249,7 @@ it.for(["direct", "child"] as const)(
                   agentId: "main",
                   sessionId,
                   lifecycleRevision: null,
-                  creatorProfileId: "creator",
+                  creatorProfileId: creatorProfile.id,
                   root: state.workspaceDir,
                 },
               }
@@ -256,18 +257,34 @@ it.for(["direct", "child"] as const)(
         };
         const expectedBinding = {
           ...binding,
+          creatorProfileId: creatorProfile.id,
           ...(kind === "child" ? { creatorOnly: true as const } : {}),
           participantProfileId: participant.id,
           participantLabel: participant.displayName || participant.id,
         };
-        setRuntimeConfigSnapshot({});
+        const cfg = {
+          agents: { entries: { main: {} } },
+          gateway: {
+            roles: {
+              default: "invited",
+              definitions: {
+                invited: {
+                  agents: "*" as const,
+                  scopes: ["operator.read" as const, "operator.write" as const],
+                  sessions: { others: "invited" as const },
+                },
+              },
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(cfg);
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
             sessionId,
             updatedAt: 1,
             sessionRoot: state.workspaceDir,
-            createdActor: { type: "human", source: "profile", id: "creator" },
+            createdActor: { type: "human", source: "profile", id: creatorProfile.id },
             owner: { actor: { type: "human", id: "assignee" } },
           },
         );
@@ -424,6 +441,7 @@ it.for(["direct", "child"] as const)(
                         const invoke = (who: ReturnType<typeof client>) =>
                           createApprovalInvocation({
                             handlers: handlersFor(method, fixture),
+                            context: { ...createContext(), getRuntimeConfig: () => cfg },
                             method,
                             body: {
                               id: record.id,
@@ -432,7 +450,10 @@ it.for(["direct", "child"] as const)(
                             },
                             client: who,
                           }).invoke();
-                        const creator = client("creator", ["operator.read", "operator.write"]);
+                        const creator = client(creatorProfile.id, [
+                          "operator.read",
+                          "operator.write",
+                        ]);
                         expect(canResolveParticipationExecApproval(record, creator)).toBe(true);
                         for (const who of [
                           client(participant.id, ["operator.approvals"]),
@@ -447,9 +468,10 @@ it.for(["direct", "child"] as const)(
                         (
                           await createApprovalInvocation({
                             handlers,
+                            context: { ...createContext(), getRuntimeConfig: () => cfg },
                             method: "exec.approval.resolve",
                             body: { id: record.id, decision: "allow-once" },
-                            client: client("creator", ["operator.read", "operator.write"]),
+                            client: client(creatorProfile.id, ["operator.read", "operator.write"]),
                           }).invoke()
                         ).ok,
                       ).toBe(true);

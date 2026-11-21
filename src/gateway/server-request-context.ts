@@ -415,16 +415,19 @@ export function createGatewayRequestContext(
             runtime.execApprovalManager?.getLiveSnapshot(opts.record.id) === opts.record) &&
           canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec", opts.record) &&
           (!opts.record ||
-            canAccessInvitedApprovalSession({
-              ...readApprovalRequestSource(opts.record),
-              client: gatewayClient,
-              cfg: getRuntimeConfig(),
-              prepared: prepareProjectedApprovalSessionAccess({
-                cfg: getRuntimeConfig(),
+            (((opts.approvalKind ?? "exec") === "exec"
+              ? canResolveParticipationExecApproval(opts.record, gatewayClient)
+              : undefined) ??
+              canAccessInvitedApprovalSession({
+                ...readApprovalRequestSource(opts.record),
                 client: gatewayClient,
-                projection: runtime.getSessionRowProjection(),
-              }),
-            })) &&
+                cfg: getRuntimeConfig(),
+                prepared: prepareProjectedApprovalSessionAccess({
+                  cfg: getRuntimeConfig(),
+                  client: gatewayClient,
+                  projection: runtime.getSessionRowProjection(),
+                }),
+              }))) &&
           (!opts.filter || opts.filter(gatewayClient, opts.record)),
       ),
     getClientConnIds,
