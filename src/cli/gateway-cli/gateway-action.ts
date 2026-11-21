@@ -1,11 +1,13 @@
 import type { Command } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
 
 export function gatewayAction(action: Parameters<Command["action"]>[0], label?: string) {
   return async function (this: Command, ...args: Parameters<typeof action>) {
-    const json = Boolean(this.opts<{ json?: boolean }>().json);
+    const opts = this.opts<{ json?: boolean }>();
+    const json = Boolean(opts.json || inheritOptionFromParent<boolean>(this, "json"));
     // JSON mode preserves structured gateway errors for automation callers.
     try {
       await action.apply(this, args);
