@@ -46,13 +46,13 @@ import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./idb-persistence-lock.js";
 import type { MatrixSdkIndexedDbSession } from "./indexeddb-session.js";
+import { createMatrixSdkCryptoTransport } from "./key-upload-fence.js";
 import { withMatrixLiveEncryptedRoom } from "./live-room-readiness.js";
 import { LogService, noop } from "./logger.js";
 import { MatrixMessageWireDispatchGuards } from "./message-wire-dispatch.js";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./send-currentness.js";
 import { MatrixSendScheduler } from "./send-scheduler.js";
-import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
@@ -216,10 +216,7 @@ export abstract class MatrixClientBase {
     this.selfUserId = opts.userId?.trim() || null;
     this.autoBootstrapCrypto = opts.autoBootstrapCrypto !== false;
     this.recoveryKeyStore = new MatrixRecoveryKeyStore(opts.recoveryKeyPath, opts.stateRuntime);
-    const cryptoCallbacks = this.encryptionEnabled
-      ? this.recoveryKeyStore.buildCryptoCallbacks()
-      : undefined;
-    const guardedFetch = createMatrixGuardedFetch({
+    const { cryptoCallbacks, fetchFn: guardedFetch } = createMatrixSdkCryptoTransport({
       captureRequestSignal: () => this.cryptoRequestOwner.getStore()?.requestSignal,
       ssrfPolicy: opts.ssrfPolicy,
       dispatcherPolicy: opts.dispatcherPolicy,
@@ -231,11 +228,16 @@ export abstract class MatrixClientBase {
           captureMatrixSendCurrentness(this),
         ),
       signal: this.requestAbortController.signal,
-      beforeRequest: async (resource, init) => {
-        // Complete admitted key persistence before checking live wire authority.
-        await this.recoveryKeyStore.drainPendingPersistence();
-        await this.messageWireDispatchGuards.beforeRequest(resource, init);
-      },
+      recoveryKeyStore: this.recoveryKeyStore,
+      dispatchGuards: this.messageWireDispatchGuards,
+      captureUploadState: () => ({
+        encryptionEnabled: this.encryptionEnabled,
+        snapshotPath: this.idbSnapshotPath,
+        databasePrefix: this.cryptoDatabasePrefix,
+        stateRuntime: this.stateRuntime,
+        assertClientActive: this.assertClientActive,
+        loadCryptoRuntime: loadMatrixCryptoRuntime,
+      }),
     });
     this.client = createMatrixJsClient({
       baseUrl: homeserver,
