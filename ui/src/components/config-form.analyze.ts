@@ -50,10 +50,6 @@ const SUPPORTED_CONSTRAINT_ONLY_KEYS = new Set([
   "minLength",
   "maxLength",
   "pattern",
-  // Provider model maps refine selected keys with patternProperties (e.g. bundled vLLM
-  // entries); the map stays editable through additionalProperties, so the keyword must
-  // not push the whole map into Raw mode.
-  "patternProperties",
   // Zod emits `format` for .url()/.email(); isJsonSchemaValueValid enforces the
   // formats TypeBox knows and admits unknown ones, so the field stays editable
   // instead of pushing every plugin URL/email setting into Raw mode.
@@ -147,7 +143,17 @@ function shouldNormalizeAllOfBranch(schema: JsonSchema): boolean {
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
   if (!hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS)) {
-    return false;
+    // Provider model maps refine selected keys with patternProperties (e.g. bundled
+    // vLLM models); admit the keyword only where the existing editor can still render
+    // the node (named properties or an object-valued/true additionalProperties), so
+    // pattern-only maps keep their Raw-mode fallback instead of rendering empty.
+    if (!isRecord(schema.patternProperties) || !hasRenderableObjectStructure(schema)) {
+      return false;
+    }
+    const { patternProperties: _patternRefinements, ...withoutPatternRefinements } = schema;
+    if (!hasOnlySupportedKeywords(withoutPatternRefinements, SUPPORTED_FORM_SCHEMA_KEYS)) {
+      return false;
+    }
   }
   if (schema.not === undefined) {
     return true;
@@ -175,6 +181,14 @@ function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<str
         normalizeSchemaNode({ type: "string", ...schema.propertyNames }, []).unsupportedPaths
           .length === 0),
   );
+}
+
+function hasRenderableObjectStructure(schema: JsonSchema): boolean {
+  if (Object.keys(schema.properties ?? {}).length > 0) {
+    return true;
+  }
+  const additional = schema.additionalProperties;
+  return additional === true || isRecord(additional);
 }
 
 function schemaAllowsNull(schema: JsonSchema): boolean {
