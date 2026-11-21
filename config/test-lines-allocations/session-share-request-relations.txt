@@ -1,0 +1,5 @@
+# Request-scoped shared session filters: additional transport-capability, no-fallback,
+# canonical identity, query-bound paging/read/import and real browser navigation regressions.
+# The browser fixture verifies source-only rows absent from the local roster; the existing
+# signed-device WSS suite adds filtered calls without another server startup.
+277

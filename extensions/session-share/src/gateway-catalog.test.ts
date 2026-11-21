@@ -377,3 +377,39 @@ it.each([undefined, "primary", "missing"])(
     }
   },
 );
+
+it("discovers peer filter support before sending and never retries a filter unscoped", async () => {
+  const { catalog, client } = await createSource();
+  const profileRelation = {
+    relationship: "involving",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.list", "session-share.read"] },
+  });
+  expect((await catalog.list({ profileRelation }))[0]).toMatchObject({
+    sessions: [],
+    error: { code: "FILTER_UNSUPPORTED" },
+  });
+  expect(client.request).not.toHaveBeenCalled();
+  await expect(
+    catalog.read({ hostId: "gateway:team", threadId: "shared", profileRelation }),
+  ).rejects.toThrow();
+  expect(client.request).not.toHaveBeenCalled();
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.list-for-profile", "session-share.read-for-profile"] },
+  });
+  client.request.mockResolvedValue({ sessions: [] });
+  expect((await catalog.list({ profileRelation }))[0]?.error).toBeUndefined();
+  expect(client.request).toHaveBeenLastCalledWith("session-share.list-for-profile", {
+    limit: 20,
+    profileRelation,
+  });
+  client.request.mockRejectedValueOnce(new Error("unknown profileRelation"));
+  expect((await catalog.list({ profileRelation }))[0]?.error?.message).toContain(
+    "relationship filter",
+  );
+  expect(
+    client.request.mock.calls.every(([method]) => method === "session-share.list-for-profile"),
+  ).toBe(true);
+});

@@ -12,6 +12,7 @@ import {
   type SessionCatalogProvider,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
+import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSessionShareCatalog } from "./session-catalog.js";
 
@@ -518,4 +519,127 @@ it.each([
   } else {
     await expect(f.read()).rejects.toThrow("Invalid OpenClaw chat history");
   }
+});
+
+it("does not send relationship params to legacy nodes and pages only advertised filtered commands", async () => {
+  const profileRelation = {
+    relationship: "owned",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  expect(await f.host({ profileRelation })).toMatchObject({
+    sessions: [],
+    error: { code: "FILTER_UNSUPPORTED" },
+  });
+  expect(f.invoke).not.toHaveBeenCalled();
+  f.list.mockResolvedValue({
+    nodes: [
+      {
+        ...makeNode("alpha"),
+        commands: [
+          ...commands,
+          "openclaw.sessions.list-for-profile.v1",
+          "openclaw.sessions.read-for-profile.v1",
+        ],
+      },
+    ],
+  });
+  const cursor = encodeCursor(1, profileRelation);
+  f.invoke.mockResolvedValue(wire({ sessions: [nativeSession], nextCursor: cursor }));
+  expect(await f.host({ profileRelation })).toMatchObject({
+    sessions: [nativeSession],
+    nextCursor: cursor,
+  });
+  expect(f.invoke).toHaveBeenCalledTimes(1);
+  expect(f.invoke).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      command: "openclaw.sessions.list-for-profile.v1",
+      params: { limit: 20, profileRelation },
+    }),
+  );
+});
+
+it("keeps configured owner and portable identity attribution on filtered node pages", async () => {
+  const owner = {
+    type: "human",
+    id: "local-owner",
+    identity: { type: "profile", id: "local-owner" },
+  } as const;
+  const identity = {
+    type: "remote",
+    pluginId: "session-share",
+    domain: "source",
+    idKind: "github-account",
+    id: "101",
+  } as const;
+  const linked = { type: "profile", id: "linked-person" } as const;
+  const resolveOwner = vi.fn(() => owner);
+  const linkParticipant = vi.fn(
+    (
+      participant: Parameters<
+        typeof transcriptRuntime.prepareSessionCatalogGitHubLinker
+      >[0]["participants"][number],
+    ) => ({ ...participant, identity: linked }),
+  );
+  const prepare = vi
+    .spyOn(transcriptRuntime, "prepareSessionCatalogGitHubLinker")
+    .mockResolvedValue({
+      assertCurrent() {},
+      resolveOwner,
+      linkParticipant,
+    });
+  f.configure({
+    plugins: {
+      entries: {
+        "session-share": {
+          config: {
+            nodes: { alpha: { owner: "profile:local-owner", linkGitHubIdentities: true } },
+          },
+        },
+      },
+    },
+  });
+  await f.restart();
+  f.list.mockResolvedValue({
+    nodes: [
+      {
+        ...makeNode("alpha"),
+        commands: [
+          ...commands,
+          "openclaw.sessions.list-for-profile.v1",
+          "openclaw.sessions.read-for-profile.v1",
+        ],
+      },
+    ],
+  });
+  f.invoke.mockResolvedValue(
+    wire({
+      sessions: [
+        nativeSession,
+        {
+          ...nativeSession,
+          threadId: "agent:main:portable",
+          createdActor: { type: "human", identity },
+        },
+      ],
+    }),
+  );
+  const profileRelation = {
+    relationship: "involving",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  const filtered = await f.host({ profileRelation });
+  expect(filtered?.sessions.map((session) => session.createdActor?.identity)).toEqual([
+    owner.identity,
+    linked,
+  ]);
+  expect(prepare).toHaveBeenCalledWith({
+    owners: ["profile:local-owner"],
+    participants: [{ identity }],
+  });
+  expect(resolveOwner).toHaveBeenCalledWith("profile:local-owner");
+  expect(linkParticipant).toHaveBeenCalledWith(
+    expect.objectContaining({ identity: { ...identity, domain: "node:alpha" } }),
+  );
+  await f.hydrate();
+  expect((await f.host())?.sessions).toEqual(filtered?.sessions);
 });

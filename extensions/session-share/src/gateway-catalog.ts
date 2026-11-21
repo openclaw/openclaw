@@ -34,6 +34,7 @@ type Source = {
   label: string;
   client: GatewayClient;
   connected: boolean;
+  supportsProfileRelation: boolean;
   // Socket turnover only; this never compares or pins a session/transcript identity.
   connectionVersion: number;
   assertConfigured: () => void;
@@ -142,6 +143,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
             hostId,
             label: typeof value.label === "string" ? value.label : id,
             connected: false,
+            supportsProfileRelation: false,
             connectionVersion: 0,
             assertConfigured,
             client: new GatewayClient({
@@ -162,7 +164,11 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                   throw new Error("Session Share service stopped");
                 }
               },
-              onHelloOk: () => {
+              onHelloOk: (hello) => {
+                source.supportsProfileRelation = [
+                  "session-share.list-for-profile",
+                  "session-share.read-for-profile",
+                ].every((method) => hello?.features?.methods?.includes(method));
                 source.connected = true;
                 source.connectionVersion++;
               },
@@ -194,6 +200,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
     audience: "session-viewers",
     supportsProcessHomeIsolation: true,
     requiresFreshList: true,
+    supportsProfileRelation: true,
     async list(query) {
       return Promise.all(
         [...sources.values()]
@@ -210,12 +217,28 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
               const connectionVersion = source.connectionVersion;
               source.assertConfigured();
               assertCurrent(source, connectionVersion);
-              const raw = await source.client.request("session-share.list", {
-                limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
-                ...(query.search ? { searchTerm: query.search } : {}),
-                ...(query.cursors?.[source.hostId] ? { cursor: query.cursors[source.hostId] } : {}),
-              });
-              const page = parseSessionSharePage(raw);
+              if (query.profileRelation && !source.supportsProfileRelation) {
+                return Object.assign(common, {
+                  sessions: [],
+                  error: {
+                    code: "FILTER_UNSUPPORTED",
+                    message:
+                      "This Gateway does not support relationship filters. Update the source or choose All owners.",
+                  },
+                });
+              }
+              const raw = await source.client.request(
+                query.profileRelation ? "session-share.list-for-profile" : "session-share.list",
+                {
+                  ...(query.profileRelation ? { profileRelation: query.profileRelation } : {}),
+                  limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
+                  ...(query.search ? { searchTerm: query.search } : {}),
+                  ...(query.cursors?.[source.hostId]
+                    ? { cursor: query.cursors[source.hostId] }
+                    : {}),
+                },
+              );
+              const page = parseSessionSharePage(raw, query.profileRelation);
               assertCurrent(source, connectionVersion);
               query.signal?.throwIfAborted();
               return Object.assign(common, page, {
@@ -239,7 +262,9 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                   message:
                     error instanceof SourceConfigurationChangedError
                       ? error.message
-                      : "Shared Gateway unavailable. Refresh the catalog.",
+                      : query.profileRelation
+                        ? "Cannot apply this relationship filter. Check the verified identity link on both Gateways, or choose All owners."
+                        : "Shared Gateway unavailable. Refresh the catalog.",
                 },
               });
             }
@@ -254,12 +279,21 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       const connectionVersion = source.connectionVersion;
       source.assertConfigured();
       assertCurrent(source, connectionVersion);
+      if (request.profileRelation && !source.supportsProfileRelation) {
+        throw new Error(
+          "This Gateway does not support relationship filters. Update the source or choose All owners.",
+        );
+      }
       try {
-        const raw = await source.client.request("session-share.read", {
-          threadId: request.threadId,
-          limit: sessionCatalogPaging.boundedLimit(request.limit),
-          ...(request.cursor ? { cursor: request.cursor } : {}),
-        });
+        const raw = await source.client.request(
+          request.profileRelation ? "session-share.read-for-profile" : "session-share.read",
+          {
+            ...(request.profileRelation ? { profileRelation: request.profileRelation } : {}),
+            threadId: request.threadId,
+            limit: sessionCatalogPaging.boundedLimit(request.limit),
+            ...(request.cursor ? { cursor: request.cursor } : {}),
+          },
+        );
         const page = parseSessionShareTranscriptPage(raw, request.threadId);
         assertCurrent(source, connectionVersion);
         return {
@@ -280,7 +314,11 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       } catch (error) {
         throw error instanceof SourceConfigurationChangedError
           ? error
-          : new Error("Shared Gateway read failed. Refresh the catalog.");
+          : new Error(
+              request.profileRelation
+                ? "Cannot apply this relationship filter. Check the verified identity link on both Gateways, or choose All owners."
+                : "Shared Gateway read failed. Refresh the catalog.",
+            );
       }
     },
   };

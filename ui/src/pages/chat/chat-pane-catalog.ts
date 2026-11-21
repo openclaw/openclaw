@@ -169,10 +169,13 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     this.catalogRead = read;
     this.catalogReadPending = false;
     const agentId = resolveChatAgentId(state);
+    const profileRelation = this.catalogProfileRelation;
+    const relationKey = JSON.stringify(profileRelation);
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
       !read.controller.signal.aborted &&
       this.catalogRead === read &&
+      JSON.stringify(this.catalogProfileRelation) === relationKey &&
       this.isConnectionScopeCurrent(scope) &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
@@ -191,6 +194,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           agentId,
           client,
           key,
+          profileRelation,
           isCurrent,
           signal: read.controller.signal,
           listMethod: catalogMethod(scope.context.gateway.snapshot, key.catalogId, "list"),
@@ -222,6 +226,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           catalogId: key.catalogId,
           hostId: key.hostId,
           threadId: key.threadId,
+          ...(profileRelation ? { profileRelation } : {}),
           ...(this.history.catalogSession?.sourceHomeId
             ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
             : {}),

@@ -9,6 +9,8 @@ import {
   createSessionShareNodeCommands,
   SESSION_SHARE_LIST_COMMAND,
   SESSION_SHARE_READ_COMMAND,
+  SESSION_SHARE_FILTERED_LIST_COMMAND,
+  SESSION_SHARE_FILTERED_READ_COMMAND,
 } from "./node-commands.js";
 
 type Request = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
@@ -17,6 +19,8 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
   for (const [method, command] of [
     ["session-share.list", SESSION_SHARE_LIST_COMMAND],
     ["session-share.read", SESSION_SHARE_READ_COMMAND],
+    ["session-share.list-for-profile", SESSION_SHARE_FILTERED_LIST_COMMAND],
+    ["session-share.read-for-profile", SESSION_SHARE_FILTERED_READ_COMMAND],
   ]) {
     api.registerGatewayMethod(
       method!,
@@ -43,7 +47,7 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
             }
           };
           assertCurrent();
-          // The reader remains a device. Only source-owned config selects the person.
+          // The reader remains a device. The supplied person narrows publication; it never changes reader authority.
           // Respond inside the source owner's final synchronous disclosure callback.
           const handler = createSessionShareNodeCommands(api, {
             assertCurrent,

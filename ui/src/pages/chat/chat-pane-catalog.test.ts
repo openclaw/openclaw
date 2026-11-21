@@ -284,6 +284,33 @@ describe("chat pane catalog", () => {
     expect(pane.history.catalogSession).toEqual(selectedSession);
   });
 
+  it("accepts a pending read after an equivalent relationship input replaces its reference", async () => {
+    const read = createDeferred<SessionsCatalogReadResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]))
+      .mockImplementationOnce(() => read.promise);
+    const { pane } = createCatalogPane(request, catalogKey, true);
+    pane.catalogProfileRelation = { relationship: "involving", target: { type: "me" } };
+    const pending = pane.loadCatalogSession(catalogKey, false);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    pane.catalogProfileRelation = { relationship: "involving", target: { type: "me" } };
+    read.resolve({
+      ...catalogKey,
+      items: [{ id: "kept", type: "userMessage", text: "Current read" }],
+    });
+    await expect(pending).resolves.toBe(true);
+    expect(pane.history.catalogMessages).toHaveLength(1);
+    expect(pane.history.catalogLoading).toBe(false);
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.catalog.read",
+      expect.objectContaining({
+        profileRelation: pane.catalogProfileRelation,
+      }),
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
   it("discards a catalog read when the pane owner changes", async () => {
     const key = catalogKey;
     const read = createDeferred<SessionsCatalogReadResult>();

@@ -53,11 +53,45 @@ In the source Control UI, move the sessions you want to share into the **Team** 
 
 `share.involvingProfileId` matches the canonical human owner (including a trusted creator only when no owner is assigned) or a profile participant. A recorded mention alone never qualifies. This publication filter is distinct from Activity filters. Merged profile IDs resolve to the same person; personal hide/show choices do not change this selection. Names, email addresses, GitHub logins, shortened Activity URL IDs, remote attribution IDs, and unqualified channel sender IDs do not select a person. Unknown profile IDs publish nothing. There is no `involvingMe`: a source node has no authenticated viewer to bind it to.
 
-A valid, nonempty `share.groups` selection is always required. The optional person selector combines with groups using **AND**: the session must be in one of the exact `groups` **and** match the selected owner or participant. Group names within `groups` combine with **OR**. Missing, empty, or malformed groups publish nothing, including with a person selector. Removing `involvingProfileId` while retaining groups intentionally returns to group-only publication; an empty or malformed person value publishes nothing.
+A valid, nonempty `share.groups` selection is always required. The optional person selector combines with groups using **AND**: the session must be in one of the exact `groups` **and** match the selected owner or participant. Group names within `groups` combine with **OR**. Missing, empty, or malformed groups publish nothing, including with a person selector. For node sharing, removing `involvingProfileId` while retaining groups intentionally returns to group-only publication; an empty or malformed person value publishes nothing.
 
 Subagents, incognito sessions, drafts, and adopted rows from other session catalogs are never published, even when they belong to a selected group. This also excludes named or resumed sessions with recorded spawn lineage; a user-created fork remains eligible.
 
 With the default hybrid reload mode, the source Gateway applies plugin configuration automatically. Start or restart the source node host after changing plugin configuration. Changing filters or removing a session's matching group or person involvement revokes new and in-flight transcript reads; a receiver that already read text may retain that text.
+
+## Filter shared sessions by person
+
+The sidebar's **Owned by me** and **Involving me** filters can query a supporting
+source before pagination. Ownership uses the canonical human owner, with a
+trusted creator as fallback only when no owner is assigned. Involvement also
+includes canonical participants and recorded mentions, but not personal Activity
+hide/show overrides. The request filter intersects the source's groups and any
+configured `share.involvingProfileId`; it never grants access to other sessions.
+
+The receiver resolves the selected local profile through its verified numeric
+GitHub account ID. The source must link that account to exactly one canonical
+profile. Missing or ambiguous links fail with guidance instead of returning an
+unfiltered shared catalog. This does not prevent local catalogs from using their
+existing client-side filters. Reads and imports retain the same filter as the selected row.
+
+Node sources must advertise and the receiver must approve both optional commands:
+
+- `openclaw.sessions.list-for-profile.v1`
+- `openclaw.sessions.read-for-profile.v1`
+
+The original `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1` commands
+remain unchanged. Filtered listing uses direct, query-scoped pages rather than the
+unfiltered node snapshot. Outbound Gateway sources must advertise both
+`session-share.list-for-profile` and `session-share.read-for-profile` in their
+connection capabilities. Those filtered methods require the same publication-read
+host switch, approved device, groups and configured `share.involvingProfileId` as
+ordinary Gateway publication. A request target is a selector, not an authentication
+claim, and can only narrow that source-owned selection.
+
+Older or unapproved sources show an unavailable message. Update and approve the
+source to use relationship filters, or deliberately choose **All owners** for
+ordinary browsing. The receiver never retries a rejected filter as an unfiltered
+request.
 
 ## Outbound Gateway pull
 
@@ -66,10 +100,10 @@ of accepting an inbound source node. No listener or tunnel is added on the
 receiver. On the source, explicitly set
 `gateway.sessionControl.publicationReadEnabled: true` and the plugin option
 `share.gateway: true`, select `share.groups`,
-and set `share.involvingProfileId`. Add the exact approved reader device IDs to
+and set `share.involvingProfileId` for all Gateway publication reads. Add the exact approved reader device IDs to
 `share.gatewayDeviceIds`. Missing or empty device grants publish nothing over
 Gateway RPC. The device reads sessions matching both the groups and canonical
-person; it does not become that person. Requests cannot change these filters.
+person; it does not become that person. Requests cannot widen these source filters.
 Merged profile IDs remain supported; unknown or removed people publish nothing.
 
 The host switch is off unless it is exactly `true`. Plugin installation,

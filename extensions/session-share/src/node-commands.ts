@@ -7,6 +7,7 @@ import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   sessionCatalogPaging,
   type SessionCatalogSession,
+  type SessionCatalogSourceProfileRelation,
 } from "openclaw/plugin-sdk/session-catalog";
 import type {
   SessionEntry,
@@ -21,7 +22,14 @@ import { sessionShareSelection } from "./config.js";
 
 export const SESSION_SHARE_LIST_COMMAND = "openclaw.sessions.list.v1";
 export const SESSION_SHARE_READ_COMMAND = "openclaw.sessions.read.v1";
-export const SESSION_SHARE_COMMANDS = [SESSION_SHARE_LIST_COMMAND, SESSION_SHARE_READ_COMMAND];
+export const SESSION_SHARE_FILTERED_LIST_COMMAND = "openclaw.sessions.list-for-profile.v1";
+export const SESSION_SHARE_FILTERED_READ_COMMAND = "openclaw.sessions.read-for-profile.v1";
+export const SESSION_SHARE_COMMANDS = [
+  SESSION_SHARE_LIST_COMMAND,
+  SESSION_SHARE_READ_COMMAND,
+  SESSION_SHARE_FILTERED_LIST_COMMAND,
+  SESSION_SHARE_FILTERED_READ_COMMAND,
+];
 
 const parameterMessages = {
   listNotObject: "Session list parameters must be an object",
@@ -68,6 +76,7 @@ function withSharedEntries<T>(
   selected: readonly { agentId: string; storePath: string; sessionKey: string }[],
   consume: (entries: SessionStoreSelectedEntry[]) => T,
   authority?: SessionShareSourceAuthority,
+  profileRelation?: SessionCatalogSourceProfileRelation,
 ): Promise<T> {
   const config = api.runtime.config.current();
   const selection = sourceSelection(api, authority);
@@ -86,7 +95,12 @@ function withSharedEntries<T>(
       return sessionKeys.length ? [{ agentId, storePath, sessionKeys }] : [];
     });
   return api.runtime.agent.session.withSessionEntriesAsync(
-    { stores, involvingProfileId: selection?.involvingProfileId },
+    {
+      stores,
+      involvingProfileId: selection?.involvingProfileId,
+      profileRelation,
+      ...(profileRelation ? { config } : {}),
+    },
     (entries) => {
       // Configuration can be edited in place while either worker prepares its facts.
       const current = api.runtime.config.current();
@@ -109,6 +123,7 @@ function withSharedEntries<T>(
 export function createSessionShareNodeCommands(
   api: OpenClawPluginApi,
   authority?: SessionShareSourceAuthority,
+  filtered = false,
 ): OpenClawPluginNodeHostCommand[] {
   const source = { pluginId: "session-share", sourceDomain: "openclaw" };
   const serializeResult = (payload: unknown) => {
@@ -122,7 +137,7 @@ export function createSessionShareNodeCommands(
     string,
     ReturnType<typeof api.runtime.agent.session.createSessionEntryListReader>
   >();
-  async function readSharedEntries() {
+  async function readSharedEntries(profileRelation?: SessionCatalogSourceProfileRelation) {
     const config = api.runtime.config.current();
     if (config !== readersConfig) {
       readers.clear();
@@ -170,7 +185,7 @@ export function createSessionShareNodeCommands(
         readers.delete(key);
       }
     }
-    if (selection?.involvingProfileId === undefined) {
+    if (selection?.involvingProfileId === undefined && !profileRelation) {
       return sessions;
     }
     // Inventory stays worker-owned. The selected cohort gets current canonical
@@ -190,11 +205,12 @@ export function createSessionShareNodeCommands(
         );
       },
       authority,
+      profileRelation,
     );
   }
-  return [
+  const commands: OpenClawPluginNodeHostCommand[] = [
     {
-      command: SESSION_SHARE_LIST_COMMAND,
+      command: filtered ? SESSION_SHARE_FILTERED_LIST_COMMAND : SESSION_SHARE_LIST_COMMAND,
       hasActiveWork: () => false,
       cap: "openclaw-sessions",
       dangerous: false,
@@ -203,8 +219,12 @@ export function createSessionShareNodeCommands(
         const params = sessionCatalogPaging.parseListParams(parseNodeParams(paramsJSON), {
           searchMaxLength: 500,
           messages: parameterMessages,
+          supportsProfileRelation: filtered,
         });
-        const offset = sessionCatalogPaging.decodeCursor(params.cursor);
+        if (filtered && !params.profileRelation) {
+          throw new Error("A relationship filter is required");
+        }
+        const offset = sessionCatalogPaging.decodeCursor(params.cursor, params.profileRelation);
         const search = params.searchTerm?.toLowerCase().normalize("NFC");
         const sessions = [];
         for (const {
@@ -213,7 +233,7 @@ export function createSessionShareNodeCommands(
           storePath,
           entry,
           assertSourceCurrent,
-        } of await readSharedEntries()) {
+        } of await readSharedEntries(params.profileRelation)) {
           const name = search
             ? await readSessionTranscriptCatalogTitleAsync({
                 agentId,
@@ -319,16 +339,22 @@ export function createSessionShareNodeCommands(
             return serializeResult({
               sessions: page,
               ...(offset + page.length < sessions.length
-                ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) }
+                ? {
+                    nextCursor: sessionCatalogPaging.encodeCursor(
+                      offset + page.length,
+                      params.profileRelation,
+                    ),
+                  }
                 : {}),
             });
           },
           authority,
+          params.profileRelation,
         );
       },
     },
     {
-      command: SESSION_SHARE_READ_COMMAND,
+      command: filtered ? SESSION_SHARE_FILTERED_READ_COMMAND : SESSION_SHARE_READ_COMMAND,
       hasActiveWork: () => false,
       cap: "openclaw-sessions",
       dangerous: false,
@@ -337,10 +363,14 @@ export function createSessionShareNodeCommands(
         const params = sessionCatalogPaging.parseReadParams(parseNodeParams(paramsJSON), {
           threadIdMaxLength: 512,
           threadIdPattern: /^[^\0\r\n]+$/,
-          cursorMaxLength: 1200,
+          cursorMaxLength: 2048,
           messages: parameterMessages,
+          supportsProfileRelation: filtered,
         });
-        const session = (await readSharedEntries()).find(
+        if (filtered && !params.profileRelation) {
+          throw new Error("A relationship filter is required");
+        }
+        const session = (await readSharedEntries(params.profileRelation)).find(
           ({ sessionKey }) => sessionKey === params.threadId,
         );
         if (!session) {
@@ -357,7 +387,7 @@ export function createSessionShareNodeCommands(
             sessionKey: session.sessionKey,
             storePath: session.storePath,
             limit: params.limit,
-            cursor: params.cursor,
+            cursor: sessionCatalogPaging.decodeScopedCursor(params.cursor, params.profileRelation),
           },
           (assertCurrent) => {
             assertActorsCurrent = assertCurrent;
@@ -382,11 +412,26 @@ export function createSessionShareNodeCommands(
               throw new Error("Session is no longer shared. Refresh the session catalog.");
             }
             assertActorsCurrent();
-            return serializeResult({ threadId: params.threadId, ...page });
+            return serializeResult({
+              threadId: params.threadId,
+              ...page,
+              ...(page.nextCursor
+                ? {
+                    nextCursor: sessionCatalogPaging.encodeScopedCursor(
+                      page.nextCursor,
+                      params.profileRelation,
+                    ),
+                  }
+                : {}),
+            });
           },
           authority,
+          params.profileRelation,
         );
       },
     },
   ];
+  return filtered
+    ? commands
+    : [...commands, ...createSessionShareNodeCommands(api, authority, true)];
 }

@@ -5,6 +5,7 @@ import {
 import {
   sessionCatalogPaging,
   type SessionCatalogSession,
+  type SessionCatalogSourceProfileRelation,
   type SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -173,11 +174,14 @@ function unwrapPayload(value: unknown): unknown {
 
 // The wire vocabulary deliberately excludes profile identities and local sessionKey.
 // Only the receiver's explicit binding may turn a paired node claim into local attribution.
-export function parseSessionSharePage(raw: unknown): SessionSharePage {
+export function parseSessionSharePage(
+  raw: unknown,
+  query?: SessionCatalogSourceProfileRelation,
+): SessionSharePage {
   const value = unwrapPayload(raw);
   if (
     !isSessionPage(value) ||
-    (value.nextCursor !== undefined && !sessionCatalogPaging.isExactCursor(value.nextCursor))
+    (value.nextCursor !== undefined && !sessionCatalogPaging.isExactCursor(value.nextCursor, query))
   ) {
     throw new Error("Invalid OpenClaw session page from paired node");
   }

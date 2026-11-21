@@ -1,6 +1,7 @@
 import type {
   SessionCatalog,
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
@@ -171,6 +172,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
   previousCatalogs: readonly SessionCatalog[];
   client: GatewayBrowserClient;
   agentId: string;
+  profileRelation?: SessionCatalogProfileRelation;
   pageDepths: ReadonlyMap<string, number>;
   isCurrent: () => boolean;
   canRequestPage: () => boolean;
@@ -250,6 +252,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 "sessions.catalog.list",
                 {
                   agentId: params.agentId,
+                  ...(params.profileRelation ? { profileRelation: params.profileRelation } : {}),
                   catalogId: catalog.id,
                   hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },
