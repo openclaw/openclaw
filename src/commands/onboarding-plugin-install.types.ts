@@ -20,6 +20,8 @@ export type OnboardingPluginInstallOptions = {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   promptInstall?: boolean;
+  /** Offer a local path after registry failure only if the caller can take an answer. */
+  promptLocalFallback?: boolean;
   /** Return failures for a caller that owns the final diagnostic. */
   failureOutput?: "caller";
   autoConfirmSingleSource?: boolean;

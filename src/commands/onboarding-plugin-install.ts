@@ -911,7 +911,11 @@ export async function ensureOnboardingPluginInstalled(
       );
     }
     await notePluginInstallFailure(params, installedSource.spec, result.error);
-    if (localPath && isUnavailablePluginSource(installedSource.source, result)) {
+    if (
+      localPath &&
+      params.promptLocalFallback !== false &&
+      isUnavailablePluginSource(installedSource.source, result)
+    ) {
       const fallback = await prompter.confirm({
         message: t("wizard.plugins.useLocalPluginPathInstead", {
           path: sanitizeTerminalText(localPath),
