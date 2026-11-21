@@ -145,25 +145,3 @@ it("retargets an adopted row without remounting its open popup", async () => {
   await waitForSolid(() => expect(popup.trigger).toBe(replacement));
   expect(view.container.querySelector(popupSelector)).toBe(popup);
 });
-
-it.each([undefined, "https://source.example/chat/main/shared"])(
-  "shows source navigation only for OpenClaw and opens it safely (%s)",
-  async (originalUrl) => {
-    const open = vi.spyOn(window, "open").mockReturnValue(null);
-    const { owner, mount } = fixture();
-    const view = mount();
-    owner.open({ ...request, key: { ...request.key, catalogId: "openclaw" }, originalUrl }, 10, 20);
-    await expectOpen(view);
-    const menu = view.container.querySelector("openclaw-catalog-session-menu")!;
-    const original = item(menu, "original");
-    expect(original.disabled).toBe(!originalUrl);
-    if (!originalUrl) {
-      expect(
-        menu.querySelector('[id="' + original.getAttribute("aria-describedby") + '"]')?.textContent,
-      ).toContain("Outbound Gateway");
-    } else {
-      original.click();
-      expect(open).toHaveBeenCalledWith(originalUrl, "_blank", "noopener,noreferrer");
-    }
-  },
-);

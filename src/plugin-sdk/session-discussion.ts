@@ -1,6 +1,7 @@
 import { buildControlUiSessionPath } from "../../packages/session-url-contract/src/index.js";
 import { parseControlUiSessionPath } from "../../packages/session-url-contract/src/parse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export type {
   SessionDiscussionInfo,
@@ -16,12 +17,14 @@ export async function prepareStoredSessionControlUiPathResolver() {
   const { resolveRequestedSessionAgentId } = await import("../gateway/session-request-agent.js");
   const { resolveSessionSubscriptionKey } = await import("../gateway/session-subscription-keys.js");
   return (params: {
-    config: OpenClawConfig;
+    config: ReturnType<PluginRuntime["config"]["current"]>;
     agentId: string;
     sessionKey: string;
   }): string | undefined => {
     // Link eligibility shares Gateway routing; keep that policy graph out of SDK startup.
-    const { config: cfg, agentId, sessionKey } = params;
+    const { agentId, sessionKey } = params;
+    // SAFETY: plugins hold the readonly runtime snapshot; the routing resolvers below only read it.
+    const cfg = params.config as OpenClawConfig;
     try {
       const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentId, "read");
       if (!requested.ok) {
