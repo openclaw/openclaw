@@ -313,6 +313,8 @@ export function createGatewayHookDispatcher(params: {
       updatedAtMs: nowMs,
       schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
       sessionTarget: value.sessionMode === "persistent" ? `session:${sessionKey}` : "isolated",
+      // Never stored, so retention and cron.remove miss its cron:<jobId> session.
+      deleteAfterRun: value.sessionMode !== "persistent",
       wakeMode: "now",
       payload: {
         kind: "agentTurn",

@@ -542,6 +542,39 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       expect(isSessionControllerWorkActive(storePath, [sessionKey, sessionId])).toBe(false);
     },
   );
+
+  it.each([
+    ["deletes its own cron:<jobId> session", "hook:webhook:42", 1],
+    ["keeps a cron: session it was pointed at", "cron:daily-report", 0],
+  ] as const)("an isolated hook run %s after the run", async (_name, sessionKey, deletions) => {
+    // Delivery dispatch owns post-run cleanup; the harness default skips it.
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+        .dispatchCronDelivery,
+    );
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({ sessionEntry: makeCronSessionEntry({ sessionId: "hook-run" }) }),
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        sessionKey,
+        job: makeIsolatedAgentJobFixture({ deleteAfterRun: true, delivery: { mode: "none" } }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(callGatewayMock).toHaveBeenCalledTimes(deletions);
+    if (deletions) {
+      expect(callGatewayMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({ key: "agent:main:cron:test-job" }),
+        }),
+      );
+    }
+  });
 });
 
 describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
