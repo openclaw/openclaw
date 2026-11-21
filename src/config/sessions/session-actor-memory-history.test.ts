@@ -597,6 +597,32 @@ describe("memory actor history facts", () => {
     expect(await storage.read(query, authority)).toEqual({ turnTainted: false, usage: undefined });
   });
 
+  it("excludes saved system-prompt checkpoints from compaction pressure bytes", async () => {
+    const checkpoint = {
+      type: "custom",
+      id: "sp",
+      parentId: "answer",
+      customType: "openclaw.system-prompt",
+      data: { prefix: "x".repeat(5000), routeKey: "route", historyId: "history" },
+      timestamp: "2026-10-11T00:00:00.000Z",
+    };
+    const { read } = await fixture([
+      message("user", null, "user", "Question"),
+      message("answer", "user", "assistant", "Answer"),
+      checkpoint,
+    ]);
+    const options = { includeByteSize: true, includeUsage: false };
+    const all = await read("accounting", { options });
+    const pressure = await read("accounting", {
+      options: { ...options, excludeSystemPromptCheckpoints: true },
+    });
+
+    expect(all.eventCount).toBe(3);
+    expect(pressure.eventCount).toBe(2);
+    expect(all.byteSize).toBeGreaterThan(5000);
+    expect(pressure.byteSize).toBeLessThan(all.byteSize! - 4000);
+  });
+
   it("projects opaque suffix data before bounds and keeps the original event intact", async () => {
     const user = message("user", null, "user", "Question");
     const opaque = {
