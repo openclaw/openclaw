@@ -291,6 +291,7 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    readRestoredCompletion: () => undefined,
     readChildVisibility: (...args) => childVisibility.read(...args),
     readChildActivity: (record, now, excluded, token) =>
       childActivity.read(record, rowContext, now, excluded, token),

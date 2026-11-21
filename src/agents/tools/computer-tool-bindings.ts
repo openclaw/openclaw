@@ -9,11 +9,7 @@ import {
   resolveEligibleNodeFromList,
 } from "../../shared/node-resolve.js";
 import { isEligibleComputerNode } from "../computer-use-node-capabilities.js";
-import {
-  bindGatewayComputerCleanup,
-  loadGatewayComputerStatus,
-  type GatewayComputerStatus,
-} from "./computer-tool-gateway.js";
+import { loadGatewayComputerStatus, type GatewayComputerStatus } from "./computer-tool-gateway.js";
 import type { ComputerHost, ComputerToolTransport } from "./computer-tool-shared.js";
 import { COMPUTER_ACT_COMMAND, SCREEN_SNAPSHOT_COMMAND } from "./computer-tool-shared.js";
 import {
@@ -188,26 +184,19 @@ export async function resolveComputerBinding(params: {
       (await loadGatewayComputerStatus(params.gatewayOpts, params.signal, true));
     if (gateway.available) {
       assertHostedCaller();
-      const close = await bindGatewayComputerCleanup({
-        options: params.gatewayOpts,
-        generation: gateway.computerUse.provider.generation,
-        executionId: params.executionId,
-      });
       return {
         host: { host: "gateway" },
         gatewayOpts: params.gatewayOpts,
         capabilities: gateway.computerUse,
         invoke: async (request) => {
+          // The Gateway retires an ended run's execution itself (revokeRunAuthority on run
+          // closure), and an ended run cannot start new Gateway requests.
           if (
-            close &&
             request.command === COMPUTER_ACT_COMMAND &&
-            request.commandParams.action === "__close_execution"
+            request.commandParams.action === "__close_execution" &&
+            request.commandParams.reason === "run-ended"
           ) {
-            return await close(
-              typeof request.commandParams.reason === "string"
-                ? request.commandParams.reason
-                : "completed",
-            );
+            return { ok: true };
           }
           const raw = await callGatewayTool<{ payload: unknown }>(
             "computer.invoke",

@@ -375,14 +375,16 @@ export async function prepareSessionEventTargetForHost(
       assertTargetCurrent();
       retained.assertCurrent();
     };
+    const source = composeSessionSourceAssertion(
+      [target.assertCurrent, retained.assertCurrent],
+      (assertSource) => {
+        assertSource();
+        assertCurrent();
+      },
+    );
     Object.assign(assertCurrent, {
-      prepareSessionSourceEffect: composeSessionSourceAssertion(
-        [target.assertCurrent, retained.assertCurrent],
-        (assertSource) => {
-          assertSource();
-          assertCurrent();
-        },
-      ).prepareSessionSourceEffect,
+      prepareSessionSourceEffect: source.prepareSessionSourceEffect,
+      prepareSessionSourceStorageEffect: source.prepareSessionSourceStorageEffect,
     });
     assertCurrent();
     return {
@@ -405,14 +407,16 @@ export async function prepareSessionEventTargetForHost(
           assertTargetCurrent();
           assertCreationCurrent();
         };
+        const boundSource = composeSessionSourceAssertion(
+          [target.assertCurrent, assertCreationCurrent],
+          (assertSource) => {
+            assertSource();
+            assertBoundCurrent();
+          },
+        );
         return Object.assign(assertBoundCurrent, {
-          prepareSessionSourceEffect: composeSessionSourceAssertion(
-            [target.assertCurrent, assertCreationCurrent],
-            (assertSource) => {
-              assertSource();
-              assertBoundCurrent();
-            },
-          ).prepareSessionSourceEffect,
+          prepareSessionSourceEffect: boundSource.prepareSessionSourceEffect,
+          prepareSessionSourceStorageEffect: boundSource.prepareSessionSourceStorageEffect,
         });
       },
     };

@@ -175,7 +175,7 @@ suite.define(() => {
             "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
             "worktrees.branches": cold
               ? { branches: [], refreshing: true }
-              : { ...branchList(), refreshing: true },
+              : { ...branchList("release/custom-base"), refreshing: true },
           },
           { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
         );
@@ -185,7 +185,7 @@ suite.define(() => {
           expect(await trigger.count()).toBe(0);
           await captureUiProof(suite, page, "checkout-cold-refreshing.png");
           await gateway.setMethodResponse("worktrees.branches", {
-            ...branchList(),
+            ...branchList("release/custom-base"),
             refreshing: true,
           });
           await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
@@ -198,19 +198,21 @@ suite.define(() => {
         await base.fill("release/custom");
         await picker.locator("[data-worktree-name]").fill("my-task");
         await base.focus();
-        await picker.locator('[data-worktree-suggestion="main"]').waitFor({ state: "visible" });
+        await picker
+          .locator('[data-worktree-suggestion="release/custom-base"]')
+          .waitFor({ state: "visible" });
         expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 2 : 1);
         await captureUiProof(suite, page, "checkout-branches-refreshing.png");
         await gateway.setMethodResponse("worktrees.branches", {
-          ...branchList(),
+          ...branchList("release/custom-base"),
           branches: [
-            { kind: "local", name: "main" },
-            { kind: "local", name: "feature/new" },
+            { kind: "local", name: "release/custom-base" },
+            { kind: "local", name: "release/custom-next" },
           ],
         });
         await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
         await picker
-          .locator('[data-worktree-suggestion="feature/new"]')
+          .locator('[data-worktree-suggestion="release/custom-next"]')
           .waitFor({ state: "visible" });
         await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "hidden" });
         expect(await base.inputValue()).toBe("release/custom");

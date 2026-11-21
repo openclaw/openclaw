@@ -43,7 +43,7 @@ export function bindCronJobAdmittedRun(
   }
 }
 
-/** Captures one occurrence before admission without granting another prompt its authority. */
+/** Capture occurrence authority once; subsequent uses keep cancellation and source ownership. */
 function captureCronJobMessageAuthority(
   params: {
     jobId: string;
@@ -62,13 +62,11 @@ function captureCronJobMessageAuthority(
   const { instanceId, runId } = params.operationalRunInstance;
   const { admittedJobRuns } = getCronActiveJobState();
   let owner: ReturnType<typeof admittedJobRuns.get>;
-  const isMarkerCurrent = () =>
-    getCurrentCronActiveJobMarker(jobId) === marker &&
-    !marker.messageActionAuthorityRevoked &&
-    (!sourceSensitive || !marker.messageSourceAuthorityRevoked) &&
-    !marker.jobRemoved &&
-    marker.cancellation?.kind !== "requested";
+  const isMarkerCurrent = () => !marker.jobRemoved && marker.cancellation?.kind !== "requested";
   const inactive = () => new Error("cron message action authority is no longer active");
+  if (!isAuthorityCurrent()) {
+    throw inactive();
+  }
   const readOwner = () => {
     const admitted = admittedJobRuns.get(marker);
     if (
@@ -90,14 +88,7 @@ function captureCronJobMessageAuthority(
   return composeSessionSourceAssertion([source], (assertSource) => {
     readOwner();
     assertSource();
-    if (!isAuthorityCurrent()) {
-      if (sourceSensitive) {
-        marker.messageSourceAuthorityRevoked = true;
-      } else {
-        marker.messageActionAuthorityRevoked = true;
-      }
-      throw inactive();
-    }
+    marker.standingGrantAuthority?.assertCurrent();
   });
 }
 
@@ -124,7 +115,6 @@ export function captureCronJobSourceAuthority(jobId: string): (() => boolean) | 
   }
   return () => {
     if (
-      getCurrentCronActiveJobMarker(jobId) !== marker ||
       (marker.jobRemoved && !isCronSelfRemovalCurrent(marker)) ||
       marker.cancellation?.kind === "requested"
     ) {
@@ -150,7 +140,6 @@ export function captureCronJobStandingGrantAuthority(params: {
   const assertCurrent = () => {
     const admitted = admittedJobRuns.get(marker);
     if (
-      getCurrentCronActiveJobMarker(params.jobId) !== marker ||
       marker.jobRemoved ||
       marker.cancellation?.kind === "requested" ||
       !admitted ||
@@ -236,7 +225,6 @@ export type CronActiveJobMarker = {
   triggerMutated?: true;
   isMessageActionAuthorityCurrent?: () => boolean;
   isMessageSourceAuthorityCurrent?: () => boolean;
-  messageActionAuthorityRevoked?: true;
   messageSourceAuthorityRevoked?: true;
   jobRemoved?: true;
   selfRemovalAccepted?: true;
@@ -391,15 +379,7 @@ export function noteActiveCronJobTriggerMutation(jobId: string): void {
   }
 }
 
-/** A committed permission change cannot be undone by a retry or an A-to-B-to-A edit. */
-export function noteActiveCronJobMessageActionAuthorityMutation(jobId: string): void {
-  const marker = getCurrentCronActiveJobMarker(jobId);
-  if (marker) {
-    marker.messageActionAuthorityRevoked = true;
-  }
-}
-
-/** Revokes source-scoped reads and writes after their authenticated executable source changes. */
+/** A queued on-exit launch checks its executable source at its own admission. */
 export function noteActiveCronJobMessageSourceAuthorityMutation(jobId: string): void {
   const marker = getCurrentCronActiveJobMarker(jobId);
   if (marker) {

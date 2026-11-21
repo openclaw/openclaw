@@ -82,14 +82,13 @@ export function captureCommandOwnerAssertion(context: object): CommandOwnerAsser
       throw new CommandOwnerRevokedError("Channel operator authority changed; send a new request.");
     }
   };
+  const source = composeSessionSourceAssertion([authority.sourceAssertion], (assertSource) => {
+    assertSource();
+    assertCurrent();
+  });
   return Object.assign(assertCurrent, {
     recoveryReference: authority.recoveryReference ?? null,
-    prepareSessionSourceEffect: composeSessionSourceAssertion(
-      [authority.sourceAssertion],
-      (assertSource) => {
-        assertSource();
-        assertCurrent();
-      },
-    ).prepareSessionSourceEffect,
+    prepareSessionSourceEffect: source.prepareSessionSourceEffect,
+    prepareSessionSourceStorageEffect: source.prepareSessionSourceStorageEffect,
   });
 }

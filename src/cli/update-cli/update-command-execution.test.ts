@@ -7,8 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { toPublicUpdateRun } from "../../infra/update-run-record.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -130,66 +129,6 @@ describe("mutable update execution", () => {
   registerExecutionTimeoutTests();
 
   registerNativeAdmissionTests();
-  it.each(["same", "alias", "disjoint", "unmanaged", "foreign", "unverifiable"] as const)(
-    "preserves managed refusals and warns for unowned Git consumers: %s",
-    async (destination) =>
-      withTestDir({ prefix: "git-live-runtime-custody-" }, async (dir) => {
-        const servingRoot = path.join(dir, "serving");
-        const warn = ["unmanaged", "foreign", "unverifiable"].includes(destination);
-        const targetRoot = destination === "same" || warn ? servingRoot : path.join(dir, "target");
-        await fs.mkdir(path.join(servingRoot, "dist"), { recursive: true });
-        if (destination === "alias") {
-          await fs.symlink(
-            servingRoot,
-            targetRoot,
-            process.platform === "win32" ? "junction" : "dir",
-          );
-        } else if (destination === "disjoint") {
-          await fs.mkdir(path.join(targetRoot, "dist"), { recursive: true });
-        }
-        const artifact = path.join(servingRoot, "dist", "prepare.runtime.js");
-        const targetArtifact = path.join(targetRoot, "dist", "prepare.runtime.js");
-        await fs.writeFile(artifact, "retained serving runtime");
-        const target = { schemaVersions: { state: 15, agent: 19 } };
-        const state = serviceState(servingRoot, "inspect", "serving-generation");
-        if (warn) {
-          state.serviceUpdateVerdict = destination === "foreign" ? { kind: "foreign" } : undefined;
-        }
-        mocks.maybeStopService.mockResolvedValue({ ...state, servicePid: 23456 });
-        const owner = warn ? { pid: process.pid, createdAt: "now", port: 20445 } : undefined;
-        const readOwner = vi
-          .spyOn(gatewayLock, "readActiveGatewayLockIdentity")
-          .mockResolvedValue(owner);
-        if (destination === "unverifiable") {
-          readOwner.mockRejectedValue(new Error("owner inspection unavailable"));
-        }
-        mocks.runGitUpdate.mockImplementation(
-          async (options: Parameters<typeof updateGitInstall>[0]) => {
-            await options.inspectGitTarget?.(target);
-            await options.beforeGitMutation?.(target);
-            await fs.writeFile(targetArtifact, "candidate runtime");
-            return { ...successfulUpdate, mode: "git" };
-          },
-        );
-        const execution = await execute({
-          ...executionParams("git"),
-          root: targetRoot,
-          shouldRestart: warn,
-          opts: { json: true, restart: warn },
-        });
-        expect(await fs.readFile(artifact, "utf8")).toBe(
-          warn ? "candidate runtime" : "retained serving runtime",
-        );
-        const blocked = !warn && destination !== "disjoint";
-        expect(execution?.mutationStarted).toBe(!blocked);
-        expect(execution?.result.status).toBe(blocked ? "error" : "ok");
-        expect(execution?.result.reason).toBe(blocked ? "runtime-artifact-publication" : undefined);
-        const diagnostics = (execution?.result.steps ?? [])
-          .map((step) => step.advisory?.message ?? step.stderrTail ?? "")
-          .join("");
-        expect(diagnostics).toMatch(warn ? /previous runtime/ : blocked ? /23456/ : /^$/);
-      }),
-  );
   it("retains the live update run when stopped-service context capture fails", async () => {
     await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
       const params = await runParams(dir, "package");
@@ -372,10 +311,6 @@ describe("mutable update execution", () => {
       await withTestDir({ prefix: "git-selection-online-" }, async (root) => {
         const events: string[] = [];
         const target = { schemaVersions: { state: 14, agent: 18 } };
-        const beginMutation = vi.fn(() => {
-          expect(mocks.serviceStopped).toBe(true);
-          events.push("mutation");
-        });
         const onActivation = vi.fn();
         mocks.checkTargetSchemas.mockImplementation(async (versions) => {
           expect(mocks.serviceStopped).toBe(false);
@@ -387,17 +322,7 @@ describe("mutable update execution", () => {
           if (phase === "prepare") {
             events.push("stop");
           }
-          const state = serviceState(root, phase);
-          state.windowsTaskAutoStartRecovery = {
-            suspended: Promise.resolve(true),
-            beginMutation,
-            assertRecoveryCurrent: () => {},
-            restore: vi.fn(async () => {}),
-            handoff: vi.fn(),
-            complete: vi.fn(async () => {}),
-            interrupted: () => false,
-          };
-          return state;
+          return serviceState(root, phase);
         });
         // The predecessor-readiness suite owns real HTTP probes; this case owns activation order.
         vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockImplementation(
@@ -433,13 +358,14 @@ describe("mutable update execution", () => {
           },
         );
 
+        // A Git release activates beside the serving Gateway: it neither verifies nor stops it.
         expect(events).toEqual([
           "mutable-prepare",
           "git",
           "activation-schema",
-          ...(incompatible ? [] : ["verified", "mutable-prepare", "stop", "mutation"]),
+          ...(incompatible ? [] : ["mutable-prepare"]),
         ]);
-        expect(execution?.previousVerified).toBe(!incompatible);
+        expect(execution?.previousVerified).toBe(false);
         expect(onActivation).toHaveBeenCalledTimes(incompatible ? 0 : 1);
         expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
           mutationStarted: !incompatible,
@@ -510,7 +436,8 @@ describe("mutable update execution", () => {
           },
         );
 
-        expect(mocks.serviceStopped).toBe(scenario === "postgres-free");
+        // A Git release never stops the serving Gateway: it keeps its own release.
+        expect(mocks.serviceStopped).toBe(scenario === "postgres-free" && kind === "package");
         expect(events).toEqual(refused ? [] : ["install-replaced"]);
         expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
           mutationStarted: !refused,
@@ -636,41 +563,6 @@ describe("mutable update execution", () => {
 
         expect(events, JSON.stringify(execution?.failure)).toEqual(["validated"]);
         expect(execution?.result.reason).not.toBe("database-engine-preflight");
-      }),
-  );
-
-  it.each([true, false])(
-    "records a checkout activation on its run before reserving plugin recovery (%s)",
-    async (checkout) =>
-      withTestDir({ prefix: "git-activation-record-" }, async (root) => {
-        const params = await runParams(root, "git");
-        const activation = { sha: "a".repeat(40), buildId: "build-new", previousBuildId: null };
-        let reservation: unknown;
-        mocks.runGitUpdate.mockImplementation(
-          async (options: Parameters<typeof updateGitInstall>[0]) => {
-            const transaction = {
-              backupRoot: root,
-              ...(checkout ? { readGitActivation: async () => activation } : {}),
-              rollback: async () => {
-                throw new Error("unused");
-              },
-              complete: async () => undefined,
-            };
-            // The fixture admitted no core identities, so the cohort reservation refuses.
-            reservation = await Promise.resolve(options.onTransaction?.(transaction)).catch(String);
-            return { ...successfulUpdate, mode: "git" };
-          },
-        );
-        await withUpdateCommandExecutor(params.opts.run.runId, async (executor) => {
-          params.opts.run.executorFence = await executor.enter(root);
-          return execute(params);
-        });
-
-        expect(reservation).toMatch(/Plugin cohort rollback requires the admitted core/);
-        const run = getUpdateRun(params.opts.run.runId, params.opts.run);
-        expect(run?.origin.gitActivation).toEqual(checkout ? activation : undefined);
-        // Public history projections keep their shape.
-        expect(run && toPublicUpdateRun(run).origin).not.toHaveProperty("gitActivation");
       }),
   );
 });

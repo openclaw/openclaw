@@ -49,6 +49,7 @@ import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
 } from "./update-command-service.js";
+import { withUpdateStateReleasedAcrossRestart } from "./update-command-state-handoff.js";
 import * as terminal from "./update-command-terminal-publication.js";
 import {
   captureUpdateCommandTerminalRecord,
@@ -536,9 +537,17 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
+      // The new build's boot upgrade may replace the shared state database file.
+      // Without a restart nothing replaces it during this update; keep the open handles.
+      const restartService = (restartParams: Parameters<typeof maybeRestartService>[0]) =>
+        restartParams.shouldRestart
+          ? withUpdateStateReleasedAcrossRestart(params.opts.run, () =>
+              maybeRestartService(restartParams),
+            )
+          : maybeRestartService(restartParams);
       const restart = async () => {
         const restarted = await forward(() =>
-          maybeRestartService({
+          restartService({
             onGatewayStartAttempted,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
@@ -546,6 +555,7 @@ async function finishSettledUpdate(
               params.opts.restart === false && currentServiceStop()?.running === true,
             result: resultWithPostUpdate,
             opts: params.opts,
+            gitReleaseRestartMode: restartContext.gitReleaseRestartMode,
             refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
             definitionRecovery,
             serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
@@ -623,7 +633,11 @@ async function finishSettledUpdate(
           });
           pendingRestartAtMs ??= stopped.stoppedAtMs;
         }));
+        // Only an already-current core reaches here with its root unbound: a replaced core's
+        // first restart rebound it, or owed the rebind. A second pass would restart again, or
+        // restart the previous definition.
         const requiresInstallRootRefresh =
+          params.coreAlreadyCurrent === true &&
           restartContext.serviceUpdateVerdict?.kind === "owned" &&
           restartContext.serviceUpdateVerdict.requiresInstallRootRefresh;
         if (

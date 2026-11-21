@@ -17,6 +17,7 @@ import type {
 } from "./command/execution-context.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import type { DelegationCapability } from "./delegation-capability.js";
+import type { HostFileMutationPreparer } from "./host-file-write.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
@@ -80,10 +81,7 @@ export type OpenClawCodingToolsOptions = {
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
   suppressManagedWebSearch?: boolean;
-  /**
-   * Auth mode for the current provider. We only need this for Anthropic OAuth
-   * tool-name blocking quirks.
-   */
+  /** Compatibility no-op; tool selection does not use model auth mode. */
   modelAuthMode?: ModelAuthMode;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;
@@ -142,6 +140,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   /** Describe prospective GitHub actions before policy filtering; never executable. */
   githubPublicationPreview?: true;
   assertInvocationCurrent?: () => void;
+  /** Captured storage custody; independent of per-invocation tool permission. */
+  prepareHostFileMutation?: HostFileMutationPreparer;
   /** Live harness-owned local execution, independent of the Gateway tool catalog. */
   nativeHarnessExecution?: true;
   /** Host-recorded handoff to a caller whose additional execution policy is unknown. */
@@ -165,8 +165,5 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
 
 export type PluginCodingToolsOptions = Omit<
   OpenClawCodingToolsOptions,
-  | "sessionReadScopeKey"
-  | "onProgressCardPlanSaved"
-  | "authProfileStoreSource"
-  | "onWebSearchConfiguration"
+  "sessionReadScopeKey" | "onProgressCardPlanSaved" | "onWebSearchConfiguration"
 >;

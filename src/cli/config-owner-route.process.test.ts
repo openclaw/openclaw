@@ -26,6 +26,30 @@ import { prepareUserProfileCatalogForTest } from "../test-utils/user-profile-cat
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
+const reloadFault = vi.hoisted(() => ({
+  failuresRemaining: 0,
+  onFailure: undefined as (() => void) | undefined,
+}));
+
+vi.mock("../gateway/config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: (opts: Parameters<typeof actual.startGatewayConfigReloader>[0]) =>
+      actual.startGatewayConfigReloader({
+        ...opts,
+        onNoopConfigCommit: async (...args) => {
+          if (reloadFault.failuresRemaining > 0) {
+            reloadFault.failuresRemaining--;
+            reloadFault.onFailure?.();
+            throw new Error("Synthetic config apply failure");
+          }
+          return await opts.onNoopConfigCommit(...args);
+        },
+      }),
+  };
+});
+
 // One real Gateway owns the state root; CLI children are the shapes the Windows companion
 // app runs against its own running Gateway (setup wizard, gateway setup, local AI tray).
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -143,6 +167,35 @@ describe("config mutations against a running Gateway", () => {
     await lock?.release();
     await claim?.release();
     restoreEnv.restore();
+  });
+
+  it("confirms a saved config set after the watcher retries the failed apply", async () => {
+    const failedApply = createDeferredCore();
+    reloadFault.failuresRemaining = 1;
+    reloadFault.onFailure = () => failedApply.resolve();
+    try {
+      const command = run(env, ["config", "set", "logging.level", "debug"]);
+      await Promise.race([failedApply.promise, command]);
+      // Deliver a file observation after the failed apply without changing the receipt's bytes.
+      const now = new Date();
+      await fs.utimes(env.OPENCLAW_CONFIG_PATH!, now, now);
+      const result = await command;
+
+      expect(reloadFault.failuresRemaining).toBe(0);
+      expect((await readConfig()).logging.level).toBe("debug");
+      const revision = await observer!.request<{
+        configRevisionHash: string;
+        appliedConfigHash: string;
+      }>("config.get", {});
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Updated logging.level. The Gateway applied the change.");
+      expect(revision.configRevisionHash).toBeTruthy();
+      expect(revision.appliedConfigHash).toBe(revision.configRevisionHash);
+      expectGatewayKeptRunning();
+    } finally {
+      reloadFault.failuresRemaining = 0;
+      reloadFault.onFailure = undefined;
+    }
   });
 
   it("routes MCP set, configure, tools, unset, and add through the live Gateway", async () => {
@@ -481,5 +534,24 @@ describe("config mutations against a running Gateway", () => {
     expect(result.stderr).toContain("stop the Gateway through its service owner");
     expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(before);
     expectGatewayKeptRunning();
+  });
+
+  it("preserves the config set error when the saved revision stays inactive", async () => {
+    reloadFault.failuresRemaining = Number.POSITIVE_INFINITY;
+    try {
+      const result = await run(env, ["config", "set", "logging.level", "warn"]);
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.stderr).toContain("persisted but was not applied to the active Gateway");
+      expect((await readConfig()).logging.level).toBe("warn");
+      const revision = await observer!.request<{
+        configRevisionHash: string;
+        appliedConfigHash: string;
+      }>("config.get", {});
+      expect(revision.configRevisionHash).toBeTruthy();
+      expect(revision.appliedConfigHash).not.toBe(revision.configRevisionHash);
+      expectGatewayKeptRunning();
+    } finally {
+      reloadFault.failuresRemaining = 0;
+    }
   });
 });

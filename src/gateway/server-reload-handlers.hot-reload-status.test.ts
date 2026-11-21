@@ -102,7 +102,12 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   expect(hoisted.invalidateConfigGetResponseCache).toHaveBeenCalledOnce();
   expect(broadcast).toHaveBeenCalledWith(
     "config.changed",
-    { path: "/tmp/openclaw.json", hash: "opaque:persisted-1", ts: expect.any(Number) },
+    {
+      path: "/tmp/openclaw.json",
+      hash: "opaque:persisted-1",
+      changedPaths: ["gateway.port"],
+      ts: expect.any(Number),
+    },
     { dropIfSlow: true },
   );
   expect(invalidateMentions).not.toHaveBeenCalled();
@@ -157,8 +162,11 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
       setRuntimeConfigSnapshot(candidate);
       commit("gateway.roles", candidate);
       expect(gatewayContext.getCommittedRuntimeConfig()).toBe(candidate);
-      expect(original.authority.signal?.aborted).toBe(true);
-      expect(duringActivation.authority.signal?.aborted).toBe(true);
+      expect(original.authority.signal?.aborted).toBe(false);
+      expect(duringActivation.authority.signal?.aborted).toBe(false);
+      expect(original.authority.assertCurrent).not.toThrow();
+      expect(duringActivation.authority.assertCurrent).not.toThrow();
+      await expect(capture()).rejects.toThrow();
     } finally {
       original.release();
       duringActivation?.release();

@@ -13,6 +13,49 @@ import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { UpdatesPage } from "./updates-page.tsx";
 import { createUpdatesViewProps } from "./updates.test-support.ts";
 
+it("uses the connected Gateway version to keep a previous failure read-only", async () => {
+  const run = createUpdateRunFixture({
+    phase: "finished",
+    status: "failed",
+    reason: "global-install-failed",
+    verification: { serviceRunning: true, runningVersion: "1.0.0" },
+    finishedAtMs: Date.now(),
+  });
+  const harness = updateRunHarness(async (method) =>
+    method === "update.status" ? { lastRun: run } : {},
+  );
+  harness.update({
+    hello: {
+      ...harness.gateway.snapshot.hello!,
+      server: { version: "2.0.0" },
+      features: { methods: ["update.run", "update.status"] },
+    },
+  });
+  const overlays = createApplicationOverlays(harness.gateway);
+  const context = {
+    gateway: harness.gateway,
+    overlays,
+    config: { current: { serverVersion: "1.0.0" }, subscribe: () => () => undefined },
+    nativeDeviceSettings: null,
+  } as unknown as ApplicationContext;
+  const mounted = mountSolid(() =>
+    createComponent(UpdatesPage, {
+      ...createUpdatesViewProps({ configObject: {} }),
+      context,
+      onCheckStatus: () => overlays.refreshUpdateStatus(),
+    }),
+  );
+  try {
+    await overlays.refreshUpdateStatus();
+    flush();
+    expect(mounted.container.textContent).toContain("Last update run failed");
+    expect(mounted.queryByRole("button", { name: "Retry update" })).toBeNull();
+  } finally {
+    mounted.unmount();
+    overlays.dispose();
+  }
+});
+
 it.each(["loading", "open"] as const)(
   "retires a Gateway update confirmation when its target changes while %s",
   async (stage) => {

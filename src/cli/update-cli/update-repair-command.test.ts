@@ -13,6 +13,7 @@ import {
 } from "../../infra/package-update-activation-journal.js";
 import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
 import { inspectUpdateRunDriver, readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -212,10 +213,18 @@ describe("update repair ledger recovery", () => {
   it.each([
     { legacy: true, target: "2026.9.3" },
     { legacy: false, target: "2026.9.2" },
+    { legacy: false, target: "2026.9.2", tag: "preview-2026.9.2" },
   ])(
     "acknowledges a package-owner refusal without maintenance ($legacy)",
-    async ({ legacy, target }) => {
-      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+    async ({ legacy, target, tag }) => {
+      const run = createUpdateRun({
+        trigger: "cli",
+        before: { version: "2026.9.2" },
+        ...(tag ? { target: { tag } } : {}),
+      });
+      const tagLookup = tag
+        ? vi.spyOn(updateCheck, "fetchNpmTagVersion").mockResolvedValue({ tag, version: target })
+        : undefined;
       const detail =
         "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.";
       const captureSteps: UpdateRunRecord["steps"] = [
@@ -253,6 +262,9 @@ describe("update repair ledger recovery", () => {
       expect(mocks.finalize).not.toHaveBeenCalled();
       expect(mocks.reachable).not.toHaveBeenCalled();
       expect(mocks.readiness).not.toHaveBeenCalled();
+      if (tagLookup) {
+        expect(tagLookup).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ tag }));
+      }
       const runStatus = await readUpdateRunStatus();
       if (runStatus.runStatusError !== undefined) {
         throw new Error(runStatus.runStatusError);

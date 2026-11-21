@@ -412,6 +412,13 @@ fails with a retry message and preserves the workspace. Immutable object downloa
 do not hold the guest frozen; capture, file application, and pending-transfer
 recovery still require consistency pauses.
 
+On a first PR import, canonical Git snapshot and manifest checks run under the
+host lease while the guest continues running. OpenClaw then observes the guest's
+Git state and pauses it to capture its manifest. An intervening checkpoint
+invalidates the prepared canonical view and asks for a retry. Both manifests remain necessary
+to preserve authored empty directories and other differences outside Git trees.
+Dirty files, staged-only edits, and mismatched source heads still reject the import.
+
 Each successful container pause records a `sandbox/quiescence` info log with a
 bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
 or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes

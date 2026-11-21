@@ -236,6 +236,7 @@ async function reviewTemplateDraft(
     items: snapshot.items,
     files: snapshot.files,
     scope: snapshot.scope,
+    ...(snapshot.iconUrl ? { iconUrl: snapshot.iconUrl } : {}),
     ...(publicationState ? { publicationState } : {}),
   };
 }

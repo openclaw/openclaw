@@ -1,3 +1,6 @@
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { Slot } from "./worker-task-pool.types.js";
+
 export class WorkerTaskError extends Error {
   readonly capacityAvailable?: Promise<void>;
   constructor(
@@ -9,6 +12,30 @@ export class WorkerTaskError extends Error {
     this.name = "WorkerTaskError";
     this.capacityAvailable = options?.capacityAvailable;
   }
+}
+
+export function workerTaskUnavailableError<Input, Output>(
+  slot: Slot<Input, Output>,
+  message: string,
+  cause?: unknown,
+  task = slot.task,
+): Error {
+  const stage = slot.ready === false ? "startup" : task?.exchange ? "exchange" : "running";
+  // Reuse owned estimates/progress without sizing or retaining input.
+  const detail = task?.diagnosticLabel
+    ? ` [task=${task.diagnosticLabel} admittedInputBytes=${task.inputBytes} exchanges=${task.exchangeSequence} stage=${stage}]`
+    : "";
+  return new WorkerTaskError(message + detail, "unavailable", { cause });
+}
+
+export function workerTaskRetirementError(taskError: Error | undefined, failure: unknown): unknown {
+  return taskError
+    ? new AggregateError(
+        [taskError, failure],
+        `Worker retirement failed: ${toErrorObject(failure, "worker retirement failed").message}; task failed: ${taskError.message}`,
+        { cause: failure },
+      )
+    : failure;
 }
 
 export function workerTaskTimeoutError(

@@ -33,6 +33,7 @@ import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import { writeDisplacedDatabaseReceipts } from "./update-displaced-database-receipt.js";
 import type { PluginCohortRecoveryBinding } from "./update-plugin-cohort-schema.js";
 
 async function existingFile(file: string) {
@@ -267,6 +268,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           sources[sources.indexOf(shared)] = { ...shared, ...prepared, snapshotPath: targetPath };
         }
         const moves: Array<{
+          databasePath: string;
           source: string;
           target: string;
           identity: NonNullable<Awaited<ReturnType<typeof existingFile>>>;
@@ -280,7 +282,7 @@ export async function restoreUpdateDatabaseBackup(params: {
             }
             const identity = await existingFile(source);
             if (identity) {
-              moves.push({ source, target, identity });
+              moves.push({ databasePath, source, target, identity });
             }
           }
         }
@@ -314,6 +316,10 @@ export async function restoreUpdateDatabaseBackup(params: {
           );
           assertOwned();
         }
+        // Cleanup may remove these files only after a later verified update, by this receipt.
+        // Bookkeeping never blocks a rollback: without a receipt the files stay protected.
+        await writeDisplacedDatabaseReceipts(params.runId, moves).catch(() => undefined);
+        assertOwned();
         params.onLiveMutation?.();
         for (const move of moves) {
           assertOwned();

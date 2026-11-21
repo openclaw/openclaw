@@ -312,7 +312,10 @@ describe("visitor access admitted caller", () => {
           try {
             await expectDefined(proof, "admitted visitor proof missing");
           } finally {
-            await waitForAssertion(() => expect(rpcSourceTesting.size).toBe(0));
+            await waitForAssertion(() => {
+              expect(rpcSourceTesting.size).toBe(0);
+              expect(hasAgentRunContextExecutionOwner(runId)).toBe(false);
+            });
           }
           expect(mocks.agentCommand).toHaveBeenCalledOnce();
           const saved = await grants.lookup(EMAIL);
@@ -331,19 +334,22 @@ describe("visitor access admitted caller", () => {
           expect(revocationState).toEqual({
             ownerBefore: true,
             callerCurrent: false,
-            ownerAfter: false,
+            ownerAfter: true,
           });
           expect(stages).toEqual(["transaction", "commit"]);
-          const outcome = expectDefined(renewal, "renewal result missing");
-          expect(outcome.status).toBe("rejected");
-          if (scenario === "revoked before commit") {
-            expect(saved).toEqual(original);
-          } else {
-            const renewed = expectDefined(saved, "committed renewal was lost");
-            expect(renewed.createdAt).toBe(original.createdAt);
-            expect(renewed.expiresAt).toBeGreaterThan(original.expiresAt);
-          }
-          expect(commitGranted).toBe(scenario === "revoked after commit");
+          expect(expectDefined(renewal, "renewal result missing")).toMatchObject({
+            status: "fulfilled",
+            value: {
+              ok: true,
+              source: "plugin",
+              toolName: "visitor_invite",
+              output: { details: { outcome: "renewed" } },
+            },
+          });
+          const renewed = expectDefined(saved, "committed renewal was lost");
+          expect(renewed.createdAt).toBe(original.createdAt);
+          expect(renewed.expiresAt).toBeGreaterThan(original.expiresAt);
+          expect(commitGranted).toBe(true);
         } finally {
           caller.release();
           closeGatewayDeviceRevocation(context);
