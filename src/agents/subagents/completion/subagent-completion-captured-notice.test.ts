@@ -142,12 +142,14 @@ it.each(["failed", "result"] as const)("preserves the %s result-size contract", 
   const { batch, readNotice } = await fixture(1);
   const child = batch[0]!;
   await recordRequiredCompletionNotice(child, "delivery refused", batch, kind);
-  const { text } = await readNotice();
+  const notice = await readNotice();
+  const { text } = notice;
   if (kind === "result") {
     expect(text).toBe(
       `Child ${child.childSessionKey} (run ${child.runId})\n\nok\n\n${child.completion!.resultText}`,
     );
   } else {
+    expect(notice).toMatchObject({ details: { backgroundDelivery: true } });
     const start = text.indexOf("answer-000");
     const end = text.indexOf("]", text.indexOf("[result truncated", start)) + 1;
     expect(start).toBeGreaterThan(0);

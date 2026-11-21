@@ -165,7 +165,14 @@ export async function recordRequiredCompletionNotice(
                   kind !== "failed" ||
                   batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
                 content: findings,
-                details: { runId, childRunId: entry.runId, error: reason },
+                details: {
+                  runId,
+                  childRunId: entry.runId,
+                  error: reason,
+                  ...(kind === "failed" && !wake?.requesterYieldBatch
+                    ? { backgroundDelivery: true }
+                    : {}),
+                },
               },
       },
     ),

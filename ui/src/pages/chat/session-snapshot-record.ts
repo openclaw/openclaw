@@ -193,8 +193,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-// Refill history that omitted structured cancellation and subagent completion receipts.
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 16;
+// Refill history that represented background delivery reports as terminal reply failures.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 17;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(
