@@ -26,10 +26,7 @@ import {
   prepareArtifactPreservingSqliteRead,
   prepareSqliteReadOnlyLocation,
 } from "../infra/sqlite-snapshot-source.js";
-import {
-  assertTransactionUsable,
-  type SqliteTransactionOptions,
-} from "../infra/sqlite-transaction.js";
+import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
@@ -56,6 +53,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
+  type StateWriteTransactionOptions,
 } from "./openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import { assertStateFileSnapshotAllowed, isStatePostgres } from "./openclaw-state-db-engine.js";
@@ -93,6 +91,7 @@ import {
 } from "./openclaw-state-db-schema-policy.js";
 import { ensureOpenClawStateRuntimeSchema as ensureSchema } from "./openclaw-state-db-schema-runtime.js";
 import {
+  admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
@@ -107,6 +106,7 @@ import {
   assertOpenClawStateWriteAllowed,
   isOpenClawStateWriteContentionError,
 } from "./openclaw-state-ownership.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import {
   readStateSchemaPublicationBlocker,
   type StateSchemaPublicationBlocker,
@@ -616,10 +616,7 @@ export function runWithOpenClawStateBusyTimeout<T>(
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
-  transactionOptions: Pick<
-    SqliteTransactionOptions,
-    "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
-  > & { singleStatement?: true } = {},
+  transactionOptions: StateWriteTransactionOptions = {},
 ): T {
   if (
     isArtifactPreservingStateRead("agent", options.database?.path ?? resolveDatabasePath(options))
@@ -648,37 +645,45 @@ export function runOpenClawStateWriteTransaction<T>(
         remaining,
       );
     database = acquired;
-    const value = runManagedStateTransaction(
-      acquired.db,
-      () => {
-        assertStateDatabaseSchemaAdmission(acquired);
-        // Recheck cached-path admission after a cold-open contention retry.
-        if (!options.database) {
-          getOpenClawStateDatabaseIfOpen(options);
-        }
-        assertOpenClawStateWriteAllowed({
-          database: acquired.db,
-          databasePath: acquired.path,
-          env: options.env ?? process.env,
-          schemaReady: stateDbCache.isOpenClawStateDatabaseSchemaReady(acquired),
-        });
-        observeOpenClawDatabaseMaintenanceResource(acquired.db);
-        if (options.database) {
-          stateDbCache.touchStateDatabase(acquired);
-        }
-        callbackEntered = true;
-        return operation(acquired);
-      },
-      {
-        databaseLabel: acquired.path,
-        ...transactionOptions,
-        ...(remaining ? { busyTimeoutMs: remaining() } : {}),
-        operationLabel:
-          transactionOptions.operationLabel ??
-          captureSqliteReaderOwner()?.operation ??
-          "state.write",
-      },
-    );
+    const write = () =>
+      runManagedStateTransaction(
+        acquired.db,
+        () => {
+          if (isPostgresSqlConnection(acquired.db)) {
+            admitStateSchemaFacts(acquired.db, acquired.path);
+          }
+          assertStateDatabaseSchemaAdmission(acquired);
+          // Recheck cached-path admission after a cold-open contention retry.
+          if (!options.database) {
+            getOpenClawStateDatabaseIfOpen(options);
+          }
+          assertOpenClawStateWriteAllowed({
+            database: acquired.db,
+            databasePath: acquired.path,
+            env: options.env ?? process.env,
+            schemaReady: stateDbCache.isOpenClawStateDatabaseSchemaReady(acquired),
+          });
+          observeOpenClawDatabaseMaintenanceResource(acquired.db);
+          if (options.database) {
+            stateDbCache.touchStateDatabase(acquired);
+          }
+          callbackEntered = true;
+          return operation(acquired);
+        },
+        {
+          databaseLabel: acquired.path,
+          ...transactionOptions,
+          ...(remaining ? { busyTimeoutMs: remaining() } : {}),
+          operationLabel:
+            transactionOptions.operationLabel ??
+            captureSqliteReaderOwner()?.operation ??
+            "state.write",
+        },
+      );
+    // Replay only admission failures before caller work, after a completed rollback.
+    const value = isPostgresSqlConnection(acquired.db)
+      ? withPostgresSchemaAdmissionRetry(acquired.db, write, () => !callbackEntered)
+      : write();
     return { database: acquired, value };
   };
   try {

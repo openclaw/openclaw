@@ -80,7 +80,12 @@ import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-pa
 import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collector-capability.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
-import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  expandToolGroups,
+  normalizeToolPolicyName,
+} from "./tool-policy.js";
+import { listsFixedToolSet } from "./tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "./tool-search-protocol.js";
 import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -136,6 +141,14 @@ export function* assembleOpenClawCodingTools(
   const toolSearchControlAllowlist = toolSearchControlsEnabled
     ? [...TOOL_SEARCH_CONTROL_TOOL_NAMES]
     : [];
+  // One listing per session: `message` is always offered; a scheduled allowlist gates calls.
+  const fixedListing = listsFixedToolSet(
+    toolSearchConfig,
+    toolSearchControlsEnabled,
+    options?.sessionKey,
+  )
+    ? { profileAlsoAllow: ["message"], includeRuntimeToolPolicy: false }
+    : undefined;
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
   ).some((toolName) => {
@@ -238,6 +251,7 @@ export function* assembleOpenClawCodingTools(
       ? yield {
           coreTools: {
             abortSignal: options?.abortSignal,
+            prepareHostFileMutation: options?.prepareHostFileMutation,
             attachmentReadRoot,
             codingRoot,
             containmentRoot,
@@ -326,13 +340,19 @@ export function* assembleOpenClawCodingTools(
   const ownerOnlyCoreToolDenylist = automationsScope.denied
     ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
     : sessionToolAccess.ownerOnlyCoreToolDenylist;
+  // A fixed listing also builds the default plugin tools a narrowing allowlist would skip.
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    capabilityProfile.policy.explicitToolAllowlist,
+    fixedListing
+      ? [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, ...capabilityProfile.policy.explicitToolAllowlist]
+      : capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
   );
   // Owner-only tools stay listed; descendants and captured allowlists cannot inherit them.
-  const pluginToolDenylist = [...capabilityProfile.policy.explicitToolDenylist];
-  const requesterToolDenylist = pluginToolDenylist.concat(
+  const pluginToolDenylist = fixedListing
+    ? capabilityProfile.policy.sessionToolDenylist
+    : capabilityProfile.policy.explicitToolDenylist;
+  // Children inherit the turn's full denylist, including sender, group and run policy.
+  const requesterToolDenylist = capabilityProfile.policy.explicitToolDenylist.concat(
     capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],
     ownerOnlyCoreToolDenylist,
   );
@@ -375,11 +395,13 @@ export function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
+    fixedToolListing: fixedListing !== undefined,
     // Only the grant's owner reaches tool construction; the grant itself stays in the allowlist.
     ...(runtimePluginToolGrant
       ? { runtimePluginToolOwnerId: runtimePluginToolGrant.pluginId }
       : {}),
-    disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
+    disableMessageTool:
+      options?.swarmCollector || (options?.disableMessageTool === true && !fixedListing),
     requesterAgentIdOverride: executionAgentId,
   };
   const pluginToolsOnly = filterToolsByClientCaps(
@@ -438,6 +460,9 @@ export function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
+            // The planning receipt belongs to a user conversation, not to scheduler or SDK calls.
+            requireCronCreationPlan:
+              options?.trigger === "user" && Boolean(options.sessionKey) && !options.jobId,
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
@@ -483,7 +508,8 @@ export function* assembleOpenClawCodingTools(
             cwd: sandbox
               ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
               : runtimeRoot,
-            gatewayConfigReadAllowed: capabilityProfile.policy.gatewayConfigReadAllowed,
+            gatewayManagementActionsAllowed:
+              capabilityProfile.policy.gatewayManagementActionsAllowed,
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
@@ -578,17 +604,33 @@ export function* assembleOpenClawCodingTools(
       ),
       options?.config,
     );
+  const handoff = capabilityProfile.policy.requesterPolicySource === "completion-handoff";
   const {
     tools: authorizedTools,
     turnAuthorized,
     callableTools,
     exportedTools,
   } = resolveTurnToolSurface({
-    turnTools: completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter)),
+    turnTools: completeTurnTools(
+      messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter),
+    ).filter((tool) => tool.name !== "message" || options?.disableMessageTool !== true),
     sessionTools:
-      capabilityProfile.policy.requesterPolicySource === "completion-handoff"
-        ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
+      handoff || fixedListing
+        ? completeTurnTools(
+            messageInvocationPolicy.filter(
+              capabilityProfile,
+              undefined,
+              handoff ? "session" : "turn",
+              fixedListing,
+            ),
+          )
         : undefined,
+    outsideTurnReason: handoff
+      ? undefined
+      : (name) =>
+          name === "message"
+            ? "message cannot send on this turn: its reply delivery or tool policy does not allow the message tool. Do not retry message."
+            : `${name} is outside the tools this run allows. Do not retry ${name}.`,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
     ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
     hostSystemTurn: isHostSystemTurn(options ?? {}),

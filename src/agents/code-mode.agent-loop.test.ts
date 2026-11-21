@@ -11,13 +11,16 @@ import {
   getInternalBeforeRequest,
   setInternalBeforeRequest,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { isActiveTurnTainted } from "../../packages/agent-core/src/turn-taint.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { getSession, waitForExecSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -31,6 +34,7 @@ import {
   createCodeModeHarness,
   expectToolCalls,
   jsonTool,
+  mcpTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -38,6 +42,7 @@ import {
 } from "./code-mode.test-support.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
+import { createAgentTurnTaintState } from "./embedded-agent-runner/run/turn-taint-state.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
@@ -118,7 +123,7 @@ async function runCodeModeAgent(params: {
       ctx: Parameters<typeof createCodeModeTools>[0];
       session?: AgentSession;
     },
-  ) => void;
+  ) => void | Promise<void>;
 }) {
   const harness = createCodeModeHarness({
     codeMode: params.executor ? { executor: params.executor } : undefined,
@@ -189,7 +194,7 @@ async function runCodeModeAgent(params: {
       modelRegistry: ModelRegistry.inMemory(authStorage),
     });
   }
-  params.configureAgent?.(agent, { tools, ctx, session });
+  await params.configureAgent?.(agent, { tools, ctx, session });
   try {
     await (session ?? agent).prompt("finish the task despite tool errors");
   } finally {
@@ -413,9 +418,10 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
-  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
+  it("preserves native exec output and refusal diagnostics", async ({ onTestFinished }) => {
     const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished, storeEnv);
-    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+    const stdout = "  review-ready\n \n";
+    await writeFile(join(state.workspaceDir, "input.txt"), stdout);
     const execute = vi.spyOn(shell, "execute");
     const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
     const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
@@ -451,7 +457,7 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(results[1]).toMatchObject({
       status: "completed",
-      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+      value: { status: "completed", exitCode: 0, aggregated: stdout },
     });
     expect(results[2]).toMatchObject({
       status: "completed",
@@ -526,7 +532,7 @@ describe("Code Mode agent-loop error recovery", () => {
     ]);
     expect(
       readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
-    ).toMatchObject({ status: "completed", value: "original result" });
+    ).toMatchObject({ status: "completed", value: "original result\n" });
     expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
     expect(await readFile(started, "utf8")).toBe("started");
   });
@@ -818,6 +824,90 @@ describe("Code Mode agent-loop error recovery", () => {
         error: expect.stringContaining("after terminal action"),
       },
     });
+  });
+
+  it.each([
+    {
+      use: "unused search",
+      code: 'const [handle] = await catalog.search("remote_metadata"); if (handle?.name !== "MCP.remote.metadata") throw new Error("Missing MCP handle"); return "found";',
+      tainted: false,
+    },
+    {
+      use: "read description",
+      code: 'const [handle] = await catalog.search("remote_metadata"); void handle.description; return "found";',
+      tainted: true,
+    },
+    {
+      use: "emitted handle",
+      code: 'return await catalog.search("remote_metadata");',
+      tainted: true,
+    },
+    {
+      use: "declaration",
+      code: 'await API.read("mcp/remote.d.ts"); return "found";',
+      tainted: true,
+    },
+  ])("records memory provenance after $use", async ({ code, tainted }) => {
+    const state = await createOpenClawTestState({ label: "catalog-memory-provenance" });
+    const remote = mcpTool({
+      name: "remote_metadata",
+      serverName: "remote",
+      toolName: "metadata",
+      description: "Externally supplied description",
+    });
+    const relativePath = "memory/catalog.md";
+    const taint = createAgentTurnTaintState();
+    try {
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [remote],
+        programs: [
+          code,
+          'return await write({ path: "memory/catalog.md", content: "Owner-requested note" });',
+        ],
+        async configureAgent(activeAgent, { ctx, tools }) {
+          const codingTools = await createOpenClawCodingToolsAsync({
+            workspaceDir: state.workspaceDir,
+            senderIsOwner: true,
+            isTurnTainted: taint.isTainted,
+            toolConstructionPlan: {
+              includeBaseCodingTools: true,
+              includeShellTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: false,
+              includePluginTools: false,
+            },
+          });
+          const write = codingTools.find((candidate) => candidate.name === "write");
+          if (!write) {
+            throw new Error("Missing memory write tool");
+          }
+          const controls = tools.map((control) =>
+            wrapToolWithBeforeToolCallHook(control, {
+              ...ctx,
+              onToolOutcome: (observation) => taint.observe(observation),
+            }),
+          );
+          activeAgent.state.tools = controls;
+          applyCodeModeCatalog({ ...ctx, tools: [...controls, remote, write] });
+        },
+      });
+      expectRecovered(agent);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        details: { status: "completed" },
+      });
+      expect(remote.execute).not.toHaveBeenCalled();
+      await expect(readFile(join(state.workspaceDir, relativePath), "utf8")).resolves.toBe(
+        "Owner-requested note",
+      );
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir: state.workspaceDir, relativePath }),
+      ).resolves.toMatchObject({
+        originClass: tainted ? "untrusted" : "agent",
+      });
+      expect(isActiveTurnTainted(agent.state.messages)).toBe(tainted);
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it.each(["network", undefined] as const)("persists %s nested-call provenance", async (source) => {

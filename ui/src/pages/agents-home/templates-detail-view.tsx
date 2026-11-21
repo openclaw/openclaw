@@ -1,11 +1,16 @@
-import { Errored, For, Loading, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
+import {
+  renderPluginDetailShell as PluginDetailShell,
+  PluginReadmeWell,
+} from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import {
   renderPackageMetadata,
@@ -13,10 +18,12 @@ import {
   renderPublisherIdentity,
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
+import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
+import "../../styles/sidebar-markdown.css";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
-import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
 type ClawHubAudit = {
   release: string;
@@ -72,7 +79,7 @@ function renderTemplateTrustWarning(warning: string) {
     <InlineAlert tone="warning" class="templates-trust-warning" role="alert">
       {audit ? (
         <>
-          <strong class="templates-trust-warning__title">{title}</strong>
+          <strong>{title}</strong>
           <p>{audit.overview}</p>
           {detailsUrl ? (
             <a href={detailsUrl} target="_blank" rel="noopener noreferrer">
@@ -81,34 +88,142 @@ function renderTemplateTrustWarning(warning: string) {
           ) : undefined}
         </>
       ) : (
-        <span class="templates-trust-warning__plain">{warning}</span>
+        <span>{warning}</span>
       )}
     </InlineAlert>
   );
 }
 
+type SoulRead =
+  | { state: "loading" }
+  | { state: "ready"; html: string }
+  | { state: "error"; message: string };
+
+/** The excerpt previews the soul; Show more reads the whole SOUL.md, formatted. */
+function TemplatePersonality(props: {
+  view: TemplatesCatalogViewProps;
+  name: string;
+  excerpt: string;
+}) {
+  const [expanded, setExpanded] = createSignal(false);
+  const [read, setRead] = createSignal<SoulRead>();
+  // Only the latest read may settle; a keyed parent remounts this for another release.
+  let attempt = 0;
+  const load = () => {
+    const reader = props.view.readInstruction;
+    if (!reader) {
+      return;
+    }
+    const current = ++attempt;
+    setRead({ state: "loading" });
+    reader(props.name).then(
+      (text) => {
+        if (current === attempt) {
+          setRead({
+            state: "ready",
+            html: toSanitizedMarkdownHtml(text, { mode: "document", remoteImages: false }),
+          });
+        }
+      },
+      (error: unknown) => {
+        if (current === attempt) {
+          setRead({
+            state: "error",
+            message: formatUiError(error, t("templatesCatalog.unavailable")),
+          });
+        }
+      },
+    );
+  };
+  const value = () => (expanded() ? read() : undefined);
+  const ready = () => {
+    const current = value();
+    return current?.state === "ready" ? current : undefined;
+  };
+  const failure = () => {
+    const current = value();
+    return current?.state === "error" ? current : undefined;
+  };
+  return (
+    <PluginReadmeWell
+      alwaysExpandable={Boolean(props.view.readInstruction)}
+      onToggle={(open) => {
+        setExpanded(open);
+        if (open && (!read() || read()?.state === "error")) {
+          load();
+        }
+      }}
+    >
+      <Show
+        when={ready()}
+        fallback={
+          <>
+            <p class="templates-personality__text">{props.excerpt}</p>
+            <Show when={value()?.state === "loading"}>
+              <p class="templates-personality__status" role="status">
+                {t("common.loading")}
+              </p>
+            </Show>
+            <Show when={failure()}>
+              {(current) => (
+                <p class="templates-personality__status" role="alert">
+                  {current().message}
+                  <button type="button" class="btn btn--sm" onClick={load}>
+                    {t("templatesCatalog.retry")}
+                  </button>
+                </p>
+              )}
+            </Show>
+          </>
+        }
+      >
+        {(current) => (
+          <article class="templates-personality__markdown sidebar-markdown">
+            <SanitizedHtml
+              html={current().html}
+              class="lit-content"
+              style={{ display: "contents" }}
+            />
+          </article>
+        )}
+      </Show>
+    </PluginReadmeWell>
+  );
+}
+
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   const contents = () => props.view.readDetail()!.contents;
+  const automationSummary = createTemplateAutomationSummary();
+  // SOUL.md reads as the Template's personality; the page lists no other workspace files.
+  const soul = createMemo(() =>
+    contents().instructions.find((file) => file.name === "SOUL.md" && file.excerpt),
+  );
   return (
     <>
-      <TemplateWorkspaceFiles
-        files={contents().instructions}
-        onOpen={(name) =>
-          props.view.onOpenPreview("instruction", name ?? contents().instructions[0]!.name)
-        }
-      />
+      <Show when={soul()} keyed>
+        {(file) => (
+          <section class="plugin-catalog-detail__readme-section templates-personality">
+            <div class="templates-personality__label">
+              <h2 class="settings-section__heading oc-settings-section-title">
+                {t("templatesCatalog.personality")}
+              </h2>
+              <button
+                type="button"
+                class="templates-personality__file"
+                onClick={() => props.view.onOpenPreview("instruction", file.name)}
+              >
+                {file.name}
+              </button>
+            </div>
+            <TemplatePersonality view={props.view} name={file.name} excerpt={file.excerpt ?? ""} />
+          </section>
+        )}
+      </Show>
       {renderPluginCapabilitySection(
         t("templatesCatalog.skillsSection"),
         contents().skills.map((item) => ({
           name: item.name,
           description: item.excerpt,
-          trailing: (
-            <span class="muted">
-              {item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })}
-            </span>
-          ),
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
         () => (
@@ -118,13 +233,15 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
       {renderPluginCapabilitySection(
         t("templatesCatalog.integrations"),
         contents().integrations.map((item) => ({
-          name: item.name,
-          description:
+          name:
             item.kind === "plugin"
-              ? item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })
-              : t("tabs.mcp"),
+              ? (props.view.pluginPresentation?.[item.name]?.name ?? item.name)
+              : item.name,
+          icon:
+            item.kind === "plugin"
+              ? () => <TemplatePluginIcon plugin={props.view.pluginPresentation?.[item.name]} />
+              : undefined,
+          description: item.kind === "plugin" ? undefined : t("tabs.mcp"),
           trailing:
             item.kind === "plugin" &&
             item.source === "clawhub" &&
@@ -148,18 +265,9 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationDisabled")}`,
-          details: (
-            <p>
-              {item.schedule} · {item.timezone}
-              {" · "}
-              {t(
-                item.enabled
-                  ? "templatesCatalog.automationEnabled"
-                  : "templatesCatalog.automationDisabled",
-              )}
-            </p>
-          ),
+          description: automationSummary(item),
+          // The prompt opens in place under its row.
+          details: <p class="template-automation-message">{item.message}</p>,
         })),
         () => (
           <Icon name="clock" />
@@ -185,6 +293,7 @@ function TemplateMetadata(props: {
         createdAt: props.detail?.createdAtMs,
         downloads: props.entry.downloads,
         categories: props.detail?.categories,
+        rail: { links: undefined },
       })}
     </>
   );
@@ -210,9 +319,10 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 backLabel={t("tabs.templates")}
                 onBack={view().onBack}
                 icon={<TemplateArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
+                rail
                 identity={renderPublisherIdentity({
-                  name:
-                    publisher().ownerHandle === "openclaw" ? "OpenClaw" : publisher().ownerHandle,
+                  // The handle names the publisher; a display name only when it says more.
+                  name: publisher().ownerHandle === "openclaw" ? "OpenClaw" : undefined,
                   handle: `@${publisher().ownerHandle}`,
                   official: publisher().official,
                 })}
@@ -242,6 +352,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 }
                 panel={
                   <>
+                    <TemplateAddFeedback view={view()} />
                     <For each={[view().detailRequest]}>
                       {() => (
                         <Errored
@@ -265,10 +376,8 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                                 role="status"
                                 aria-label={t("templatesCatalog.contentsLoading")}
                               >
-                                <div class="templates-content-skeleton__title skeleton" />
-                                <For each={[0, 1, 2, 3]}>
-                                  {() => <div class="templates-content-skeleton__row skeleton" />}
-                                </For>
+                                <div class="skeleton-title skeleton" />
+                                <For each={[0, 1, 2, 3]}>{() => <div class="skeleton" />}</For>
                               </section>
                             }
                           >
@@ -279,7 +388,6 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                         </Errored>
                       )}
                     </For>
-                    <TemplateAddFeedback view={view()} />
                   </>
                 }
               />
@@ -312,9 +420,9 @@ export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) 
         </InlineAlert>
       </Show>
       <Show when={props.view.consentWarning}>
-        <section class="templates-add-consent" aria-label={t("templatesCatalog.trustReview")}>
+        <section class="templates-add-consent stack" aria-label={t("templatesCatalog.trustReview")}>
           {renderTemplateTrustWarning(props.view.consentWarning!)}
-          <div class="templates-add-consent__actions">
+          <div class="template-actions templates-add-consent__actions">
             <button type="button" class="btn" onClick={() => props.view.onCancelConsent()}>
               {t("common.cancel")}
             </button>

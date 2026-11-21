@@ -22,13 +22,8 @@ import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 
-/**
- * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
- * whose history owner can change while the run lasts (a native login) passes a check for
- * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
- */
+/** Host-internal, like the forwarded auth credential and not part of the plugin SDK. */
 export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
-  assertPrivateInputCurrent?: () => void;
   prepareCredentialUse?: () => Promise<void>;
 };
 type ClaudeCliTurn = {
@@ -104,24 +99,6 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   } catch {
     return undefined;
   }
-}
-
-function privateInputHolds(turn: ClaudeCliTurn): boolean {
-  try {
-    turn.context.assertPrivateInputCurrent?.();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
-  return (
-    promptHooks.promptContextHookSlot(request.callback_id) >= 0 &&
-    isRecord(response) &&
-    isRecord(response.hookSpecificOutput) &&
-    response.hookSpecificOutput.additionalContext !== undefined
-  );
 }
 
 async function authorizeTool(
@@ -675,10 +652,7 @@ export async function* executeClaudeCli(
             // The transport invokes this synchronously at its final write, after all awaits.
             return () => {
               if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
-                // Saved turn context leaves here, so it takes the private-input check too.
-                return carriesTurnContext(request, response) && !privateInputHolds(admittedTurn)
-                  ? {}
-                  : response;
+                return response;
               }
               const message = "The OpenClaw run is no longer active.";
               if (request.subtype === "can_use_tool") {
@@ -711,7 +685,6 @@ export async function* executeClaudeCli(
       }
       await context.prepareCredentialUse?.();
       context.assertCurrent?.();
-      context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }

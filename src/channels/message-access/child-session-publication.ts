@@ -15,6 +15,7 @@ export class ChildSessionPublication {
     readonly requesterSessionKey: string,
     private assertSourceCurrent: () => void,
     private readonly prepareSource?: () => Promise<(() => void) | null>,
+    private readonly publicAudience = true,
   ) {}
 
   prepare(): Promise<void> {
@@ -55,7 +56,9 @@ export class ChildSessionPublication {
     this.assertSourceCurrent();
     this.#run = run;
     this.#assertRunCurrent = assertRunCurrent;
-    runs.set(run, this);
+    if (this.publicAudience) {
+      runs.set(run, this);
+    }
   }
 
   assertCurrent(): void {
@@ -98,9 +101,15 @@ export function bindChildSessionPublication(
   requesterSessionKey: string,
   assertCurrent: () => void,
   prepare?: () => Promise<(() => void) | null>,
+  publicAudience = true,
 ): void {
   Object.assign(context, {
-    [PUBLICATION]: new ChildSessionPublication(requesterSessionKey, assertCurrent, prepare),
+    [PUBLICATION]: new ChildSessionPublication(
+      requesterSessionKey,
+      assertCurrent,
+      prepare,
+      publicAudience,
+    ),
   });
 }
 

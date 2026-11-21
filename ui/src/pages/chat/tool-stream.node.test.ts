@@ -265,6 +265,18 @@ it.each(["result", "item-end", "canvas"] as const)(
 );
 
 describe("status text truncation", () => {
+  it("shows a model preparing a call without claiming the tool has started", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    emitEvent(host, "run-1", 1, "assistant", { text: "Hello" });
+    emitEvent(host, "run-1", 2, "run_status", { phase: "preparing_tool" });
+    expect(startupLabel(host)).toBe("Preparing a tool call");
+    expect(host.toolStreamOrder).toHaveLength(0);
+    emitEvent(host, "run-1", 3, "tool", { phase: "start", toolCallId: "call", name: "read" });
+    expect(startupLabel(host)).not.toBe("Preparing a tool call");
+    emitEvent(host, "run-1", 2, "run_status", { phase: "preparing_tool" });
+    expect(startupLabel(host)).not.toBe("Preparing a tool call");
+  });
+
   it("restores model waits after prior activity and rejects stale wait replay", () => {
     const host = createHost({ chatRunId: "run-1" });
     emitEvent(host, "run-1", 1, "assistant", { text: "First result" });

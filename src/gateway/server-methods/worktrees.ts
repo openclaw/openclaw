@@ -22,7 +22,7 @@ import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
-import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
+import { resolveRecordedProjectByRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
 import {
@@ -93,7 +93,7 @@ async function resolveWriteScopedRepoRoot(
 ): Promise<string | undefined> {
   const containment = await resolveWorkspacePathContainment(repoRoot, cfg);
   // A stored project row authorizes its canonical repo root for write-scoped clients.
-  return containment?.path ?? (await resolveRecordedProjectRoot(repoRoot));
+  return containment?.path ?? (await resolveRecordedProjectByRoot(repoRoot))?.repoRoot;
 }
 
 /**
@@ -293,7 +293,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = opts.context.getRuntimeConfig();
-    const result = await runGitReadOperation(
+    const branches = runGitReadOperation(
       {
         type: "repository.branches",
         input: { repoRoot, includeRepositoryStatus: params.includeRepositoryStatus },
@@ -316,7 +316,13 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         },
       },
     );
-    respond(true, result, undefined);
+    const [result, clone] = await Promise.all([
+      branches,
+      params.includeRepositoryStatus
+        ? resolveRecordedProjectByRoot(repoRoot, { source: "cloned" })
+        : undefined,
+    ]);
+    respond(true, clone ? { ...result, requiresWorktree: true } : result, undefined);
   }),
   "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {
     const { respond, context } = opts;

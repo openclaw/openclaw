@@ -68,10 +68,14 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cargo/registry",
   ".cargo/git",
   ".gradle/caches",
+  ".local/share/NuGet/http-cache",
+  ".local/share/NuGet/v3-cache",
+  ".nuget/packages",
   ".cache/vitest",
   ".cache/bun-transpiler",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
+  ".cache/convex/binaries",
   ".local/share/pnpm/store",
   "artifacts/task-environment/local/share/pnpm/store",
   ".openclaw/.pnpm-store",
@@ -98,9 +102,12 @@ function buildCacheInputPaths(paths = []) {
   return retained;
 }
 const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock", ".openclaw/tmp"];
-const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(
+const DERIVED_WORKSPACE_SEGMENT_RES = [
+  "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|build/intermediates|build/outputs/apk|build/outputs/bundle|bin/Debug|bin/Release|obj/Debug|obj/Release|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
+  "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|build/intermediates|build/outputs/apk|build/outputs/bundle|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
+  "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|bin/Debug|bin/Release|obj/Debug|obj/Release|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
   "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
-);
+].map((pattern) => new RegExp(pattern));
 function isRuntimeOwnedWorkspacePath(relativePath) {
   return (
     relativePath === ".git" ||
@@ -115,9 +122,9 @@ function isRuntimeOwnedWorkspacePath(relativePath) {
 }
 function isDerivedWorkspacePath(
   relativePath,
-  retainedInput = false,
-  excludeBuildCaches = false,
-  includeLegacyPnpmStore = false,
+  retainedInput,
+  excludeBuildCaches,
+  legacyDerivedEligibilitySubset,
 ) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
@@ -129,13 +136,17 @@ function isDerivedWorkspacePath(
   if (
     DERIVED_WORKSPACE_ROOT_PATHS.some(
       (root) =>
-        (!includeLegacyPnpmStore || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+        (root !== PNPM_FALLBACK_STORE_ROOT_PATH ||
+          !legacyDerivedEligibilitySubset?.includes("pnpm")) &&
         (relativePath === root || relativePath.startsWith(root + "/")),
     )
   ) {
     return true;
   }
-  return DERIVED_WORKSPACE_SEGMENT_RE.test(relativePath);
+  const legacySegments =
+    (legacyDerivedEligibilitySubset?.includes("agp") ? 2 : 0) +
+    (legacyDerivedEligibilitySubset?.includes("dotnet") ? 1 : 0);
+  return DERIVED_WORKSPACE_SEGMENT_RES[legacySegments].test(relativePath);
 }
 function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();

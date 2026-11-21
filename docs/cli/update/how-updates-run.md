@@ -1498,6 +1498,15 @@ the sentinel.
 
 ## Git checkout flow
 
+On macOS, Dashboard **Update** and `/update` use the service command to choose
+what to update. When the LaunchAgent still starts the checkout, the managed
+updater updates that checkout in place, even if an earlier update left a
+selected release on disk. A later independently started update also stays in
+place if the checkout service does not use that selection: the selected build
+is not its rollback target. A LaunchAgent already using the stable launcher
+keeps using release switches. This choice belongs to the installed updater, not the
+target build.
+
 ### Channel selection
 
 - `stable`: select the latest non-beta tag.
@@ -1586,6 +1595,90 @@ the sentinel.
 
   </Step>
 </Steps>
+
+### Git checkouts that run from releases
+
+On macOS and Linux, a Git checkout whose Gateway service the update owns runs from
+releases instead of being rebuilt in place. Each release is a detached worktree of the
+checkout under `<stateDir>/git-install/releases/`, and the link
+`<stateDir>/git-install/openclaw` names the selected one. An update
+builds the target as a new release, switches the link, and arms a trial in
+`releases/.trial`. The service starts through `<stateDir>/git-install/openclaw-launcher.mjs`,
+which switches the link back to the trial's previous release after two failed starts.
+The trial ends once the Gateway on the new release is ready.
+
+If the old Gateway is still serving after its next maintenance check, the updater can
+request a cooperative restart. A busy Gateway can defer that request for five minutes.
+When the running Gateway records that it accepted a restart, the updater waits for
+that deferral and process replacement before verifying. A signal alone does not extend
+the wait. Older Gateways without this receipt keep the original bounded wait; an
+explicit overall update timeout still applies. Only serving-build and readiness checks
+confirm the update. This behavior requires the updated updater and, for the extended
+wait, a running Gateway that records acceptance. If restart signals are disabled, an updater in an
+independent terminal can still use the native restart of its verified, owned service.
+A managed handoff never selects that route to restart a running incumbent. On macOS,
+if a loaded KeepAlive job has no listener when verification times out, the updater
+leaves the trial unconfirmed rather than restarting the job a second time: launchd
+may still bring it up. Inspect `openclaw gateway status --deep` before taking action.
+
+The link alone does not show what serves. An update can fail after the link switched
+but before any Gateway started the new release. That leaves the link on a release that
+never started, with its trial still armed. When the trial's previous release is shown to
+serve (see below), the next plain `openclaw update` builds on it:
+
+- If the target is the release the link already names, and that release's build still
+  verifies, the update reuses it instead of rebuilding. It still admits the target and
+  runs the normal candidate checks on it, and checks the match only after local commits
+  are replayed. It then restarts the Gateway into the release, verifies it, and ends the
+  trial.
+- If the target is newer, the link goes back to the serving release. The new release
+  goes on trial with the serving release as its fallback. The superseded release stays
+  on disk, because an `openclaw` started through the link may be running from it; release
+  collection in a later update that publishes a release removes it once it has been
+  deselected for 24 hours.
+- If the serving release is the target, the update runs the candidate checks on it and the
+  caller's mutation check, puts the link back on the serving release, and reports that the
+  installation is current. If the placed release started or ended its trial meanwhile, the
+  link stays on it and the update fails with `git-release-selection-changed` instead. It
+  does not call a restart safe, because the next start runs that other release.
+
+Only a release the launcher never started and no process holds counts as never started.
+A trial that started stays under the launcher, which owns its state rollback. If the
+release starts, or its trial ends, while the update builds, the update does not reconcile
+them: it publishes the target with the release the link names as its fallback. An update
+with `--no-restart` does not repair a placed release, because moving the link would
+restart a launcher-backed Gateway. It handles the link and trial as an earlier updater
+would. A trial never falls back to its own target, and arming a trial for the release
+the link already names keeps that release's existing trial.
+
+The trial's previous release is used as the fallback, or its commit rebuilt, only on
+evidence that this commit is what the Gateway serves. The only such evidence on disk is
+the state a conversion leaves before its first restart: no Gateway has ever run from a
+release, so the service still runs the checkout, and the checkout's own build reports
+that commit. Every Gateway that runs from a release first takes a lease under
+`releases/.leases/`, and that directory stays, so any lease directory there means the
+checkout's build no longer shows what serves. Nothing on disk records that a release's
+trial passed, and a lease is taken before the Gateway is ready, so neither shows which
+release served. With that evidence, a fallback must be present, its build must verify
+against its commit, and it must have the `dist/index.js` the launcher loads. If it is incomplete, the update rebuilds that commit as a new
+release. It switches to the rebuilt release only at the normal switch point, after the
+target passed its checks. A later attempt reuses that rebuild instead of building another
+copy.
+
+Without that evidence, or when the fallback is gone or no longer readable as a Git
+release, the commit that serves is not known. The update then changes nothing and fails
+with `git-release-fallback-unavailable`. Do not restart the Gateway into the release
+link. Run `openclaw triage` so an agent can rebuild a fallback from the
+serving commit, then run `openclaw update` again.
+
+The link text is computed between real paths and must resolve to the chosen release before
+the old link is replaced, so a state directory reached through a symlink (macOS `/tmp` is
+`/private/tmp`) never gets a dangling link.
+
+The update result includes a `git-release-placement` note that names the releases
+involved and says what the update did. This runs in the installed updater, the
+checkout's own build. An updater built before this change still treats the link's
+release as the serving one.
 
 ## Plugin sync details
 

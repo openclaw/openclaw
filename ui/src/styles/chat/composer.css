@@ -78,31 +78,27 @@
 
 .agent-chat__composer-status {
   width: 100%;
-  border: 1px solid color-mix(in srgb, var(--border) 16%, transparent);
+  border: 1px solid var(--chat-composer-hairline, var(--border));
   border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   overflow: hidden;
   background: var(--composer-attached-surface, var(--chat-composer-surface));
+  color: var(--text);
 }
 
 /* This is one status lane; event details remain with their transcript, queue,
-   or toast owner instead of growing extra composer rows. */
-.agent-chat__composer-status[data-tone="info"] {
-  border-color: color-mix(in srgb, var(--info) 12%, transparent);
-  background: color-mix(in srgb, var(--info) 7%, var(--composer-attached-surface));
-  color: color-mix(in srgb, var(--info) 72%, var(--text));
+   or toast owner instead of growing extra composer rows. Like every composer
+   neighbor, the surface stays neutral and only the icon carries the tone. */
+.agent-chat__composer-status[data-tone="info"] .agent-chat__composer-status-icon {
+  color: var(--info);
 }
 
-.agent-chat__composer-status[data-tone="warn"] {
-  border-color: color-mix(in srgb, var(--warn) 12%, transparent);
-  background: color-mix(in srgb, var(--warn) 7%, var(--composer-attached-surface));
-  color: color-mix(in srgb, var(--warn) 72%, var(--text));
+.agent-chat__composer-status[data-tone="warn"] .agent-chat__composer-status-icon {
+  color: var(--warn);
 }
 
-.agent-chat__composer-status[data-tone="danger"] {
-  border-color: color-mix(in srgb, var(--danger) 12%, transparent);
-  background: color-mix(in srgb, var(--danger) 7%, var(--composer-attached-surface));
-  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+.agent-chat__composer-status[data-tone="danger"] .agent-chat__composer-status-icon {
+  color: var(--danger);
 }
 
 .agent-chat__composer-status-band {
@@ -1492,7 +1488,8 @@
     rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
 
   display: flex;
-  gap: calc(var(--chat-attachment-inset-block) * 3);
+  /* As wide as the remove target's overhang, so neighbors never share a hit area. */
+  gap: var(--chat-attachment-hit-slop);
   flex-wrap: nowrap;
   flex-shrink: 0;
   /* Keep horizontal clipping inside the composer. Reserve remove-target and
@@ -2004,6 +2001,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .agent-chat__media-input {
   display: none;
   position: fixed;
+  position-area: center;
+  width: 100%;
+  height: 100%;
   margin: 0;
   padding: 0;
   border: 0;
@@ -4432,16 +4432,19 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   --oc-overlay-distance: 4px;
   --oc-overlay-show-duration: 150ms;
   --overlay-ease-enter: cubic-bezier(0.22, 0.8, 0.24, 1);
+  --oc-overlay-enter-scale: 0.96;
+  --oc-overlay-enter-translate: 0 -4px;
   padding: 4px;
   border: 0;
   border-radius: min(18px, var(--menu-radius));
   background: var(--popover);
   box-shadow: var(--menu-shadow);
-  scale: 1;
   transform-origin: top left;
 }
 
 .chat-controls__settings-popover.chat-controls__runtime-details {
+  --oc-overlay-enter-translate: 0 4px;
+
   position-area: none;
   position-try-fallbacks: none;
   inset: auto;
@@ -4719,28 +4722,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-manage .chat-controls__model-option-action {
   display: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-controls__settings-popover {
-    transition:
-      opacity 150ms cubic-bezier(0.22, 0.8, 0.24, 1),
-      transform 150ms cubic-bezier(0.22, 0.8, 0.24, 1),
-      display 150ms allow-discrete,
-      overlay 150ms allow-discrete;
-  }
-
-  @starting-style {
-    .chat-controls__settings-popover:popover-open {
-      opacity: 0;
-      scale: 1;
-      transform: translateY(-4px) scale(0.96);
-    }
-
-    .chat-controls__runtime-details:popover-open {
-      transform: translateY(4px) scale(0.96);
-    }
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

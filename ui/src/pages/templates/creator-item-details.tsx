@@ -193,7 +193,7 @@ export function TemplateItemDetails(props: {
                         (automation().enabled ? "enabledInstallation" : "pausedInstallation"),
                     )}
                 </p>
-                <p class="template-creator__message">{automation().message}</p>
+                <p class="template-automation-message">{automation().message}</p>
               </div>
             </div>
           </>

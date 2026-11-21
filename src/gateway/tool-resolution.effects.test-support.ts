@@ -38,6 +38,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import { cancelAgentRuntimeBoundApprovals } from "./server-methods/approval-run-cancellation.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./server-methods/system-agent.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -262,7 +263,7 @@ export function registerGatewayToolFinalEffectTests() {
     );
 
     it.each(["approve", "tool-cancelled", "run-revoked", "precommit-revoked"] as const)(
-      "fences workspace-restricted persistent Gateway delegation: %s",
+      "settles workspace-restricted persistent Gateway delegation: %s",
       async (outcome) => {
         const f = await fixture(true);
         const controller = new AbortController();
@@ -295,7 +296,11 @@ export function registerGatewayToolFinalEffectTests() {
             controller.abort();
           } else if (outcome === "run-revoked") {
             releaseAgentRunDelegatedAuthority(f.authority);
-            await f.manager.forceDenyIfRuntimeAuthorityClosed(record.id);
+            await cancelAgentRuntimeBoundApprovals({
+              authority: f.authority,
+              manager: f.manager,
+              publish: vi.fn(),
+            });
           } else {
             expect(await f.manager.resolve(record.id, "allow-once", "fixture-operator")).toBe(true);
           }
@@ -305,7 +310,7 @@ export function registerGatewayToolFinalEffectTests() {
           );
           if (outcome === "tool-cancelled") {
             expect(result).toMatchObject({
-              error: { message: "agent tool caller authority is no longer active" },
+              error: { name: "AbortError" },
             });
           }
           // A cancelled tool wait can finish before the approval owner's durable handoff.
@@ -316,16 +321,16 @@ export function registerGatewayToolFinalEffectTests() {
           if (outcome === "precommit-revoked") {
             expect(revokeBeforeWrite).toHaveBeenCalledOnce();
           }
-          if (outcome === "approve") {
-            expect(result).toHaveProperty("value");
+          if (outcome === "approve" || outcome === "precommit-revoked") {
+            if (outcome === "approve") {
+              expect(result).toHaveProperty("value");
+            }
             expect(JSON.parse(await fs.readFile(f.configPath, "utf8"))).toMatchObject({
               logging: { level: "debug" },
             });
           } else {
             expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
-            expect((await f.manager.getSnapshot(record.id))?.status).toBe(
-              outcome === "precommit-revoked" ? "allowed" : "cancelled",
-            );
+            expect((await f.manager.getSnapshot(record.id))?.status).toBe("cancelled");
             expect(
               await getOperatorApprovalDetailed({
                 id: record.id,
@@ -333,7 +338,7 @@ export function registerGatewayToolFinalEffectTests() {
               }),
             ).toMatchObject({
               outcome: "found",
-              record: { status: outcome === "precommit-revoked" ? "allowed" : "cancelled" },
+              record: { status: "cancelled" },
             });
             expect(await f.manager.resolve(record.id, "allow-once", "late-operator")).toBe(false);
             expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
