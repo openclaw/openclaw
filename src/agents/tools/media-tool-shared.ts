@@ -145,7 +145,6 @@ function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
     provider: providerId,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
     authStore: params.authStore,
   });
 }
@@ -256,7 +255,9 @@ export async function resolveCapabilityModelConfigForTool(params: {
   }
   const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   return buildToolModelConfigFromCandidates({
-    ...params,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    authStore: params.authStore,
     explicit,
     candidates: await resolveCapabilityModelCandidatesForTool({ ...params, providers }),
     // Candidate selection already checked each provider against its current auth owner.
@@ -314,7 +315,6 @@ export function hasGenerationToolAvailability(params: {
       provider: providerId,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       authStore: params.authStore,
       capability: capabilityAuthOperation(params.providerKey),
     }),

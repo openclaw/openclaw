@@ -114,8 +114,8 @@ icon. Unknown publisher metadata does not enable branding.
 Choose **View → Inline command trail (this browser)** in the session menu to show
 compact command, read, and search rows in conversation order while work is running.
 Command output advances in place; expand a row for captured output and details.
-Grouped tool activity remains the default, and completed dashboard turns keep their
-**Worked for…** folding. This preference stays in this browser for this Gateway.
+Grouped tool activity remains the default. This preference does not change which
+completed dashboard turns show **Worked for…**. This preference stays in this browser for this Gateway.
 If the trail cannot load, grouped commands remain available. Turn the option off
 and on to retry; the error’s details retain the technical failure.
 
@@ -296,8 +296,8 @@ keep their existing capture limits. If an interrupted command has no saved tool
 result, its partial output may be unavailable after terminal reconciliation or
 reload.
 
-Completed dashboard turns still fold their intermediate work into **Worked for…**.
-Open that disclosure to inspect the chronological trail again. Channel sessions
+Completed OpenAI turns can fold their intermediate work into **Worked for…**.
+Open that disclosure to inspect the trail again. Other models keep it inline. Channel sessions
 and speech bubbles keep their existing completion behavior. The preference
 persists in this browser for this Gateway; grouped activity remains the default.
 Live Codex stdout is delivered to panes that enable the inline trail. Switching
@@ -1457,6 +1457,11 @@ Absolute external `http(s)` embed URLs stay blocked by default, except for the d
 
 Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled. Authenticated conversation readers, including guests, receive the configured sandbox policy without needing general operator read access. Bootstrap does not grant access to plugin modules or configuration settings that their scopes do not allow.
 
+Widgets that are no longer available keep their error visible instead of reloading on later chat
+activity or when their chat row remounts. Reload the page or ask the agent to
+recreate the widget. Temporary loading failures retry up to five times with exponential
+backoff; after that, the error offers a manual **Retry**.
+
 When a live widget moves into the assistant's final reply, Chrome and Edge 133+
 and Firefox 144+ preserve its playback and local interaction state. Browsers
 without atomic DOM moves, including Safari, reload the widget during that move.
@@ -1611,9 +1616,13 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns, commentary, reasoning-only messages, and tool activity
-share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and delivered visual
+In completed dashboard turns answered by OpenAI models, commentary, reasoning-only
+messages, and tool activity can share one **Worked for…** disclosure above the answers.
+For other models, mixed-model work, or history that does not identify the model,
+there is no turn-wide disclosure: text and tools stay inline. Switching the selected
+model does not change earlier turns. Tool names and tool grouping are unchanged.
+
+Expanding **Worked for…** shows the activity in its original order; explicit answer segments and delivered visual
 results stay visible below it. Images returned for tool inspection remain inside
 that tool's activity instead of splitting the completed response. Browser tab
 previews keep their execution order relative to those visible results, so a page

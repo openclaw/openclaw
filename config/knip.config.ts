@@ -34,9 +34,11 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/ui-e2e-worker-affinity-measure.mts",
   "scripts/perf/isolated-completion-registry-measure.ts!",
   "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
+  "scripts/perf/session-history-page-reads-measure.ts!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
@@ -418,6 +420,9 @@ const repositoryScriptEntries = [
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
   "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  // git-release.sh runs this helper and preloads the launcher-kill hook by path.
+  "scripts/e2e/lib/upgrade-survivor/git-release.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/git-release-launcher-kill.mjs!",
   // Installed recovery launches its driver/access probe and preloads its fault observer by path.
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
@@ -504,6 +509,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Standalone Linux workload compares pinned boundary-reference initialization.
+  "scripts/perf/boundary-reference-measure.mts!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -572,6 +579,8 @@ const repositoryScriptEntries = [
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
+  // scripts/update-gateway.sh runs this source-update build by path.
+  "scripts/update-gateway-build.mts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.
@@ -586,8 +595,9 @@ const repositoryScriptEntries = [
   "security/opengrep/compile-rules.mjs!",
   // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
   "skills/create-blobster/scripts/cli.mjs!",
-  // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  // create-template/SKILL.md runs inventory.mjs, which calls the bundled CLI bridge.
   "skills/create-template/scripts/cli.mjs!",
+  "skills/create-template/scripts/inventory.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
@@ -762,6 +772,9 @@ const rootEntries = [
   // PR #174294 stages the local credential owner without activating production consumers.
   // Remove this audit root when the client credential cutover wires those consumers.
   "src/infra/client-credential-store.ts!",
+  // PR #202654 stages the restricted writer transport ahead of its Session Share handlers.
+  // Remove this audit root when they consume prepareGatewayPublicationTransportV1.
+  "src/gateway/publication-reader.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
@@ -1614,6 +1627,7 @@ const config = {
         // knowledge-source-ingest/SKILL.md has agents run these bundled scripts by path.
         "skills/knowledge-source-ingest/scripts/chat-transcript.mjs!",
         "skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/slack-read-normalize.mjs!",
         "skills/knowledge-source-ingest/scripts/source-manifest.mjs!",
         // skill-packaging.test.ts runs this skill-reference generator with --check.
         "scripts/sync-skill-references.mjs",

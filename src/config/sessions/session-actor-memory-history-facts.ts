@@ -56,7 +56,10 @@ import type {
   SessionTranscriptMaintenanceRead,
 } from "./session-transcript-hydration.types.js";
 import { selectTranscriptMaintenanceSuffix } from "./session-transcript-maintenance-suffix.js";
-import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
+import {
+  transcriptEventChargesContextBytes,
+  transcriptEventContextEligibility,
+} from "./session-transcript-projection-append.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
 import { TranscriptReportNavigation } from "./session-transcript-report-policy.js";
 import { projectAssistantTranscriptText } from "./transcript-assistant-delivery-read.js";
@@ -137,7 +140,7 @@ function contextAccountingRows(navigation: Navigation): SessionActorMemoryHistor
     ({ event }) => isRecord(event) && (event.type === "reset" || event.type === "compaction"),
   );
   if (!boundary || !isRecord(boundary.event)) {
-    return active.filter((row) => transcriptEventContextEligibility(row.event) === 1);
+    return active.filter((row) => transcriptEventChargesContextBytes(row.event));
   }
   const boundaryEvent = boundary.event;
   const firstKeptId = boundaryEvent.firstKeptEntryId;
@@ -163,7 +166,7 @@ function contextAccountingRows(navigation: Navigation): SessionActorMemoryHistor
     ...(boundary.event.type === "compaction" ? [boundary] : []),
     ...active
       .slice(boundary.activePosition + 1)
-      .filter((row) => transcriptEventContextEligibility(row.event) === 1),
+      .filter((row) => transcriptEventChargesContextBytes(row.event)),
   ];
 }
 

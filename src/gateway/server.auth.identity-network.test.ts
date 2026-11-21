@@ -13,6 +13,7 @@ import {
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   openWs,
+  TEST_OPERATOR_CLIENT,
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
@@ -103,5 +104,59 @@ test("reuses verified Access identity across a document reload and WebSocket hel
       }
     },
     { port: 19673, serverOptions: { controlUiEnabled: true } },
+  );
+});
+
+test("keeps a session-only Access guest connected when no named role is configured", async () => {
+  const auth = {
+    ...githubCfg.gateway!.auth!,
+    trustedProxy: { ...githubCfg.gateway!.auth!.trustedProxy!, allowLoopback: true },
+  };
+  testState.gatewayAuth = auth;
+  await writeConfigFile({ gateway: { auth, trustedProxies: ["127.0.0.1"] } });
+  await withGatewayServer(
+    async ({ port }) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
+          return identityResponse(oidcIdentity());
+        }
+        expect(url).toBe("https://api.github.com/user/101");
+        return identityResponse({ id: 101, login: "ada" });
+      });
+      const socket = await openWs(port, {
+        "x-forwarded-for": "203.0.113.51",
+        "x-forwarded-proto": "https",
+        "cf-access-authenticated-user-email": "ada@example.test",
+        "cf-access-jwt-assertion": `header.${Buffer.from(
+          JSON.stringify({ iss: accessOrigin, exp: Math.floor(Date.now() / 1_000) + 600 }),
+        ).toString("base64url")}.signature`,
+      });
+      const closes: number[] = [];
+      socket.on("close", (code) => closes.push(code));
+      try {
+        const hello = await connectReq(socket, {
+          skipDefaultAuth: true,
+          prePairDevice: true,
+          client: TEST_OPERATOR_CLIENT,
+          scopes: ["operator.sessions.write"],
+        });
+        expect(hello.ok, JSON.stringify(hello.error)).toBe(true);
+        await vi.waitFor(() => expect(transport).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+        await new Promise((resolve) => {
+          setTimeout(resolve, 500);
+        });
+        expect(closes).toEqual([]);
+        // Hello already names the guest's own profile, so attaching it changes nothing.
+        const helloAuth = (hello.payload as { auth?: { profileActivityViewerId?: unknown } }).auth;
+        expect(helloAuth?.profileActivityViewerId).toEqual(expect.any(String));
+      } finally {
+        socket.close();
+        transport.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    },
+    { port: 19674 },
   );
 });

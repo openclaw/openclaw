@@ -1,7 +1,11 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { chatSessionListResponse, waitForTranscriptScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  chatSessionListResponse,
+  waitForTranscriptScrollIdle,
+  openAiAuthor,
+} from "./chat-flow.test-support.ts";
 import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -24,6 +28,7 @@ const message = (
   runId: string | null = "review",
 ) => ({
   role,
+  ...(role === "assistant" ? openAiAuthor : {}),
   content,
   __openclaw: { id, ...(runId ? { runId } : {}) },
   timestamp,
@@ -106,18 +111,8 @@ suite.define(() => {
           .getByText("I’ll review the change before publishing it.", { exact: true })
           .waitFor();
         const swarm = pane.locator('.chat-thread [data-test-id="chat-inline-swarm"]');
-        await expect.poll(() => swarm.locator("[data-state]").count()).toBe(viewport.count);
-        expect(await swarm.count()).toBe(1);
-        expect(await swarm.locator('[data-state="running"]').count()).toBe(
-          Math.max(0, viewport.count - 4),
-        );
-        if (viewport.failure) {
-          await selectChatLayoutAction(pane, "Subagents");
-        } else {
-          await swarm
-            .getByRole("button", { name: "Check release notes: Completed" })
-            .press("Enter");
-        }
+        expect(await swarm.count()).toBe(0);
+        await selectChatLayoutAction(pane, "Subagents");
         const panel = pane.locator("openclaw-chat-subagents-panel");
         await expect.poll(() => panel.locator("[data-session-key]").count()).toBe(viewport.count);
         await pane.getByRole("button", { name: "Close Subagents", exact: true }).click();
@@ -201,16 +196,7 @@ suite.define(() => {
         await gateway.setMethodResponse("sessions.list", chatSessionListResponse([retiredParent]));
         await page.reload();
         await pane.getByText("Now look at the next change.", { exact: true }).waitFor();
-        await expect.poll(() => swarm.count()).toBe(1);
-        expect(await swarm.getByRole("status").textContent()).toContain(
-          `${viewport.count} of ${viewport.count} settled`,
-        );
-        if (viewport.failure) {
-          expect(await swarm.getByText("1 failed or stopped", { exact: true }).count()).toBe(1);
-        } else {
-          expect(await swarm.locator('[data-state="done"]').count()).toBe(viewport.count);
-          expect(await swarm.getByRole("button").count()).toBe(0);
-        }
+        expect(await swarm.count()).toBe(0);
         // Open retained work, then any aggregates; standalone launches need no second group.
         await pane.locator(".chat-work-group .chat-activity-group__summary").click();
         const closedGroups = pane.locator(

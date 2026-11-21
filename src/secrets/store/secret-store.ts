@@ -195,7 +195,7 @@ export async function readSecretStoreExecEnvironment(params: {
   const includeSecretSentinels = params.includeSecretSentinels;
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
-    { type: "secrets.execEnvironment", input: { excludeNames: params.excludeNames ?? [] } },
+    { type: "secrets.execEnvironment", input: { excludeNames: [...(params.excludeNames ?? [])] } },
     { context, preferIndependentWarmRead: true },
   );
   const rows = reply?.rows ?? [];

@@ -16,7 +16,7 @@ import {
   projectGateway,
   projectOverlays,
 } from "../lib/reactive/application.ts";
-import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
+import { projectAgents, projectRuntimeConfig } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
@@ -32,6 +32,8 @@ import {
   runSessionNavigationAction,
 } from "../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../lib/toast.ts";
+import { shareAgentAsTemplate } from "../pages/templates/creator-owner.ts";
+import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import {
   pluginSessionMenuActions,
   runControlUiPluginAction,
@@ -59,6 +61,7 @@ import {
   runBatchSessionAction,
 } from "./session-organizer-menu.runtime.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
+import { resolveAgentMenuSessionKey } from "./sidebar-agent-menu-session-key.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
@@ -191,6 +194,18 @@ function renderSidebarMenus(
             }
             return t("agentChip.creationRequiresAdmin");
           });
+          const runtimeConfig = createMemo(() => {
+            const source = view.sessionDataContext?.runtimeConfig;
+            return source && projectRuntimeConfig(source);
+          });
+          const shareAgent = createMemo(() => {
+            const context = view.sessionDataContext;
+            gateway()?.read();
+            runtimeConfig()?.read();
+            return context && canCreateTemplateDraft(context)
+              ? (agentId: string) => void shareAgentAsTemplate(context, agentId)
+              : undefined;
+          });
           return (
             <SidebarAgentMenu
               {...{
@@ -233,8 +248,9 @@ function renderSidebarMenus(
                   if (view.sidebarAgentsMode === "roster") {
                     patchSettings({ sidebarAgentsMode: "chip" });
                   }
-                  view.switchChipAgent(agentId);
+                  view.switchChipAgent(agentId, resolveAgentMenuSessionKey);
                 },
+                onShareAgent: shareAgent(),
                 onCreateAgent: () => {
                   if (view.sessionDataContext) {
                     projected.closeAgentMenu();

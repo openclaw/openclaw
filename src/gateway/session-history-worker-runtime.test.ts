@@ -714,6 +714,7 @@ it.each([
           omission: { omittedCount: 1 },
         };
         reply.page.encodedMessagesDeflate = deflated;
+        reply.page.messageModelIndex = { byteLength: bytes.byteLength, rowCount: 1, ranges: [] };
       }
       queued[0]!.result.resolve(reply);
       const results = await settled;
@@ -732,7 +733,10 @@ it.each([
           expect(result.encodedResponse?.messages).toBe(bytes);
           expect(result.encodedResponse?.activity).toBe(activity);
           expect(result.encodedMessagesDeflate).toBe(deflated);
+          expect(result.messageModelIndex).toEqual(reply.page.messageModelIndex);
         }
+        pages[0]!.messageModelIndex!.ranges.push(1, 2);
+        expect(pages[1]!.messageModelIndex!.ranges).toEqual([]);
         pages[0]!.encodedResponse!.omission!.omittedCount = 9;
         expect(pages[1]!.encodedResponse!.omission!.omittedCount).toBe(1);
       }

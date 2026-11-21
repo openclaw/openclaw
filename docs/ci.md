@@ -489,6 +489,10 @@ Control UI E2E skips Vitest requirement discovery when its selected files cannot
 include a WebKit or Gateway-runtime suite. Matching or unspecified selections
 retain the existing shard discovery before installing WebKit or preparing runtime.
 
+WebKit system-package downloads retry without the first mirror after a timeout.
+Recovery uses APT's configured local text mirror list, then restores it on success
+or failure. Package installation itself runs without a download deadline.
+
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
@@ -740,6 +744,11 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Release channels](/install/development-channels)
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
+
+Selected iOS lanes install and verify the pinned simulator helper before compiling
+the app. A failed download stops the job before compilation. Simulator boot and
+preparation still run alongside the build, with the same checks required before
+tests start.
 
 Android's existing `android-access-native` emulator rows retain their packaged
 Access-crypto proof and exercise Gateway WebSocket and widget HTTPS clients on

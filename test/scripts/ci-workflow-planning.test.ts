@@ -300,6 +300,18 @@ describe("PostgreSQL conformance selection", () => {
     [["src/infra/exec-approvals-native.test.ts"], true],
     [["src/infra/client-credential-update.test.ts"], true],
     [["src/infra/update-managed-service-handoff-engine.test.ts"], true],
+    ...[
+      "src/infra/gateway-lock.ts",
+      "src/infra/gateway-lock-recovery.ts",
+      "src/infra/gateway-lock-recovery-lease.ts",
+      "src/infra/gateway-lock-recovery-postgres.ts",
+      "src/infra/gateway-postgres-custody.ts",
+      "src/infra/gateway-postgres-owner.ts",
+      "src/channels/message/ingress-monitor.scheduling.test.ts",
+      "src/gateway/github-publication-runtime.test.ts",
+      "src/plugin-state/plugin-state-worker.test.ts",
+    ].map((file): [string[], boolean] => [[file], true]),
+    [["src/infra/gateway-lock.test.ts"], false],
     [["src/infra/sql-connection.ts"], true],
     [["src/infra/sql-query-compiler.ts"], true],
     [["src/infra/kysely-sync.ts"], true],
@@ -612,6 +624,7 @@ function runRunnerProfileFixture(options: {
   requestedProfile?: "default" | "hybrid" | "runson" | "boat";
   ciShape?: "default" | "main";
   qualificationDispatch?: boolean;
+  boatLimits?: unknown;
   targetSupportsRunson?: boolean;
   targetSupportsContract: boolean;
 }) {
@@ -633,6 +646,13 @@ function runRunnerProfileFixture(options: {
       "scripts/ci-resolve-runner-profile.sh",
       path.join(harnessScripts, "ci-resolve-runner-profile.sh"),
     );
+    if (options.boatLimits !== undefined) {
+      const lib = path.join(harnessScripts, "lib");
+      mkdirSync(lib);
+      for (const file of ["ci-node-test-capacity.mts", "vitest-shard-metadata.mts"]) {
+        copyFileSync(path.join("scripts/lib", file), path.join(lib, file));
+      }
+    }
     const outputPath = path.join(root, "profile.out");
     writeFileSync(outputPath, "", "utf8");
     const step = requiredWorkflowStep(
@@ -657,8 +677,16 @@ function runRunnerProfileFixture(options: {
         REQUESTED_RUNNER_PROFILE: options.requestedProfile ?? "default",
         QUALIFICATION_DISPATCH: String(options.qualificationDispatch ?? false),
         CI_SHAPE: options.ciShape ?? "default",
-        BOAT_API_KEY: "",
-        BOAT_ORG: "",
+        BOAT_API_KEY: options.boatLimits === undefined ? "" : "fixture-key",
+        BOAT_ORG: options.boatLimits === undefined ? "" : "fixture-org",
+        ...(options.boatLimits === undefined
+          ? {}
+          : {
+              FORCE_COLOR: "0",
+              NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(
+                `globalThis.fetch = async () => ({ ok: true, json: async () => (${JSON.stringify(options.boatLimits)}) });`,
+              )}`,
+            }),
       },
     });
     const outputs = Object.fromEntries(
@@ -2241,6 +2269,160 @@ describe("ci workflow guards", () => {
       expect(manifest.outputs.central_lint_selection_json).toBe("");
     });
 
+    it.each([
+      {
+        label: "ordinary PR",
+        eventName: "pull_request" as const,
+        releaseGate: false,
+        qualification: false,
+      },
+      {
+        label: "manual release gate",
+        eventName: "workflow_dispatch" as const,
+        releaseGate: true,
+        qualification: false,
+      },
+      {
+        label: "PR-shaped qualification",
+        eventName: "workflow_dispatch" as const,
+        releaseGate: true,
+        qualification: true,
+      },
+    ])(
+      "preserves changed root-test lint for $label",
+      ({ eventName, releaseGate, qualification }) => {
+        const roots = [
+          "test/scripts/ios-release-e2e.test.ts",
+          "test/scripts/ios-release-e2e-diagnostics.test.ts",
+          "test/scripts/simslim.test.ts",
+        ];
+        const paths = [
+          "scripts/ios-release-e2e.ts",
+          "scripts/ios-simulator-prepare.sh",
+          "scripts/lib/ios-release-e2e-diagnostics.ts",
+          "scripts/lib/ios-release-e2e-native.ts",
+          ...roots,
+          "docs/ci/runners.md",
+        ];
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          checkFamilyScope: true,
+          extensionLintCapability: true,
+          historicalCompatibility: false,
+          runnerProfile: "hybrid",
+          eventName,
+          releaseGate,
+          changedPaths: paths,
+          changedPlannerSource: changedPlannerSource(),
+          ciLintPlan: {
+            core: [],
+            extensions: [],
+            central: {
+              files: [],
+              rootTestFiles: roots,
+              coreStripes: [],
+              extensionStripes: [],
+              groups: [],
+              central: true,
+            },
+          },
+          scopeEnv: {
+            OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+            OPENCLAW_CI_QUALIFICATION: String(qualification),
+          },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(readJsonOutput(manifest.outputs, "changed_root_test_paths_json")).toEqual(roots);
+        const workflow = readCiWorkflow();
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: manifest.outputs,
+          additionalNeeds: {
+            "check-plan": { outputs: manifest.checkPlanOutputs, result: "success" },
+          },
+          matrix: { task: "lint" },
+          steps: {
+            check_setup: { outcome: "success", outputs: {} },
+            bun_setup: { outcome: "success", outputs: {} },
+          },
+        };
+        const changed = requiredWorkflowStep(
+          workflow.jobs["check-shard"].steps,
+          "Run changed lint",
+        );
+        const fallback = requiredWorkflowStep(
+          workflow.jobs["check-shard"].steps,
+          "Run fallback root-test lint",
+        );
+        // The ordinary selected path owns its full inputs. Manual fallback owns
+        // only the missing root tests and leaves the existing full shards alone.
+        expect(Boolean(evaluateWorkflowCondition(changed.if, context))).toBe(
+          eventName === "pull_request",
+        );
+        expect(Boolean(evaluateWorkflowCondition(fallback.if, context))).toBe(
+          eventName !== "pull_request",
+        );
+        expect(evaluateWorkflowExpression(fallback.env.ROOT_TEST_PATHS_JSON, context)).toBe(
+          JSON.stringify(roots),
+        );
+        expect(
+          evaluateWorkflowExpression(workflow.jobs.preflight.outputs.changed_root_test_paths_json, {
+            ...context,
+            steps: { manifest: { outputs: manifest.outputs } },
+          }),
+        ).toBe(JSON.stringify(roots));
+        if (eventName !== "pull_request") {
+          expect(manifest.outputs.run_check_plan).toBe("false");
+          expect(manifest.outputs.narrow_check_paths_json).toBe("");
+          expect(
+            Boolean(
+              evaluateWorkflowCondition(
+                requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard").if,
+                context,
+              ),
+            ),
+          ).toBe(true);
+        }
+      },
+    );
+
+    it("keeps root-test fallback out of historical targets and selected lint", () => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        checkFamilyScope: true,
+        historicalCompatibility: true,
+        eventName: "workflow_dispatch",
+        releaseGate: false,
+        changedPaths: ["test/scripts/simslim.test.ts"],
+        changedPlannerSource: changedPlannerSource(),
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.changed_root_test_paths_json).toBe("[]");
+      const fallback = requiredWorkflowStep(
+        readCiWorkflow().jobs["check-shard"].steps,
+        "Run fallback root-test lint",
+      );
+      for (const central of ["", '{"central":true}']) {
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { task: "lint" },
+          preflightOutputs: {
+            changed_root_test_paths_json: central ? '["test/scripts/simslim.test.ts"]' : "[]",
+            central_lint_selection_json: central,
+          },
+          steps: {
+            check_setup: { outcome: "success", outputs: {} },
+            bun_setup: { outcome: "success", outputs: {} },
+          },
+        };
+        expect(Boolean(evaluateWorkflowCondition(fallback.if, context))).toBe(false);
+      }
+    });
+
     it.each([false, true])(
       "lets selected dist consumers own artifact admission (requiresDist=%s)",
       (requiresDist) => {
@@ -3345,6 +3527,7 @@ describe("ci workflow guards", () => {
     function emittedHostedRows(
       outputs: Record<string, string>,
       overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+      rejectBlacksmith = false,
     ) {
       const context = {
         // Count full-manifest rows after admission, not a default security-only push.
@@ -3424,7 +3607,11 @@ describe("ci workflow guards", () => {
           : [definition["runs-on"]];
         for (const row of selectedRows) {
           for (const runner of runners) {
-            if (hostedLabels.has(String(evaluate(runner, row)))) {
+            const physicalRunner = evaluate(runner, row);
+            if (rejectBlacksmith) {
+              expect(JSON.stringify(physicalRunner), name).not.toContain("blacksmith");
+            }
+            if (hostedLabels.has(String(physicalRunner))) {
               rows.push(name);
             }
           }
@@ -3432,6 +3619,176 @@ describe("ci workflow guards", () => {
       }
       return rows;
     }
+
+    it.each([
+      { limit: 1, eventName: "push" as const },
+      { limit: 20, eventName: "pull_request" as const },
+      { limit: 1, eventName: "workflow_dispatch" as const },
+    ])(
+      "keeps ordinary $eventName CI hosted around a $limit-start Boat allowance",
+      ({ limit, eventName }) => {
+        const admitted = runRunnerProfileFixture({
+          configuredProfile: "boat",
+          eventName,
+          targetSupportsContract: true,
+          boatLimits: {
+            teamId: "fixture-org",
+            canStart: true,
+            starts: {
+              day: { limit: 2400, used: 0, remaining: 2400 },
+              hour: { limit: 600, used: 0, remaining: 600 },
+              minute: { limit: 90, used: 0, remaining: limit },
+            },
+          },
+        });
+        expect(admitted.status, admitted.output).toBe(0);
+        expect(admitted.outputs).toMatchObject({
+          runner_profile: "github",
+          node_runner_backend: "github",
+          effective_runner_backend: "github",
+          placement_runner_backend: "github",
+          boat_node_job_limit: String(limit),
+        });
+        const targets = [
+          "test/scripts/run-vitest-bounded.test.ts",
+          "test/scripts/run-vitest-state-cleanup.test.ts",
+          "test/scripts/vitest-worker-artifacts.test.ts",
+          "test/scripts/test-projects-empty-native.test.ts",
+          "src/gateway/board-store.test.ts",
+          "src/node-host/node-worker-prepared-workspace.test.ts",
+          "src/infra/sqlite-capabilities.test.ts",
+        ];
+        const options = {
+          bundledPlanner: true,
+          historicalCompatibility: false,
+          eventName,
+          checkFamilyScope: eventName === "pull_request",
+          changedPaths:
+            eventName === "pull_request" ? ["src/infra/sqlite-capabilities.ts"] : undefined,
+          runnerBackend: "github" as const,
+          nodeRunnerBackend: "github" as const,
+          runtimeJobs: true,
+          bunTestRuntime: true,
+          nodeTestShards: expectDefined(
+            createSelectedNodeTestShardBundles(targets, { runnerBackend: "github" }),
+            "hosted selected plan",
+          ),
+          scopeEnv: {
+            OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND: expectDefined(
+              admitted.outputs.effective_runner_backend,
+              "admitted runner backend",
+            ),
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all",
+          },
+        };
+        const baseline = runCiManifestFixture(options);
+        const routed = runCiManifestFixture({
+          ...options,
+          scopeEnv: { ...options.scopeEnv, OPENCLAW_CI_BOAT_NODE_JOB_LIMIT: String(limit) },
+        });
+        expect(baseline.status, baseline.output).toBe(0);
+        expect(routed.status, routed.output).toBe(0);
+        const rows = readJsonOutput(routed.outputs, "checks_node_core_nondist_matrix").include;
+        const stripPlacement = ({
+          runner: _runner,
+          runner_label: _runnerLabel,
+          cpu_budget: _cpuBudget,
+          ...row
+        }: Record<string, unknown>) => row;
+        expect(rows.map(stripPlacement)).toEqual(
+          readJsonOutput(baseline.outputs, "checks_node_core_nondist_matrix").include.map(
+            stripPlacement,
+          ),
+        );
+        const boatRows = rows.filter((row: { runner: string }) => row.runner.startsWith("boat"));
+        expect(boatRows.length).toBeGreaterThan(0);
+        expect(boatRows.length).toBeLessThanOrEqual(limit);
+        if (eventName === "workflow_dispatch") {
+          expect(boatRows).toHaveLength(1);
+          const baseName = boatRows[0].base_check_name;
+          const runtimeRows = rows.filter(
+            (row: { base_check_name: string }) => row.base_check_name === baseName,
+          );
+          expect(
+            runtimeRows.map((row: { test_runtime: string }) => row.test_runtime).toSorted(),
+          ).toEqual(["bun", "node"]);
+          expect(
+            runtimeRows.filter((row: { runner: string }) => !row.runner.startsWith("boat")),
+          ).toHaveLength(1);
+        }
+        const hosted = emittedHostedRows(
+          { ...routed.outputs, ...admitted.outputs },
+          {
+            eventName,
+            runnerBackend: "boat",
+            headRepository: "openclaw/openclaw",
+            additionalNeeds: {
+              "check-plan": { outputs: routed.checkPlanOutputs, result: "success" },
+              "build-artifacts": {
+                result: "success",
+                outputs: { published_driver_artifact_id: "fixture-package" },
+              },
+            },
+          },
+          true,
+        );
+        if (eventName === "pull_request") {
+          expect(routed.outputs.run_check_plan).toBe("true");
+          expect(Object.keys(routed.checkPlanOutputs).length).toBeGreaterThan(0);
+          expect(hosted).toContain("check-plan");
+        } else {
+          expect(hosted).toContain("build-artifacts");
+        }
+        expect(hosted).toContain("check-shard");
+        const workflow = readCiWorkflow();
+        expect(workflow.jobs.preflight.outputs.boat_node_job_limit).toBe(
+          "${{ steps.runner_profile.outputs.boat_node_job_limit }}",
+        );
+        const job = workflow.jobs["checks-node-core-test-nondist-shard"];
+        for (const row of rows) {
+          const context = {
+            eventName: "pull_request" as const,
+            repository: "openclaw/openclaw",
+            headRepository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: admitted.outputs,
+            matrix: row,
+          };
+          const physical = evaluateWorkflowExpression(job["runs-on"], context);
+          expect(physical).toBe(row.runner.startsWith("boat") ? row.runner : "ubuntu-24.04");
+          expect(evaluateWorkflowExpression(job["runs-on"], { ...context, runAttempt: 2 })).toBe(
+            "ubuntu-24.04",
+          );
+          expect(
+            evaluateWorkflowExpression(job["runs-on"], {
+              ...context,
+              headRepository: "fork/openclaw",
+            }),
+          ).toBe("ubuntu-24.04");
+          expect(
+            evaluateWorkflowExpression(job["runs-on"], {
+              ...context,
+              preflightOutputs: { ...admitted.outputs, boat_node_job_limit: "" },
+            }),
+          ).toBe("ubuntu-24.04");
+          expect(
+            evaluateWorkflowExpression(job["runs-on"], {
+              ...context,
+              eventName: "workflow_dispatch",
+              dispatchId: "full-release-validation-fixture",
+              releaseRunnerGroup: "fixture-group",
+            }),
+          ).toEqual({ group: "fixture-group", labels: physical });
+          if (row.runner.startsWith("boat")) {
+            expect(["boat-large", "boat-xlarge"]).toContain(row.runner);
+            expect(row.cpu_budget).toBeLessThanOrEqual(4);
+            expect(resolveSelectedUiIncludes(row.groups_gzip_base64).flat()).not.toContain(
+              "src/node-host/node-worker-prepared-workspace.test.ts",
+            );
+          }
+        }
+      },
+    );
 
     it("counts hosted qualification controls and preflight without counting the AWS cron row", () => {
       const common = {
@@ -6191,11 +6548,14 @@ describe("ci workflow guards", () => {
     expect(result.status, result.output).toBe(0);
     const fullBoat = "qualificationDispatch" in scenario && scenario.qualificationDispatch;
     expect(result.outputs).toMatchObject({
-      runner_profile: scenario.admitted ? "hybrid" : "github",
-      node_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
-      effective_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
-      placement_runner_backend: scenario.admitted ? "hybrid" : "github",
+      runner_profile: scenario.admitted && fullBoat ? "hybrid" : "github",
+      node_runner_backend: scenario.admitted && fullBoat ? "boat" : "github",
+      effective_runner_backend: scenario.admitted && fullBoat ? "boat" : "github",
+      placement_runner_backend: scenario.admitted && fullBoat ? "hybrid" : "github",
     });
+    if (scenario.admitted && !fullBoat) {
+      expect(result.outputs.boat_node_job_limit).toBe("0");
+    }
   });
 
   it("routes retained Boat plans and retries without pilot exceptions", () => {
@@ -6215,8 +6575,10 @@ describe("ci workflow guards", () => {
       // Already-emitted plans and explicit qualifications keep the full Boat route.
       preflightOutputs: {
         ...admitted.outputs,
+        runner_profile: "hybrid",
         node_runner_backend: "boat",
         effective_runner_backend: "boat",
+        placement_runner_backend: "hybrid",
       },
     };
     for (const [name, runner] of [

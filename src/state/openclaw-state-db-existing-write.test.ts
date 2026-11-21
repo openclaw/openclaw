@@ -120,6 +120,23 @@ it("admits maintenance with QUICK without lending that receipt to a FULL writer"
   expect(readValues(options.path)).toEqual(["quick write", "full write"]);
 });
 
+it("leaves the writer available while cold bookkeeping verifies integrity", () => {
+  const options = fixture();
+  using peer = new DatabaseSync(options.path);
+  peer.exec("PRAGMA busy_timeout = 0");
+  let checked = false;
+  observeSqliteReadSql(StatementSync.prototype, (sql) => {
+    if (sql !== "PRAGMA integrity_check;") {
+      return;
+    }
+    checked = true;
+    peer.exec("BEGIN IMMEDIATE; INSERT INTO records VALUES (1, 'live writer'); COMMIT");
+  });
+  writeExisting(record(2, "bookkeeping"), options, contract);
+  expect(checked).toBe(true);
+  expect(readValues(options.path)).toEqual(["live writer", "bookkeeping"]);
+});
+
 it("writes to an existing additive subset across reopen", () => {
   const options = fixture(true);
   const additive = { ...contract, initializeAdditiveSchema: true };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { pendingSessionsYield } from "../chat-sessions-yield.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
+import { openAIModel } from "../chat-thread-fixtures.test-support.ts";
 import { createProps, makeMessage } from "../chat-thread.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
@@ -101,6 +102,7 @@ describe("tool media and operation receipts", () => {
       const inspect = (id: string) => [
         entry(id, {
           role: "assistant",
+          ...openAIModel,
           stopReason: "toolUse",
           content: [{ type: "toolCall", id, name: "view_image", arguments: {} }],
         }),
@@ -136,6 +138,7 @@ describe("tool media and operation receipts", () => {
       ];
       const answer = entry("answer", {
         role: "assistant",
+        ...openAIModel,
         phase: "final_answer",
         stopReason: "stop",
         content: [
