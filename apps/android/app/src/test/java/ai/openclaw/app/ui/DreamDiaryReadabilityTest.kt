@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayDreamDiaryEntry
 import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.GatewaySummaryState
@@ -62,7 +63,8 @@ class DreamDiaryReadabilityTest {
       val model = MainViewModel(app, prefs, SavedStateHandle())
       models.put("dream-diary", model)
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(model, "runtimeRef").value = runtime
-      ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_isConnected").value = true
+      val display = ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay")
+      display.value = display.value.copy(isConnected = true)
       val owner = ReflectionHelpers.getField<Any>(runtime, "dreamingSummary")
       val state =
         ReflectionHelpers.getField<MutableStateFlow<GatewaySummaryState<GatewayDreamingSummary>>>(

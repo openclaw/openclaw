@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -101,8 +102,8 @@ class VoiceSettingsGatewayOwnerTest {
 
     fun setConnected(connected: Boolean) {
       ReflectionHelpers.setField(runtime, "operatorConnected", connected)
-      ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_isConnected").value =
-        connected
+      val display = ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay")
+      display.value = display.value.copy(isConnected = connected)
     }
 
     fun receiveGatewayWords(gateway: String) {

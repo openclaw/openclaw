@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayClawHubSkillSearchState
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -130,7 +131,8 @@ class SkillsSettingsScreenTest {
       findTestField(runtime, "connectedEndpoint").set(runtime, GatewayEndpoint.manual("127.0.0.1", 18789))
       findTestField(runtime, "operatorConnected").set(runtime, true)
       @Suppress("UNCHECKED_CAST")
-      (findTestField(runtime, "_isConnected").get(runtime) as MutableStateFlow<Boolean>).value = true
+      val display = findTestField(runtime, "_gatewayConnectionDisplay").get(runtime) as MutableStateFlow<GatewayConnectionDisplay>
+      display.value = display.value.copy(isConnected = true)
       @Suppress("UNCHECKED_CAST")
       (findTestField(runtime, "_operatorScopes").get(runtime) as MutableStateFlow<List<String>>).value = listOf("operator.admin")
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
