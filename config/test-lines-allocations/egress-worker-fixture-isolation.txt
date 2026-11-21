@@ -1,0 +1,2 @@
+# Isolate the existing native proxy worker fixture from ambient proxy settings.
+6

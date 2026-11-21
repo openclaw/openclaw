@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { PROXY_ENV_KEYS } from "../../infra/net/proxy-env.js";
 import { ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { reserveTestPortListener, type TestPortClaim } from "../../test-utils/port-claims.js";
@@ -52,6 +53,8 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+afterAll(() => vi.unstubAllEnvs());
+
 function trackSocket(socket: Socket): void {
   sockets.add(socket);
   socket.once("close", () => sockets.delete(socket));
@@ -59,6 +62,9 @@ function trackSocket(socket: Socket): void {
 }
 
 async function startWorker(onFailure = failure) {
+  for (const key of [...PROXY_ENV_KEYS, "NO_PROXY", "no_proxy"]) {
+    vi.stubEnv(key, undefined);
+  }
   const caDir = dirs.make("openclaw-egress-worker-");
   for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
     fs.copyFileSync(path.join(seedDir, file), path.join(caDir, file));
