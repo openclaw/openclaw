@@ -13,12 +13,15 @@ vi.mock("./github-publication-availability.js", () => ({
 }));
 vi.mock("./github-publication-git-transport.js", () => ({
   requirePublicationCommand: async (argv: string[], options: { cwd?: string }) => {
-    if (argv[0] === "gh") return JSON.stringify({ fork: false, default_branch: "main" });
+    if (argv[0] === "gh") {
+      return JSON.stringify({ fork: false, default_branch: "main" });
+    }
     return execFileSync(argv[0]!, argv.slice(1), { cwd: options.cwd, encoding: "utf8" }).trim();
   },
   runPublicationCommand: async (argv: string[], options: { cwd?: string }) => {
-    if (argv[0] === "gh")
+    if (argv[0] === "gh") {
       return { code: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("gh: Not Found (HTTP 404)") };
+    }
     const { spawnSync } = await import("node:child_process");
     const result = spawnSync(argv[0]!, argv.slice(1), { cwd: options.cwd });
     return { code: result.status, stdout: result.stdout, stderr: result.stderr };
@@ -26,7 +29,9 @@ vi.mock("./github-publication-git-transport.js", () => ({
 }));
 const directories: string[] = [];
 afterEach(() => {
-  for (const dir of directories.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of directories.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 it("targets the default branch through publication preparation for a short commit base", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "publication-base-target-"));

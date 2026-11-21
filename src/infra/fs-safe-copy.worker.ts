@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";

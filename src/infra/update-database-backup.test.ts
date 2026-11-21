@@ -1074,7 +1074,9 @@ it("bounds concurrent payload fsync before sealing the recovery capture", async 
         active++;
         peak = Math.max(peak, active);
         try {
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10);
+          });
           await sync();
         } finally {
           active--;
