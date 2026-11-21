@@ -46,6 +46,13 @@ run `openclaw gateway install`, then `openclaw gateway start` to wait until it
 is ready. Run `openclaw` for the TUI or
 `openclaw dashboard` to reopen the web UI.
 
+<Tip>
+Have an API key in 1Password, an existing Ollama server, or an interrupted Linux
+setup? Follow [Small-host setup](/start/small-host-setup) for a supported path
+and checks that distinguish a running Gateway from working AI.
+To reuse selected non-secret settings, see [Repeatable setup](/start/repeatable-setup).
+</Tip>
+
 ## Quick setup
 
 <Steps>
@@ -91,8 +98,7 @@ is ready. Run `openclaw` for the TUI or
     for it to be ready:
 
     ```bash
-    openclaw gateway install
-    openclaw gateway start
+    openclaw gateway install && openclaw gateway start
     ```
 
     This installs a LaunchAgent on macOS, a systemd user unit on Linux and
@@ -119,7 +125,8 @@ is ready. Run `openclaw` for the TUI or
     openclaw dashboard
     ```
 
-    This opens the Control UI in your browser. If it loads, everything is working.
+    This opens the Control UI in your browser. Loading it confirms the web UI is
+    reachable; send a message in the next step to check the AI connection.
 
   </Step>
   <Step title="Send your first message">
