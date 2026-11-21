@@ -150,8 +150,13 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.command === "string" && !readNonBlankString(opts.command)) {
             throw new CronCliError("--command must not be blank");
           }
-          if (typeof opts.commandCwd === "string" && !normalizeOptionalString(opts.commandCwd)) {
-            throw new CronCliError("--command-cwd must not be blank");
+          for (const [flag, cwd] of [
+            ["--command-cwd", opts.commandCwd],
+            ["--on-exit-cwd", opts.onExitCwd],
+          ] as const) {
+            if (typeof cwd === "string" && !readNonBlankString(cwd)) {
+              throw new CronCliError(`${flag} must not be blank`);
+            }
           }
           const commandCwd = readNonBlankString(opts.commandCwd);
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
