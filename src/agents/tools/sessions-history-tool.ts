@@ -1,5 +1,6 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { ArrayOptions, ObjectOptions } from "typebox/type";
 import {
@@ -20,6 +21,7 @@ import {
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
+import { isThinkingLikeBlock } from "../thinking-block.js";
 import {
   describeSessionLinkRule,
   describeSessionsHistoryTool,
@@ -131,7 +133,7 @@ type ChatHistoryPaginationMetadata = Partial<
 
 function sanitizeHistoryMessage(
   message: unknown,
-  { maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS, stripToolBlocks = false } = {},
+  { maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS, stripToolAndSignatureBlocks = false } = {},
 ): {
   message: unknown;
   truncated: boolean;
@@ -163,14 +165,22 @@ function sanitizeHistoryMessage(
     const rawBlocks: unknown[] = entry.content;
     const blocks: unknown[] = [];
     for (const block of rawBlocks) {
-      if (stripToolBlocks && (isContractToolCallBlock(block) || isContractToolResultBlock(block))) {
-        continue;
-      }
       if (!block || typeof block !== "object") {
         blocks.push(block);
         continue;
       }
-      const content = { ...(block as Record<string, unknown>) };
+      const record = block as Record<string, unknown>;
+      if (
+        stripToolAndSignatureBlocks &&
+        (isContractToolCallBlock(block) ||
+          isContractToolResultBlock(block) ||
+          (isThinkingLikeBlock(record) &&
+            !normalizeOptionalString(record.thinking) &&
+            !normalizeOptionalString(record.text)))
+      ) {
+        continue;
+      }
+      const content = { ...record };
       const fields =
         content.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
       for (const field of fields) {
@@ -534,7 +544,7 @@ export function createSessionsHistoryTool(opts?: {
       const transcriptBudget = SESSIONS_HISTORY_MAX_BYTES - (pending?.bytes ?? 0);
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) =>
-        sanitizeHistoryMessage(message, { stripToolBlocks: !includeTools }),
+        sanitizeHistoryMessage(message, { stripToolAndSignatureBlocks: !includeTools }),
       );
       const contentTruncated =
         sanitizedMessages.some((entry) => entry.truncated) || pending?.truncated === true;

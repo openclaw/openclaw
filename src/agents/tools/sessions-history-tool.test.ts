@@ -531,6 +531,33 @@ it("preserves the anchor and user text while stripping structured tool blocks", 
   expect(details).toMatchObject({ truncated: false, droppedMessages: false });
 });
 
+it("omits Claude CLI tool blocks and signature-only thinking from default recall", async () => {
+  const reasoning = { type: "thinking", thinking: "Check the result", signature: "signed" };
+  const answer = { type: "text", text: "The final reply" };
+  const imported = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "", signature: "opaque-signature" },
+      { type: "redacted_thinking", data: "opaque-redacted-data" },
+      { type: "toolcall", id: "claude-call", name: "Read", arguments: { file_path: "sample" } },
+      { type: "tool_result", tool_use_id: "claude-call", content: "sample contents" },
+      reasoning,
+      answer,
+    ],
+    __openclaw: { id: "claude-answer", importedFrom: "claude-cli" },
+  };
+  const { tool } = historyFixture({ messages: [imported] });
+
+  for (const params of [{}, { includeTools: false }, { includeTools: true }]) {
+    const { messages } = readHistoryDetails(
+      await tool.execute("claude-import", { sessionKey: "main", ...params }),
+    );
+    expect(messages).toEqual([
+      params.includeTools ? imported : { ...imported, content: [reasoning, answer] },
+    ]);
+  }
+});
+
 it.each([
   {
     name: "projected siblings from the same row",
