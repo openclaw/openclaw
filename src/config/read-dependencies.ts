@@ -79,12 +79,9 @@ export function configPathAffectsReader(path: string, reader: Reader): boolean {
 }
 
 /** The same dependency decision scopes both publication keys and client refreshes. */
-function configPathAffectsConversation(path: unknown): boolean {
+function configPathAffectsConversation(path: string): boolean {
   const roots: readonly string[] = otherReaders;
-  return (
-    typeof path !== "string" ||
-    (path !== "meta.lastTouchedVersion" && !roots.includes(path.split(".")[0]!))
-  );
+  return path !== "meta.lastTouchedVersion" && !roots.includes(path.split(".")[0]!);
 }
 
 /** Config editors refresh every revision; conversations follow their readers' dependencies. */
@@ -93,7 +90,10 @@ export function isConversationConfigChange(event: { event: string; payload?: unk
     return false;
   }
   const paths = asNullableRecord(event.payload)?.changedPaths;
-  return !Array.isArray(paths) || paths.some(configPathAffectsConversation);
+  return (
+    !Array.isArray(paths) ||
+    paths.some((path: unknown) => typeof path !== "string" || configPathAffectsConversation(path))
+  );
 }
 
 export function projectConfigReadDependencies(config: OpenClawConfig, reader: Reader) {

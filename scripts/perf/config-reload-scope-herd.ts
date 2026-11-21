@@ -138,11 +138,16 @@ const { sessionChanges } = await import("../../src/sessions/session-row-changes.
 const { registerPreparedModelRuntimePublicationListener } =
   await import("../../src/agents/prepared-model-runtime.js");
 const { requestGatewayRestartWithSignalAdmission } = await import("../../src/infra/restart.js");
-const server = await startGatewayServer(port, {
-  bind: "loopback",
-  controlUiEnabled: false,
-  hotReloadRecovery: requestGatewayRestartWithSignalAdmission,
-});
+const { withAgentDatabaseStartupAdmission } =
+  await import("../../src/state/agent-database-startup.js");
+const { server, databaseStartup } = await withAgentDatabaseStartupAdmission(async (admission) => ({
+  server: await startGatewayServer(port, {
+    bind: "loopback",
+    controlUiEnabled: false,
+    hotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+  }),
+  databaseStartup: admission,
+}));
 await server.startupSettled;
 // Exclude the owner's deferred startup maintenance from warm reload measurements.
 const startupDeadline = Date.now() + 120_000;
@@ -271,6 +276,24 @@ try {
     ]) {
       await client.request(method, params(client, method));
     }
+  }
+  // Lazy reads can schedule full integrity verification after startupSettled.
+  await databaseStartup.pendingPreparation;
+  // The fixture's transcript pass runs independently of startup maintenance.
+  let progress = "";
+  let progressDeadline = Date.now() + 120_000;
+  while (true) {
+    const log = readFileSync(logPath, "utf8");
+    if (log.includes("session: transcript facts backfill pass complete:")) {
+      break;
+    }
+    const latest = log.match(/session: transcript facts backfill progress: [^"\n]+/g)?.at(-1);
+    if (latest && latest !== progress) {
+      progress = latest;
+      progressDeadline = Date.now() + 120_000;
+    }
+    assert(Date.now() < progressDeadline, "Transcript backfill stopped making progress");
+    await delay(1000);
   }
   if (values.allocations) {
     await inspector.post("HeapProfiler.startSampling", samplingOptions);
