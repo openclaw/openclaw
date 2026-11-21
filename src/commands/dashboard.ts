@@ -125,11 +125,11 @@ async function ensureDashboardTargetReady(params: {
   allowRecovery?: boolean;
 }) {
   const { runtime, yes, allowRecovery } = params;
-  const probeUrl = params.target.probeUrl;
   const gatherStatus = async () => {
     const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
     return gatherDaemonStatus({
-      rpc: probeUrl ? { url: probeUrl } : {},
+      rpc: {},
+      dashboardTarget: { port: params.target.port, probeUrl: params.target.probeUrl },
       probe: true,
       requireRpc: false,
       deep: false,

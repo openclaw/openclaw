@@ -31,7 +31,6 @@ export type PluginDiscoveryState = {
 };
 
 const CATALOG_PAGE_SIZE = 100;
-const CATALOG_SECTION_SIZE = 8;
 
 type CatalogPageArgs = readonly [
   client: GatewayBrowserClient,
@@ -65,8 +64,7 @@ function rankedOverviewShelf(
       (left, right) =>
         (left.catalog[rank] ?? Number.MAX_SAFE_INTEGER) -
         (right.catalog[rank] ?? Number.MAX_SAFE_INTEGER),
-    )
-    .slice(0, CATALOG_SECTION_SIZE);
+    );
 }
 
 export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange: () => void) {
@@ -278,6 +276,14 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
   });
   return {
     read: (): Readonly<typeof state> => state,
+    findEntry(id: string): PluginDiscoveryEntry | undefined {
+      const matches = (entry: PluginDiscoveryEntry) => entry.id === id;
+      return (
+        state.result?.items.find(matches) ??
+        state.featured.find(matches) ??
+        state.trending.find(matches)
+      );
+    },
     invalidate(): void {
       // Reconnects reload the latest input without replaying its manual observation.
       disconnect();

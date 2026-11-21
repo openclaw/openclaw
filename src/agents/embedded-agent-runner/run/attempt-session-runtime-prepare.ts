@@ -38,6 +38,7 @@ import {
   prepareSessionPublicationToolListing,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "../session-prompt-update.js";
 import { resolveSessionToolPolicyDigest } from "../session-tool-checkpoint.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
@@ -306,11 +307,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
             freshSystemPrompt = preparedPrompt;
           }
+          const entries = sessionManager[sessionManagerReadTranscriptBranch]();
           const prepared = prepareSessionSystemPrompt({
             state: sessionPromptState,
             routeKey: promptRouteKey,
             systemPrompt: freshSystemPrompt,
-            entries: sessionManager[sessionManagerReadTranscriptBranch](),
+            entries,
             historyBoundaryCount: sessionManager.getBoundaryCount(),
           });
           // Keep an attempt's restart visible through subsequent continuation preparations.
@@ -328,6 +330,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             restartRecorded = true;
             resources.session.agent.state.messages = resources.session.messages.filter(
               (message) => getOpenClawSystemUpdateKind(message) !== "prompt-update",
+            );
+          }
+          if (resources.session) {
+            resources.session.agent.state.messages = retireUserRowPromptUpdates(
+              resources.session.agent.state.messages,
+              entries,
+              prepared.restart,
             );
           }
           projectedSystemPrompt = prepared.systemPrompt;

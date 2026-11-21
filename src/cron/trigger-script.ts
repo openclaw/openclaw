@@ -277,6 +277,7 @@ async function prepareTriggerRuntime(
         signal,
         messageActionTurnCapability,
       ) => {
+        const assertSource = resolveAdmittedRunActiveAssertion(admitted, signal);
         const allTools = toolPlan.constructTools
           ? await createOpenClawCodingToolsInternalAsync({
               agentId,
@@ -284,6 +285,7 @@ async function prepareTriggerRuntime(
               operationalRunInstance: admitted.operationalRunInstance,
               messageActionTurnCapability,
               abortSignal: signal,
+              prepareHostFileMutation: assertSource?.prepareSessionSourceStorageEffect,
               exec: { config },
               sandbox,
               sessionKey,
