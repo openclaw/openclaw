@@ -591,3 +591,12 @@ it("defers terminal retirement until the session's active lease releases", async
     await releaseSessionMcpRuntime(acquired);
   }
 });
+
+// Regression for #193958: a CLI turn that records successfulCronAdds must project it
+// into the settled AgentRunResult so the reminder guard suppresses the false note.
+it("projects successfulCronAdds from CliOutput into the settled run result", () => {
+  const result = testRunResult({
+    output: { text: "I scheduled your reminder.", successfulCronAdds: 1 },
+  });
+  expect(result.successfulCronAdds).toBe(1);
+});
