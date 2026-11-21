@@ -11,12 +11,13 @@ import { resolveCronContinuationSessionKey } from "../session-target.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
-import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
+import { resolveCronTriggerSkip, type CronRunOptions as RunOptions } from "./run-queue-requests.js";
 import { awaitCronRunQueueTurn, wakeCronRunQueues } from "./run-queue-wake.js";
 import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
@@ -185,7 +186,7 @@ export async function launchCronRun(
   const manual = options.source === "manual" || options.source === "event";
   const admittedJob = structuredClone(continuationSession ? current : entry.job);
   if (options.onExit) {
-    admittedJob.enabled = false;
+    autoDisableCronJob(admittedJob, { reason: "completed" });
   }
   const executionJob = structuredClone(admittedJob);
   executionJob.payload = options.event
@@ -214,7 +215,13 @@ export async function launchCronRun(
   }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
-    executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
+  }
+  // An explicit skipTrigger applies to due runs too; otherwise only manual runs skip it.
+  if (
+    options.skipTrigger ||
+    (isImmediateCronRunMode(options.mode) && resolveCronTriggerSkip(executionJob, options))
+  ) {
+    delete executionJob.trigger;
   }
   const activeJobMarker = manual
     ? markManualCronJobActive(state, entry.job, entry.runReceipt)

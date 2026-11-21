@@ -1,10 +1,10 @@
-import { isDeepStrictEqual } from "node:util";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { checkRequesterOwner } from "../cron/execution-context-admission.js";
 import { resolveScheduledRequester } from "../cron/execution-context.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -67,7 +67,23 @@ export async function captureCronJobTurnTarget(params: {
       target: source.kind === "gateway" ? undefined : { agentId, sessionKey },
       context,
       assertCurrent: () => {
-        if (!isDeepStrictEqual(context.cron.getJob(job.id)?.operatorSource, captured)) {
+        // An edit to what runs re-captures the source from its editor. When that is this
+        // requester again (for example this turn fixing its own job), the turn keeps going.
+        const current = context.cron.getJob(job.id)?.operatorSource?.source;
+        const previous = captured?.source;
+        if (
+          !current ||
+          !previous ||
+          current.agentId !== previous.agentId ||
+          (current.kind === "gateway" || previous.kind === "gateway"
+            ? current.kind !== previous.kind
+            : current.sessionKey !== previous.sessionKey) ||
+          current.snapshot.profileId !== previous.snapshot.profileId ||
+          !isSameOpenClawIdTunnelPrincipal(
+            current.snapshot.openclawIdPrincipal,
+            previous.snapshot.openclawIdPrincipal,
+          )
+        ) {
           throw new Error("Automation operator source changed");
         }
       },

@@ -138,7 +138,7 @@ async function runCronIsolatedAgentTurnInTrace(
       return {
         status: "error",
         error: err.message,
-        errorClassification: { kind: "permanent" },
+        errorClassification: { kind: "source-unavailable" },
         executionStarted: false,
         admissionDisposition: "rejected",
       };
@@ -636,7 +636,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 interruptedByRestart,
                 errorClassification:
                   err instanceof CronOperatorSourceError
-                    ? { kind: "permanent" }
+                    ? { kind: "source-unavailable" }
                     : err instanceof CronSessionLifecycleClaimError
                       ? { kind: "session-conflict" }
                       : resolveCronAgentErrorClassification(terminalOutcome, errorReason),

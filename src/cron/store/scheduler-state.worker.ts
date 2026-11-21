@@ -79,6 +79,7 @@ export function recordSkippedCronRunsInWorker(
                 nowMs: () => policy.nowMs,
                 cronConfig: policy.cronConfig,
                 defaultAgentId: policy.defaultAgentId,
+                resolveUserTimezone: () => policy.userTimezone,
                 log: createCronMutationLogger(outcome.logs),
               },
               preparedFailureAlert: {

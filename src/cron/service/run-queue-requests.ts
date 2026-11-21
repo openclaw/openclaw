@@ -14,6 +14,28 @@ export type CronRunOptions = ManualRunOptions & {
   source?: "scheduled" | "startup" | "manual" | "event";
 };
 
+/** Event and on-exit runs carry their own event; everything else evaluates unless skipped. */
+function evaluatesCronRunTrigger(options: CronRunOptions): boolean {
+  return !options.skipTrigger && !options.event && !options.onExit;
+}
+
+/** Why a run now does not evaluate the job's trigger; manual runs report it. */
+export function resolveCronTriggerSkip(
+  job: Pick<CronJob, "trigger" | "schedule">,
+  options: CronRunOptions,
+): string | undefined {
+  if (!job.trigger) {
+    return undefined;
+  }
+  if (options.skipTrigger) {
+    return "Trigger skipped: the trigger script was not tested.";
+  }
+  const timed = job.schedule.kind === "cron" || job.schedule.kind === "every";
+  return evaluatesCronRunTrigger(options) && (timed || options.streamBatch !== undefined)
+    ? undefined
+    : "Trigger skipped: there is no event to test it with.";
+}
+
 /** Encode worker requests without owning admission, publication, or launch state. */
 export function createCronRunRequests(
   candidates: readonly CronJob[],
@@ -70,7 +92,7 @@ export function projectCronRunQueueRequests(
             : "scheduled",
         onExitSchedule: options.onExit?.schedule,
         event: eventTransferred ? undefined : options.event,
-        evaluateTrigger: !isImmediateCronRunMode(options.mode) || options.evaluateTrigger === true,
+        evaluateTrigger: evaluatesCronRunTrigger(options),
       }))
   );
 }

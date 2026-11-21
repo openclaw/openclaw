@@ -672,9 +672,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
           JSON.stringify({ providerRequests, toolEffects: await fs.readFile(effectFile, "utf8") }),
         ).toMatchObject({
           status: "error",
-          error: expect.stringContaining(
-            "operator authority that created this automation was refused",
-          ),
+          error: expect.stringContaining("access of the person who created it was refused"),
         });
         expect(providerErrors).toEqual([]);
         expect(providerRequests).toBe(2);

@@ -302,7 +302,7 @@ export async function executeJobCore(
         ...(stateChanged ? { state: evaluation.state } : {}),
       };
       if (!evaluation.fire) {
-        return { status: "ok", triggerEval };
+        return { status: "ok", triggerEval: { ...triggerEval, message: evaluation.message } };
       }
       // The wait for a run slot pauses the run's time budget, like a lane wait.
       const runSlot = await options?.onConditionFired?.({

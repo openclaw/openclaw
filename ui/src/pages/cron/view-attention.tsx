@@ -17,10 +17,13 @@ export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }
     const diagnostic = formatUiExternalText(props.job.state.lastDiagnosticSummary);
     return diagnostic && diagnostic !== error ? `${error} — ${diagnostic}` : error;
   };
-  // A stopped job shows that state in its header; caution about repeated effects matters more here.
+  // A stopped job says why it is off and the one action that resumes it.
   const outcome = () => {
-    if (props.job.state.autoDisabled) {
-      return t("cron.attention.effectsUnknown");
+    const stopped = props.job.state.autoDisabled;
+    if (stopped) {
+      return stopped.gone
+        ? t(`cron.attention.goneResume.${stopped.gone}`)
+        : t(`cron.attention.resume.${stopped.reason}`);
     }
     if (isCronJobRunning(props.job)) {
       return t("cron.attention.running");
@@ -36,11 +39,13 @@ export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }
         <span class="cron-failure-details__dot" aria-hidden="true" />
         <span class="cron-failure-details__copy">
           <strong>
-            {t(
-              props.job.state.autoDisabled
-                ? "cron.attention.autoDisabledTitle"
-                : "cron.attention.title",
-            )}
+            {props.job.state.autoDisabled?.gone
+              ? t(`cron.attention.gone.${props.job.state.autoDisabled.gone}`)
+              : props.job.state.autoDisabled
+                ? t(`cron.attention.stopped.${props.job.state.autoDisabled.reason}`, {
+                    count: String(props.job.state.autoDisabled.consecutiveErrors),
+                  })
+                : t("cron.attention.title")}
           </strong>
           <span class="cron-failure-details__outcome">
             {" · "}

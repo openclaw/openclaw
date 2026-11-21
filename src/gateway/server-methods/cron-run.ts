@@ -47,9 +47,11 @@ export const cronRunHandler = scopedCronJobHandler(
           modelJobPolicy: { config: cfg, jobId },
         },
       );
-      result = commitGuard
-        ? await context.cron.enqueueRun(jobId, p.mode ?? "force", { commitGuard })
-        : await context.cron.enqueueRun(jobId, p.mode ?? "force");
+      const skipTrigger = p.skipTrigger === true ? { skipTrigger: true } : {};
+      result = await context.cron.enqueueRun(jobId, p.mode ?? "force", {
+        ...(commitGuard ? { commitGuard } : {}),
+        ...skipTrigger,
+      });
     } catch (error) {
       if (error instanceof TypeError) {
         respondInvalidCronParams(respond, "cron.run", formatErrorMessage(error));

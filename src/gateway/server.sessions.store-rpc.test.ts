@@ -991,7 +991,12 @@ test.each([false, true])(
       { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
     ] as unknown as CronJob[];
     const update = vi.fn(
-      async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
+      async (
+        id: string,
+        _patch: unknown,
+        precondition: (job: CronJob, nowMs: number) => void,
+        _opts?: { autoDisable?: { gone?: string } },
+      ) => {
         const current = jobs.find((candidate) => candidate.id === id);
         if (!current) {
           throw new Error(`cron job not found: ${id}`);
@@ -1025,9 +1030,9 @@ test.each([false, true])(
       return;
     }
     expect([archived.ok, archived.error]).toEqual([true, undefined]);
-    expect(update.mock.calls.map((call) => call.slice(0, 2))).toEqual([
-      ["bound", { enabled: false }],
-    ]);
+    expect(update.mock.calls.map((call) => [call[0], call[1], call[3]?.autoDisable?.gone])).toEqual(
+      [["bound", {}, "conversation"]],
+    );
 
     // Restoring must not silently re-arm schedules that archive disabled.
     update.mockClear();

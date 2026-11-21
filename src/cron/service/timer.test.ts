@@ -453,12 +453,7 @@ describe("cron quiet outcome finalization", () => {
       }
       try {
         const execution = mode.includes("manual")
-          ? run(
-              state,
-              job.id,
-              force ? "force" : "due",
-              force ? { evaluateTrigger: true } : undefined,
-            )
+          ? run(state, job.id, force ? "force" : "due")
           : onTimer(state);
         if (failWrite) {
           await expect(execution).rejects.toThrow("quiet row unavailable");

@@ -13,6 +13,7 @@ import {
   MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT,
 } from "../plugin-command-schedule.js";
 import { toPublicCronJob } from "../public-job.js";
+import { autoDisableCronJob } from "../service/auto-disable.js";
 import { declarativeFields } from "../service/jobs-declarative.js";
 import {
   applyCronStreamSandboxTarget,
@@ -84,6 +85,7 @@ export function planCronJobMutation(
   const next: CronStoreFile = { version: 1, jobs: [...previous.jobs] };
   const plan: CronJobMutationPlan = { previous, next, notifications: [], logs: [] };
   const { nowMs: now, defaultAgentId, cronConfig, configuredChannels } = snapshot;
+  const policy = { deps: { nowMs: () => now, log: createCronMutationLogger(plan.logs) } };
   if (mutation.kind === "remove") {
     const ids = new Set(mutation.ids);
     next.jobs = next.jobs.filter((job) => !ids.has(job.id));
@@ -244,12 +246,20 @@ export function planCronJobMutation(
       }
       if (
         previousJob.pluginCommand !== undefined &&
+        !options.autoDisable &&
         (mutation.patch.enabled !== false || Object.keys(mutation.patch).length !== 1)
       ) {
         throw new Error("plugin command jobs can only be disabled or removed, not edited");
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      if (options.autoDisable) {
+        autoDisableCronJob(nextJob, {
+          ...options.autoDisable,
+          state: policy,
+          deferredNotifications: plan.notifications,
+        });
+      }
       if (options.bindSourceConversation) {
         assertCronBindApplies(previousJob, options.bindSourceConversation);
         nextJob.sourceConversation = { ...options.bindSourceConversation };
@@ -274,6 +284,7 @@ export function planCronJobMutation(
           mutation.patch.schedule !== undefined ||
           options.streamSandbox !== undefined ||
           mutation.patch.enabled !== undefined ||
+          options.autoDisable !== undefined ||
           "trigger" in mutation.patch ||
           "pacing" in mutation.patch,
         scheduleChanged: mutation.patch.schedule !== undefined,
@@ -344,6 +355,13 @@ export function planCronJobMutation(
       defaultAgentId,
     });
     if (previousJob && nextJob.ownerProfileId !== previousJob.ownerProfileId) {
+      autoDisableCronJob(nextJob, {
+        reason: "source-unavailable",
+        cause: "Its owner changed, so it needs fresh authority from the new owner.",
+        gone: "owner",
+        state: policy,
+        deferredNotifications: plan.notifications,
+      });
       retireTransferredCronAuthority(nextJob);
     }
     // An incomplete old OCID row must not lose its last source marker through a payload edit.
@@ -377,7 +395,6 @@ export function planCronJobMutation(
   if (mutation.kind === "remove" || plan.created) {
     // Only maintenance mutates untouched rows; ordinary edits clone their target above.
     next.jobs = next.jobs.map((job) => (job === plan.job ? job : cloneCronJobForMutation(job)));
-    const policy = { deps: { nowMs: () => now, log: createCronMutationLogger(plan.logs) } };
     const reservations = new Map(
       next.jobs.flatMap((job) =>
         job.state.queuedAtMs === undefined

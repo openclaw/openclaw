@@ -22,7 +22,7 @@ export type ManualRunOptions = {
   payload?: CronPayload;
   delivery?: CronServiceRunOptions["delivery"];
   terminalTracker?: { emitted: boolean };
-  evaluateTrigger?: boolean;
+  skipTrigger?: boolean;
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;

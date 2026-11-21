@@ -21,10 +21,6 @@ export async function dispatchCronNotification(
   state: CronServiceState,
   notification: CronNotificationIntent,
 ): Promise<void> {
-  if (notification.kind === "failure-repair") {
-    await requestFailureRepair(state, notification);
-    return;
-  }
   let routing = notification.routing ? { ...notification.routing } : undefined;
   if (!routing) {
     const hasOwner =
@@ -52,47 +48,33 @@ export async function dispatchCronNotification(
 }
 
 /**
- * Sends the failure notice to the agent in the conversation that owns the job. If that turn
- * cannot start, the plain alert goes to the job's route instead.
+ * Asks the agent in the conversation that owns the job to follow up on the failure notice,
+ * which has already settled. A repair that cannot run changes nothing the user was told.
  */
-async function requestFailureRepair(
+function requestFailureRepair(
   state: CronServiceState,
-  notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
-): Promise<void> {
-  const jobId = notification.job.id;
+  job: Extract<CronNotificationIntent, { kind: "failure-alert" }>["job"],
+  message: string,
+): void {
+  const jobId = job.id;
   const owner = state.store?.jobs.find((candidate) => candidate.id === jobId)?.owner;
   const sessionKey = owner?.sessionKey?.trim();
-  const cycle: FailureAlertCycle = {
-    jobId,
-    alertAtMs: notification.job.state.lastFailureAlertAtMs,
-    runAtMs: notification.job.state.lastRunAtMs,
-    notificationId: notification.job.state.lastFailureNotificationId,
-    lifecycleGeneration: state.lifecycleGeneration,
-  };
-  const failed = async (err: unknown) => {
-    state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
-    await dispatchCronNotification(state, {
-      ...notification.fallback,
-      routing: notification.routing,
-    });
-  };
-  if (!sessionKey || !cycle.notificationId || !state.deps.runCronFailureRepair) {
-    await failed(new Error("Missing failure repair runner, owner session, or notice ID"));
+  const repairId = job.state.lastFailureNotificationId;
+  if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
+    state.deps.log.warn({ jobId }, "cron: failure repair has no owner conversation or runner");
     return;
   }
   void state.deps
     .runCronFailureRepair({
       jobId,
-      repairId: cycle.notificationId,
+      repairId,
       timeoutMs: state.deps.failureRepairTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
       agentId: owner?.agentId,
       sessionKey,
-      message: notification.text,
+      message,
     })
-    .then(() => recordFailureAlertOutcome(state, cycle, { delivered: true, status: "delivered" }))
-    .catch(failed)
     .catch((err: unknown) =>
-      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair fallback failed"),
+      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed"),
     );
 }
 
@@ -187,8 +169,17 @@ async function transportFailureAlert(
       "failure-alert",
       routing,
     );
+    if (params.repair) {
+      requestFailureRepair(state, params.job, params.repair);
+    }
     return;
   }
+  // The transport resolves after the notice settles, so the repair never arrives first.
+  const followUp = () => {
+    if (params.repair) {
+      requestFailureRepair(state, params.job, params.repair);
+    }
+  };
   void state.deps
     .sendCronFailureAlert({
       job: params.job,
@@ -224,10 +215,11 @@ async function transportFailureAlert(
         }
       },
     })
-    .catch((err: unknown) => {
+    .then(followUp, (err: unknown) => {
       state.deps.log.warn(
         { jobId: params.job.id, err: String(err) },
         "cron: failure alert delivery failed",
       );
+      followUp();
     });
 }

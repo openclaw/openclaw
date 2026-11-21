@@ -60,7 +60,7 @@ function createEvaluator(
 }
 
 const INPUT = { jobId: "probe", script: "return result", state: null };
-const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
+const SCRIPT_ERROR = expect.objectContaining({ kind: "error", code: "script_error" });
 
 it("snapshots a cron tool result without temporary object-value arrays", async () => {
   const details = {
@@ -191,7 +191,7 @@ it.each([
     host: "node",
     expected: {
       kind: "error",
-      code: "internal_error",
+      code: "script_error",
       error: expect.stringContaining(
         "exec host not allowed (requested gateway; configured host is node",
       ),
@@ -217,7 +217,7 @@ it.each([
       }),
     ).resolves.toEqual({
       kind: "error",
-      code: "internal_error",
+      code: "script_error",
       error: expect.stringContaining(
         "exec is pinned to host=gateway; the requested host or node is not allowed for this job.",
       ),
@@ -241,7 +241,7 @@ it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
     scheduledToolPolicy: { version: 1, mode: "trusted" },
   });
 
-  expect(result).toMatchObject({ kind: "error", code: "internal_error" });
+  expect(result).toMatchObject({ kind: "error", code: "script_error" });
   expect(result.kind === "error" ? result.error : "").toContain("exec is not defined");
 });
 
@@ -268,6 +268,23 @@ it("projects typed exec details into trigger scripts without content wrappers", 
 });
 
 it.skipIf(process.platform === "win32")(
+  "waits for exec to finish and returns its exit code and output, whatever yieldMs asks",
+  async () => {
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const { exitCode, output } = await exec({ command: "sleep 1; printf done", yieldMs: 10 });
+          return { fire: exitCode === 0 && output === "done" };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: true });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "gives a trigger only the command's output when the command leaves a process running",
   async () => {
     // One JSON line, then a child that outlives the command (as `gh` does with its telemetry).
@@ -279,19 +296,71 @@ it.skipIf(process.platform === "win32")(
         toolsAllow: ["exec", "process"],
         scheduledToolPolicy: { version: 1, mode: "trusted" },
         script: `
+          // exec waits for the command and stops what it left running.
           const result = await exec({ command: ${JSON.stringify(command)} });
-          const observed = JSON.parse(result.aggregated);
-          const left = /keeps running as background session (\\S+):/.exec(result.warningText ?? "");
-          if (!left) {
-            throw new Error("the process left running was not reported");
-          }
-          await process({ action: "kill", sessionId: left[1] });
-          return { fire: false, state: observed };
+          return { fire: false, state: JSON.parse(result.aggregated) };
         `,
       }),
     ).resolves.toEqual({ kind: "evaluated", fire: false, state: { ok: true } });
   },
 );
+
+it.skipIf(process.platform === "win32")(
+  "keeps granted process operations for a command the script backgrounds",
+  async () => {
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const started = await exec({ command: "sleep 30", background: true });
+          if (started.status !== "running" || !started.sessionId) {
+            throw new Error("not backgrounded: " + JSON.stringify(started));
+          }
+          await process({ action: "kill", sessionId: started.sessionId });
+          return { fire: true };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: true });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps a shorter timeout the script asked exec for",
+  async () => {
+    const startedAt = performance.now();
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const { exitCode } = await exec({ command: "sleep 20", timeoutSeconds: 1 });
+          return { fire: exitCode !== 0 };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: true });
+    expect(performance.now() - startedAt).toBeLessThan(15_000);
+  },
+);
+
+it.each([
+  [
+    "throws",
+    'throw new Error("gh search did not complete: running");',
+    "gh search did not complete",
+  ],
+] as const)("records a script that %s as script_error", async (_name, script, message) => {
+  const result = await execEvaluator("gateway")({
+    ...INPUT,
+    toolsAllow: ["exec", "process"],
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+    script,
+  });
+  expect(result).toMatchObject({ kind: "error", code: "script_error" });
+  expect(result.kind === "error" ? result.error : "").toContain(message);
+});
 
 it.each([
   [
@@ -310,8 +379,8 @@ it.each([
     ]),
     { kind: "evaluated", fire: true, state: { current: true } },
   ],
-  ["rejects a nonboolean fire", completed({ fire: "yes" }), INTERNAL_ERROR],
-  ["rejects a nonstring message", completed({ fire: true, message: 42 }), INTERNAL_ERROR],
+  ["rejects a nonboolean fire", completed({ fire: "yes" }), SCRIPT_ERROR],
+  ["rejects a nonstring message", completed({ fire: true, message: 42 }), SCRIPT_ERROR],
   [
     "rejects oversized state",
     completed({ fire: false, state: { value: "x".repeat(16 * 1024) } }),

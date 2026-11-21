@@ -117,13 +117,7 @@ export function resolveNextRunAtMsOrDisable(params: {
   if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
     return nextRunAtMs;
   }
-  autoDisableCronJob({
-    job: params.job,
-    reason: "schedule-errors",
-    atMs: params.state.deps.nowMs(),
-    consecutiveErrors: 1,
-    deferredNotifications: params.deferredNotifications,
-  });
+  autoDisableCronJob(params.job, { reason: "schedule-errors", ...params });
   return undefined;
 }
 
@@ -451,17 +445,7 @@ export function recordScheduleComputeError(params: {
   job.state.lastError = `schedule error: ${errText}`;
 
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
-    autoDisableCronJob({
-      job,
-      reason: "schedule-errors",
-      atMs: state.deps.nowMs(),
-      consecutiveErrors: errorCount,
-      deferredNotifications: params.deferredNotifications,
-    });
-    state.deps.log.error(
-      { jobId: job.id, name: job.name, errorCount, err: errText },
-      "cron: auto-disabled job after repeated schedule errors",
-    );
+    autoDisableCronJob(job, { reason: "schedule-errors", ...params });
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },

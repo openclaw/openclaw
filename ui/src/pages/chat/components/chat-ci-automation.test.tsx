@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { createCronJob } from "../../../test-helpers/cron.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatCiAutomationView } from "./chat-ci-automation.tsx";
@@ -54,4 +55,29 @@ it("retries with the current callback without replacing the error button", async
   button.click();
   expect(currentRetry).toHaveBeenCalledOnce();
   expect(initialRetry).not.toHaveBeenCalled();
+});
+
+it("explains a scheduler stop that has no failed runs", () => {
+  const view = mountSolid(() => (
+    <ChatCiAutomationView
+      options={{ autoFix: true, autoMerge: false, autoArchive: false }}
+      pending={{}}
+      jobs={{
+        autoFix: createCronJob("auto-fix", "Auto-fix", {
+          enabled: false,
+          state: {
+            autoDisabled: { reason: "source-unavailable", atMs: 1, consecutiveErrors: 0 },
+          },
+        }),
+      }}
+      loading={false}
+      saving={false}
+      error={null}
+      onChange={() => {}}
+      onRetry={() => {}}
+    />
+  ));
+  expect(view.getByRole("status").textContent).toBe(
+    "Turned off because the conversation or owner it runs as is no longer available. Restore it, then turn this automation back on.",
+  );
 });

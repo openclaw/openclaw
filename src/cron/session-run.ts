@@ -407,7 +407,7 @@ export async function runCronSessionTurn(
     return {
       status: "error",
       error: error.message,
-      errorClassification: { kind: "permanent" },
+      errorClassification: { kind: "source-unavailable" },
       executionStarted: false,
     };
   } finally {

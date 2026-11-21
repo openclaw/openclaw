@@ -56,6 +56,7 @@ export async function finalizeCompletedCronRunOutcomes(
         snapshot: {
           nowMs: state.deps.nowMs(),
           defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+          userTimezone: state.deps.resolveUserTimezone?.(),
           cronConfig: state.deps.cronConfig,
           outcomes: outcomes.map(
             ({

@@ -43,65 +43,70 @@ async function withOwnerConversation(
   );
 }
 
-it("notifies the owning conversation when a conversation-bound job's trigger fails", async () => {
-  await withOwnerConversation(async ({ storePath, cfg, transcript }) => {
-    let delivery: Promise<void> | undefined;
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath,
-      cronEnabled: true,
-      log: createNoopLogger(),
-      cronConfig: { triggers: { enabled: true } },
-      enqueueSystemEvent: vi.fn(),
-      enqueueSessionEvent: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger: async () => ({
-        kind: "error",
-        code: "internal_error",
-        error: "Error: GitHub search failed",
-      }),
-      sendCronFailureAlert: (params) => {
-        delivery = sendGatewayCronFailureAlert({
-          ...params,
-          deps: {} as never,
-          logger: createNoopLogger(),
-          resolveCronAgent: () => ({ agentId: "main", cfg }),
+it.each(["current", "owner session"] as const)(
+  "notifies the owning conversation when a conversation-bound job's trigger fails (%s)",
+  async (target) => {
+    await withOwnerConversation(async ({ storePath, cfg, transcript }) => {
+      // The service clock moves to the slot; the global clock does not survive the first case.
+      let nowMs = Date.now();
+      let delivery: Promise<void> | undefined;
+      const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => nowMs,
+        storePath,
+        cronEnabled: true,
+        log: createNoopLogger(),
+        cronConfig: { triggers: { enabled: true } },
+        enqueueSystemEvent: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        evaluateCronTrigger: async () => ({
+          kind: "error",
+          code: "internal_error",
+          error: "Error: GitHub search failed",
+        }),
+        sendCronFailureAlert: (params) => {
+          delivery = sendGatewayCronFailureAlert({
+            ...params,
+            deps: {} as never,
+            logger: createNoopLogger(),
+            resolveCronAgent: () => ({ agentId: "main", cfg }),
+          });
+          return delivery;
+        },
+      });
+      try {
+        await cron.start();
+        const job = await cron.add({
+          name: "watcher",
+          enabled: true,
+          schedule: { kind: "cron", expr: "0 */6 * * *", staggerMs: 0 },
+          trigger: { script: "json({ fire: false })" },
+          sessionTarget: target === "current" ? "current" : `session:${sessionKey}`,
+          sessionKey,
+          owner: { agentId: "main", sessionKey },
+          agentId: "main",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "check" },
+          delivery: { mode: "announce" },
         });
-        return delivery;
-      },
-    });
-    try {
-      await cron.start();
-      const job = await cron.add({
-        name: "watcher",
-        enabled: true,
-        schedule: { kind: "cron", expr: "0 */6 * * *", staggerMs: 0 },
-        trigger: { script: "json({ fire: false })" },
-        sessionTarget: "current",
-        sessionKey,
-        owner: { agentId: "main", sessionKey },
-        agentId: "main",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "check" },
-        delivery: { mode: "announce" },
-      });
-      vi.setSystemTime(job.state.nextRunAtMs!);
-      await cron.run(job.id, "due");
-      await vi.waitFor(() => expect(delivery).toBeDefined());
-      await delivery;
+        nowMs = job.state.nextRunAtMs!;
+        await cron.run(job.id, "due");
+        await vi.waitFor(() => expect(delivery).toBeDefined(), { timeout: 30_000 });
+        await delivery;
 
-      const stored = (await loadCronStore(storePath)).jobs.find(({ id }) => id === job.id);
-      expect(stored?.state).toMatchObject({
-        lastFailureNotificationDelivered: true,
-        lastFailureNotificationDeliveryStatus: "delivered",
-      });
-      expect(await transcript()).toContain('Automation \\"watcher\\" failed');
-    } finally {
-      cron.stop();
-    }
-  });
-});
+        const stored = (await loadCronStore(storePath)).jobs.find(({ id }) => id === job.id);
+        expect(stored?.state).toMatchObject({
+          lastFailureNotificationDelivered: true,
+          lastFailureNotificationDeliveryStatus: "delivered",
+        });
+        expect(await transcript()).toContain('Automation \\"watcher\\" failed');
+      } finally {
+        cron.stop();
+      }
+    });
+  },
+);
 
 it("keeps an explicit failure recipient owed when no channel can be selected", async () => {
   await withOwnerConversation(async ({ cfg, transcript }) => {

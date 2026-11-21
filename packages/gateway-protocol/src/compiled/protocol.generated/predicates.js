@@ -1191,8 +1191,8 @@ var External = [
     /(^jobId$|^patch$|^expectedConfigRevision$)/u,
     /(^id$|^expectedConfigRevision$)/u,
     /(^jobId$|^expectedConfigRevision$)/u,
-    /(^id$|^mode$|^expectedProcessInstanceId$|^waitTimeoutMs$)/u,
-    /(^jobId$|^mode$|^expectedProcessInstanceId$|^waitTimeoutMs$)/u,
+    /(^id$|^mode$|^expectedProcessInstanceId$|^waitTimeoutMs$|^skipTrigger$)/u,
+    /(^jobId$|^mode$|^expectedProcessInstanceId$|^waitTimeoutMs$|^skipTrigger$)/u,
     /(^agentId$|^view$|^scope$|^id$|^jobId$|^runId$|^limit$|^offset$|^statuses$|^status$|^deliveryStatuses$|^deliveryStatus$|^query$|^sortDir$)/u,
     /^[^/\\]+$/u,
     /(^id$|^runId$|^runAtMs$|^cursor$|^limit$)/u,
@@ -11616,7 +11616,8 @@ var External = [
       check_63(value.expectedProcessInstanceId)) &&
     (value.waitTimeoutMs === void 0 ||
       !("waitTimeoutMs" in value) ||
-      check_1751(value.waitTimeoutMs)),
+      check_1751(value.waitTimeoutMs)) &&
+    (value.skipTrigger === void 0 || !("skipTrigger" in value) || check_181(value.skipTrigger)),
   check_1747 = (value) => check_1748(value) || check_1749(value) || check_1750(value),
   check_1748 = (value) => typeof value == "string" && value === "due",
   check_1749 = (value) => typeof value == "string" && value === "force",
@@ -11639,7 +11640,8 @@ var External = [
       check_63(value.expectedProcessInstanceId)) &&
     (value.waitTimeoutMs === void 0 ||
       !("waitTimeoutMs" in value) ||
-      check_1751(value.waitTimeoutMs)),
+      check_1751(value.waitTimeoutMs)) &&
+    (value.skipTrigger === void 0 || !("skipTrigger" in value) || check_181(value.skipTrigger)),
   check_1753 = (value) => check_1604(value),
   check_1754 = (value) => check_1755(value),
   check_1755 = (value) =>

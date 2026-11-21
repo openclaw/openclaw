@@ -106,7 +106,7 @@ it.each([
       } else {
         expect(order).toEqual(["commit", "notify"]);
         expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("was auto-disabled"),
+          expect.stringContaining("is turned off"),
           expect.objectContaining({
             agentId,
             sessionKey: job.sessionKey,

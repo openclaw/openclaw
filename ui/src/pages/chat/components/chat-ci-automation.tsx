@@ -63,9 +63,11 @@ function JobError(props: { job?: CronJob; option: CiAutomationOption }) {
           {(disabled) => (
             <div>
               {t(
-                disabled().reason === "schedule-errors"
-                  ? "chat.pullRequests.automationScheduleDisabled"
-                  : "chat.pullRequests.automationFailureDisabled",
+                disabled().reason === "source-unavailable"
+                  ? "chat.pullRequests.automationSourceUnavailable"
+                  : disabled().reason === "schedule-errors"
+                    ? "chat.pullRequests.automationScheduleDisabled"
+                    : "chat.pullRequests.automationFailureDisabled",
                 { count: String(disabled().consecutiveErrors) },
               )}
             </div>

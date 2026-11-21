@@ -374,7 +374,7 @@ function createCronFailureAlertSchema(): TSchema {
       ],
       {
         description:
-          "Failure alert policy/route override; null clears. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
+          "Failure alert policy/route override; null clears. Omit it unless the user asks for fewer notices: by default the first failure notifies the creating conversation with the next attempt time (after=1, cooldownMs=3600000). false disables execution/delivery alerts but not the auto-disable safety notice.",
       },
     ),
   );
@@ -580,6 +580,12 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         description:
           'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
       }),
+      skipTrigger: Type.Optional(
+        Type.Boolean({
+          description:
+            'For action="run": run the payload without evaluating the trigger (the result says the trigger was not tested).',
+        }),
+      ),
       runId: Type.Optional(
         Type.String({ description: 'Run id from action="run" to read with action="runs"' }),
       ),

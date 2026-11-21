@@ -24,7 +24,7 @@ const { admitScheduledOccurrence } = await import("./execution-context-admission
 const { prepareCronRunAdmission } = await import("./run-admission.js");
 const { readScheduledMemoryParent, readScheduledToolTargets, resolveScheduledRunMemoryReceipt } =
   await import("./execution-context-registry.js");
-const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
+const { describeScheduledParentPause } = await import("./scheduled-occurrence.js");
 const { sessionChanges } = await import("../sessions/session-row-changes.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -485,14 +485,9 @@ describe("occurrence pause", () => {
     expect((await admit(linked)).pause).toBeUndefined();
   });
 
-  it("names the parent and the repair in the notice", () => {
-    const text = buildScheduledParentPauseNotice({
-      job: { id: "job-1", name: `${"a".repeat(119)}📊 tail` },
-      pause: { reason: "archived", parentSessionKey: PARENT_KEY },
-    });
-    expect(text).toContain(`Automation "${"a".repeat(119)}" is paused`);
+  it("names the parent in the pause cause", () => {
+    const text = describeScheduledParentPause({ reason: "archived", parentSessionKey: PARENT_KEY });
     expect(text).toContain(`\`${PARENT_KEY}\`, is unavailable: it was archived.`);
-    expect(text).toContain("openclaw automations enable job-1");
   });
 });
 

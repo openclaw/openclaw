@@ -33,8 +33,12 @@ const enChatCi = {
       automationLoadFailed: "Couldn’t load automations. Try again.",
       automationSaveFailed:
         "Couldn’t confirm the change. Refresh to check the current state before trying again.",
-      automationScheduleDisabled: "Automatically disabled after {count} scheduling errors.",
-      automationFailureDisabled: "Automatically disabled after {count} failed replies.",
+      automationScheduleDisabled:
+        "Turned off after {count} scheduling errors. Correct the schedule, then turn this automation back on.",
+      automationFailureDisabled:
+        "Turned off after {count} failed runs in a row. Fix the cause, then turn this automation back on.",
+      automationSourceUnavailable:
+        "Turned off because the conversation or owner it runs as is no longer available. Restore it, then turn this automation back on.",
       automationLastError: "Couldn’t complete this automation: {error}",
       automationRetry: "Try again",
     },

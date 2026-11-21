@@ -416,9 +416,16 @@ const CronDeliveryTraceSchema = closedObject({
 });
 
 const CronAutoDisabledSchema = closedObject({
-  reason: stringLiteralUnion(["consecutive-failures", "schedule-errors"]),
+  reason: stringLiteralUnion([
+    "consecutive-failures",
+    "schedule-errors",
+    "source-unavailable",
+    "failed",
+  ]),
   atMs: CronDateTimestampMsSchema,
-  consecutiveErrors: Type.Integer({ minimum: 1 }),
+  consecutiveErrors: Type.Integer({ minimum: 0 }),
+  /** What a source-unavailable stop lost, so the user is told what to restore. */
+  gone: Type.Optional(stringLiteralUnion(["conversation", "owner", "access", "plugin"])),
 });
 
 const CronJobRuntimeFeedbackProperties = {
@@ -711,6 +718,8 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
   expectedProcessInstanceId: Type.Optional(NonEmptyString),
   /** Holds the response until the queued run records its outcome or this many ms pass. */
   waitTimeoutMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 2_147_483_647 })),
+  /** Runs the payload without evaluating the job's trigger; the result says so. */
+  skipTrigger: Type.Optional(Type.Boolean()),
 });
 
 /** Query params for cron run history. */

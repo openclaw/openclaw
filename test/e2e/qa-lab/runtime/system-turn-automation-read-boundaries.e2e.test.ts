@@ -359,7 +359,7 @@ it(
                 // The scheduler's real auto-disable notice turn for the failed owned automation.
                 case 5:
                   expect(JSON.stringify(body.input)).toContain(
-                    'Automation \\"Owned proof\\" was auto-disabled after 1 consecutive run failures.',
+                    'Automation \\"Owned proof\\" was turned off because its run failed and will not be retried.',
                   );
                   call("automations", "get_owned", { action: "get", jobId: owned() });
                   break;

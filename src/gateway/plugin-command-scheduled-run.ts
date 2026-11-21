@@ -600,7 +600,7 @@ export async function runPluginCommandScheduledTurn(params: {
         ? { errorClassification: { kind: "aborted" as const } }
         : error instanceof PluginCommandScheduleInstanceReplacedError
           ? // Settlement retires the schedule on this first refusal.
-            { errorClassification: { kind: "permanent" as const } }
+            { errorClassification: { kind: "source-unavailable" as const } }
           : {}),
       executionStarted,
       delivered: false,

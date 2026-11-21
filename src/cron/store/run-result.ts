@@ -11,6 +11,12 @@ import type { CronEvent, CronJob } from "../types.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
 import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 
+/** A requested check whose condition was quiet says so, with the condition's own message. */
+function quietTriggerError(message: string | undefined): string {
+  const detail = message?.trim().replace(/\.$/, "");
+  return `Trigger did not fire${detail ? `: ${detail}` : ""}. The payload did not run.`;
+}
+
 /** The persisted terminal fact and the published event describe the same result. */
 export function cronRunResultEvent(
   job: CronJob,
@@ -23,7 +29,7 @@ export function cronRunResultEvent(
     job,
     status: quiet ? "skipped" : result.status,
     completionStatus: quiet ? "failed" : result.completionStatus,
-    error: quiet ? "queued manual run skipped: trigger condition not met" : result.error,
+    error: quiet ? quietTriggerError(result.triggerEval?.message) : result.error,
     summary: quiet ? undefined : result.summary,
     result: quiet ? undefined : result.result,
     diagnostics: result.diagnostics,

@@ -17,6 +17,7 @@ export async function recoverCronRuns(state: CronServiceState): Promise<Set<stri
       nowMs: state.deps.nowMs(),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+      userTimezone: state.deps.resolveUserTimezone?.(),
       // A cron reload's replacement starts while the previous owner's runs settle here.
       liveReceiptIds: listLiveCronRunReceiptIds(state),
     },

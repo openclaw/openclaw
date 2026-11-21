@@ -24,7 +24,7 @@ function scriptResultCandidate(
 
 export function scriptFailure(
   error: string,
-  code: CronTriggerFailureCode = "internal_error",
+  code: CronTriggerFailureCode = "script_error",
 ): Extract<CronTriggerEvaluationResult, { kind: "error" }> {
   return { kind: "error", code, error };
 }
@@ -72,14 +72,14 @@ function validateCronState(candidate: Record<string, unknown>, label: string) {
   } catch (error) {
     return {
       ok: false as const,
-      code: "internal_error" as const,
+      code: "script_error" as const,
       error: `${label} state is not JSON-serializable: ${formatErrorMessageWithCode(error)}`,
     };
   }
   if (serialized === undefined) {
     return {
       ok: false as const,
-      code: "internal_error" as const,
+      code: "script_error" as const,
       error: `${label} state is not JSON-serializable`,
     };
   }

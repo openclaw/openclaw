@@ -234,6 +234,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Run an automation now (debug)")
       .argument("<id>", "Job id")
       .option("--due", "Run only when due (default behavior in older versions)", false)
+      .option("--skip-trigger", "Run the payload without evaluating the trigger", false)
       .option("--wait", "Wait for the queued run to finish", false)
       .option(
         "--wait-timeout <duration>",
@@ -264,6 +265,7 @@ export function registerCronSimpleCommands(cron: Command) {
           const res = await callGatewayFromCli("cron.run", opts, {
             id,
             mode: opts.due ? "due" : "force",
+            ...(opts.skipTrigger ? { skipTrigger: true } : {}),
           });
           const result = res as CronRunCommandResult | undefined;
           if (opts.wait && result?.ok && result.enqueued) {

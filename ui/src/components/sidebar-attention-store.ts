@@ -78,13 +78,13 @@ function isCronAttentionJob(job: unknown): job is CronAttentionJob {
     ) &&
     (disabled === undefined ||
       (isRecord(disabled) &&
-        (disabled.reason === "consecutive-failures" || disabled.reason === "schedule-errors") &&
+        typeof disabled.reason === "string" &&
         typeof disabled.atMs === "number" &&
         Number.isFinite(disabled.atMs) &&
         disabled.atMs >= 0 &&
         typeof disabled.consecutiveErrors === "number" &&
         Number.isSafeInteger(disabled.consecutiveErrors) &&
-        disabled.consecutiveErrors > 0))
+        disabled.consecutiveErrors >= 0))
   );
 }
 

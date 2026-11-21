@@ -46,7 +46,7 @@ it.each<
       expect(stored).toMatchObject({
         enabled: false,
         state: {
-          autoDisabled: { reason: "consecutive-failures", consecutiveErrors: priorFailures + 1 },
+          autoDisabled: { reason: "failed", consecutiveErrors: priorFailures + 1 },
         },
       });
       expect(f.runCronFailureRepair).not.toHaveBeenCalled();
@@ -54,7 +54,7 @@ it.each<
       expect(f.enqueueSessionEvent).toHaveBeenCalledTimes(notices);
       if (notices) {
         expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
-          expect.stringContaining("auto-disabled"),
+          expect.stringContaining("so it will not try again"),
           expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
         );
       }

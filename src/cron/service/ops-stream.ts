@@ -65,6 +65,7 @@ async function mutateExternalState(
           nowMs: state.deps.nowMs(),
           cronConfig: change.kind === "failure" ? state.deps.cronConfig : undefined,
           defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+          userTimezone: state.deps.resolveUserTimezone?.(),
         },
         publish(outcome) {
           committed = outcome;

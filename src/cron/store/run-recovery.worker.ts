@@ -52,6 +52,7 @@ export function recoverCronRunsInWorker(
           nowMs: () => input.nowMs,
           cronConfig: input.cronConfig,
           defaultAgentId: input.defaultAgentId,
+          resolveUserTimezone: () => input.userTimezone,
           log: createCronMutationLogger(outcome.logs),
         },
       };

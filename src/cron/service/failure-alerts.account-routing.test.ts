@@ -137,7 +137,7 @@ it("routes required delivery failure outside the failed topic", async () => {
       threadId: undefined,
       inheritSessionThread: false,
       payload: expect.objectContaining({
-        text: 'Automation "Topic-routed job" delivery failed\nCheck automation history for details.',
+        text: 'Automation "Topic-routed job" delivery failed\nCause: not recorded. The automation\'s run history has the details.',
       }),
     }),
   );

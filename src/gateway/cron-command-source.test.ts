@@ -93,7 +93,7 @@ it("preserves an admitted command but rejects fresh runs after OCID device remov
       expect(fs.readFileSync(ran, "utf8")).toBe("xy");
       expect(cron.getJob(once.id)?.state).toMatchObject({
         lastRunStatus: "error",
-        lastError: expect.stringContaining("operator authority"),
+        lastError: expect.stringContaining("access of the person who created it was refused"),
       });
     } finally {
       fs.writeFileSync(release, "go");

@@ -640,7 +640,12 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 result = await callGateway(
                   "cron.run",
                   { ...gatewayOpts, timeoutMs: waitTimeoutMs + CRON_RUN_ENQUEUE_TIMEOUT_MS },
-                  { id, mode: runMode, waitTimeoutMs },
+                  {
+                    id,
+                    mode: runMode,
+                    waitTimeoutMs,
+                    ...(params.skipTrigger === true ? { skipTrigger: true } : {}),
+                  },
                 );
               } catch (error) {
                 // Shipped Gateways reject the param before enqueueing, so retrying cannot double-run.
@@ -655,9 +660,6 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               const followUp = managementAuthority?.managementOnly
                 ? "check it later on the Automations page"
                 : "check it later with runs jobId runId";
-              if (!isRecord(result)) {
-                throw new Error("cron.list returned an invalid inventory response");
-              }
               return jsonResult({
                 ...result,
                 note: result.finished

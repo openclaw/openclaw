@@ -340,9 +340,7 @@ it.each([
     }
     expect(entered).toBe(scenario === "device revoked during the run" ? 1 : 0);
     expect(after.state.lastRunStatus).toBe("error");
-    expect(after.state.lastError).toMatch(
-      /operator authority that created this automation was refused/,
-    );
+    expect(after.state.lastError).toMatch(/access of the person who created it was refused/);
     expect(after.state.lastError).toMatch(
       scenario === "role revoked" ? /operator identity changed/i : /authority|policy/i,
     );

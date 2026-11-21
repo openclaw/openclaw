@@ -14,6 +14,7 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { inspectManualRunPreflight } from "./ops-run-preparation.js";
 import type { ManualRunOptions, OnExitRunOptions } from "./run-options.js";
+import { resolveCronTriggerSkip } from "./run-queue-requests.js";
 import {
   commitCronRunRequests,
   drainCronRunQueue,
@@ -29,7 +30,7 @@ async function requestManualCronRun(
   id: string,
   mode?: CronRunMode,
   options: ManualRunOptions = {},
-): Promise<{ requested: RequestedCronRun } | CronRunResult> {
+): Promise<{ requested: RequestedCronRun; triggerSkip?: string } | CronRunResult> {
   const tracking = { ...options, terminalTracker: options.terminalTracker ?? { emitted: false } };
   const result = await locked(state, async () => {
     const source = captureCronServiceMutationSource(state);
@@ -43,7 +44,7 @@ async function requestManualCronRun(
       source: "manual",
     });
     return requested
-      ? { requested }
+      ? { requested, triggerSkip: resolveCronTriggerSkip(preflight.job, tracking) }
       : ({
           ok: true,
           ran: false,
@@ -106,7 +107,10 @@ export async function enqueueRun(
   state: CronServiceState,
   id: string,
   mode?: CronRunMode,
-  opts?: Pick<ManualRunOptions, "commitGuard" | "event" | "onEventTransferred" | "runId">,
+  opts?: Pick<
+    ManualRunOptions,
+    "commitGuard" | "event" | "onEventTransferred" | "runId" | "skipTrigger"
+  >,
 ) {
   const runId = opts?.runId ?? `cron-request.${randomUUID()}`;
   const releaseCaller = opts?.event ? retainGatewayDeviceRevocation(opts.commitGuard) : undefined;
@@ -155,7 +159,12 @@ export async function enqueueRun(
           return result.requested.completion;
         }
       }
-      return { ok: true, enqueued: true, runId } as const;
+      return {
+        ok: true,
+        enqueued: true,
+        runId,
+        ...(result.triggerSkip ? { trigger: result.triggerSkip } : {}),
+      } as const;
     }, "cron:manual-run"),
   ).catch((error: unknown) => {
     releaseCaller?.();

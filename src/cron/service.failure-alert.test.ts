@@ -97,9 +97,9 @@ describe("CronService failure alerts", () => {
           });
         }
         const alert = alertCallArg(sendCronFailureAlert);
-        expect(alert.text).toContain("local model provider is unreachable");
-        expect(alert.text).toContain("Start the provider or check its configured endpoint");
-        expect(alert.text).toContain("will check again on a later scheduled run");
+        expect(alert.text).toContain("the local model provider cannot be reached");
+        expect(alert.text).toContain("Start it, or check its address");
+        expect(alert.text).toContain("It is still on. Next attempt: ");
         expect(alert.text).not.toContain("private diagnostic");
         expect(runCronFailureRepair).not.toHaveBeenCalled();
 
@@ -130,10 +130,10 @@ describe("CronService failure alerts", () => {
           expect(saved?.state.nextRunAtMs).toBe(mode === "force" ? atMs : undefined);
           const guidance = alertCallArg(sendCronFailureAlert).text;
           if (mode === "due") {
-            expect(guidance).toContain("use Run Now or reschedule");
-            expect(guidance).not.toContain("will check again on a later scheduled run");
+            expect(guidance).toContain('To try again, reply "run');
+            expect(guidance).not.toContain("It is still on");
           } else {
-            expect(guidance).toContain("will check again on a later scheduled run");
+            expect(guidance).toContain("It is still on. Next attempt: ");
           }
         }
 
@@ -141,7 +141,7 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(cron.getJob(job.id)?.enabled).toBe(false);
         expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
-        expect(alertCallArg(sendCronFailureAlert).text).toContain("use Run Now or reschedule");
+        expect(alertCallArg(sendCronFailureAlert).text).toContain('To try again, reply "run');
         expect(runCronFailureRepair).not.toHaveBeenCalled();
       },
       { failureAlert: undefined },
@@ -259,7 +259,7 @@ describe("CronService failure alerts", () => {
         await runJob(job, 1);
 
         await runJob(job, 2, timeoutFailure);
-        expectAlertTextContaining(sendCronFailureAlert, "Cause: timeout");
+        expectAlertTextContaining(sendCronFailureAlert, "Cause: the AI provider took too long");
 
         await runJob(job, 2, { status: "ok" });
 
@@ -395,11 +395,11 @@ describe("CronService failure alerts", () => {
           await cron.run(job.id, "force");
 
           const alert = alertCallArg(sendCronFailureAlert);
-          expect(alert.text).toContain("Cause: auth_permanent");
+          expect(alert.text).toContain("Cause: the AI provider refused the sign-in.");
           expect(alert.text).toContain("Send `/login openai`");
           if (oneShot) {
             expect(cron.getJob(job.id)?.enabled).toBe(false);
-            expect(alert.text).toContain("was auto-disabled");
+            expect(alert.text).toContain("so it will not try again");
           }
           const signIn = {
             label: "Sign in",
@@ -422,19 +422,25 @@ describe("CronService failure alerts", () => {
   );
 
   it.each([
-    ["arbitrary permanent error", undefined, "Check automation history for details."],
-    ["command exit", { kind: "command-exit", exitCode: 23 }, "Cause: command exited with code 23"],
+    [
+      "arbitrary permanent error",
+      undefined,
+      "Cause: not recorded. The automation's run history has the details.",
+    ],
+    [
+      "command exit",
+      { kind: "command-exit", exitCode: 23 },
+      "Cause: its command exited with code 23.",
+    ],
     [
       "script failure",
       { kind: "script-failure", source: "payload", code: "tool_budget_exceeded" },
-      "Cause: automation script exceeded its tool budget",
+      "Cause: the automation script made too many tool calls in one check, so it stopped.",
     ],
     [
       "plugin reload failure",
       { kind: "script-failure", source: "payload", code: "plugin_reload_failed" },
-      "Cause: tools could not be refreshed after a plugin reload.\n" +
-        "The automation script did not run. Automatic setup recovery failed.\n" +
-        "Check automation history and plugin status, then retry the automation.",
+      "Cause: tools could not be refreshed after a plugin reload, so the automation script did not run.",
     ],
   ] satisfies Array<[string, CronFailureNotificationDetail | undefined, string]>)(
     "renders safe %s detail in threshold alerts",
@@ -444,8 +450,13 @@ describe("CronService failure alerts", () => {
           const job = await addJob("closed detail alert");
 
           await runJob(job, 1);
-          expect(alertCallArg(sendCronFailureAlert).text).toBe(
-            `Automation "closed detail alert" failed\n${expected}`,
+          // What happened, why, when it tries again (user's timezone) and the one reply.
+          const text = alertCallArg(sendCronFailureAlert).text;
+          expect(text).toContain(
+            `⚠️ Automation "closed detail alert" failed.\n${expected}\nIt is still on. Next attempt: `,
+          );
+          expect(text).toMatch(
+            /Next attempt: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+\.\nTo fix it, reply "fix closed detail alert"\.$/,
           );
         },
         {

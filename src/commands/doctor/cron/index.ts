@@ -44,7 +44,7 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
   const autoDisabledJobs: Array<{
     id: string;
     name: string;
-    reason: "consecutive-failures" | "schedule-errors";
+    reason: string;
     consecutiveErrors: number;
   }> = [];
   for (const job of jobs) {
@@ -71,8 +71,7 @@ function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
     const autoDisabled = state.autoDisabled;
     if (
       !isRecord(autoDisabled) ||
-      (autoDisabled.reason !== "consecutive-failures" &&
-        autoDisabled.reason !== "schedule-errors") ||
+      typeof autoDisabled.reason !== "string" ||
       typeof autoDisabled.consecutiveErrors !== "number"
     ) {
       continue;
@@ -368,10 +367,10 @@ export async function maybeRepairLegacyCronStore(params: {
   if (autoDisabledJobs.length > 0) {
     note(
       [
-        `${pluralize(autoDisabledJobs.length, "automation")} ${autoDisabledJobs.length === 1 ? "is" : "are"} auto-disabled after repeated failures.`,
+        `${pluralize(autoDisabledJobs.length, "automation")} ${autoDisabledJobs.length === 1 ? "was" : "were"} turned off by the scheduler.`,
         ...autoDisabledJobs.map(
           (job) =>
-            `- ${job.name} (${job.id}): recorded reason \`${job.reason}\` after ${job.consecutiveErrors} consecutive errors. Fix the cause, then re-enable with ${formatCliCommand(`openclaw automations enable ${job.id}`)}.`,
+            `- ${job.name} (${job.id}): recorded reason \`${job.reason}\`${job.consecutiveErrors > 0 ? ` after ${job.consecutiveErrors} consecutive errors` : ""}. Fix the cause, then re-enable with ${formatCliCommand(`openclaw automations enable ${job.id}`)}.`,
         ),
       ].join("\n"),
       "Cron",

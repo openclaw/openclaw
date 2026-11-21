@@ -106,7 +106,8 @@ function restartFailure() {
 
 it.each([
   { code: "aborted", enabled: true },
-  { code: "internal_error", enabled: false },
+  { code: "internal_error", enabled: true },
+  { code: "source_unavailable", enabled: false },
 ] as const)(
   "a key-linked watcher whose condition ends with $code stays enabled: $enabled",
   ({ code, enabled }) => {
@@ -144,6 +145,7 @@ it.each([
     });
     expect(job.enabled).toBe(enabled);
     expect(job.state.nextRunAtMs !== undefined).toBe(enabled);
+    expect(job.state.autoDisabled?.reason).toBe(enabled ? undefined : "source-unavailable");
   },
 );
 
@@ -368,14 +370,14 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   expect(job.state.nextRunAtMs).toBeUndefined();
   expect(job.state.autoDisabled).toEqual({
     reason: "consecutive-failures",
-    atMs: startedAt + 60_010,
+    atMs: startedAt,
     consecutiveErrors: 10,
   });
   expect(deferredNotifications).toHaveLength(1);
   await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
   expect(sendCronFailureAlert).toHaveBeenCalledOnce();
   expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain(
-    'Automation "outcome" was auto-disabled after 10 consecutive run failures.',
+    'Automation "outcome" is turned off. It failed 10 times in a row.',
   );
   expect(enqueueSessionEvent).not.toHaveBeenCalled();
 });
@@ -397,7 +399,7 @@ it.each([
   expect(deferredNotifications.map(({ kind }) => kind)).toEqual(["auto-disabled"]);
   await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
   expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("was auto-disabled after 10 consecutive run failures"),
+    expect.stringContaining("is turned off. It failed 10 times in a row"),
     expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
   );
   expect(sendCronFailureAlert).not.toHaveBeenCalled();
@@ -434,7 +436,7 @@ it.each([
     expect(deferredNotifications.map(({ kind }) => kind)).toEqual(["failure-alert"]);
     const [notification] = deferredNotifications;
     expect(notification?.kind === "failure-alert" && notification.payload.text).toContain(
-      "was auto-disabled after 10 consecutive run failures",
+      "is turned off. It failed 10 times in a row",
     );
   },
 );
@@ -604,7 +606,7 @@ function parentPause(
 
 const pauseNotice = expect.objectContaining({
   kind: "auto-disabled",
-  text: "paused: parent archived",
+  text: expect.stringContaining("is turned off. paused: parent archived"),
 });
 
 it("pauses a parent-linked job once when its parent conversation is gone", () => {
@@ -612,6 +614,7 @@ it("pauses a parent-linked job once when its parent conversation is gone", () =>
   apply(parentPause());
   expect(job.enabled).toBe(false);
   expect(job.state.nextRunAtMs).toBeUndefined();
+  expect(job.state.autoDisabled?.reason).toBe("source-unavailable");
   expect(deferredNotifications).toEqual([pauseNotice]);
   // A second settled outcome for the already-paused job sends nothing new.
   apply(parentPause());
@@ -645,7 +648,7 @@ it.each(["legacy", "owner"] as const)(
     apply(parentPause("archived", parentSessionKey));
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-      "paused: parent archived",
+      expect.stringContaining("paused: parent archived"),
       expect.objectContaining({ agentId: "ops", sessionKey: undefined, createIfMissing: true }),
     );
   },

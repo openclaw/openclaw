@@ -189,8 +189,15 @@ export async function runCodeModeScriptHeadless(params: {
   const output = new CodeModeOutputState(config.maxOutputBytes);
   let pending: PendingBridgeState[] = [];
   let toolCallCount = 0;
-  const fail = (code: CodeModeFailureCode | "tool_budget_exceeded", error: string) =>
-    output.takeResult({ status: "failed" as const, code, toolCallCount }, { error });
+  const fail = (
+    code: CodeModeFailureCode | "tool_budget_exceeded",
+    error: string,
+    failurePhase?: Extract<CodeModeWorkerResult, { status: "failed" }>["failurePhase"],
+  ) =>
+    output.takeResult(
+      { status: "failed" as const, code, toolCallCount, ...(failurePhase ? { failurePhase } : {}) },
+      { error },
+    );
   let releaseReservation: (() => void) | undefined;
   try {
     // Headless runs publish no resumable snapshot/handle, so collector globals stay unavailable.
@@ -361,7 +368,7 @@ export async function runCodeModeScriptHeadless(params: {
         };
       }
       if (result.status === "failed") {
-        return fail(result.code, result.error);
+        return fail(result.code, result.error, result.failurePhase);
       }
 
       dispatch(result);

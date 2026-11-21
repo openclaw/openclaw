@@ -359,9 +359,7 @@ it.each([
     persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, stateDir, "both");
     // The bound occurrence rechecks the stored operator source and refuses before any effect.
     const refused = await runOccurrence(config, job, context as never, "error");
-    expect(refused.lastError).toMatch(
-      /operator authority that created this automation was refused/,
-    );
+    expect(refused.lastError).toMatch(/access of the person who created it was refused/);
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     return;
   }

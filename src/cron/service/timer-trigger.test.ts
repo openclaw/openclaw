@@ -78,8 +78,8 @@ describe("resolveTransientCronRetryDecision", () => {
           : notice?.kind === "auto-disabled"
             ? notice.text
             : undefined;
-      expect(text).toContain("auto-disabled");
-      expect(text).toContain("invalid automation target");
+      expect(text).toMatch(/is turned off|will not try again/);
+      expect(text).toContain("the agent or conversation it runs in no longer exists");
     },
   );
 

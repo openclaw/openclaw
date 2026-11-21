@@ -173,12 +173,12 @@ describe("private command schedules under the live scheduler", () => {
     expect(peekSystemEventEntries(queueKey).map(({ text }) => text)).toEqual(["Parent notice"]);
   });
 
-  it("retires on the first refusal from a replaced plugin instance, without auto-disable", async () => {
+  it("retires on the first refusal from a replaced plugin instance", async () => {
     const refused = {
       status: "error" as const,
       error:
         "Scheduled plugin command's original plugin instance was replaced; the schedule ended.",
-      errorClassification: { kind: "permanent" as const },
+      errorClassification: { kind: "source-unavailable" as const },
       executionStarted: false,
     };
     const result = await runSchedule(
@@ -190,7 +190,7 @@ describe("private command schedules under the live scheduler", () => {
     expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
     expect(result.stored?.state.nextRunAtMs).toBeUndefined();
-    expect(result.stored?.state.autoDisabled).toBeUndefined();
+    expect(result.stored?.state.autoDisabled?.reason).toBe("source-unavailable");
     expect(result.history).toEqual([{ status: "error", error: refused.error }]);
   });
 

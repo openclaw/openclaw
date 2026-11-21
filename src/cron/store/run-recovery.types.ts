@@ -8,6 +8,8 @@ export type CronRunRecoveryInput = {
   cronConfig?: CronConfig;
   /** Owner for agent-less jobs when selecting agent-scoped failure routes. */
   defaultAgentId?: string;
+  /** Notice times use this zone; the worker cannot read config. */
+  userTimezone?: string;
   /** Receipts a cron owner in this process still holds; that owner settles them. */
   liveReceiptIds?: string[];
 };

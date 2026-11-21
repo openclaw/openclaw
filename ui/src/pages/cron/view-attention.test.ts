@@ -17,7 +17,7 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   });
   const container = await renderView({ editingJob: job, detailTab: "history" });
   expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')?.textContent).toContain(
-    "Auto-disabled",
+    "Turned off",
   );
   // The raw cause stays collapsed until asked for.
   expect(container.querySelector(".cron-error-details__text")).toBeNull();
@@ -28,8 +28,31 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("Provider rejected the request");
   expect(warning?.textContent).toContain("No response was recorded");
-  expect(warning?.textContent).toContain("Check for completed actions before running again");
+  // Why it is off and the one action that resumes it, without the raw cause.
+  expect(warning?.textContent).toContain("Turned off after 10 failed runs in a row");
+  expect(warning?.textContent).toContain("Fix the cause, then switch Active back on to resume.");
   expect(warning?.textContent).not.toContain("Paused");
+});
+
+it("names what a source-unavailable stop lost and how to restore it", async () => {
+  const job = createJob("archived", {
+    enabled: false,
+    state: {
+      autoDisabled: {
+        reason: "source-unavailable",
+        atMs: 10,
+        consecutiveErrors: 0,
+        gone: "conversation",
+      },
+      lastRunStatus: "error",
+    },
+  });
+  const container = await renderView({ editingJob: job, detailTab: "history" });
+  const warning = container.querySelector(".cron-failure-details")?.textContent;
+  expect(warning).toContain(
+    "Turned off because the conversation it runs in was archived or deleted",
+  );
+  expect(warning).toContain("Restore the conversation or move the automation to another one");
 });
 
 it("does not flag a manually paused historical error as an active failure", async () => {

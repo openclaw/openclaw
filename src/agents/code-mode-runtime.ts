@@ -7,7 +7,7 @@ import type { CodeModeConfig as AuthoredCodeModeConfig } from "../config/types.t
 import { modelKey } from "../shared/model-key.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
+import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-executor-types.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CODE_MODE_RESULTS_API_FILE } from "./code-mode-results-api.js";
 import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
@@ -51,6 +51,8 @@ export type CodeModeHeadlessResult =
       status: "failed";
       code: CodeModeFailureCode | "tool_budget_exceeded";
       error: string;
+      /** Set when the worker reported where the failure arose; a guest throw is "guest". */
+      failurePhase?: Extract<CodeModeWorkerResult, { status: "failed" }>["failurePhase"];
       output: unknown[];
       toolCallCount: number;
     };
