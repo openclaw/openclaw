@@ -451,6 +451,50 @@ describe("memory index", () => {
     expect(results[0]?.score).toBeLessThanOrEqual(1);
   });
 
+  it.each(["keyword-only", "hybrid"] as const)(
+    "returns a whole chunk longer than 700 characters in %s search",
+    async (mode) => {
+      const manager = await modeManager(mode, 0);
+      expect(manager.status().fts?.available).toBe(true);
+      const filler = Array.from(
+        { length: 36 },
+        (_, index) => `Archive line ${index} about mooring.`,
+      );
+      await writeFiles({
+        "2000-01-01.md": [...filler, "The closing token is zebrafoxtrot."].join("\n"),
+      });
+      await manager.sync({ reason: "test" });
+
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+      const chunk = db
+        .prepare("SELECT text FROM memory_index_chunks WHERE text LIKE '%zebrafoxtrot%'")
+        .get() as { text: string };
+      expect(chunk.text.length).toBeGreaterThan(1000);
+
+      const results = await manager.search("zebrafoxtrot", { maxResults: 1 });
+      expect(results[0]?.snippet).toBe(chunk.text);
+    },
+  );
+
+  it("returns whole chunks of an overlong single line", async () => {
+    const manager = await keywordManager();
+    expect(manager.status().fts?.available).toBe(true);
+    const words = Array.from({ length: 500 }, (_, index) => `w${index}`);
+    words[230] = "quokkazulu";
+    await writeFiles({ "2000-01-01.md": words.join(" ") });
+    await manager.sync({ reason: "test" });
+
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+    const chunk = db
+      .prepare("SELECT text FROM memory_index_chunks WHERE text LIKE '%quokkazulu%'")
+      .get() as { text: string };
+    expect(chunk.text.length).toBeGreaterThan(1000);
+    expect(chunk.text.length).toBeLessThanOrEqual(1600);
+
+    const results = await manager.search("quokkazulu", { maxResults: 1 });
+    expect(results[0]?.snippet).toBe(chunk.text);
+  });
+
   it("prefers exact session transcript hits in FTS-only mode", async () => {
     const manager = await getFtsSessionManager();
     if (!manager) {
