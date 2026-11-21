@@ -136,8 +136,8 @@ export function SessionsView(props: SessionsProps) {
                   type="search"
                   class="settings-input"
                   value={props.searchQuery}
-                  aria-label={t("sessionsView.personalGroupSearch")}
-                  placeholder={t("sessionsView.personalGroupSearch")}
+                  aria-label={t("sessionsView.searchSessions")}
+                  placeholder={t("sessionsView.searchSessions")}
                   onInput={(event) => props.onSearchChange(event.currentTarget.value)}
                 />
               </div>

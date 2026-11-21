@@ -2,9 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
-import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { createProfilePrefsServer } from "./server-prefs.test-support.ts";
-import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const scope = "wss://gateway.example";
@@ -14,7 +13,7 @@ const group = { id: "first", label: "First", sessionKeys: ["agent:main:saved"] }
 // Synthetic state captured with the v2026.10.6 production writers (commit
 // fe06181dc5ecc01cf8904abbfc26925925efefbc): patchSettings, then an offline
 // pushServerUiPrefs(changedServerUiPrefs(before, next)) for profile a.
-// This is a production-owner storage fixture, not a shipped-app upgrade test.
+// Add the later section layout and pending edit to exercise retirement alongside that older data.
 const stableSettings = {
   gatewayUrl: scope,
   theme: "claw",
@@ -31,6 +30,7 @@ const stableSettings = {
     [scope]: { sessionKey: "agent:main:saved", lastActiveSessionKey: "agent:main:saved" },
   },
   locale: "de",
+  personalSessionGroups: [group],
 };
 installSettingsStorageLifecycle();
 beforeEach(() => {
@@ -40,7 +40,11 @@ beforeEach(() => {
   localStorage.setItem("openclaw.control.currentGateway.v1:" + scope, scope);
   localStorage.setItem(
     pendingKey,
-    JSON.stringify({ fontUi: "geist", sidebarEntries: stableSettings.sidebarEntries }),
+    JSON.stringify({
+      fontUi: "geist",
+      sidebarEntries: stableSettings.sidebarEntries,
+      personalSessionGroups: [group],
+    }),
   );
 });
 afterEach(async () => {
@@ -48,7 +52,7 @@ afterEach(async () => {
   await vi.dynamicImportSettled();
 });
 
-it("preserves stable browser settings without reviving retired navigation when groups are first saved", () => {
+it("preserves stable browser settings without reviving retired navigation when settings change", () => {
   expect(loadSettings()).toMatchObject({
     themeMode: "light",
     fontUi: "geist",
@@ -57,29 +61,29 @@ it("preserves stable browser settings without reviving retired navigation when g
     pinnedAgentIds: ["research"],
     sessionKey: "agent:main:saved",
     sidebarEntries: DEFAULT_SIDEBAR_ENTRIES,
-    personalSessionGroups: [],
   });
-  patchSettings({ personalSessionGroups: [group] });
+  expect(loadSettings()).not.toHaveProperty("personalSessionGroups");
+  patchSettings({ navWidth: 340 });
   expect(loadSettings()).toMatchObject({
     themeMode: "light",
     fontUi: "geist",
-    navWidth: 320,
+    navWidth: 340,
     locale: "de",
     pinnedAgentIds: ["research"],
     sessionKey: "agent:main:saved",
-    personalSessionGroups: [group],
   });
   // docs/web/control-ui/settings.md documents the intentional sidebarEntries
-  // retirement. Group edits must neither delete its recoverable value nor promote
+  // retirement. Settings writes must neither delete its recoverable value nor promote
   // the old shared-navigation mirror into private pins.
   expect(JSON.parse(localStorage.getItem(settingsKey)!)).toMatchObject({
     sidebarEntries: ["session:agent:main:saved", "route:cron"],
+    personalSessionGroups: [group],
   });
   expect(loadSettings().sidebarEntries).toEqual(DEFAULT_SIDEBAR_ENTRIES);
 });
 
 it.each(["stable", "personal-pins"])(
-  "replays pre-group %s preference intent while saving only the new group field",
+  "replays %s preferences without sending retired section edits",
   async (format) => {
     const existingPins = ["route:usage", "session:agent:main:saved"];
     if (format === "personal-pins") {
@@ -100,6 +104,7 @@ it.each(["stable", "personal-pins"])(
           railShortcuts: existingPins.toReversed(),
           railShortcutsBase: existingPins,
           railShortcutsOrder: true,
+          personalSessionGroups: [group],
         }),
       );
     }
@@ -115,24 +120,18 @@ it.each(["stable", "personal-pins"])(
     );
     const a = backend.connect("a");
     await a.refresh();
-    expect(loadSettings()).toMatchObject({ fontUi: "geist", personalSessionGroups: [] });
-    const before = loadSettings();
-    const next = patchSettings({ personalSessionGroups: [group] });
-    const delta = changedServerUiPrefs(before, next)!;
-    expect(delta).toEqual({ personalSessionGroups: [group] });
-    pushServerUiPrefs(a.writer, delta, { profileId: "a", canWrite: true });
+    expect(loadSettings()).not.toHaveProperty("personalSessionGroups");
+    flushServerUiPrefs(a.writer, { profileId: "a", canWrite: true });
     await vi.dynamicImportSettled();
     expect(backend.profiles.a).toEqual({
       "ui.themeMode": "light",
       "ui.fontUi": "geist",
       "ui.railShortcuts": format === "personal-pins" ? existingPins.toReversed() : existingPins,
-      "ui.personalSessionGroups": [group],
     });
     expect(localStorage.getItem(pendingKey)).toBeNull();
     resetServerUiPrefsSync();
     await backend.connect("a").refresh();
     expect(loadSettings()).toMatchObject({
-      personalSessionGroups: [group],
       fontUi: "geist",
       pinnedAgentIds: ["research"],
       navWidth: 320,

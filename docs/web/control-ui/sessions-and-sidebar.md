@@ -135,7 +135,7 @@ native creation controls.
 
 The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
 **Involving me**, and **All owners** stay within the selected agent; changing the
-owner never expands the list to other agents. Sidebar pins and personal sections
+owner never expands the list to other agents. Sidebar pins
 also follow that agent scope without removing their saved references. Choose
 **Show all** in the agent picker to browse across agents. Explicit rail shortcuts
 remain available across agent selections.
