@@ -8,6 +8,10 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import {
+  isAtomicReplacePermissionError,
+  writeExistingMemoryInPlace,
+} from "./short-term-promotion-memory-write.js";
 import { readStore } from "./short-term-promotion-store.js";
 import { resolveWorkspaceCreationMode, type WorkspaceFileMode } from "./workspace-file-mode.js";
 
@@ -101,16 +105,40 @@ export async function writeDreamsFileAtomic(
   }
   const mode = resolveWorkspaceCreationMode(workspaceFileMode);
   await assertSafeDreamsPath(dreamsPath);
-  await replaceFileAtomic({
-    filePath: dreamsPath,
-    content,
-    dirMode: "preserve",
-    mode,
-    preserveExistingMode: true,
-    tempPrefix: `${path.basename(dreamsPath)}.dreams`,
-    throwOnCleanupError: true,
-    assertBeforeMutation: assertCurrent,
-  });
+  try {
+    await replaceFileAtomic({
+      filePath: dreamsPath,
+      content,
+      dirMode: "preserve",
+      mode,
+      preserveExistingMode: true,
+      tempPrefix: `${path.basename(dreamsPath)}.dreams`,
+      throwOnCleanupError: true,
+      assertBeforeMutation: assertCurrent,
+    });
+  } catch (error) {
+    if (!isAtomicReplacePermissionError(error)) {
+      throw error;
+    }
+    // The parent directory rejects temp-file creation (for example a read-only
+    // workspace with a writable DREAMS.md bind-mounted over it), so no atomic
+    // replace can succeed. Fall back to writing the existing regular file in
+    // place, the same recovery MEMORY.md promotion uses: re-check the target
+    // identity and live mutation authority, keep the existing permissions, and
+    // restore the preimage if the write fails partway. A missing file has no
+    // in-place target, so the original error still propagates.
+    assertCurrent?.();
+    await assertSafeDreamsPath(dreamsPath);
+    if (
+      !(await writeExistingMemoryInPlace({
+        filePath: dreamsPath,
+        content,
+        assertBeforeMutation: assertCurrent,
+      }))
+    ) {
+      throw error;
+    }
+  }
 }
 
 export async function updateDreamsFile<T>(params: {
