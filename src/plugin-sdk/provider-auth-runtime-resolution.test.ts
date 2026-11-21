@@ -19,6 +19,7 @@ const runtime = vi.hoisted(() => ({
 vi.mock("../agents/model-auth-provider.js", () => ({
   resolveApiKeyForProviderCore: runtime.provider,
 }));
+// mock-isolation: Observe lazy model-runtime initialization without loading real provider state.
 vi.mock("../plugins/runtime/runtime-model-auth.runtime.js", () => {
   runtime.loaded();
   return {
