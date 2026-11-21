@@ -65,7 +65,6 @@ export type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.t
 
 export type {
   PluginHookAgentContext,
-  PluginHookExecRequestOwner,
   PluginHookToolAuthority,
 } from "./hook-agent-context.types.js";
 export type {

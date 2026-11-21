@@ -14,7 +14,10 @@ import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-out
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
-import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import {
+  requiresExternalCronDelivery,
+  resolveDeliveryTarget,
+} from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import type { CronFailureRepairRequest, CronServiceDeps } from "../cron/service/state.js";
@@ -482,25 +485,56 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 
     const abortController = new AbortController();
     const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
+    const sessionKey = resolveCronDeliverySessionKey(params.job);
+    const payload = {
+      ...params.payload,
+      text: appendCronFailureAlertDetails(params.payload.text ?? "", params.runAtMs, runtimeConfig),
+    };
     // Release Gateway admission on deadline even when a transport ignores abort.
     const result = await withTimeout(
       (async () => {
+        const route = {
+          mode: "announce" as const,
+          source: "delivery" as const,
+          requested: true,
+          channel: params.channel,
+          target: params.target,
+          directPolicy: params.directPolicy,
+          to: params.to,
+          accountId: params.accountId,
+          threadId: params.threadId,
+        };
         const resolved = await resolveDeliveryTarget(
           runtimeConfig,
           agentId,
-          {
-            channel: params.channel,
-            target: params.target,
-            directPolicy: params.directPolicy,
-            to: params.to,
-            accountId: params.accountId,
-            threadId: params.threadId,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
-          },
+          { ...route, sessionKey, sessionTarget: params.job.sessionTarget },
           { inheritSessionThread: params.inheritSessionThread },
         );
         if (!resolved.ok) {
-          throw resolved.error;
+          // Like its results, a conversation-bound job without an external route is
+          // notified in the conversation that created it.
+          if (
+            requiresExternalCronDelivery(route, resolved) ||
+            params.job.sessionTarget !== "current" ||
+            !sessionKey
+          ) {
+            throw resolved.error;
+          }
+          const committed = await commitCronConversationResult({
+            config: runtimeConfig,
+            agentId,
+            jobId: params.job.id,
+            runStartedAt: params.runAtMs ?? params.job.state.lastRunAtMs ?? Date.now(),
+            idempotencyKey: `cron-failure-alert:${params.job.id}:${params.job.state.lastFailureNotificationId ?? params.runAtMs}`,
+            conversation: { sessionKey },
+            payloads: [payload],
+            signal: abortController.signal,
+            deliveryAttemptFence: null,
+          });
+          if (!committed.ok) {
+            throw new Error(committed.reason);
+          }
+          return { status: "sent" as const };
         }
         return await sendCronAnnouncePayloadStrict({
           deps: params.deps,
@@ -512,14 +546,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           onTranscriptDiagnostic: (message) => {
             params.logger.warn({ jobId: params.job.id }, message);
           },
-          payload: {
-            ...params.payload,
-            text: appendCronFailureAlertDetails(
-              params.payload.text ?? "",
-              params.runAtMs,
-              runtimeConfig,
-            ),
-          },
+          payload,
           inspectionUrl: resolveControlUiAutomationRunUrl(runtimeConfig, {
             jobId: params.job.id,
             runId:
