@@ -57,6 +57,63 @@ also verify `dist/build-info.json` against a source commit should use
 or declaration build. Keep generated files unchanged after either build so
 equivalent-input admission can certify the same source bytes.
 
+## Isolated native chat startup diagnostics
+
+`scripts/perf/native-chat-start-measure.ts` attaches to a separately prepared,
+authenticated synthetic Gateway using the `gateway-client/ui` identity. It never
+starts or reconfigures a Gateway. Use `--write-config <new-file> --gateway-port
+<port> --mock-port <port>` to generate its synthetic input, then set the guest-owned
+workspace before launch. The existing `scripts/e2e/mock-openai-server.mjs` supplies
+the loopback provider; the driver verifies unique replies and mock request counts.
+The config guard permits the released empty `agents.entries.main` materialization,
+but rejects agent-specific overrides and additional agents.
+Start the mock with `MOCK_NATIVE_CHAT_ACCOUNTING=1` to retain its bounded,
+content-free route/ordinal and synthetic request-correlation ledger. Background
+utility behavior remains enabled; do not assume one total request per turn.
+
+Copy the self-contained `scripts/perf/native-chat-start-preload.mjs` into the
+task-owned runtime's readable staging directory. Before launch, run it with
+`--check-owner-root <packaged-app> --expected-build <commit>` and one
+`--expected-owner-hash <sha256>` per qualified owner. This checks the actual
+bundled `dist` layout without editing it. Append its file URL to the owned guest
+process's existing `NODE_OPTIONS`, set `OPENCLAW_PERF_CHAT_OWNER_ROOT` to that app,
+and set `OPENCLAW_PERF_CHAT_CAPTURE_DIR` to a guest-writable task directory.
+On Windows, use file URLs for Node `--import` arguments, not backslash specifiers.
+Readable and recognized identifier-minified owners are qualified separately;
+unsupported or ambiguous bindings fail closed. A checkout with `src` selects
+source-only qualification even after a build: qualify its emitted files through
+a dist-only staged app root, not that source-only result.
+
+Run the driver through the repository TypeScript loader with `--url <loopback-ws>
+--mock-url <loopback-http-v1> --samples 6 --output <new-file>`. An optional
+`--stop-target <file>` accepts only the task lock's exact `{pid, ownerId, port}`;
+the driver verifies the connected PID and requests targeted graceful shutdown
+after the turns. A scheduled shutdown is not completion: join the foreground
+process and retrieve its capture through the runtime owner before reducing it.
+Do not treat host invocation cancellation or forced termination as graceful exit.
+An externally supervised packaged process refuses this stop request by design.
+Any self-owned foreground experiment must select that lifecycle before launch,
+retain package repair/update and native-isolation policy, use fresh state, and
+be labeled separately from externally supervised package lifecycle evidence.
+
+After the Gateway exits, save the mock's final `/health` JSON without changing
+the instance. Wrap it as `{mock: <health>, completion: {mainPid,
+foregroundExitCode: 0, listenerClosed: true, observedStoppedPids: [...]}}` only
+after joining the foreground, verifying listener teardown, and observing every
+captured PID stopped; these are recorded host observations, not guessed defaults.
+`node scripts/perf/native-chat-start-report.mjs --client <receipts>
+--capture-dir <retrieved-captures> --mock-final <final-health>` requires one
+provider chain per measured run and a one-to-one match between every Responses
+request and a measured or explicitly purpose-tagged background chain. It reports
+background calls and observed overlap separately; unrelated extra traffic,
+retries, lost observations and incomplete measured shutdown fail explicitly.
+Embeddings are endpoint-counted separately, not assigned invented completion
+owners or latency. An unjoined helper with no installed owner or mark can only
+be excluded from the exhaustively accounted main-process Responses scope, never
+certified as clean process-tree shutdown. Loader instrumentation is diagnostic
+overhead, not uninstrumented performance evidence. Raw network first byte, paint
+and supervised-service lifecycle remain separate claims; authorization is unchanged.
+
 ## Interrupted Control UI builds
 
 Source UI builds and Settings preparation share checkout artifact ownership.

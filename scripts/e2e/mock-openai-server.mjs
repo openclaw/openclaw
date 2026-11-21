@@ -6,7 +6,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
 import { resolveAgentPluginBundleResponse } from "./lib/agent-plugin-bundle-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
-import { readMockUserText, summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
+import {
+  createMockNativeChatAccounting,
+  readMockUserText,
+  summarizeMockInferenceRequest,
+} from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -26,6 +30,8 @@ const port =
 const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+const nativeChatAccounting =
+  process.env.MOCK_NATIVE_CHAT_ACCOUNTING === "1" ? createMockNativeChatAccounting() : undefined;
 // Absolute record ordinal, stamped at the producer: consumers expose a bounded
 // tail of the log, so entries must carry their own position. The server starts
 // once per run, so the counter spans the whole session.
@@ -821,7 +827,13 @@ const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/health") {
-      writeJson(res, 200, { ok: true, requests });
+      writeJson(res, 200, {
+        ok: true,
+        requests: {
+          ...requests,
+          ...(nativeChatAccounting ? { accounting: nativeChatAccounting.snapshot() } : {}),
+        },
+      });
       return;
     }
     if (req.method === "GET" && url.pathname === "/v1/models") {
@@ -843,6 +855,7 @@ const server = http.createServer((req, res) => {
               ? "embeddings"
               : "other";
     requests.ingress[route] += 1;
+    nativeChatAccounting?.record(route, req.headers);
     const scriptedRoute = route === "responses" || route === "chatCompletions";
     // Reserve before body reads or hold waits so concurrent turns consume the script
     // in arrival order. The explicit version survives hold-only control rewrites.
