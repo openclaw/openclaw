@@ -177,11 +177,10 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 - Example model: `byteplus-plan/ark-code-latest`
 - CLI: `openclaw onboard --auth-choice byteplus-api-key`
 
-Install the official plugin and restart the Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/byteplus-provider
-openclaw gateway restart
 ```
 
 ```json5
