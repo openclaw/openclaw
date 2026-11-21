@@ -276,7 +276,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
     expect(result.meta.agentMeta).toMatchObject({
       sessionId: "external-cli-session-1",
-      usage: { input: 11, output: 7, total: 18 },
+      usage: { input: 21, output: 9, total: 30, contextUsage: { state: "unavailable" } },
       lastCallUsage: { input: 11, output: 7, total: 18 },
       diagnosticUsage: { input: 21, output: 9, total: 30 },
     });
