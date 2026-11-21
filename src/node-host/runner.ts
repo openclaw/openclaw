@@ -331,6 +331,24 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected
       desktopSharingEnabled: opts.desktopSharingEnabled,
       commands: config.commands,
     }));
+  let isolatedDesktopWarningShown = false;
+  const warnAboutIsolatedDesktop = (manifest: typeof preparedRuntime.manifest) => {
+    if (
+      isolatedDesktopWarningShown ||
+      process.platform !== "win32" ||
+      process.env.CLAWCTL_GATEWAY_ISOLATION !== "enabled" ||
+      !manifest.commands.some(
+        (command) => command === "computer.act" || command === "screen.snapshot",
+      )
+    ) {
+      return;
+    }
+    isolatedDesktopWarningShown = true;
+    writeStderrLine(
+      "node host warning: the Windows MSIX CLI runs computer control and screenshots on an isolated agent desktop, not your signed-in Windows desktop, even when started from your terminal. Windows Hub is the supported interactive Windows desktop node route, but its computer.act support is pending: https://github.com/openclaw/openclaw-windows-node/issues/1871\nThis node will continue with its existing command surface.",
+    );
+  };
+  warnAboutIsolatedDesktop(preparedRuntime.manifest);
   logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
   const deviceIdentity = resumeIdentity ?? (await loadOrCreateDeviceIdentityAsync());
   const { token, password } =
@@ -549,7 +567,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected
     prepared: preparedRuntime,
     client,
     writeStderrLine,
-    onManifestChanged: (manifest) => client.updateNodeManifest(manifest),
+    onManifestChanged: (manifest) => {
+      warnAboutIsolatedDesktop(manifest);
+      client.updateNodeManifest(manifest);
+    },
   });
 
   async function announceLauncherReady(url: string, tlsFingerprint?: string) {
