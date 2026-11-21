@@ -3304,6 +3304,85 @@ struct OnboardingAISetupTests {
         }
     }
 
+    @Test func `provider wizard keeps outer navigation locked until canceled`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingWizardNavigationTests"))
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let harness = AISetupHarness(url: url) { _, request, _ in
+                switch request.method {
+                case "agents.list":
+                    return missingConfiguredModelResponse(id: request.id)
+                case "openclaw.setup.detect":
+                    return Data("""
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                      "candidates":[],"manualProviders":[],"authOptions":[{
+                        "id":"openai","label":"Fixture sign-in","brandId":"openai","kind":"oauth","featured":true}],
+                      "setupComplete":false}}
+                    """.utf8)
+                case "openclaw.setup.auth.start":
+                    let sessionID = try #require(request.params["sessionId"] as? String)
+                    return Data("""
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                      "sessionId":"\(sessionID)","done":false,"status":"running",
+                      "step":{"id":"login","type":"text","executor":"client","message":"Enter the sign-in response"}}}
+                    """.utf8)
+                case "wizard.cancel":
+                    return Data(
+                        #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"cancelled"}}"#.utf8)
+                default:
+                    return nil
+                }
+            }
+            let state = AppState(preview: true)
+            state.connectionMode = .remote
+            let view = OnboardingView(
+                initialPage: .aiSetup,
+                state: state,
+                aiSetupGateway: harness.gateway,
+                systemAgentDefaults: defaults,
+                aiSetupRouteIdentityProvider: { "remote:id:fixture" },
+                gatewaySelectionPersister: { true }
+            )
+            _ = AppKitTestSupport.application
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: view.pageWidth, height: 650)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            defer {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+            }
+            window.orderFront(nil)
+            hosting.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+
+            try await harness.recorder.waitForMethod("openclaw.setup.detect")
+            let connectionPageTitle = "Where should your assistant run?"
+            try await TestWait.state("picker navigation is available") {
+                let actions = try await inspectAISetupAccessibility(hosting).actions
+                return actions["Back"] == true && actions[connectionPageTitle] == true
+            }
+            try await pressOnboardingEntryButton("onboarding-ai-row-chatgpt", in: hosting)
+            try await TestWait.state("provider wizard accepts input") {
+                try await inspectAISetupAccessibility(hosting).actions["Continue"] == true
+            }
+            let wizard = try await inspectAISetupAccessibility(hosting).actions
+            #expect(wizard["Back"] == false)
+            #expect(wizard[connectionPageTitle] == false)
+            #expect(wizard["Choose another AI"] == true)
+
+            try await pressOnboardingEntryButton("Cancel", in: hosting)
+            try await harness.recorder.waitForMethod("wizard.cancel")
+            try await TestWait.state("navigation is available after cancellation") {
+                let actions = try await inspectAISetupAccessibility(hosting).actions
+                return actions["Back"] == true && actions[connectionPageTitle] == true
+            }
+            await harness.gateway.shutdown()
+        }
+    }
+
     @Test func `configured model label stays pending until live verification`() async throws {
         // Isolated defaults + fixed route: the default init reads the machine's
         // real resume store, whose leftover activation leases fail this test on
