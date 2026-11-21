@@ -15,7 +15,7 @@ import {
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
-import { CommandLane } from "../../process/lanes.js";
+import { CommandLane, resolveCronNestedAgentLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
@@ -79,11 +79,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
   const runLane = turn.followupRun.run.scheduledAutomation
-    ? CommandLane.CronNested
+    ? resolveCronNestedAgentLane(turn.followupRun.run.agentId)
     : turn.followupRun.run.internalEventExecution
       ? turn.followupRun.run.inputProvenance?.sourceTool === "restart"
         ? CommandLane.RestartRecovery
-        : CommandLane.CronNested
+        : resolveCronNestedAgentLane(turn.followupRun.run.agentId)
       : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {

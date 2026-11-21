@@ -14,6 +14,8 @@ const CRON = "cron-nested";
 const HOOK = "hook-dispatch";
 const DELIVERY = "delivery-dispatch";
 const GROUP = "cron-hooks";
+const PER_AGENT_PREFIX = "cron-nested:";
+const PER_AGENT_CRON = "cron-nested:main";
 
 type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
 type Reservations = LaneGroupSpec["reservations"];
@@ -299,6 +301,34 @@ describe("command lane capacity groups", () => {
       expect(() => configure(2, undefined, [lane, HOOK])).toThrow(/cannot join a capacity group/);
     }
     expect(() => configure(2, undefined, [CommandLane.SystemAgentInference, HOOK])).not.toThrow();
+  });
+
+  test("counts prefix-scoped lanes against the shared budget", async () => {
+    // Per-agent cron lanes are named at run time, so the group claims them by
+    // prefix. Each agent keeps its own lane queue, but the aggregate budget
+    // still bounds them all.
+    publishLaneConfiguration({
+      lanes: { [PER_AGENT_CRON]: 4 },
+      groups: {
+        [GROUP]: { budget: 2, members: [CRON, HOOK], memberPrefixes: [PER_AGENT_PREFIX] },
+      },
+    });
+    const gates = [createDeferred(), createDeferred()];
+    const runs = gates.map((gate) =>
+      enqueueCommandInLane(PER_AGENT_CRON, async () => await gate.promise),
+    );
+    expect(getCommandLaneSnapshot(PER_AGENT_CRON)).toMatchObject({
+      activeCount: 2,
+      blockedBy: "group-budget",
+    });
+    // A sibling lane in the same group is blocked by the shared budget that
+    // the prefix-scoped lanes already consumed.
+    const hookGate = createDeferred();
+    const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
+    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(0);
+    gates.forEach((gate) => gate.resolve());
+    hookGate.resolve();
+    await Promise.allSettled([...runs, hookRun]);
   });
 
   test("rejects a reservation for a non-member lane", () => {

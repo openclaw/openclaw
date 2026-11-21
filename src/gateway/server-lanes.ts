@@ -10,7 +10,7 @@ import {
   publishLaneConfiguration,
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
-import { CommandLane } from "../process/lanes.js";
+import { CommandLane, CRON_NESTED_LANE_PREFIX } from "../process/lanes.js";
 
 type GatewayLaneConcurrency = {
   cron: number;
@@ -69,6 +69,10 @@ export function applyGatewayLaneConcurrency(
             [CRON_HOOK_LANE_GROUP]: {
               budget: concurrency.cron,
               members: [CommandLane.CronNested, CommandLane.HookDispatch],
+              // Per-agent cron lanes are named at run time, so the shared
+              // budget must claim them by prefix rather than by an exact
+              // member list that cannot enumerate every agent id.
+              memberPrefixes: [CRON_NESTED_LANE_PREFIX],
               reservations: hooksEnabled
                 ? { [CommandLane.HookDispatch]: HOOK_DISPATCH_LANE_RESERVATION }
                 : undefined,
