@@ -80,7 +80,10 @@ function validateGatewayPublicOrigin(value: string): boolean {
 export const GatewayConfigSchema = z
   .strictObject({
     resources: z
-      .strictObject({ profile: z.enum(["auto", "standard", "lean"]).optional() })
+      .strictObject({
+        profile: z.enum(["auto", "standard", "lean"]).optional(),
+        memoryBudgetMiB: z.number().int().positive().optional(),
+      })
       .optional(),
     sessionControl: z
       .strictObject({

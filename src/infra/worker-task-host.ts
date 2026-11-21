@@ -23,6 +23,7 @@ import {
   receiveWorkerMemoryPort,
   isWorkerGcObservationEnabled,
 } from "./worker-cpu.js";
+import { createWorkerPoolMemoryBudget } from "./worker-memory-budget.js";
 import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
@@ -81,6 +82,7 @@ export function createWorkerTaskHost(
     : undefined;
   return {
     maxWorkers: workerClass ? resolveWorkerPoolSize(workerClass) : undefined,
+    createMemoryBudget: createWorkerPoolMemoryBudget,
     requiresReady: owner.retainedTransport,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
