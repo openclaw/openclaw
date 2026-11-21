@@ -22,6 +22,7 @@ export async function prepareGatewayShutdownRuntime() {
     sessionRestartResume,
     subagentRegistry,
     { prepareSqliteWorkerBrokerClose },
+    { loadSupervisorLogRuntime },
   ] = await Promise.all([
     import("./server-close.runtime.js"),
     import("../plugins/hook-runner-global.js"),
@@ -40,11 +41,13 @@ export async function prepareGatewayShutdownRuntime() {
     import("./session-restart-resume.js"),
     import("../agents/subagents/registry/subagent-registry.js"),
     import("../infra/sqlite-worker-store.js"),
+    import("../process/supervisor/released-processes.js"),
   ]);
   await Promise.all([
     prepareActivePluginRegistryShutdown(),
     loadSubagentSessionCleanupRuntime(),
     prepareSqliteWorkerBrokerClose(),
+    loadSupervisorLogRuntime(),
   ]);
 
   return {

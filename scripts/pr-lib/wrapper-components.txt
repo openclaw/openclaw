@@ -1243,6 +1243,7 @@ src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/resolve-system-bin.ts
 src/infra/restart-stale-pids.ts
+src/infra/restart-lifecycle.worker.ts
 src/infra/restart-recovery-errors.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts

@@ -46,7 +46,6 @@ import type {
 export function createProcessSupervisor(): ProcessSupervisor & {
   shutdown: () => Promise<void>;
 } {
-  void loadSupervisorLogRuntime().catch(() => {});
   // Retries share a run ID while an older command can still own descendants.
   // Keep each admission until its own cleanup completes.
   const ownedRuns = new Set<OwnedRun>();

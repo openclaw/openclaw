@@ -7,7 +7,7 @@ import { readCommandProcessStartTime } from "../command-process-identity.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import type { ReleasedProcess } from "./types.js";
 
-/** Supervisors start this load: host stop can report after an update replaced its chunk. */
+/** Gateway startup loads this: host stop can report after an update replaced its chunk. */
 export const loadSupervisorLogRuntime = createLazyRuntimeModule(
   () => import("./supervisor-log.runtime.js"),
 );
