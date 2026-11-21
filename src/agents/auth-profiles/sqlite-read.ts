@@ -205,6 +205,15 @@ export async function prepareAgentAuthProfileRowsRead(options: {
     if (!identity.key.startsWith("file:")) {
       return missing;
     }
+    if (postgres && captured.ok && isArtifactPreservingStateRead("agent", databasePath)) {
+      const rows = await readAuthProfileSources(
+        captured.value,
+        [{ kind: "agent", databasePath, agentId, identity: identity.key, schema: undefined }],
+        { artifactPreserving: true, assertCurrent, signal: controller.signal },
+      );
+      controller.signal.throwIfAborted();
+      return rows?.get(databasePath) ?? missing;
+    }
     const inspection = getArtifactPreservingSqliteRead(databasePath);
     const rows = postgres
       ? await readAgentAuthProfileRows(
@@ -441,7 +450,7 @@ export async function readSharedAuthProfileRows(
 export async function readAuthProfileSources(
   context: OpenClawStateWorkerContext,
   sources: AuthProfileReadSource[],
-  options: { artifactPreserving?: boolean; assertCurrent?: () => void } = {},
+  options: { artifactPreserving?: boolean; assertCurrent?: () => void; signal?: AbortSignal } = {},
 ): Promise<Map<string, AuthProfileRowRead> | undefined> {
   let rows: Map<string, AuthProfileRowRead> | undefined;
   const assertCurrent = () => {
@@ -461,6 +470,7 @@ export async function readAuthProfileSources(
     {
       existingOnly: true,
       assertCurrent,
+      signal: options.signal,
       createAdmission: () => ({
         nativeLocations: [
           ...new Set([
