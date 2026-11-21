@@ -98,6 +98,27 @@ function expectUnclassifiedInstall(reason: string) {
   expect(triage).not.toHaveBeenCalled();
 }
 
+it.runIf(process.platform === "darwin")(
+  "reports missing developer tools for a source update without a confirmed package owner",
+  async () => {
+    await fs.mkdir(path.join(root, ".git"));
+    vi.stubEnv("PATH", "/usr/bin:/bin");
+    const command = vi.mocked(processRunner.runCommandWithTimeout);
+    const run = command.getMockImplementation()!;
+    command.mockImplementation((argv, options) =>
+      argv[0] === "/usr/bin/xcode-select"
+        ? Promise.resolve(createCommandResult({ code: 2 }))
+        : run(argv, options),
+    );
+    await expect(updateCommand({ json: true, yes: true, restart: false })).rejects.toMatchObject({
+      code: 1,
+    });
+    expect(output[0]).toMatchObject({ status: "error", reason: "git-version-unsupported" });
+    expect(lines.join("\n")).toContain("xcode-select --install");
+    expect(command.mock.calls.some(([argv]) => argv[0] === "git")).toBe(false);
+  },
+);
+
 const expectNoDatabase = () =>
   expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
     code: "ENOENT",

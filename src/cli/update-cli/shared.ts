@@ -27,6 +27,7 @@ import {
   resolveExpectedInstalledVersionFromSpec,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { describeUnavailableMacosSystemGit } from "../../infra/update-macos-git.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
@@ -36,6 +37,7 @@ import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { reportUpdateStepCompletion, runStep } from "../../infra/update-runner-command.js";
 import {
   describeUpdateInstallRoot,
+  looksLikeGitCheckout,
   resolveUnmanagedUpdateInstallReason,
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
@@ -546,6 +548,17 @@ export async function resolveGlobalManager(params: {
       diagnostics,
     );
     if (!detected) {
+      // A source checkout cannot establish its Git ownership when Apple's shim is unavailable.
+      // An owned package still follows its package manager even if its root has Git metadata.
+      if (process.platform === "darwin" && (await looksLikeGitCheckout(params.root))) {
+        const missing = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
+          cwd: params.root,
+          timeoutMs: params.timeoutMs,
+        });
+        if (missing) {
+          throw new UpdatePreMutationError("git-version-unsupported", missing);
+        }
+      }
       const reason = resolveUnmanagedUpdateInstallReason();
       const failure = createUpdatePreflightFailure(
         "installation-unclassified",
