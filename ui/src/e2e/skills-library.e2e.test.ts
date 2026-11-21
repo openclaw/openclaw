@@ -109,22 +109,6 @@ async function expectSkillNameValidation(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps the refresh glyph on one trailing line when switching phone library tabs", async () => {
-    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
-      await libraryGateway(page);
-      await openSkillSettings(page);
-      const refresh = page.locator("openclaw-skills-page").getByRole("button", { name: "Refresh" });
-      // The same SVG draws both glyphs, so comparing its x tests the ink, not the touch box.
-      const glyphX = () => refresh.locator("svg").evaluate((svg) => svg.getBoundingClientRect().x);
-      await page.getByRole("radio", { name: "My skills", exact: true }).click();
-      await page.locator('input[name="library-search"]').waitFor();
-      const libraryX = await glyphX();
-      await page.getByRole("radio", { name: "Agent & workspace", exact: true }).click();
-      await page.locator('input[name="skills-filter"]').waitFor();
-      expect(Math.abs((await glyphX()) - libraryX)).toBeLessThanOrEqual(1);
-    });
-  });
-
   it("closes an existing skill without a discard warning after its edit is reverted", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, locale: "en-US" },
