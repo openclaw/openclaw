@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
@@ -165,6 +166,29 @@ function readLaunchedCliCommand(
   );
 }
 
+/**
+ * Where Node loads a bare preload from: the nearest node_modules above the
+ * process's working directory, followed through links. NODE_PATH is not read.
+ */
+function resolveBarePreload(specifier: string, cwd: string): string | undefined {
+  const name = specifier
+    .split("/")
+    .slice(0, specifier.startsWith("@") ? 2 : 1)
+    .join("/");
+  for (let directory = cwd; ; directory = path.dirname(directory)) {
+    for (const extension of ["", ".js", ".json", ".node"]) {
+      try {
+        return fs.realpathSync(path.join(directory, "node_modules", name + extension));
+      } catch {
+        // Not installed at this level; Node keeps climbing.
+      }
+    }
+    if (path.dirname(directory) === directory) {
+      return undefined;
+    }
+  }
+}
+
 function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
@@ -275,7 +299,17 @@ function classifyProcessArtifactCustody(
           continue;
         }
       } else if (!path.isAbsolute(value) && !value.startsWith("./") && !value.startsWith("../")) {
-        unknown ??= "runtime module package identity is unavailable";
+        const resolved = cwd && path.isAbsolute(cwd) ? resolveBarePreload(value, cwd) : undefined;
+        if (resolved && referencesRetainedArtifact(resolved)) {
+          artifactEvidence = true;
+          holder =
+            !holder || holder.paths
+              ? { kind: "holder", paths: [...(holder?.paths ?? []), resolved] }
+              : holder;
+        } else {
+          // Loaded from outside every runtime, or not loadable from this cwd at all.
+          unknown ??= "runtime module package identity is unavailable";
+        }
         continue;
       }
     } else if (
