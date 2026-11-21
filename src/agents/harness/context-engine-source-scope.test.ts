@@ -183,7 +183,7 @@ describe("harness context engine source scopes", () => {
         messages,
       });
       if (operation === "bootstrap") {
-        await expect(result).resolves.toBeUndefined();
+        await expect(result).resolves.toBe(true);
       } else {
         await expect(result).resolves.toMatchObject({
           messages,
