@@ -38,7 +38,6 @@ import {
   resolveCompactionRecoverySummary,
 } from "./mock-openai-compaction-summaries.js";
 import {
-  type ResponsesInputItem,
   type StreamEvent,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
@@ -195,7 +194,7 @@ import {
   encodeCodeModeTarget,
   resolveCodeModeExecSurface,
   canCallScenarioTool,
-  readProgressCommand,
+  buildCommandProgressEvents,
   readScenarioToolCompletion,
   resolveCurrentToolDeclarationSurface,
   readRestartCheckpointProgress,
@@ -428,29 +427,6 @@ async function buildResponsesPayload(
   } = readScenarioToolCompletion(toolDeclarationBody, input, allInputText);
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
-  const pendingCommandProgress = (
-    progressInput: ResponsesInputItem[],
-    command: string,
-    expectedOutcome: "success" | "failure" | "either" = "success",
-  ) => {
-    const progress = readProgressCommand(progressInput, command);
-    if (progress.error) {
-      return buildAssistantEvents(progress.error);
-    }
-    if (progress.sessionId) {
-      return buildToolCallEventsWithArgs("process", {
-        action: "poll",
-        sessionId: progress.sessionId,
-        timeout: 30_000,
-      });
-    }
-    if (expectedOutcome === "failure" && !progress.failed) {
-      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
-    }
-    return progress.failed && expectedOutcome === "success"
-      ? buildAssistantEvents("BUG-TOOL-FAILED")
-      : null;
-  };
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
   );
@@ -1203,7 +1179,8 @@ async function buildResponsesPayload(
   }
   if (slackProgressDirectives) {
     if (hasToolOutput(slackProgressInput)) {
-      const pending = pendingCommandProgress(
+      const pending = buildCommandProgressEvents(
+        toolDeclarationBody,
         slackProgressInput,
         slackProgressDirectives.execCommand,
       );
@@ -1235,14 +1212,9 @@ async function buildResponsesPayload(
     // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
     const progressInput = turn ? input.slice(turn.index) : [];
     const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
-    if (!hasToolOutput(progressInput)) {
-      return buildToolCallEventsWithArgs(
-        command ? "exec" : "read",
-        command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },
-      );
-    }
     if (command) {
-      const pending = pendingCommandProgress(
+      const pending = buildCommandProgressEvents(
+        toolDeclarationBody,
         progressInput,
         command,
         /command fails/iu.test(scenarioFamilyPrompt)
@@ -1254,6 +1226,10 @@ async function buildResponsesPayload(
       if (pending) {
         return pending;
       }
+    } else if (!hasToolOutput(progressInput)) {
+      return buildToolCallEventsWithArgs("read", {
+        path: readTargetFromPrompt(scenarioFamilyPrompt),
+      });
     }
     const output = extractToolOutput(progressInput);
     const reply =

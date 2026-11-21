@@ -23,12 +23,15 @@ import {
   expectAnthropicMessagesJson,
   expectOk,
   makeToolOutputWithCallId,
+  outputItem,
   outputItems,
   outputToolCall,
+  outputToolCallId,
   postJson,
   outputText,
   postResponses,
   requireRecord,
+  readDebugRequest,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -92,6 +95,80 @@ async function requestProgress(route: string, prompt: string, results: ProgressR
   };
   return (await expectOk(postJson(server, `/v1/${route}`, body))).json();
 }
+
+it("finishes native Responses tool progress with unlinked sender context in its history", async () => {
+  const server = await startMockServer();
+  const options = { tools: [{ type: "function", name: "exec" }] };
+  const input = userInputs(
+    EXEC_PROMPT,
+    { type: "function_call_output", output: "Sender context, not a completed call." },
+    { type: "custom_tool_call_output", call_id: "", output: "More sender context." },
+  );
+  const plan = await respond(server, input, options);
+  const call = outputToolCall(plan, "exec");
+  expect(call).toMatchObject({
+    type: "function_call",
+    arguments: JSON.stringify({ command: "true" }),
+  });
+  const completed = await respond(
+    server,
+    [
+      ...input,
+      call,
+      makeToolOutputWithCallId(String(call.call_id), ""),
+      { type: "function_call_output", call_id: " ", output: "Trailing sender context." },
+    ],
+    options,
+  );
+  expectResponseText(completed, "PROGRESS_OK");
+});
+
+it.each([
+  ["function", "function_call", "function_call_output"],
+  ["custom", "custom_tool_call", "custom_tool_call_output"],
+] as const)(
+  "ignores unlinked %s output without losing linked native results",
+  async (toolType, callType, outputType) => {
+    const server = await startMockServer();
+    const prompt =
+      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.";
+    const options = { tools: [{ type: toolType, name: "apply_patch" }] };
+    const initial = await respond(server, prompt, options);
+    const call = outputItem(initial);
+    expect(call).toMatchObject({ type: callType, name: "apply_patch" });
+    const callId = outputToolCallId(call, "linked-native-call");
+
+    for (const key of ["call_id", "tool_call_id", "tool_use_id"] as const) {
+      const completed = await respond(
+        server,
+        userInputs(
+          prompt,
+          call,
+          { type: outputType, [key]: callId, output: "" },
+          "Continue the OpenClaw runtime event.",
+        ),
+        options,
+      );
+      expect(outputItem(completed).type).toBe("message");
+      const debug = await readDebugRequest(server);
+      expect(debug).toMatchObject({ toolOutput: "", toolOutputCallId: callId });
+      expect(debug).not.toHaveProperty("plannedToolName");
+    }
+
+    for (const linkage of [{}, { call_id: " ", tool_call_id: "\t", tool_use_id: "\n" }]) {
+      const pending = await respond(
+        server,
+        userInputs(prompt, {
+          type: outputType,
+          ...linkage,
+          output: "Sender context only; no tool ran.",
+        }),
+        options,
+      );
+      expect(outputItem(pending)).toMatchObject({ type: callType, name: "apply_patch" });
+    }
+  },
+);
 
 it("honors the Matrix required failure after exit 0", async () => {
   const prompt = buildMatrixToolProgressMentionSafetyPrompt(

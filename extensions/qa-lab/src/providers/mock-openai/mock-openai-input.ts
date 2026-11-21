@@ -360,8 +360,20 @@ function stringifyFunctionCallOutput(output: unknown): string {
   return "";
 }
 
-function isResponsesToolCallOutput(item: ResponsesInputItem) {
-  return item.type === "function_call_output" || item.type === "custom_tool_call_output";
+function readToolOutputCallId(item: ResponsesInputItem | undefined) {
+  return (
+    [item?.call_id, item?.tool_call_id, item?.tool_use_id].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    ) ?? ""
+  );
+}
+
+export function isResponsesToolCallOutput(item: ResponsesInputItem) {
+  // Unlinked outputs can carry sender context, not completed tool calls.
+  return (
+    (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+    readToolOutputCallId(item) !== ""
+  );
 }
 
 function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
@@ -416,12 +428,7 @@ export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
 }
 
 export function extractToolOutputCallId(input: ResponsesInputItem[]) {
-  const item = findCurrentToolOutput(input);
-  return (
-    [item?.call_id, item?.tool_call_id, item?.tool_use_id].find(
-      (value): value is string => typeof value === "string" && value.trim().length > 0,
-    ) ?? ""
-  );
+  return readToolOutputCallId(findCurrentToolOutput(input));
 }
 
 export function extractLatestToolOutput(input: ResponsesInputItem[]) {
