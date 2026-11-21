@@ -73,6 +73,12 @@ never runs automatically or settles the deferred migration: after explicit
 recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
 the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
 
+Update Doctor still defers agent database path repair so the captured rollback
+inventory stays unchanged. It reads the registrations and warns only when one
+needs that repair, with the count; a registry with nothing to repair adds no
+warning to the update result. The candidate must contain this change; the
+installed updater needs no schema or protocol change.
+
 Gateway update handoff preparation and its parent-side lease reads, identity checks,
 and cleanup run in the existing handoff worker. Slow coordinator filesystem work
 does not block the serving Gateway. Parking and terminal commit still await exact
