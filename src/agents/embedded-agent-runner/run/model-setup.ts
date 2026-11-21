@@ -50,6 +50,7 @@ import {
 } from "../../prepared-model-runtime-generation-scope.js";
 import { readAdmittedPublishedModelCatalog } from "../../prepared-model-runtime.capture.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { resolveProviderModelMaterializationAuthMode } from "../../provider-model-route-auth.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -430,6 +431,19 @@ export async function resolveEmbeddedRunModelSetup(params: {
       });
     observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
+    const agentId = runParams.agentId;
+    const nativeAccountAuthMode =
+      runParams.authProfileId || !runParams.config || !agentId
+        ? undefined
+        : resolveProviderModelMaterializationAuthMode(
+            agentHarness.readNativeAccountAuthMode?.({
+              config: runParams.config,
+              agentId,
+              agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
+              provider,
+            }),
+          );
     const tieredResolution = await resolveTieredModel({
       abortSignal: runParams.abortSignal,
       assertCurrent: params.assertCurrent,
@@ -442,6 +456,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
       config: runParams.config,
       workspaceDir: params.workspaceDir,
       authProfileId: runParams.authProfileId,
+      authProfileMode: nativeAccountAuthMode,
       preparedModelRuntime: params.preparedModelRuntime,
       staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
     });
