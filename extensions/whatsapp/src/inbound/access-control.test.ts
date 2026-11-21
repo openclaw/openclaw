@@ -160,4 +160,13 @@ describe("WhatsApp admission and command authorization", () => {
     configure({ dmPolicy: "pairing", allowFrom: [SELF] });
     expect(await access(samePhone)).toMatchObject({ isSelfChat: true });
   });
+  it.each([false, true])("rejects same-digit LID allowlists (group: %s)", async (group) => {
+    configure({
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["15550001111@hosted.lid"],
+      accounts: { work: { allowFrom: ["15550001111@lid"] } },
+    });
+    await checkBoth(false, {}, group);
+  });
 });

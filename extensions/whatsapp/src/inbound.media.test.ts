@@ -79,7 +79,7 @@ function createMockSocket() {
     updateMediaMessage: vi.fn(),
     getMediaHost: () => "media-conn.example",
     logger: {},
-    user: { id: "me@s.whatsapp.net" },
+    user: { id: "15559876543@s.whatsapp.net" },
   };
 }
 let currentMockSocket: ReturnType<typeof createMockSocket> | undefined;
@@ -415,7 +415,7 @@ describe("web inbound media saves with extension", () => {
       quotedReply("@bot what is this?", {
         stanzaId: "quoted-image",
         participant: "222@s.whatsapp.net",
-        mentionedJid: ["me@s.whatsapp.net"],
+        mentionedJid: ["15559876543@s.whatsapp.net"],
         quotedMessage: imageMessage(),
       }),
       "111@g.us",
@@ -441,7 +441,7 @@ describe("web inbound media saves with extension", () => {
       "quote-own-image",
       quotedReply("what is in your image?", {
         stanzaId: "bot-image",
-        participant: "me@s.whatsapp.net",
+        participant: "15559876543@s.whatsapp.net",
         quotedMessage: imageMessage(),
       }),
     );
@@ -456,7 +456,7 @@ describe("web inbound media saves with extension", () => {
     const retry = encryptMediaRetryRequest(
       quoted!.key as never,
       Buffer.alloc(32, 1),
-      "me@s.whatsapp.net",
+      "15559876543@s.whatsapp.net",
     );
     const retryNode = Array.isArray(retry.content)
       ? retry.content.find((node) => node.tag === "rmr")

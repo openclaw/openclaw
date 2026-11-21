@@ -23,6 +23,7 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { normalizeWhatsAppAllowFromEntries } from "./allowlist-format.js";
 import { readWhatsAppAccountLinkState } from "./channel-runtime-loader.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
@@ -32,7 +33,6 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
-import { normalizeWhatsAppAllowFromEntries } from "./normalize-target.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,

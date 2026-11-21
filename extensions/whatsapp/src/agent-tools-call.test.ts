@@ -157,7 +157,10 @@ describe("WhatsApp call tool", () => {
       expect(wav.subarray(44)).toEqual(Buffer.alloc(48_000, 1));
       return commandResult();
     }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
-    const tool = resolveRegisteredCallTool(createApi({ runCommand }), createContext());
+    const tool = resolveRegisteredCallTool(
+      createApi({ runCommand }),
+      createContext({ requesterSenderId: "15551234567:2@c.us" }),
+    );
 
     const result = await tool?.execute("call-2", {
       action: "call",

@@ -1,6 +1,1 @@
-export {
-  DisconnectReason,
-  downloadMediaMessage,
-  isJidGroup,
-  normalizeMessageContent,
-} from "baileys";
+export { DisconnectReason, downloadMediaMessage, normalizeMessageContent } from "baileys";

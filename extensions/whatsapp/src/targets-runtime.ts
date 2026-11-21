@@ -1,44 +1,18 @@
-import fs from "node:fs";
-import path from "node:path";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeWhatsAppAllowFromEntry } from "./allowlist-format.js";
 import {
-  FormatCapabilityProfile,
-  type MarkdownIR,
-  markdownToIRWithMeta,
-  renderMarkdownIRChunksWithinLimit,
-  renderMarkdownWithMarkers,
-  sliceMarkdownIR,
-} from "openclaw/plugin-sdk/text-chunking";
-import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
-
-const WHATSAPP_FORMAT_CAPABILITIES = FormatCapabilityProfile.define({
-  mechanism: "markdown",
-  constructs: {
-    underline: "strip",
-    spoiler: "fallback",
-    codeLanguage: "fallback",
-    linkLabel: "fallback",
-    heading: "fallback",
-    taskList: "fallback",
-    table: "fallback",
-    image: "fallback",
-  },
-  chunk: { limit: 4_096, unit: "chars" },
-});
-
-const WHATSAPP_STYLE_MARKERS = {
-  bold: { open: "*", close: "*" },
-  italic: { open: "_", close: "_" },
-  strikethrough: { open: "~", close: "~" },
-  code: { open: "```", close: "```" },
-  code_block: { open: "```\n", close: "```" },
-} as const;
-
-const WHATSAPP_INDENT_GUARD = "\u2060";
-const WHATSAPP_MARKERS = ["*", "_", "~", "`"] as const;
+  readWhatsAppLidToPnMapping,
+  readWhatsAppPnToLidMapping,
+  type WhatsAppLidMappingFileOptions,
+} from "./lid-mapping-files.js";
+import { stripWhatsAppTargetPrefixes } from "./whatsapp-jid-syntax.js";
+import {
+  classifyWhatsAppDirectJid,
+  classifyWhatsAppJid,
+  encodeWhatsAppJid,
+  type WhatsAppDirectJid,
+} from "./whatsapp-jid.js";
 
 export type WebChannel = "web";
 
@@ -55,20 +29,28 @@ export function isSelfChatMode(
   if (!selfE164 || !allowFrom?.length) {
     return false;
   }
-  const normalizedSelf = normalizeE164(selfE164);
-  return allowFrom.some(
-    (entry) => entry !== "*" && normalizeE164(String(entry)) === normalizedSelf,
-  );
+  const normalizedSelf = normalizeWhatsAppAllowFromEntry(selfE164);
+  if (!normalizedSelf || normalizedSelf === "*") {
+    return false;
+  }
+  return allowFrom.some((n) => {
+    const normalized = normalizeWhatsAppAllowFromEntry(String(n));
+    return normalized !== "*" && normalized === normalizedSelf;
+  });
 }
 
 export function toWhatsappJid(number: string): string {
-  const withoutPrefix = number.replace(/^whatsapp:/i, "").trim();
+  const withoutPrefix = stripWhatsAppTargetPrefixes(number);
   if (withoutPrefix.includes("@")) {
-    return withoutPrefix;
+    const classified = classifyWhatsAppJid(withoutPrefix);
+    if (classified.kind === "unsupported") {
+      throw new Error(`Invalid WhatsApp JID: ${withoutPrefix}`);
+    }
+    return classified.jid;
   }
   const e164 = normalizeE164(withoutPrefix);
   const digits = e164.replace(/\D/g, "");
-  return `${digits}@s.whatsapp.net`;
+  return encodeWhatsAppJid(digits, "s.whatsapp.net");
 }
 
 // LID-aware outbound JID resolver. When a forward mapping file
@@ -77,19 +59,17 @@ export function toWhatsappJid(number: string): string {
 // ghost-chat failure mode where messages route to a sender-only thread that
 // never reaches recipients whose contact is internally LID-based (#67378).
 export function toWhatsappJidWithLid(number: string, opts?: JidToE164Options): string {
-  const stripped = number.replace(/^whatsapp:/i, "").trim();
+  const stripped = stripWhatsAppTargetPrefixes(number);
   if (stripped.includes("@")) {
-    return stripped;
+    return toWhatsappJid(stripped);
   }
   const e164 = normalizeE164(stripped);
   const phoneDigits = e164.replace(/\D/g, "");
-  const lid = readLidForwardMapping({ phoneDigits, opts });
-  return lid ? `${lid}@lid` : `${phoneDigits}@s.whatsapp.net`;
+  const lid = readWhatsAppPnToLidMapping({ phoneDigits, options: opts });
+  return lid ? encodeWhatsAppJid(lid, "lid") : encodeWhatsAppJid(phoneDigits, "s.whatsapp.net");
 }
 
-export type JidToE164Options = {
-  authDir?: string;
-  lidMappingDirs?: string[];
+export type JidToE164Options = WhatsAppLidMappingFileOptions & {
   logMissing?: boolean;
 };
 
@@ -107,148 +87,94 @@ function addUniqueString(target: string[], value: string | null | undefined): vo
 
 async function tryLookupMappedJid(
   lookup: () => Promise<string | null> | undefined,
-  failureContext = "",
 ): Promise<string | null> {
   try {
     return (await lookup()) ?? null;
   } catch (err) {
     if (shouldLogVerbose()) {
-      logVerbose(`LID mapping lookup failed${failureContext}: ${String(err)}`);
+      logVerbose(`LID mapping lookup failed: ${String(err)}`);
     }
     return null;
   }
 }
 
-const DIRECT_PN_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted)$/i;
-const DIRECT_LID_JID_RE = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/i;
-
-function addEquivalentDirectChatCandidate(target: string[], jid: string | null | undefined): void {
-  addUniqueString(target, jid);
-  const match = jid?.match(DIRECT_PN_JID_RE) ?? jid?.match(DIRECT_LID_JID_RE);
-  if (match) {
-    addUniqueString(target, `${match[1]}@${match[2]}`);
+function addEquivalentDirectChatCandidate(
+  target: string[],
+  jid: string | null | undefined,
+  expectedKind?: WhatsAppDirectJid["kind"],
+): void {
+  const classified = classifyWhatsAppDirectJid(jid);
+  if (!classified || (expectedKind && classified.kind !== expectedKind)) {
+    return;
   }
+  addUniqueString(target, classified.jid);
+  const aliasServer =
+    classified.kind === "pn"
+      ? classified.server === "hosted"
+        ? "s.whatsapp.net"
+        : "hosted"
+      : classified.server === "hosted.lid"
+        ? "lid"
+        : "hosted.lid";
+  // Baileys collapses hosted domains on receive. Keep both routing aliases so
+  // reactions can find bindings saved under the original delivered JID.
+  addUniqueString(target, encodeWhatsAppJid(classified.user, aliasServer));
 }
 
 export async function resolveEquivalentWhatsAppDirectChatJids(
   jid: string | null | undefined,
   opts?: JidToE164Options & { lidLookup?: LidLookup },
 ): Promise<string[]> {
-  const normalized = jid?.trim();
-  if (!normalized) {
+  const directJid = classifyWhatsAppDirectJid(jid);
+  if (!directJid) {
     return [];
   }
 
   const candidates: string[] = [];
-  addEquivalentDirectChatCandidate(candidates, normalized);
-  const pnMatch = normalized.match(DIRECT_PN_JID_RE);
-  const match = pnMatch ?? normalized.match(DIRECT_LID_JID_RE);
-  if (!match) {
-    return candidates;
-  }
-  const mappedJid = await tryLookupMappedJid(() =>
-    pnMatch
-      ? opts?.lidLookup?.getLIDForPN?.(normalized)
-      : opts?.lidLookup?.getPNForLID?.(normalized),
-  );
-  addEquivalentDirectChatCandidate(candidates, mappedJid);
+  addEquivalentDirectChatCandidate(candidates, directJid.jid);
+  if (directJid.kind === "pn") {
+    const mappedLid = await tryLookupMappedJid(() => opts?.lidLookup?.getLIDForPN?.(directJid.jid));
+    addEquivalentDirectChatCandidate(candidates, mappedLid, "lid");
 
-  const digits = match[1];
-  const domain = match[2];
-  if (!digits || !domain) {
+    const mappedLocalLid = readWhatsAppPnToLidMapping({
+      phoneDigits: directJid.user,
+      options: opts,
+    });
+    const localLidDomain = directJid.server === "hosted" ? "hosted.lid" : "lid";
+    addEquivalentDirectChatCandidate(
+      candidates,
+      mappedLocalLid ? encodeWhatsAppJid(mappedLocalLid, localLidDomain) : null,
+    );
     return candidates;
   }
-  if (pnMatch) {
-    const mappedLocalLid = readLidForwardMapping({ phoneDigits: digits, opts });
-    const localLidDomain = domain.toLowerCase() === "hosted" ? "hosted.lid" : "lid";
-    addUniqueString(candidates, mappedLocalLid ? `${mappedLocalLid}@${localLidDomain}` : null);
-  } else {
-    const e164 = jidToE164(normalized, { ...opts, logMissing: false });
-    const localPnJid =
-      e164 && domain.toLowerCase() === "hosted.lid"
-        ? `${e164.replace(/\D/g, "")}@hosted`
-        : e164
-          ? toWhatsappJid(e164)
-          : null;
-    addUniqueString(candidates, localPnJid);
-  }
+
+  const e164 = await resolveJidToE164(directJid.jid, { ...opts, logMissing: false });
+  const localPnDomain = directJid.server === "hosted.lid" ? "hosted" : "s.whatsapp.net";
+  addEquivalentDirectChatCandidate(
+    candidates,
+    e164 ? encodeWhatsAppJid(e164.replace(/\D/g, ""), localPnDomain) : null,
+  );
   return candidates;
 }
 
-function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
-  const dirs = new Set<string>();
-  const addDir = (dir?: string | null) => {
-    if (!dir) {
-      return;
-    }
-    dirs.add(resolveUserPath(dir));
-  };
-  addDir(params.opts?.authDir);
-  for (const dir of params.opts?.lidMappingDirs ?? []) {
-    addDir(dir);
-  }
-  addDir(CONFIG_DIR);
-  addDir(path.join(CONFIG_DIR, "credentials"));
-  return [...dirs];
-}
-
-function readLidMapping(
-  mappingFilename: string,
-  opts: JidToE164Options | undefined,
-  normalize: (value: string) => string | null,
-): string | null {
-  for (const dir of resolveLidMappingDirs({ opts })) {
-    const mappingPath = path.join(dir, mappingFilename);
-    try {
-      const data = fs.readFileSync(mappingPath, "utf8");
-      const value = JSON.parse(data) as string | number | null;
-      if (value === null || value === undefined) {
-        continue;
-      }
-      const normalized = normalize(String(value));
-      if (normalized !== null) {
-        return normalized;
-      }
-    } catch {
-      // next location
-    }
-  }
-  return null;
-}
-
-function readLidForwardMapping(params: {
-  phoneDigits: string;
-  opts?: JidToE164Options;
-}): string | null {
-  return readLidMapping(
-    `lid-mapping-${params.phoneDigits}.json`,
-    params.opts,
-    (value) => value.replace(/\D/g, "") || null,
-  );
-}
-
 export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
-  const match = jid.match(/^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted)$/);
-  const phoneDigits = match?.[1];
-  if (phoneDigits) {
-    return `+${phoneDigits}`;
-  }
-
-  const lidMatch = jid.match(/^(\d+)(?::\d+)?@(lid|hosted\.lid)$/);
-  if (!lidMatch) {
+  const directJid = classifyWhatsAppDirectJid(jid);
+  if (!directJid) {
     return null;
   }
-  const lid = lidMatch[1];
-  if (!lid) {
-    return null;
+  if (directJid.kind === "pn") {
+    return `+${directJid.user}`;
   }
-  const phone = readLidMapping(`lid-mapping-${lid}_reverse.json`, opts, normalizeE164);
-  if (phone) {
-    return phone;
+  const mapping = readWhatsAppLidToPnMapping({
+    lid: directJid.user,
+    options: opts,
+  });
+  if (mapping.kind === "mapped") {
+    return mapping.e164;
   }
   const shouldLog = opts?.logMissing ?? shouldLogVerbose();
   if (shouldLog) {
-    logVerbose(`LID mapping not found for ${lidMatch[1]}; skipping inbound message`);
+    logVerbose(`LID mapping not found for ${directJid.user}; skipping inbound message`);
   }
   return null;
 }
@@ -260,132 +186,33 @@ export async function resolveJidToE164(
   if (!jid) {
     return null;
   }
-  const direct = jidToE164(jid, opts);
-  if (direct) {
-    return direct;
-  }
-  if (!/(@lid|@hosted\.lid)$/.test(jid) || !opts?.lidLookup?.getPNForLID) {
+  const directJid = classifyWhatsAppDirectJid(jid);
+  if (!directJid) {
     return null;
   }
-  return await tryLookupMappedJid(async () => {
-    const pnJid = await opts.lidLookup?.getPNForLID?.(jid);
-    return pnJid ? jidToE164(pnJid, opts) : null;
-  }, ` for ${jid}`);
+  if (directJid.kind === "pn") {
+    return `+${directJid.user}`;
+  }
+  const mapping = readWhatsAppLidToPnMapping({ lid: directJid.user, options: opts });
+  if (mapping.kind === "mapped") {
+    return mapping.e164;
+  }
+  // Baileys may return the same stale reverse entry that the file owner rejected.
+  if (mapping.kind === "rejected" || !opts?.lidLookup?.getPNForLID) {
+    return null;
+  }
+  try {
+    const pnJid = await opts.lidLookup.getPNForLID(directJid.jid);
+    if (!pnJid) {
+      return null;
+    }
+    return jidToE164(pnJid, opts);
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`LID mapping lookup failed for ${directJid.jid}: ${String(err)}`);
+    }
+    return null;
+  }
 }
 
-export function markdownToWhatsAppChunks(
-  text: string,
-  limit: number,
-  tableMode: MarkdownTableMode = "bullets",
-  chunkMode: ChunkMode = "length",
-): string[] {
-  if (!text) {
-    return [];
-  }
-  if (!text.trim()) {
-    return chunkMarkdownTextWithMode(text, limit, chunkMode);
-  }
-  // Some outbound callers preserve leading indentation as presentation, while
-  // CommonMark consumes it as block indentation. Guard only the parse.
-  const guardedIndent = /^[\t ]/u.test(text);
-  const placeholders: string[] = [];
-  for (const [start, end] of [
-    [0xe000, 0xf8ff],
-    [0xf0000, 0xffffd],
-  ] as const) {
-    for (
-      let codePoint = start;
-      codePoint <= end && placeholders.length < WHATSAPP_MARKERS.length;
-      codePoint += 1
-    ) {
-      const candidate = String.fromCodePoint(codePoint);
-      if (!text.includes(candidate)) {
-        placeholders.push(candidate);
-      }
-    }
-  }
-  if (placeholders.length < WHATSAPP_MARKERS.length) {
-    throw new Error("Unable to reserve WhatsApp formatting placeholders");
-  }
-  const escapedMarkers = WHATSAPP_MARKERS.map((marker, index) => ({
-    source: `\\${marker}`,
-    placeholder: placeholders[index] ?? "",
-  }));
-  let protectedText = text;
-  for (const { source, placeholder } of escapedMarkers) {
-    protectedText = protectedText.replaceAll(source, placeholder);
-  }
-  const markdown = guardedIndent ? `${WHATSAPP_INDENT_GUARD}${protectedText}` : protectedText;
-  const trailingWhitespace = text.match(/\s+$/u)?.[0] ?? "";
-  const { ir: parsedIr, hasTables } = markdownToIRWithMeta(markdown, {
-    linkify: false,
-    autolink: false,
-    enableSpoilers: true,
-    enableHtmlUnderline: true,
-    enableTaskLists: true,
-    headingStyle: "rich",
-    tableMode: tableMode === "block" ? "code" : tableMode,
-    preserveSourceBlockSpacing: true,
-  });
-  let ir = parsedIr;
-  if (guardedIndent && ir.text.startsWith(WHATSAPP_INDENT_GUARD)) {
-    ir = sliceMarkdownIR(ir, WHATSAPP_INDENT_GUARD.length, ir.text.length);
-  }
-  if (!hasTables && trailingWhitespace) {
-    ir.text = `${ir.text.trimEnd()}${trailingWhitespace}`;
-  }
-  const render = (chunk: MarkdownIR) =>
-    renderMarkdownWithMarkers(
-      chunk,
-      {
-        styleMarkers: WHATSAPP_STYLE_MARKERS,
-        blockquotePrefix: "> ",
-        escapeText: (value) => {
-          let restored = value;
-          for (const { source, placeholder } of escapedMarkers) {
-            restored = restored.replaceAll(placeholder, source);
-          }
-          return restored;
-        },
-      },
-      WHATSAPP_FORMAT_CAPABILITIES,
-    );
-  function splitWhatsAppIRForChunkMode(): MarkdownIR[] {
-    if (chunkMode !== "newline") {
-      return [ir];
-    }
-    const chunkTexts = chunkMarkdownTextWithMode(ir.text, limit, chunkMode);
-    const chunks: MarkdownIR[] = [];
-    let cursor = 0;
-    for (const chunkText of chunkTexts) {
-      const start = ir.text.indexOf(chunkText, cursor);
-      if (start < 0) {
-        return [ir];
-      }
-      const end = start + chunkText.length;
-      chunks.push(sliceMarkdownIR(ir, start, end));
-      cursor = end;
-    }
-    return chunks;
-  }
-
-  let chunks =
-    ir.styles.length === 0 && ir.links.length === 0
-      ? chunkMarkdownTextWithMode(render(ir), limit, chunkMode)
-      : splitWhatsAppIRForChunkMode().flatMap((source) =>
-          renderMarkdownIRChunksWithinLimit({
-            ir: source,
-            limit,
-            renderChunk: render,
-            measureRendered: (value) => value.length,
-          }).map((chunk) => chunk.rendered),
-        );
-  if (chunkMode === "newline") {
-    chunks = chunks.map((chunk) => chunk.trimEnd()).filter(Boolean);
-  }
-  return chunks;
-}
-
-export function markdownToWhatsApp(text: string, tableMode: MarkdownTableMode = "bullets"): string {
-  return markdownToWhatsAppChunks(text, Number.POSITIVE_INFINITY, tableMode).join("");
-}
+export { markdownToWhatsApp, markdownToWhatsAppChunks } from "./whatsapp-format.js";

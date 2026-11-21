@@ -1,13 +1,49 @@
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeWhatsAppTarget } from "./normalize-target.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
+import { readWhatsAppLidToPnMappings } from "./lid-mapping-files.js";
+import {
+  isWhatsAppGroupJid,
+  isWhatsAppNewsletterJid,
+  normalizeWhatsAppDirectPhone,
+  normalizeWhatsAppTarget,
+} from "./normalize-target.js";
+import { classifyWhatsAppDirectJid } from "./whatsapp-jid.js";
 
 type WhatsAppOutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
+
+function whatsappAllowFromPolicyError(target: string): Error {
+  return new Error(`Target "${target}" is not listed in the configured WhatsApp allowFrom policy.`);
+}
+
+function resolveAuthorizedTargetPhone(params: {
+  target: string;
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
+}): string | null {
+  const directPhone = normalizeWhatsAppDirectPhone(params.target);
+  if (directPhone || !params.cfg) {
+    return directPhone;
+  }
+  const directJid = classifyWhatsAppDirectJid(params.target);
+  if (directJid?.kind !== "lid") {
+    return null;
+  }
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
+  const mappings = readWhatsAppLidToPnMappings({
+    lid: directJid.user,
+    mappingDirs: [account.authDir],
+  });
+  return mappings.length === 1 ? (mappings[0] ?? null) : null;
+}
 
 export function resolveWhatsAppOutboundTarget(params: {
   to: string | null | undefined;
   allowFrom: Array<string | number> | null | undefined;
   mode: string | null | undefined;
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
 }): WhatsAppOutboundTargetResolution {
   const normalizedTo = normalizeWhatsAppTarget(params.to ?? "");
   if (!normalizedTo) {
@@ -16,23 +52,30 @@ export function resolveWhatsAppOutboundTarget(params: {
       error: missingTargetError("WhatsApp", "<E.164|group JID|newsletter JID>"),
     };
   }
-  if (normalizedTo.endsWith("@g.us") || normalizedTo.endsWith("@newsletter")) {
+
+  if (isWhatsAppGroupJid(normalizedTo) || isWhatsAppNewsletterJid(normalizedTo)) {
     return { ok: true, to: normalizedTo };
   }
 
   const allowListRaw = normalizeStringEntries(params.allowFrom ?? []);
   const hasWildcard = allowListRaw.includes("*");
-  const allowList = allowListRaw
-    .filter((entry) => entry !== "*")
-    .map((entry) => normalizeWhatsAppTarget(entry))
+  const constrainedEntries = allowListRaw.filter((entry) => entry !== "*");
+  const allowList = constrainedEntries
+    .map((entry) => normalizeWhatsAppDirectPhone(entry))
     .filter((entry): entry is string => Boolean(entry));
-  if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo)) {
+  if (hasWildcard || constrainedEntries.length === 0) {
+    return { ok: true, to: normalizedTo };
+  }
+  const normalizedTargetPhone = resolveAuthorizedTargetPhone({
+    target: normalizedTo,
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (normalizedTargetPhone && allowList.includes(normalizedTargetPhone)) {
     return { ok: true, to: normalizedTo };
   }
   return {
     ok: false,
-    error: new Error(
-      `Target "${normalizedTo}" is not listed in the configured WhatsApp allowFrom policy.`,
-    ),
+    error: whatsappAllowFromPolicyError(normalizedTo),
   };
 }

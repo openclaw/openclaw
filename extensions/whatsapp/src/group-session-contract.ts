@@ -1,18 +1,20 @@
+// Whatsapp plugin module implements group session contract behavior.
+import { canonicalizeWhatsAppGroupJid } from "./whatsapp-jid-syntax.js";
+
 export function resolveLegacyGroupSessionKey(ctx: { From?: string }): {
   key: string;
   channel: string;
   id: string;
   chatType: "group";
 } | null {
-  const from = ctx.From?.trim() ?? "";
-  const normalized = from.toLowerCase();
-  if (!from || from.includes(":") || !normalized.endsWith("@g.us")) {
+  const groupJid = canonicalizeWhatsAppGroupJid(ctx.From);
+  if (!groupJid) {
     return null;
   }
   return {
-    key: `whatsapp:group:${normalized}`,
+    key: `whatsapp:group:${groupJid}`,
     channel: "whatsapp",
-    id: normalized,
+    id: groupJid,
     chatType: "group",
   };
 }

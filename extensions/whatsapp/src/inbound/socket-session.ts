@@ -5,7 +5,6 @@ import type {
   MiscMessageGenerationOptions,
   proto,
   ReachoutTimelockState,
-  WAMessage,
   WASocket,
 } from "baileys";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
@@ -13,7 +12,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
-import { cacheInboundMessageMeta } from "../quoted-message.js";
 import {
   DEFAULT_RECONNECT_POLICY,
   computeBackoff,
@@ -35,18 +33,21 @@ import {
   toWhatsappJid,
   toWhatsappJidWithLid,
 } from "../targets-runtime.js";
+import { classifyWhatsAppDirectJid } from "../whatsapp-jid.js";
 import {
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysMessageCache,
 } from "./baileys-cache.js";
-import { rememberRecentOutboundMessage } from "./dedupe.js";
 import type { WhatsAppReadReceiptTarget } from "./durable-receive.js";
-import { extractText } from "./extract.js";
 import {
   attachEmitterListener,
   closeInboundMonitorSocket,
   type WhatsAppSocketListen,
 } from "./lifecycle.js";
+import {
+  createWhatsAppOutboundMessageRecorder,
+  type WhatsAppOutboundMessageIdentity,
+} from "./outbound-message-cache.js";
 import { DisconnectReason } from "./runtime-api.js";
 import type { WebListenerCloseReason } from "./types.js";
 
@@ -68,10 +69,6 @@ type SocketSessionOptions = {
   logVerbose: (message: string) => void;
   logConnectionError: (error: unknown) => void;
 };
-
-function isDirectUserJid(jid: string): boolean {
-  return /^(\d+)(?::\d+)?@(s\.whatsapp\.net|c\.us|lid|hosted|hosted\.lid)$/i.test(jid.trim());
-}
 
 function getActiveReachoutTimelock(
   state: ReachoutTimelockState | undefined,
@@ -190,36 +187,11 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
-  const rememberOutboundMessage = (remoteJid: string, result: WAMessage | undefined) => {
-    const messageId = result?.key?.id;
-    if (!messageId) {
-      return;
-    }
-    rememberRecentOutboundMessage({
+  const { remember: rememberOutboundMessage, trackLateAccepted: trackLateAcceptedSend } =
+    createWhatsAppOutboundMessageRecorder({
       accountId: options.accountId,
-      remoteJid,
-      messageId,
+      rememberBaileysMessage,
     });
-    const message = result?.message;
-    rememberBaileysMessage(remoteJid, messageId, message);
-    // Baileys derives the participant for fromMe quotes from its own userJid.
-    // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
-    cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
-      fromMe: true,
-      body: extractText(message ?? undefined),
-    });
-  };
-
-  const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
-    // The local send has failed terminally, but Baileys may still deliver it.
-    // Track a late message id only to suppress the resulting self-echo.
-    void promise.then(
-      (result) => {
-        rememberOutboundMessage(jid, result);
-      },
-      () => {},
-    );
-  };
 
   const currentSocketOperations = (currentSock: WASocket) =>
     createWhatsAppSocketOperationTimeoutAdapter(currentSock, sendOperationTimeoutMs, {
@@ -228,7 +200,8 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
           throw new Error(RECONNECT_IN_PROGRESS_ERROR);
         }
       },
-      onSendMessageTimeout: ({ jid, promise }) => trackLateAcceptedSend(jid, promise),
+      onSendMessageTimeout: ({ jid, promise, identity }) =>
+        trackLateAcceptedSend(jid, promise, identity),
     });
 
   let reachoutTimeLock: ReachoutTimelockState | undefined;
@@ -268,7 +241,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     currentSock: WASocket,
     readinessOptions?: { rememberReady?: boolean; useVerifiedReady?: boolean },
   ) => {
-    if (!isDirectUserJid(jid)) {
+    if (!classifyWhatsAppDirectJid(jid)) {
       return;
     }
     if (
@@ -311,6 +284,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     jid: string,
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
+    identity?: WhatsAppOutboundMessageIdentity,
   ) => {
     // One logical send keeps its identity even if an ambiguous failure changes sockets.
     // Baileys treats an empty caller ID as missing, so pin that fallback before retrying.
@@ -328,8 +302,9 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
             jid,
             content,
             trackedOptions,
+            identity,
           );
-          rememberOutboundMessage(jid, result);
+          rememberOutboundMessage(jid, result, identity);
           return result;
         } catch (error) {
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(error)) {

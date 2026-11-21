@@ -92,8 +92,8 @@ const outbound = {
     },
   },
   pollMaxOptions: 12,
-  resolveTarget: ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget: ({ to, allowFrom, mode, cfg, accountId }) =>
+    resolveWhatsAppOutboundTarget({ to, allowFrom, mode, cfg, accountId }),
   ...createAttachedChannelResultAdapter({
     channel: "whatsapp",
     sendText: async (params) => {

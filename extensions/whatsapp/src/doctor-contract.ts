@@ -13,6 +13,10 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
+import {
+  migrateWhatsAppLidAllowlistsConfig,
+  whatsAppLidAllowlistLegacyRules,
+} from "./allowlist-doctor.js";
 import { isWhatsAppBaileysAuthFileName } from "./creds-files.js";
 import { normalizeCompatibilityConfig as normalizeAckReactionConfig } from "./doctor.js";
 
@@ -97,6 +101,7 @@ function collectDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
+  ...whatsAppLidAllowlistLegacyRules,
   {
     path: ["channels", "whatsapp", "ackReaction"],
     message:
@@ -120,6 +125,14 @@ export function normalizeCompatibilityConfig({
     cfg: ackReaction.config,
     changes: ackReaction.changes,
   });
-  const warnings = collectDefaultAccountWarnings(normalized.config);
-  return { ...normalized, ...(warnings.length ? { warnings } : {}) };
+  const allowlists = migrateWhatsAppLidAllowlistsConfig(normalized.config);
+  const warnings = [
+    ...collectDefaultAccountWarnings(allowlists.config),
+    ...(allowlists.warnings ?? []),
+  ];
+  return {
+    config: allowlists.config,
+    changes: [...normalized.changes, ...allowlists.changes],
+    ...(warnings.length ? { warnings } : {}),
+  };
 }

@@ -16,9 +16,15 @@ const runtimeLoads = vi.hoisted(() => ({
   readWebAuthState: vi.fn(async () => "linked" as const),
 }));
 
+vi.mock("./auth-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-state.js")>()),
+  readWebAuthState: runtimeLoads.readWebAuthState,
+}));
+
+// mock-isolation: Observe preload ordering without initializing the socket/auth runtime.
 vi.mock("./auth-store.js", () => {
   runtimeLoads.order.push("auth-store");
-  return { readWebAuthState: runtimeLoads.readWebAuthState };
+  return {};
 });
 
 vi.mock("./channel.runtime.js", () => {
@@ -59,15 +65,16 @@ function listChannelRuntimeImportOwners(): string[] {
 }
 
 describe("WhatsApp channel runtime loader", () => {
-  it("shares imports and resolves auth before the channel runtime", async () => {
+  it("reads auth without loading runtime and shares preloaded runtime imports", async () => {
+    await expect(readWhatsAppAccountLinkState("/tmp/default")).resolves.toBe("linked");
+    expect(runtimeLoads.order).toEqual([]);
+    expect(runtimeLoads.readWebAuthState).toHaveBeenCalledExactlyOnceWith("/tmp/default");
+
     const firstRuntimeLoad = loadWhatsAppChannelRuntime();
 
     expect(loadWhatsAppChannelRuntime()).toBe(firstRuntimeLoad);
-    await expect(
-      Promise.all([readWhatsAppAccountLinkState("/tmp/default"), firstRuntimeLoad]),
-    ).resolves.toEqual(["linked", expect.any(Object)]);
+    await expect(firstRuntimeLoad).resolves.toEqual(expect.any(Object));
     expect(runtimeLoads.order).toEqual(["auth-store", "channel-runtime"]);
-    expect(runtimeLoads.readWebAuthState).toHaveBeenCalledOnce();
   });
 
   it("keeps one production owner for the channel runtime import", () => {

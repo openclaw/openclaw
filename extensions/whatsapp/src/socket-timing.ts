@@ -11,6 +11,7 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import type { WhatsAppOutboundMessageIdentity } from "./inbound/outbound-message-cache.js";
 
 export type WhatsAppSocketTimingOptions = {
   keepAliveIntervalMs?: number;
@@ -23,13 +24,18 @@ export type WhatsAppSocketOperationAdapter = {
     jid: string,
     content: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
+    identity?: WhatsAppOutboundMessageIdentity,
   ) => Promise<WAMessage | undefined>;
   sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
 };
 
 type WhatsAppSocketOperationTimeoutHooks = {
   assertCurrent?: () => void;
-  onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
+  onSendMessageTimeout?: (params: {
+    jid: string;
+    promise: Promise<WAMessage | undefined>;
+    identity?: WhatsAppOutboundMessageIdentity;
+  }) => void;
 };
 
 const socketSendMessageQueues = new WeakMap<WhatsAppSocketOperationAdapter, Promise<void>>();
@@ -128,11 +134,11 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
       : run();
   };
   return {
-    sendMessage: (jid, content, options) =>
+    sendMessage: (jid, content, options, identity) =>
       runOperation(
         "sendMessage",
         () => (options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content)),
-        (promise) => hooks?.onSendMessageTimeout?.({ jid, promise }),
+        (promise) => hooks?.onSendMessageTimeout?.({ jid, promise, identity }),
       ),
     sendPresenceUpdate: (presence, jid) =>
       runOperation("sendPresenceUpdate", () =>

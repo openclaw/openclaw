@@ -17,6 +17,8 @@ export function resolveAuthorizedWhatsAppOutboundTarget(params: {
     to: params.chatJid,
     allowFrom: account.allowFrom ?? [],
     mode: "implicit",
+    cfg: params.cfg,
+    accountId: account.accountId,
   });
   if (!resolution.ok) {
     throw new ToolAuthorizationError(

@@ -50,10 +50,11 @@ type MockSock = {
   logger: Record<string, unknown>;
   signalRepository: {
     lidMapping: {
+      getLIDForPN: AnyMockFn;
       getPNForLID: AnyMockFn;
     };
   };
-  user: { id: string };
+  user: { id: string; lid?: string };
 };
 
 const sessionState = vi.hoisted(() => ({
@@ -208,6 +209,7 @@ function createMockSock(): MockSock {
     logger: {},
     signalRepository: {
       lidMapping: {
+        getLIDForPN: vi.fn().mockResolvedValue(null),
         getPNForLID: vi.fn().mockResolvedValue(null),
       },
     },
@@ -362,6 +364,9 @@ export function buildNotifyMessageUpsert(params: {
   timestamp: number;
   pushName?: string;
   participant?: string;
+  participantAlt?: string;
+  remoteJidAlt?: string;
+  fromMe?: boolean;
 }) {
   return {
     type: "notify",
@@ -369,9 +374,11 @@ export function buildNotifyMessageUpsert(params: {
       {
         key: {
           id: params.id,
-          fromMe: false,
+          fromMe: params.fromMe ?? false,
           remoteJid: params.remoteJid,
+          remoteJidAlt: params.remoteJidAlt,
           participant: params.participant,
+          participantAlt: params.participantAlt,
         },
         message: { conversation: params.text },
         messageTimestamp: params.timestamp,
