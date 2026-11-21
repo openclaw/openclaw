@@ -482,6 +482,7 @@ export const ChatAbortParamsSchema = closedObject({
 export const ChatInjectParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  sessionId: Type.Optional(NonEmptyString),
   message: NonEmptyString,
   label: Type.Optional(Type.String({ maxLength: 100 })),
 });
