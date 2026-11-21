@@ -3,7 +3,10 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
 import * as sessionMeta from "../../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import * as entryReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,13 +15,17 @@ import {
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionStoreLookup } from "./dispatch-from-config.context.js";
 import { gatherDispatchRequest } from "./dispatch-from-config.gather.js";
+import { prepareDispatchOperationContext } from "./dispatch-from-config.prepare-context.js";
 import { prepareDispatchDelivery } from "./dispatch-from-config.prepare-delivery.js";
+import { prepareDispatchOperation } from "./dispatch-from-config.prepare-operation.js";
 import * as runtimeLoaders from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -315,3 +322,41 @@ it.each([false, true])(
     }
   },
 );
+
+it("records a persisted webchat participant when pre-dispatch admission is busy", async () => {
+  const cfg = await createOwnerState("dispatch-busy-participant");
+  const sessionKey = "global";
+  const sessionId = "busy-participant-session";
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "work" });
+  const target = { agentId: "work", sessionKey, storePath };
+  replaceSessionEntrySync(target, { sessionId, updatedAt: 1 });
+  using resources = new DisposableStack();
+  const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
+  let prepared:
+    | Extract<Awaited<ReturnType<typeof gatherDispatchRequest>>, { status: "ready" }>
+    | undefined;
+  try {
+    prepared = await gather(cfg, dispatcher, resources);
+    prepareSessionParticipantInput(prepared.state.ctx, { type: "profile", id: "profile-author" });
+    const delivered = await prepareDispatchDelivery(prepared.state);
+    const operationContext = await prepareDispatchOperationContext(delivered);
+    expect(operationContext.status).toBe("ready");
+    if (operationContext.status !== "ready") {
+      throw new Error("dispatch operation context was not ready");
+    }
+    vi.spyOn(operationContext.state, "ensureDispatchReplyOperation").mockResolvedValue({
+      status: "busy",
+    });
+    const result = await prepareDispatchOperation(operationContext.state);
+    expect(result.status).toBe("complete");
+    await waitForSessionParticipantRecording(target);
+    expect(loadSessionEntry(target)?.participants).toEqual([
+      expect.objectContaining({ identity: { type: "profile", id: "profile-author" } }),
+    ]);
+  } finally {
+    prepared?.state.completeDispatchReplyOperation();
+    await prepared?.state.releasePreDispatchLifecycleAdmission();
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  }
+});
