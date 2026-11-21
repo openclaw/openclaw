@@ -56,7 +56,15 @@ async function resolveConfiguredGatewaySecretInput(params: {
         if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
           throw error;
         }
-        throw new GatewaySecretRefUnavailableError(params.path);
+        // The provider failure is the real cause (for example a read-only
+        // sandbox failing the store's cleanup write); surface its config-derived
+        // identity instead of pointing operators at credential overrides. It is
+        // preserved off the standard cause chain: the shared terminal formatter
+        // walks causes, and resolution failures can quote payload-derived text
+        // such as a malformed secret file's contents.
+        throw new GatewaySecretRefUnavailableError(params.path, {
+          providerFailure: error,
+        });
       },
     });
   // CLI RPC paths defer storage selection, so read store refs from a PostgreSQL state family
