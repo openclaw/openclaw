@@ -91,7 +91,9 @@ const scrollRemaining = (board: Locator) =>
 async function expectWidgetReady(board: Locator, frame: Locator) {
   await expect.poll(() => frame.getAttribute("inert")).toBeNull();
   expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-  expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
+  await expect
+    .poll(() => board.getByRole("status", { name: "Loading…", exact: true }).count())
+    .toBe(0);
 }
 
 async function rememberMainTab(page: Page): Promise<void> {
