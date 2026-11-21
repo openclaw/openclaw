@@ -198,7 +198,7 @@ describe("balanced JSON extraction", () => {
     );
   });
 
-  it.each(["\n", "\r\n"])(
+  it.each(["\n", "\r\n", "\r"])(
     "resets impossible quoted-string state only for opt-in recovery (%j)",
     (newline) => {
       const first = '{\n "publicShare": {"id": "opaque"},\n "count": 7\n}';
@@ -216,6 +216,34 @@ describe("balanced JSON extraction", () => {
       expect(extractBalancedJsonFragments(raw)).toEqual([]);
       const valid = '[\n "quoted \\"value\\"",\n {"nested": [1, 2]}\n]';
       expect(extractBalancedJsonPrefix(valid, { recoverAtLineStart: true })?.json).toBe(valid);
+    },
+  );
+
+  it("keeps leading and inter-record prose quotes owned during recovery", () => {
+    const first = '{"actual":1}';
+    const second = '{"next":2}';
+    const raw = `banner "example [0]"\n${first}\n"escaped \\"quote\\" and {fake}" ${second}`;
+    for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+      expect(extractBalancedJsonPrefix(raw, options)).toEqual(fragmentsAt(raw, [first])[0]);
+      expect(extractBalancedJsonFragments(raw, options)).toEqual(fragmentsAt(raw, [first, second]));
+    }
+    expect(extractBalancedJsonPrefix(raw)?.json).toBe("[0]");
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "uses the same recovery boundary for completed records and invalid strings (%j)",
+    (newline) => {
+      const child = '{"ok":true}';
+      const next = '{"next":2}';
+      const raw = `warning: [${newline}${child}${newline}${next}`;
+      for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+        expect(extractBalancedJsonFragments(raw, options)).toEqual(fragmentsAt(raw, [child, next]));
+        const parent = `[${newline}${child}${newline}]`;
+        expect(extractBalancedJsonFragments(parent, options)).toEqual(
+          fragmentsAt(parent, [parent]),
+        );
+      }
+      expect(extractBalancedJsonFragments(raw)).toEqual([]);
     },
   );
 
