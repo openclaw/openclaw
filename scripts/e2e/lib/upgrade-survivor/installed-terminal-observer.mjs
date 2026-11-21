@@ -1573,6 +1573,156 @@ export function installedTerminalDescendants(rows, root) {
   return found;
 }
 
+// The inner terminal owner suppresses candidate success on settlement failure;
+// the outer JSON reporter still publishes one detached error after that refusal.
+// Validate the complete stream and its emitting owner, not an empty-stdout proxy.
+export function assertInstalledTerminalOutput(rows, spec, result) {
+  const only = (event) => {
+    const matches = rows.filter((row) => row.event === event);
+    assert.equal(matches.length, 1, `Expected one ${event}`);
+    return matches[0];
+  };
+  const closed = only("worker-closed");
+  const candidateResult = JSON.parse(closed.stdout);
+  assert.equal(candidateResult.status, "ok");
+  const handoff = only("handoff");
+  const success = only("candidate-success");
+  assert.equal(candidateResult.root, spec.root);
+  assert.equal(candidateResult.runId, success.response.terminalRunId);
+  for (const row of [closed, success]) {
+    assert.equal(row.pid, handoff.pid);
+    assert.equal(row.thread, handoff.thread);
+    assert.equal(row.child, handoff.child);
+  }
+  assert(BigInt(handoff.time) < BigInt(closed.time));
+  assert(BigInt(closed.time) < BigInt(success.time));
+  const all = installedTerminalDescendants(rows, result.pid);
+  const candidate = installedTerminalDescendants(rows, handoff.child);
+  const outputs = rows.filter(
+    (row) => row.event === "stdout" && all.has(row.pid) && !candidate.has(row.pid),
+  );
+  const bytes = (events) => Buffer.concat(events.map((row) => Buffer.from(row.bytes, "base64")));
+  if (!spec.fault) {
+    assert.equal(result.code, 0);
+    // This observation binds publication to the qualified response. Final parent
+    // cleanup and executor release are separate production-caller obligations.
+    assert.equal(result.stdout, closed.stdout, "Healthy stdout changed candidate bytes");
+    assert.deepEqual(
+      bytes(outputs.filter((row) => row.pid === handoff.pid)),
+      Buffer.from(result.stdout),
+      "Healthy parent stdout capture mismatch",
+    );
+    for (const row of outputs) {
+      if (Buffer.from(row.bytes, "base64").length) {
+        if (row.pid === handoff.pid) {
+          assert.equal(row.thread, 0);
+          assert(
+            BigInt(row.time) > BigInt(success.time),
+            "Healthy output preceded response qualification",
+          );
+        } else {
+          // Earlier inspection children use stdout for captured private replies.
+          // Complete CLI/parent equality above detects any bytes that escaped;
+          // after handoff, predecessor writers must also remain quiescent.
+          assert(
+            BigInt(row.time) < BigInt(handoff.time),
+            "Foreign predecessor wrote during healthy terminal handoff",
+          );
+        }
+      }
+    }
+    return;
+  }
+  const fault = only("launcher-replaced");
+  assert.equal(fault.pid, handoff.pid);
+  assert.equal(fault.thread, 0);
+  assert(BigInt(success.time) < BigInt(fault.time));
+  assert.equal(result.code, 1);
+  const refusal = result.stderr
+    .split(/\r?\n/u)
+    .find((line) =>
+      /^Update backup cleanup failed: Selected package launcher identity changed\.\. Inspect .+ before manual cleanup\.$/u.test(
+        line,
+      ),
+    );
+  assert(refusal, "Missing exact package backup cleanup refusal");
+  const parentOutput = outputs.filter((row) => row.pid === handoff.pid && row.thread === 0);
+  if (spec.historical) {
+    const terminal = parentOutput.filter((row) => BigInt(row.time) > BigInt(fault.time));
+    assert(
+      bytes(terminal).includes(Buffer.from(closed.stdout)),
+      "Historical driver did not expose the original early-publication failure",
+    );
+    assert(result.stdout.includes(closed.stdout), "Historical success did not reach CLI stdout");
+    return;
+  }
+  assert(
+    !bytes(outputs).includes(Buffer.from(closed.stdout)),
+    "Parent republished candidate success after settlement failed",
+  );
+  assert.deepEqual(
+    bytes(parentOutput),
+    Buffer.from(result.stdout),
+    "Parent stdout capture mismatch",
+  );
+  for (const row of outputs) {
+    if (BigInt(row.time) > BigInt(success.time) && Buffer.from(row.bytes, "base64").length) {
+      assert.equal(row.pid, handoff.pid, "Foreign predecessor published terminal output");
+      assert.equal(row.thread, 0, "Worker published terminal output");
+      assert(BigInt(row.time) > BigInt(fault.time), "Parent output preceded the settlement fault");
+    }
+  }
+  // Empty callback writes drain a Worker's stream without publishing bytes.
+  // Keep them in the capture equality; only actual bytes have publication timing.
+  assert(
+    parentOutput.every(
+      (row) =>
+        Buffer.from(row.bytes, "base64").length === 0 || BigInt(row.time) > BigInt(fault.time),
+    ),
+    "Parent publication preceded the settlement fault",
+  );
+  // JSON.parse rejects concatenated results and progress text. A detached report
+  // must preserve captured identities without reopening or projecting the ledger.
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, "error");
+  assert.equal(output.reason, "update-recovery-pending");
+  assert.equal(output.mode, "npm");
+  assert.equal(output.root, spec.root);
+  assert.equal(output.runId, success.response.terminalRunId);
+  for (const key of ["mode", "root", "runId", "before", "after"]) {
+    assert.deepEqual(output[key], candidateResult[key], `Changed captured result ${key}`);
+  }
+  assert.equal(output.run, undefined, "Detached failure must not project retained history");
+  if (output.reportPath !== undefined) {
+    assert(
+      typeof output.reportPath === "string" &&
+        path.isAbsolute(output.reportPath) &&
+        /^openclaw-update-report-[^/]+$/u.test(path.basename(path.dirname(output.reportPath))) &&
+        /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.md$/iu.test(
+          path.basename(output.reportPath),
+        ) &&
+        !containsPath(spec.root, output.reportPath) &&
+        !containsPath(path.dirname(spec.stateDatabase), output.reportPath),
+      "Detached report must not write candidate or retained state",
+    );
+  }
+  assert.deepEqual(output.recovery, {
+    serviceRestartSafe: false,
+    reason: "runtime-verification-failed",
+  });
+  // Advisory nonzero exits are already part of the candidate's outcome. Preserve
+  // those ordered steps exactly; only the new retention refusal may be appended.
+  const candidateSteps = success.response.result.steps;
+  assert.equal(output.steps.length, candidateSteps.length + 1);
+  assert.deepEqual(output.steps.slice(0, -1), candidateSteps);
+  const failure = output.steps.at(-1);
+  assert.equal(failure.name, "package-backup-retention");
+  assert.equal(failure.command, "openclaw update");
+  assert.equal(failure.cwd, spec.root);
+  assert.equal(failure.exitCode, 1);
+  assert.equal(failure.stderrTail, refusal, "Missing exact parent settlement diagnostic");
+}
+
 function readObservation(directory, spec = {}) {
   const { files, isolates } = readIsolates(directory);
   const rows = isolates.flat();

@@ -3,6 +3,12 @@ export function installedTerminalDescendants(
   root: number,
 ): Set<number>;
 
+export function assertInstalledTerminalOutput(
+  rows: Record<string, unknown>[],
+  spec: { root: string; stateDatabase: string; fault: boolean; historical: boolean },
+  result: { pid: number; code: number; stdout: string; stderr: string },
+): void;
+
 export function readInstalledTerminalHasher(
   root: string,
   identity: {
