@@ -364,9 +364,6 @@ function* createOpenClawToolsSteps(
         agentDir: searchContext.agentDir,
         authStore: options?.authProfileStore,
         runtimeWebSearch: runtimeWebTools?.search,
-        ...(options?.authProfileStoreSource !== undefined
-          ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
-          : {}),
       });
     options?.onWebSearchConfiguration?.(configured);
     if (!configured) {
@@ -509,6 +506,7 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
+            requireCreationPlan: options?.requireCronCreationPlan,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,

@@ -1506,25 +1506,6 @@ const startupEnglish = {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
-    inlineSwarm: {
-      title: "Swarm",
-      progress: "{done} of {total} settled",
-      childStatus: "{name}: {status}",
-      overflow: "+{count}",
-      moreWorkers: "{count} more workers",
-      status: {
-        queued: "Queued",
-        running: "Running",
-        done: "Completed",
-        failed: "Failed or stopped",
-      },
-      count: {
-        queued: "{count} queued",
-        running: "{count} running",
-        done: "{count} completed",
-        failed: "{count} failed or stopped",
-      },
-    },
     sessionAutomation: {},
     activityPills: {},
     mobileDetails: {
@@ -1632,6 +1613,7 @@ const startupEnglish = {
       preparingContext: "Preparing reply",
       memoryFlushing: "Saving conversation memory",
       startingModel: "Waiting for a response",
+      preparingTool: "Preparing a tool call",
       waitingForLocalModel: "Waiting for the local model to respond",
       waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy—retrying",

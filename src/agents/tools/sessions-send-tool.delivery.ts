@@ -148,7 +148,6 @@ type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
   admissionConfig: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
-  callDurableGateway?: AgentToolGatewayRequestCaller;
   runId: string;
   sendParams: Record<string, unknown> & {
     message: string;
@@ -204,9 +203,7 @@ const FALLBACK_STEER_REJECTIONS = new Set<
 export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
-): Promise<
-  SessionsSendStart | { fallbackSessionKey?: string; callGateway?: AgentToolGatewayRequestCaller }
-> {
+): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
   const assertCaller = captureGatewayToolCallerAssertion();
   try {
     const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
@@ -271,8 +268,6 @@ export async function trySessionsSendActiveRunDelivery(
           },
           steeringMode: "all",
           debounceMs: 0,
-          // Reply waiting and durable admission have separate deadlines.
-          deliveryTimeoutMs: undefined,
           ...lifecycle,
           onQueueAccepted: (value) => {
             // Accepted guidance belongs to the receiver, not the sender's later policy.
@@ -290,7 +285,8 @@ export async function trySessionsSendActiveRunDelivery(
                 },
               }
             : {}),
-          waitForTranscriptCommit: true,
+          // Admission is the receipt; the receiving run owns commit or withdrawal.
+          waitForTranscriptCommit: false,
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
@@ -356,13 +352,6 @@ export async function trySessionsSendActiveRunDelivery(
           );
         }
         return {};
-      }
-      if (steer.reason === "transcript_commit_wait_unsupported") {
-        if (!params.callDurableGateway) {
-          throw new Error("The target cannot accept restart-durable steering from this caller.");
-        }
-        // Capability rejection precedes injection, so the same input can safely queue once.
-        return { callGateway: params.callDurableGateway };
       }
       // A definite capability refusal leaves ordinary input on its captured
       // conversation. Revocation and uncertain native commitment never retry.

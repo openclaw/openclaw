@@ -14,6 +14,10 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import {
+  hasAutomationActivity,
+  loadAutomationProjection,
+} from "./chat-automation-projection-loader.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
@@ -477,16 +481,24 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
     // boundary shows no shimmer flash for an instant prepend.
     let prepended = false;
     let visible = true;
-    const contributesContent = (messages: unknown[]) =>
-      !readerIntent || hasVisibleOlderHistoryPage(state, this.paneId, messages);
     try {
       if (catalogKey) {
         const count = this.history.catalogMessages.length;
         this.history.loadingOlder = true;
         prepended = await this.loadCatalogSession(catalogKey, true);
-        visible = contributesContent(
-          this.history.catalogMessages.slice(0, this.history.catalogMessages.length - count),
+        const page = this.history.catalogMessages.slice(
+          0,
+          this.history.catalogMessages.length - count,
         );
+        if (readerIntent) {
+          const projector = page.some(hasAutomationActivity)
+            ? await loadAutomationProjection()
+            : undefined;
+          if (!isCurrent()) {
+            return false;
+          }
+          visible = hasVisibleOlderHistoryPage(state, this.paneId, page, projector);
+        }
       } else {
         prepended = await this.loadNativeHistoryPackets(
           state,

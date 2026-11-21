@@ -836,7 +836,6 @@ src/gateway/mention-inbox-recording.ts	5
 src/gateway/mention-inbox.ts	4
 src/gateway/message-action-turn-capability.ts	8
 src/gateway/node-claude-skill-runtime.ts	20
-src/gateway/node-invoke-plugin-approval.ts	2
 src/gateway/node-invoke-plugin-policy.ts	4
 src/gateway/node-registry-pairing.ts	2
 src/gateway/node-registry-private.ts	7

@@ -20,6 +20,7 @@ import {
 } from "../../lib/chat/message-normalizer.ts";
 import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { hasAutomationActivity } from "./chat-automation-projection-loader.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -168,6 +169,12 @@ export function buildChatItems(
     extractToolCardsCached(message).some((card) =>
       readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
     );
+  const automationTools = mode === "history" ? [] : tools;
+  const automation =
+    props.projectAutomations &&
+    (history.some(hasAutomationActivity) || automationTools.some(hasAutomationActivity))
+      ? props.projectAutomations(history, automationTools, facts?.firsts)
+      : undefined;
   const historyItems = buildMessageItems(history);
   const canvasTurns = collectCanvasTurns(historyItems, normalizedHistory, matchesSearch);
   const compaction = props.compactionStatus;
@@ -179,6 +186,13 @@ export function buildChatItems(
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
+    for (const card of automation?.cards.get(msg) ?? []) {
+      hideSearchMiss(card);
+      items.push(card);
+    }
+    if (automation?.consumed.has(msg)) {
+      continue;
+    }
     if (isHiddenChatCommentary(props, msg, activeCommentaryRunId)) {
       items.push({
         kind: "notice",
@@ -606,7 +620,10 @@ export function buildChatItems(
     toolItems.map((tool) => tool.projection),
   );
   for (const tool of toolItems) {
-    for (const item of pluginInlineViewItems(tool.projection.item, inlineInvocations)) {
+    for (const item of [
+      ...(automation?.cards.get(tool.projection.item.message) ?? []),
+      ...pluginInlineViewItems(tool.projection.item, inlineInvocations),
+    ]) {
       hideSearchMiss(item);
       projections.push({
         ...tool.projection,

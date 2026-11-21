@@ -1,12 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
 } from "./chat-application-context.test-support.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   CHAT_HISTORY_REQUEST_LIMIT,
   CHAT_HISTORY_REQUEST_MAX_BYTES,
@@ -21,11 +23,9 @@ import {
 import { render, renderChatThread } from "./test-helpers/chat-transcript-native.tsx";
 
 it("fills an initially short transcript when its first geometry settles without an unrelated pane update", async () => {
-  const historyRequest = vi.fn(async () => ({
-    messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
-    hasMore: false,
-    totalMessages: 4,
-  }));
+  const messages = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));
+  const olderPage = createDeferred<ChatHistoryResult>();
+  const historyRequest = vi.fn(() => olderPage.promise);
   const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture({
       request: (method) => (method === "chat.history" ? historyRequest() : Promise.resolve({})),
@@ -34,7 +34,7 @@ it("fills an initially short transcript when its first geometry settles without 
   pane.paneId = "history-initial-geometry";
   pane.presentationId = pane.paneId;
   pane.sessionKey = state.sessionKey;
-  state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+  state.chatMessages = messages.slice(2);
   state.chatHistoryPagination = {
     hasMore: true,
     olderCursor: "older-settlement",
@@ -66,12 +66,10 @@ it("fills an initially short transcript when its first geometry settles without 
   await expect.poll(() => pane.transcript.isPositionSettled).toBe(true);
   expect(root.scrollHeight).toBeLessThanOrEqual(root.clientHeight);
   await expect.poll(() => historyRequest.mock.calls.length).toBe(1);
-  expect(state.chatMessages).toEqual([
-    nativeHistoryMessage(1),
-    nativeHistoryMessage(2),
-    nativeHistoryMessage(3),
-    nativeHistoryMessage(4),
-  ]);
+  expect(state.chatMessages).toEqual(messages.slice(2));
+  olderPage.resolve({ messages: messages.slice(0, 2), hasMore: false, totalMessages: 4 });
+  await expect.poll(() => state.chatMessages).toEqual(messages);
+  expect(historyRequest).toHaveBeenCalledTimes(1);
   expect(state.chatFollowLocked).toBe(false);
   expect(state.chatReadingHistory).toBe(false);
 });

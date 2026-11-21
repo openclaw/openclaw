@@ -28,6 +28,7 @@ export function sameChatItemsStructuralInput(
     previous.runId === next.runId &&
     previous.compactionStatus === next.compactionStatus &&
     previous.locale === next.locale &&
+    previous.projectAutomations === next.projectAutomations &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.guardianNotices === next.guardianNotices &&

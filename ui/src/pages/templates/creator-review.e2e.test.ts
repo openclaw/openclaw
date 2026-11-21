@@ -143,7 +143,7 @@ it.skipIf(!chromiumAvailable)(
       expect(creates).toHaveLength(1);
       expect(creates[0]?.params).toEqual({ agentId: "main" });
       expect(imports).toHaveLength(1);
-      const card = page.getByRole("region", { name: "Review your Template" });
+      const card = page.getByRole("region", { name: "Publish Template" });
       expect(await card.count()).toBe(0);
       // Duplicate admission must also stay closed after create has completed
       // while the original chat write is still awaiting its acknowledgement.
@@ -157,7 +157,7 @@ it.skipIf(!chromiumAvailable)(
       await card.scrollIntoViewIfNeeded();
       await card.getByRole("heading", { name: "First use", exact: true }).waitFor();
       expect(await card.locator("input, textarea").count()).toBe(0);
-      expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
+      expect(await page.getByRole("dialog", { name: "Preview Template" }).count()).toBe(0);
       expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       console.log(
@@ -294,6 +294,18 @@ it.skipIf(!chromiumAvailable).each([
       const config = { gateway: { controlUi: { experimental: { templates: true } } } };
       const gateway = await installMockGateway(page, {
         sessionKey,
+        agentModel: "demo/local",
+        models: [{ id: "local", name: "Demo model", provider: "demo" }],
+        sessions: [
+          {
+            key: sessionKey,
+            label: "Main",
+            kind: "direct",
+            updatedAt: 1_790_000_002_000,
+            model: "local",
+            modelProvider: "demo",
+          },
+        ],
         // Synthetic persisted tool result: this exercises the real browser
         // review owner, not model execution or real registry publication.
         historyMessages: [
@@ -361,20 +373,33 @@ it.skipIf(!chromiumAvailable).each([
       await waitForControlUiGatewayReady(page);
       const inline = page.locator('[data-plugin-inline-view="release-review"]');
       await inline.scrollIntoViewIfNeeded();
-      const card = inline.getByRole("region", { name: "Review your Template" });
+      const card = inline.getByRole("region", { name: "Publish Template" });
       await card.getByRole("heading", { name: "Release Brief", exact: true }).waitFor();
       expect(await card.getByText("Summarizes releases", { exact: true }).count()).toBe(1);
       expect(await card.locator("input, textarea").count()).toBe(0);
       expect(await card.getByRole("checkbox").count()).toBe(0);
-      await card.getByRole("button", { name: /Workspace files/ }).click();
-      await card.getByRole("button", { name: "View all", exact: true }).click();
-      await card.getByRole("button", { name: optionalFile, exact: true }).click();
-      const document = card.locator(".template-creator__detail-panel article");
+      const initialRect = await card.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { width: rect.width, left: rect.left, right: rect.right };
+      });
+      if (width === 1440) {
+        // A short description must not shrink the inline host to its content width.
+        expect(initialRect.width).toBeCloseTo(600, 0);
+      }
+      expect(initialRect.left).toBeGreaterThanOrEqual(0);
+      expect(initialRect.right).toBeLessThanOrEqual(width);
+      expect(await card.getByRole("button", { name: /Workspace files/ }).count()).toBe(0);
+      await card.getByRole("button", { name: "Preview", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Preview Template" });
+      await dialog.getByRole("button", { name: /Workspace files/ }).click();
+      await dialog.getByRole("button", { name: "View all", exact: true }).click();
+      await dialog.getByRole("button", { name: optionalFile, exact: true }).click();
+      const document = dialog.locator(".template-creator__detail-panel article");
       await document.getByText("Check each date and citation.", { exact: true }).first().waitFor();
       expect(await document.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
       );
-      const body = card.locator(".template-creator__body");
+      const body = dialog.locator(".template-creator__body");
       await body.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
@@ -383,18 +408,20 @@ it.skipIf(!chromiumAvailable).each([
           (element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
         ),
       ).toBe(true);
-      await card.getByRole("button", { name: "Back to contents", exact: true }).click();
-      await card.getByRole("button", { name: "Back to contents", exact: true }).click();
-      await card.getByRole("button", { name: "Back to Template", exact: true }).click();
+      await dialog.getByRole("button", { name: "Back to contents", exact: true }).click();
+      await dialog.getByRole("button", { name: "Back to contents", exact: true }).click();
+      await dialog.getByRole("button", { name: "Back to Template", exact: true }).click();
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
       expect(await gateway.getRequests("templates.drafts.review")).toHaveLength(1);
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(0);
       await gateway.deferNext("templates.drafts.publish");
       await card.getByRole("button", { name: "Publish", exact: true }).click();
       await gateway.waitForRequest("templates.drafts.publish");
-      await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
-      expect(
-        await card.getByRole("button", { name: "Publishing…", exact: true }).isDisabled(),
-      ).toBe(true);
+      await card.getByRole("button", { name: "Publishing", exact: true }).waitFor();
+      expect(await card.getByRole("button", { name: "Publishing", exact: true }).isDisabled()).toBe(
+        true,
+      );
       await card.locator(".btn__spinner").waitFor({ state: "visible" });
       const application = await getControlUiContextHandle(page);
       try {
@@ -406,9 +433,9 @@ it.skipIf(!chromiumAvailable).each([
           new URL(controlUiSessionUrl(server.baseUrl, sessionKey)).pathname,
         );
         await waitForControlUiRoute(page, { routeId: "chat" });
-        await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
+        await card.getByRole("button", { name: "Publishing", exact: true }).waitFor();
         expect(
-          await card.getByRole("button", { name: "Publishing…", exact: true }).isDisabled(),
+          await card.getByRole("button", { name: "Publishing", exact: true }).isDisabled(),
         ).toBe(true);
         expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
         await gateway.rejectDeferred("templates.drafts.publish", {
@@ -445,8 +472,12 @@ it.skipIf(!chromiumAvailable).each([
         });
         await card.getByText("Pending", { exact: true }).waitFor();
         await card.getByRole("link", { name: "View submission", exact: true }).waitFor();
+        expect(await card.evaluate((element) => element.getBoundingClientRect().width)).toBeCloseTo(
+          initialRect.width,
+          0,
+        );
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
+        expect(await page.getByRole("dialog", { name: "Preview Template" }).count()).toBe(0);
       } finally {
         await application.dispose();
       }
