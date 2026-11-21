@@ -1,13 +1,13 @@
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
-import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
+import type { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
 
 type SubagentSettleToolPolicyBatch = {
   sourceSessionKeys: readonly string[];
   /** The settle owner retains batch, requester-incarnation, and revocation authority. */
   isCurrent: () => boolean;
-  receiptAdmission?: GatewayToolCallerReceiptAdmission;
+  receiptAdmission?: ReturnType<typeof createRequesterSettleReceiptAdmission>;
 };
 
 export type TrustedSubagentCompletionHandoff = {
@@ -18,7 +18,10 @@ export type TrustedSubagentCompletionHandoff = {
   targetSessionId: string;
   provider: string;
   model: string;
-  settleBatch?: SubagentSettleToolPolicyBatch;
+  settleBatch?: SubagentSettleToolPolicyBatch & {
+    /** Consumed execution retains requester/store identity, not child delivery progress. */
+    isExecutionCurrent?: () => boolean;
+  };
 };
 
 export type SubagentCompletionToolHandoffRegistration = {
@@ -89,7 +92,8 @@ export function isTrustedSubagentCompletionHandoffForRun(params: {
     handoff.kind !== "subagent-completion" ||
     params.inputProvenance?.kind !== "inter_session" ||
     (handoff.settleBatch
-      ? params.inputProvenance.sourceTool !== "subagent_settle" || !handoff.settleBatch.isCurrent()
+      ? params.inputProvenance.sourceTool !== "subagent_settle" ||
+        !(handoff.settleBatch.isExecutionCurrent ?? handoff.settleBatch.isCurrent)()
       : params.inputProvenance.sourceTool !== "subagent_announce" ||
         (params.internalEvents !== undefined && !completionEvent))
   ) {

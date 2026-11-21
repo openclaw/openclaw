@@ -130,6 +130,12 @@ export function consumeSubagentCompletionToolHandoff(params: {
     return undefined;
   }
   handoffs.delete(handoffId);
+  // The exact child receipt admits this requester once. Legal child continuation
+  // can replace that receipt's cohort without ending the requester's own run.
+  const receiptAdmission = entry.settleBatch?.receiptAdmission;
+  const isExecutionCurrent = receiptAdmission
+    ? () => receiptAdmission.isRequesterCurrent() && receiptAdmission.isStoreCurrent()
+    : entry.settleBatch?.isCurrent;
   return {
     kind: "subagent-completion",
     sourceSessionKey,
@@ -138,6 +144,6 @@ export function consumeSubagentCompletionToolHandoff(params: {
     targetSessionId,
     provider,
     model,
-    ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
+    ...(entry.settleBatch ? { settleBatch: { ...entry.settleBatch, isExecutionCurrent } } : {}),
   };
 }

@@ -53,6 +53,7 @@ import {
   streamMocks,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { createRequesterSettleReceiptAdmission } from "../subagents/announce/subagent-announce.requester-settle-receipt.js";
 import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-session-store.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
@@ -73,6 +74,9 @@ describe("sessions_send direct queue source authority", () => {
     ["ask-revoked", "authority"],
     ["settle-live", null],
     ["settle-wildcard", null],
+    ["settle-resumed", null],
+    ["settle-requester-replaced", inactiveCaller],
+    ["settle-store-replaced", inactiveCaller],
     ["settle-revoked", inactiveCaller],
     ["settle-reassigned", inactiveCaller],
   ] as const)(
@@ -232,6 +236,8 @@ describe("sessions_send direct queue source authority", () => {
         const message = "guidance-from-" + source + "-source";
         const settleOwner = {};
         let currentSettleOwner: object | undefined = settleOwner;
+        const requesterIdentity = { sessionId: "queue-source-session" };
+        let requesterStoreCurrent = true;
         let tool = createSessionsSendTool({
           config: cfg,
           agentSessionKey: requesterSessionKey,
@@ -261,7 +267,26 @@ describe("sessions_send direct queue source authority", () => {
             idempotencyKey: "settle-source",
             settleBatch: {
               sourceSessionKeys: [child],
-              isCurrent: () => currentSettleOwner === settleOwner,
+              isCurrent: () =>
+                currentSettleOwner === settleOwner &&
+                requesterIdentity.sessionId === "queue-source-session" &&
+                requesterStoreCurrent,
+              ...(["settle-resumed", "settle-requester-replaced", "settle-store-replaced"].includes(
+                source,
+              )
+                ? {
+                    receiptAdmission: createRequesterSettleReceiptAdmission({
+                      requester: { canonicalKey: requesterSessionKey, agentId: "main" },
+                      identity: { sessionId: "queue-source-session" },
+                      storeSessionKey: requesterSessionKey,
+                      storeAgentId: "main",
+                      storePaths: () => [target.storePath],
+                      isSourceCurrent: () => true,
+                      readCurrent: () => requesterIdentity,
+                      isStoreCurrent: () => requesterStoreCurrent,
+                    }),
+                  }
+                : {}),
             },
           };
           const trustedInternalHandoff = consumeSubagentCompletionToolHandoff({
@@ -365,6 +390,16 @@ describe("sessions_send direct queue source authority", () => {
           }
           if (source === "settle-revoked" || source === "settle-reassigned") {
             currentSettleOwner = source === "settle-reassigned" ? {} : undefined;
+          }
+          if (source === "settle-resumed") {
+            // Resuming a paused child replaces the delivery cohort, not its admitted parent.
+            currentSettleOwner = {};
+          }
+          if (source === "settle-requester-replaced") {
+            requesterIdentity.sessionId = "replacement-requester-session";
+          }
+          if (source === "settle-store-replaced") {
+            requesterStoreCurrent = false;
           }
           const revokeSend = () =>
             setRuntimeConfigSnapshot({
