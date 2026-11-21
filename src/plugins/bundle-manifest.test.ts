@@ -69,6 +69,14 @@ function expectLoadError(rootDir: string, bundleFormat: "agent" | "codex", error
 afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
 describe("bundle manifest parsing", () => {
+  it("detects Cursor's root mcp.json without a manifest override", () => {
+    const rootDir = fixture({
+      [CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "cursor-mcp" },
+      "mcp.json": { mcpServers: { fixture: { command: "node" } } },
+    });
+    expect(expectLoadedManifest(rootDir, "cursor").capabilities).toEqual(["mcpServers"]);
+  });
+
   it("does not treat openclaw.bundle.json as a bundle manifest", () => {
     const rootDir = fixture({
       "openclaw.bundle.json": { name: "Not Real", skills: ["skills"] },
