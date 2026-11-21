@@ -1047,6 +1047,9 @@ span.new-session-page__select {
      page and the identity centers in the space above the draft. Auto margins
      yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome {
+    /* The member step replaces the composer and needs the same space below it. */
+    --member-welcome-gap: 10px;
+
     flex: 1 0 auto;
     min-height: auto;
     margin-block: 0;
@@ -1092,17 +1095,10 @@ span.new-session-page__select {
     margin-top: 14px;
   }
 
-  .new-session-page__composer,
-  .new-session-page .openclaw-id-welcome-step {
-    /* Both occupy the mobile composer slot, inside the shell's safe area. */
-    --chat-composer-bottom-gap: 10px;
-  }
-
-  .new-session-page .openclaw-id-welcome-step {
-    padding-block-end: var(--chat-composer-bottom-gap);
-  }
-
   .new-session-page__composer {
+    /* Matches .agent-chat__composer-shell[data-mobile-composer="true"]. */
+    --chat-composer-bottom-gap: 10px;
+
     /* Keep privacy context above the writing surface, never below it. */
     order: 1;
   }
