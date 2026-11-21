@@ -6,7 +6,6 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   floorPositiveFiniteNumber,
   resolveIntegerOption,
-  timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
@@ -19,9 +18,7 @@ import {
   asNonArrayRecord,
   isRecord,
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -30,10 +27,18 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import { resolveCodexAppServerUserHomeDir } from "./app-server/auth-start-options.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import { visitJsonlLines } from "./jsonl-lines.js";
+import {
+  type CodexCliSessionSummary,
+  findSessionFiles,
+  hydrateSessionFiles,
+  hydrateSessionsFromSessionFiles,
+  matchesSessionFilter,
+  readHistorySessions,
+} from "./node-cli-session-files.js";
 import { codexCatalogHomeId } from "./session-catalog-home-id.js";
 import {
   MAX_SESSION_ID_LENGTH,
+  NODE_INVOKE_TIMEOUT_MS,
   readBoundedOptionalString,
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
@@ -51,22 +56,48 @@ export const CODEX_CLI_SESSION_SOURCE_UPGRADE_MESSAGE =
 
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
+/**
+ * A bounded listing reads a capped prefix of the codex-home. The slowest bounded request measured
+ * across five real homes (the largest 2.4 GB / 2,990 rollouts) returned in 2.0 s, so the released
+ * 15 s budget stays generous for it and is kept unchanged.
+ */
+const BOUNDED_SESSIONS_LIST_TIMEOUT_MS = 15_000;
+/**
+ * `--search-all` deliberately opens every rollout under the codex-home and reads each one whole.
+ * Measured on a real 2.4 GB codex-home that takes 15.6-21.6 s, which the bounded budget above
+ * cannot cover: `node.invoke` arms an absolute deadline from the forwarded `timeoutMs`
+ * (`src/gateway/node-registry.invoke-stream.ts`), and an expired pending invocation resolves
+ * `TIMEOUT` and cancels the node request. With one budget serving both routes the truncation
+ * notice could not recover the page it offered to recover. This reuses the budget the Codex
+ * session catalog already reserves for a whole-codex-home node scan rather than introducing a
+ * second number: roughly 3x the measured worst case, and inside the 15-120 s window a node clamps
+ * an invoke-result wait to.
+ */
+const EXHAUSTIVE_SESSIONS_LIST_TIMEOUT_MS = NODE_INVOKE_TIMEOUT_MS;
 const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
 
-type CodexCliSessionSummary = {
-  sessionId: string;
-  updatedAt?: string;
-  lastMessage?: string;
-  cwd?: string;
-  sessionFile?: string;
-  messageCount: number;
-};
-
 type CodexCliSessionsListResult = {
   sessions: CodexCliSessionSummary[];
   codexHome: string;
+  /** Rollouts opened to build this listing. Absent from a node build that predates the counter. */
+  scannedFileCount?: number;
+  /** Rollouts present under the codex-home, whether or not they were opened. */
+  sessionFileCount?: number;
+  /**
+   * Set when the listing may be missing a session it should show. Filtered: rollouts were never
+   * opened, or an opened rollout was too large to read whole and the part that went unread could
+   * have matched. Unfiltered: the scan budget ran out while an unread rollout was still modified more
+   * recently than the oldest session on the page, so a newer session may be missing from it.
+   */
+  searchTruncated?: boolean;
+  /**
+   * Rollouts that were opened, failed the filter on a windowed summary, and had an unread span the
+   * filter term could be sitting in. Distinct from unopened files: the count is why an
+   * every-file-opened search still cannot call itself complete.
+   */
+  unreadSpanCount?: number;
 };
 
 type CodexCliSessionResumeResult = {
@@ -142,6 +173,15 @@ export async function listCodexCliSessionsOnNode(params: {
   requestedNode?: string;
   filter?: string;
   limit?: number;
+  /**
+   * Opt out of the bounded scan: open every rollout under the codex-home and read each one whole.
+   * This is what a user reruns with after the bounded listing reported it stopped short, so a
+   * directory or preview match past the candidate ceiling — or inside a span the read windows
+   * skipped — stays reachable instead of being permanently dropped. An unfiltered request honors it
+   * too: it ranks every rollout by its records rather than by file mtime, which recovers the newest
+   * session after a copied or restored codex-home rewrote the mtimes.
+   */
+  searchAll?: boolean;
 }): Promise<{ node: CodexCliSessionNodeInfo; result: CodexCliSessionsListResult }> {
   const { runtime, requestedNode } = params;
   const command = CODEX_CLI_SESSIONS_LIST_COMMAND;
@@ -173,8 +213,11 @@ export async function listCodexCliSessionsOnNode(params: {
     params: {
       limit: params.limit,
       filter: params.filter,
+      ...(params.searchAll ? { searchAll: true } : {}),
     },
-    timeoutMs: 15_000,
+    timeoutMs: params.searchAll
+      ? EXHAUSTIVE_SESSIONS_LIST_TIMEOUT_MS
+      : BOUNDED_SESSIONS_LIST_TIMEOUT_MS,
     scopes: ["operator.write"],
   });
   return { node, result: parseCodexCliSessionsListResult(raw) };
@@ -287,16 +330,32 @@ export async function resumeCodexCliSessionOnNode(params: {
 export function formatCodexCliSessions(params: {
   node: CodexCliSessionNodeInfo;
   result: CodexCliSessionsListResult;
+  /** Whether the request carried a filter; the two kinds of listing are cut for different reasons. */
+  filtered: boolean;
 }): string {
+  const truncation = params.filtered
+    ? formatSessionSearchTruncation(params.result)
+    : formatSessionPageTruncation(params.result);
   if (params.result.sessions.length === 0) {
-    return `No Codex CLI sessions returned from ${formatCodexDisplayText(formatNodeLabel(params.node))}.`;
+    // The empty answer is the one most likely to be read as "no such session exists", so a cut
+    // search has to say so here too — returning early before the notice hid it exactly where it
+    // mattered most.
+    return [
+      `No Codex CLI sessions returned from ${formatCodexDisplayText(formatNodeLabel(params.node))}.`,
+      ...truncation,
+    ].join("\n");
   }
   return [
     `Codex CLI sessions on ${formatCodexDisplayText(formatNodeLabel(params.node))}:`,
+    ...truncation,
     ...params.result.sessions.map((session) => {
-      const details = [session.cwd, session.updatedAt].filter((value): value is string =>
-        Boolean(value),
-      );
+      // Say so when the preview and count come from a windowed read, so nobody reads a stale
+      // `lastMessage` off an oversized rollout as that session's latest activity.
+      const details = [
+        session.cwd,
+        session.updatedAt,
+        session.partialScan ? "partial scan" : undefined,
+      ].filter((value): value is string => Boolean(value));
       return `- ${formatCodexDisplayText(session.sessionId)}${
         session.lastMessage ? ` - ${formatCodexDisplayText(session.lastMessage)}` : ""
       }${details.length > 0 ? ` (${details.map(formatCodexDisplayText).join(", ")})` : ""}\n  Bind: /codex resume ${formatCodexDisplayText(
@@ -304,6 +363,69 @@ export function formatCodexCliSessions(params: {
       )} --host ${formatCodexDisplayText(readNodeId(params.node))} --bind here`;
     }),
   ].join("\n");
+}
+
+/**
+ * A filter that stopped short is a search with sessions missing from it, not just a short page, so
+ * say which part of the corpus was actually searched instead of presenting the cut set as the
+ * whole answer.
+ */
+function formatSessionSearchTruncation(result: CodexCliSessionsListResult): string[] {
+  if (!result.searchTruncated) {
+    return [];
+  }
+  const scanned = result.scannedFileCount;
+  const total = result.sessionFileCount;
+  const unread = result.unreadSpanCount ?? 0;
+  const sentences: string[] = [];
+  // Not "the N most recent": a filtered scan reads filename matches before the rest, so the
+  // rollouts it opened are not a recency prefix of the codex-home.
+  if (scanned === undefined || total === undefined) {
+    sentences.push(
+      "Only part of this codex-home was searched; sessions matching on directory or message text may exist outside this list.",
+    );
+  } else if (scanned < total) {
+    sentences.push(
+      `Searched ${String(scanned)} of ${String(total)} rollouts; sessions matching on directory or message text may exist outside this list.`,
+    );
+  }
+  // An opened rollout is not a read rollout. Reporting only the file count would let a search that
+  // covered every file call itself complete while a match sat in a span it never looked at.
+  if (unread > 0) {
+    sentences.push(
+      unread === 1
+        ? "1 rollout was too large to read whole, so a directory or message-text match inside the part that went unread would not appear here."
+        : `${String(unread)} rollouts were too large to read whole, so a directory or message-text match inside the parts that went unread would not appear here.`,
+    );
+  }
+  sentences.push(
+    "A session id is part of the rollout filename, so an id filter is read before the rest and reaches further back than a directory or message-text filter does.",
+  );
+  // Both causes above are the bounded scan's, and the complete search clears both: it opens every
+  // rollout and reads each one whole. So the offer belongs on every truncated answer, not only on
+  // the ones that ran out of candidates.
+  sentences.push("Add --search-all to read every rollout on this node in full instead.");
+  return [sentences.join(" ")];
+}
+
+/**
+ * An unfiltered page is cut only when the node ran out of budget while an unread rollout was still
+ * modified more recently than the oldest session shown — the shape a copied, restored, or touched
+ * codex-home leaves behind. The page is otherwise exact, so this stays silent on an ordinary listing.
+ */
+function formatSessionPageTruncation(result: CodexCliSessionsListResult): string[] {
+  if (!result.searchTruncated) {
+    return [];
+  }
+  const scanned = result.scannedFileCount;
+  const total = result.sessionFileCount;
+  const read =
+    scanned === undefined || total === undefined
+      ? "Not every rollout on this node was read"
+      : `Read ${String(scanned)} of ${String(total)} rollouts`;
+  return [
+    `${read}, and some unread ones were modified more recently than the oldest session shown (as after copying, restoring, or touching a codex-home), so a more recent session may be missing from this list. Add --search-all to read every rollout on this node in full instead.`,
+  ];
 }
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
@@ -314,21 +436,27 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
   });
   // Canonical forms compare equal here; sessions keep their original spelling.
   const filter = normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC");
+  // Absent on a node build that predates the flag, which is the safe default: the bounded scan.
+  const searchAll = params.searchAll === true;
   const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
-  await hydrateSessionsFromSessionFiles(codexHome, summaries);
+  const sessionFiles = await findSessionFiles(path.join(codexHome, "sessions"), 4);
+  await hydrateSessionFiles(summaries, sessionFiles);
+  const scan = await hydrateSessionsFromSessionFiles(summaries, sessionFiles, filter, limit, {
+    searchAll,
+  });
   const sessions = [...summaries.values()]
-    .filter((session) => {
-      if (!filter) {
-        return true;
-      }
-      return [session.sessionId, session.cwd, session.lastMessage].some((value) =>
-        normalizeLowercaseStringOrEmpty(value).normalize("NFC").includes(filter),
-      );
-    })
+    .filter((session) => matchesSessionFilter(session, filter))
     .toSorted((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
     .slice(0, limit);
-  return JSON.stringify({ sessions, codexHome } satisfies CodexCliSessionsListResult);
+  return JSON.stringify({
+    sessions,
+    codexHome,
+    scannedFileCount: scan.scannedFileCount,
+    sessionFileCount: sessionFiles.length,
+    ...(scan.searchTruncated ? { searchTruncated: true } : {}),
+    ...(scan.unreadSpanCount > 0 ? { unreadSpanCount: scan.unreadSpanCount } : {}),
+  } satisfies CodexCliSessionsListResult);
 }
 
 async function resumeLocalCodexCliSession(
@@ -460,154 +588,6 @@ async function runCodexExecResume(params: {
   }
 }
 
-async function readHistorySessions(
-  codexHome: string,
-): Promise<Map<string, CodexCliSessionSummary>> {
-  const summaries = new Map<string, CodexCliSessionSummary>();
-  const historyPath = path.join(codexHome, "history.jsonl");
-  const result = await visitJsonlLines(historyPath, (line) => {
-    const parsed = parseJsonRecord(line.trim());
-    if (typeof parsed.session_id !== "string") {
-      return;
-    }
-    const sessionId = parsed.session_id.trim();
-    if (!sessionId) {
-      return;
-    }
-    const entry = summaries.get(sessionId) ?? {
-      sessionId,
-      messageCount: 0,
-    };
-    entry.messageCount += 1;
-    if (typeof parsed.text === "string" && parsed.text.trim()) {
-      entry.lastMessage = truncateText(parsed.text.trim(), 140);
-    }
-    if (typeof parsed.ts === "number") {
-      entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
-    }
-    summaries.set(sessionId, entry);
-  });
-  if (!result.ok) {
-    return new Map();
-  }
-  return summaries;
-}
-
-async function hydrateSessionsFromSessionFiles(
-  codexHome: string,
-  summaries: Map<string, CodexCliSessionSummary>,
-): Promise<void> {
-  const sessionsDir = path.join(codexHome, "sessions");
-  const files = await findSessionFiles(sessionsDir, 4);
-  for (const file of files) {
-    const summary = await readSessionFileSummary(file);
-    if (!summary) {
-      continue;
-    }
-    const existing = summaries.get(summary.sessionId);
-    summaries.set(summary.sessionId, {
-      ...summary,
-      ...existing,
-      cwd: existing?.cwd ?? summary.cwd,
-      sessionFile: existing?.sessionFile ?? summary.sessionFile,
-      updatedAt: existing?.updatedAt ?? summary.updatedAt,
-      lastMessage: existing?.lastMessage ?? summary.lastMessage,
-      messageCount: existing?.messageCount ?? summary.messageCount,
-    });
-  }
-}
-
-async function readSessionFileSummary(file: string): Promise<CodexCliSessionSummary | null> {
-  let sessionId = "";
-  let cwd: string | undefined;
-  let updatedAt: string | undefined;
-  let lastMessage: string | undefined;
-  let messageCount = 0;
-  const result = await visitJsonlLines(file, (line) => {
-    const parsed = parseJsonRecord(line.trim());
-    updatedAt = normalizeOptionalString(parsed.timestamp) ?? updatedAt;
-    if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
-      sessionId = normalizeOptionalString(parsed.payload.id) ?? sessionId;
-      cwd = normalizeOptionalString(parsed.payload.cwd) ?? cwd;
-      return;
-    }
-    const messageText = readResponseItemMessageText(parsed);
-    if (messageText) {
-      messageCount += 1;
-      lastMessage = truncateText(messageText, 140);
-    }
-  });
-  if (!result.ok || result.lineCount === 0) {
-    return null;
-  }
-  if (!sessionId) {
-    sessionId = readSessionIdFromFilename(file) ?? "";
-  }
-  if (!sessionId) {
-    return null;
-  }
-  return {
-    sessionId,
-    updatedAt: updatedAt ?? (await readFileMtimeIso(file)),
-    lastMessage,
-    cwd,
-    sessionFile: file,
-    messageCount,
-  };
-}
-
-async function findSessionFiles(dir: string, maxDepth: number): Promise<string[]> {
-  if (maxDepth < 0) {
-    return [];
-  }
-  let entries: Array<import("node:fs").Dirent>;
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const files: string[] = [];
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await findSessionFiles(entryPath, maxDepth - 1)));
-    } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-      files.push(entryPath);
-    }
-  }
-  return files;
-}
-
-function readResponseItemMessageText(parsed: Record<string, unknown>): string | undefined {
-  if (
-    parsed.type !== "response_item" ||
-    !isRecord(parsed.payload) ||
-    parsed.payload.type !== "message" ||
-    parsed.payload.role !== "user"
-  ) {
-    return undefined;
-  }
-  const content = Array.isArray(parsed.payload.content) ? parsed.payload.content : [];
-  const parts = content.flatMap((entry) => {
-    if (!isRecord(entry)) {
-      return [];
-    }
-    const text =
-      typeof entry.text === "string"
-        ? entry.text
-        : typeof entry.input_text === "string"
-          ? entry.input_text
-          : undefined;
-    return text?.trim() ? [text.trim()] : [];
-  });
-  return parts.length > 0 ? parts.join(" ") : undefined;
-}
-
-function readSessionIdFromFilename(file: string): string | undefined {
-  const match = path.basename(file).match(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
-  return match?.[0];
-}
-
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {
   const payload = unwrapNodeInvokePayload(
     raw,
@@ -618,6 +598,12 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
   }
   return {
     codexHome: typeof payload.codexHome === "string" ? payload.codexHome : "",
+    // Keep these absent rather than zero when the node build predates them, so the truncation
+    // notice falls back to its unquantified wording instead of claiming "0 of 0 rollouts".
+    scannedFileCount: readOptionalCount(payload.scannedFileCount),
+    sessionFileCount: readOptionalCount(payload.sessionFileCount),
+    searchTruncated: payload.searchTruncated === true ? true : undefined,
+    unreadSpanCount: readOptionalCount(payload.unreadSpanCount),
     sessions: payload.sessions.flatMap((entry) => {
       if (!isRecord(entry) || typeof entry.sessionId !== "string") {
         return [];
@@ -629,35 +615,29 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
           lastMessage: typeof entry.lastMessage === "string" ? entry.lastMessage : undefined,
           cwd: typeof entry.cwd === "string" ? entry.cwd : undefined,
           sessionFile: typeof entry.sessionFile === "string" ? entry.sessionFile : undefined,
-          messageCount:
-            typeof entry.messageCount === "number" && Number.isFinite(entry.messageCount)
-              ? entry.messageCount
-              : 0,
+          messageCount: readFiniteCount(entry.messageCount),
+          partialScan: entry.partialScan === true ? true : undefined,
         },
       ];
     }),
   };
 }
 
-function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
-  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
+function readFiniteCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-async function readFileMtimeIso(file: string): Promise<string | undefined> {
-  try {
-    return (await fs.stat(file)).mtime.toISOString();
-  } catch {
-    return undefined;
-  }
+function readOptionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
+  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
 }
 
 function normalizeTimeoutMs(value: unknown): number {
   const timeoutMs = floorPositiveFiniteNumber(value);
   return timeoutMs === undefined ? DEFAULT_RESUME_TIMEOUT_MS : Math.min(60 * 60_000, timeoutMs);
-}
-
-function truncateText(value: string, max: number): string {
-  return truncateWithMarker(value, max, { marker: "...", reserve: 3, trimEnd: false });
 }
 
 function readNodeId(node: CodexCliSessionNodeInfo): string {
