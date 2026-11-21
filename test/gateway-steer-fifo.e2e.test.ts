@@ -857,7 +857,13 @@ describe("Gateway steer FIFO", () => {
   it(
     "hands steered document attachments to the active run as extracted file context",
     async () => {
-      const fixture = await createGatewayFixture("steer-document-context");
+      const fixture = await createGatewayFixture("steer-document-context", {
+        observeSteering: "QUEUED_STEER_DOCUMENT",
+      });
+      const steeringAdmission = fixture.steeringAdmission;
+      if (!steeringAdmission) {
+        throw new Error("steering admission fixture was not configured");
+      }
       const first = await sendHeldTurn(fixture, true);
 
       // Real gateway protocol send with a file attachment while the initial
@@ -884,6 +890,12 @@ describe("Gateway steer FIFO", () => {
         },
       );
       expect(steer).toMatchObject({ status: "started" });
+      // The send ACK owns durable input, not native steering admission. Keep the
+      // target alive until this test is exercising steering rather than fallback.
+      await vi.waitFor(async () => {
+        expect(await readTrace(steeringAdmission.receiptPath)).toContain("QUEUED_STEER_DOCUMENT");
+        expect(fixture.modelServer.requests).toHaveLength(1);
+      }, WAIT_OPTS);
 
       fixture.modelServer.releaseFirst("final");
 
