@@ -12,8 +12,8 @@
   }
 }
 
-/* The mobile drawer keeps management actions in its always-reachable menu, with the
-   dots ending on the same edge as the filter control above the list. */
+/* Center the dots on New session above. The 36px hit target starts at the same
+   edge as the 28px toolbar button; its extra width stays tappable. */
 .shell--mobile-nav .sidebar-recent-session {
   &.session-row-host {
     --session-row-actions-reserve: var(--sidebar-session-menu-size);
@@ -26,10 +26,9 @@
 
   .session-action--touch-menu {
     display: inline-flex;
-    justify-content: flex-end;
     width: var(--sidebar-session-menu-size);
     height: var(--sidebar-session-row-floor);
-    padding-inline-end: 6px;
+    padding-inline-end: var(--sidebar-inset);
     opacity: 1;
     pointer-events: auto;
   }
@@ -37,6 +36,12 @@
   .session-row-badge--draft {
     display: none;
   }
+}
+
+/* Roster rows inset the target itself, so it shares the toolbar button’s end
+   rather than its start. Keep the extra hit area on the opposite side. */
+.shell--mobile-nav .sidebar-recent-session--team .session-action--touch-menu {
+  padding-inline: var(--sidebar-inset) 0;
 }
 
 /* Every row pays once for the menu at its edge. Signals exist only when they have
@@ -125,7 +130,7 @@
 }
 
 .shell--mobile-nav .sidebar-recent-sessions__head {
-  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 0.75px;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset));
 }
 
 /* Each person pays only for what it shows: the dots end on the filter control's edge and
