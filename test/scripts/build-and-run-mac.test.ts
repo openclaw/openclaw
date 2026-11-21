@@ -235,6 +235,7 @@ const portableScripts = [
   "scripts/e2e/doctor-install-switch-docker.sh",
   "scripts/e2e/gateway-concurrency-docker.sh",
   "scripts/e2e/gateway-network-docker.sh",
+  "scripts/e2e/installed-terminal-docker.sh",
   "scripts/e2e/kitchen-sink-plugin-docker.sh",
   "scripts/e2e/kitchen-sink-rpc-docker.sh",
   "scripts/e2e/live-plugin-tool-docker.sh",

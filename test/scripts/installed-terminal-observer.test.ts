@@ -516,6 +516,90 @@ it("distinguishes real empty Worker drains from early terminal output bytes", ()
   );
 });
 
+it("reports a final failure for driver and shell preflight rejection without starting Docker", () => {
+  const driver = runProcess(
+    node,
+    [path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal.mjs")],
+    process.env,
+    10_000,
+  );
+  expect(driver.status).toBe(1);
+  expect(driver.stderr.trimEnd().split("\n").at(-1)).toBe("[installed-terminal] FAILED (exit 1)");
+  expect(driver.stderr).toContain("[installed-terminal] terminal-error");
+  const shell = runProcess(
+    "/bin/bash",
+    [path.resolve("scripts/e2e/installed-terminal-docker.sh")],
+    { ...process.env, CELL_DEADLINE_EPOCH_SECONDS: "invalid" },
+    10_000,
+  );
+  expect(shell.status).toBe(2);
+  expect(shell.stderr.trimEnd().split("\n").at(-1)).toBe("[installed-terminal] FAILED (exit 2)");
+  expect(shell.stdout).toBe("");
+});
+
+it.each([
+  {
+    deadline: "1",
+    platform: "linux/amd64",
+    cid: true,
+    diagnostic: "deadline expired before package preparation",
+  },
+  {
+    deadline: "future",
+    platform: "linux/amd64",
+    cid: false,
+    diagnostic: "bounded producer settlement",
+  },
+  { deadline: "future", platform: "linux/arm64", cid: true, diagnostic: "requires linux/amd64" },
+  {
+    deadline: "future",
+    platform: "linux/amd64",
+    cid: true,
+    diagnostic: "package tarball does not exist",
+  },
+])("rejects $diagnostic before preparing an input or invoking Docker", (row) => {
+  const root = dirs.make("terminal-admission-");
+  const cid = path.join(root, "producer.cid");
+  const shell = runProcess(
+    "/bin/bash",
+    [
+      path.resolve("scripts/e2e/installed-terminal-docker.sh"),
+      path.join(root, "missing.tgz"),
+      path.join(root, "evidence"),
+    ],
+    {
+      ...process.env,
+      CELL_DEADLINE_EPOCH_SECONDS:
+        row.deadline === "future" ? String(Math.floor(Date.now() / 1000) + 300) : row.deadline,
+      DOCKER_DEFAULT_PLATFORM: row.platform,
+      DOCKER_E2E_CONTAINER_CIDFILE: row.cid ? cid : "",
+    },
+    10_000,
+  );
+  expect(shell.status).toBe(row.diagnostic === "package tarball does not exist" ? 1 : 2);
+  expect(shell.stderr).toContain(row.diagnostic);
+  expect(fs.readdirSync(root)).toEqual([]);
+});
+
+it.runIf(process.platform === "linux" && !fs.existsSync("/.dockerenv"))(
+  "rejects the actual bare-host Node driver with valid inert arguments",
+  () => {
+    const result = runProcess(
+      node,
+      [
+        path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal.mjs"),
+        "candidate.tgz",
+        "evidence",
+        "contracts.json",
+      ],
+      process.env,
+      10_000,
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Use the bare Docker E2E runner");
+  },
+);
+
 function fixture() {
   const root = fs.realpathSync(dirs.make("installed-terminal-observer-"));
   const directory = path.join(root, "events");

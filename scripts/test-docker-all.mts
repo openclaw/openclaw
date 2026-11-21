@@ -7,6 +7,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
@@ -101,9 +102,10 @@ type TimingStore = Awaited<ReturnType<typeof loadTimingStore>>;
 
 type ShellCommandResult = Omit<
   ReturnType<typeof shellCommandSkippedForShutdown>,
-  "signal" | "cancelled"
+  "signal" | "cancelled" | "launched"
 > & {
   cancelled?: true;
+  launched: boolean;
   signal: ChildProcess["signalCode"];
 };
 type ShellCaptureResult = Omit<
@@ -123,6 +125,7 @@ type ShellCommandOptions = {
   noOutputTimeoutMs?: number;
   timeoutKillGraceMs?: number;
   timeoutMs?: number;
+  onProcessJoined?: (result: ShellCommandResult) => void;
 };
 
 type ShellCaptureOptions = Omit<ShellCommandOptions, "logFile" | "noOutputTimeoutMs"> &
@@ -850,7 +853,10 @@ export function dockerPreflightSmokeCommand(arch: NodeJS.Architecture = process.
 
 export function runShellCommand(options: ShellCommandOptions) {
   if (activeChildrenShutdownPromise) {
-    return activeChildrenShutdownPromise.then(() => shellCommandSkippedForShutdown());
+    return activeChildrenShutdownPromise.then(
+      shellCommandSkippedForShutdown,
+      shellCommandSkippedForShutdown,
+    );
   }
   return runOwnedShellCommand(options);
 }
@@ -864,6 +870,7 @@ function runOwnedShellCommand({
   timeoutMs,
   noOutputTimeoutMs,
   timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
+  onProcessJoined,
 }: ShellCommandOptions) {
   return new Promise<ShellCommandResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
@@ -1014,6 +1021,19 @@ function runOwnedShellCommand({
           activeChildren.delete(child);
         }
         const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
+        const result = {
+          launched: true,
+          signal,
+          status: exitCode,
+          timedOut: timedOut || exitCode === 124,
+          noOutputTimedOut,
+          ...(cancelled ? { cancelled: true as const } : {}),
+        };
+        if (error === undefined) {
+          // Log publication can fail after this join. The lane still owns
+          // independent Docker settlement, using these observed process facts.
+          onProcessJoined?.(result);
+        }
         if (stream) {
           writeLog(
             `\n==> [${label}] finished: ${utcStamp()} status=${exitCode}${
@@ -1042,13 +1062,7 @@ function runOwnedShellCommand({
         if (env.GITHUB_ACTIONS === "true") {
           printUpgradeFailureMetadata(failureMetadata);
         }
-        resolve({
-          signal,
-          status: exitCode,
-          timedOut: timedOut || exitCode === 124,
-          noOutputTimedOut,
-          ...(cancelled ? { cancelled: true as const } : {}),
-        });
+        resolve(result);
       };
       void finishShellProcessTree(
         child,
@@ -1528,7 +1542,8 @@ async function runLane(
   const env = laneEnv(lane, baseEnv, logDir);
   delete env.DOCKER_E2E_CONTAINER_CIDFILE;
   const recoveryIndex = installedRecoveryLaneNames.indexOf(name);
-  if (recoveryIndex !== -1) {
+  const settlesProducer = recoveryIndex !== -1 || name === "installed-terminal";
+  if (settlesProducer) {
     // Candidate-writable evidence stays outside uploads, unique to this attempt.
     const privateRoot = path.join(ROOT_DIR, ".artifacts/upgrade-survivor");
     await mkdir(privateRoot, { recursive: true });
@@ -1573,6 +1588,8 @@ async function runLane(
   console.log(`==> [${name}] start`);
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
+  let joinedResult: ShellCommandResult | undefined;
+  let commandError: { cause: unknown } | undefined;
   const result = await runShellCommand({
     command,
     env,
@@ -1582,32 +1599,57 @@ async function runLane(
       env.GITHUB_ACTIONS === "true" && lane.stateScenario === "upgrade-survivor",
     timeoutMs,
     noOutputTimeoutMs,
+    onProcessJoined(value) {
+      joinedResult = value;
+    },
+  }).catch((cause: unknown) => {
+    if (!settlesProducer || !joinedResult) {
+      throw cause;
+    }
+    commandError = { cause };
+    return joinedResult;
   });
-  const attempts = [laneAttempt(1, startedAt, result)];
+  const attempts = result.launched ? [laneAttempt(1, startedAt, result)] : [];
   let publicationStatus: number | null = 0;
   let publicationError: { cause: unknown } | undefined;
-  if (recoveryIndex !== -1) {
+  if (settlesProducer && result.launched) {
+    let producerSettled = false;
     // The killed lane cannot publish its own interruption. This independent
     // bounded host command joins the daemon producer after the host group/log,
     // before the publisher can read candidate-writable evidence.
     try {
       // Normal admission stays closed. Finalization follows successful execution
       // cleanup and retains the same process/log custody and later-signal handling.
+      const settle = `source ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/lib/docker-e2e-container.sh"))} && docker_e2e_settle_container_cidfile ${shellQuote(env.DOCKER_E2E_CONTAINER_CIDFILE!)}`;
+      const finalizerDeadline = Date.now() + 30_000;
+      const settled = await runOwnedShellCommand({
+        command: settle,
+        env,
+        label: `${name}-settlement`,
+        timeoutMs: 30_000,
+        timeoutKillGraceMs: 1_000,
+      });
+      publicationStatus = settled.status;
+      assert.equal(settled.status, 0, "Installed producer settlement failed");
+      producerSettled = true;
+      // Publication storage cannot prevent the independent producer close join.
       const destination = await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
-      await activeChildrenShutdownPromise;
+      const remaining = finalizerDeadline - Date.now();
+      assert(remaining > 0, "Installed finalizer exhausted its deadline");
       const publication = await runOwnedShellCommand({
-        command: `source ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/lib/docker-e2e-container.sh"))} && docker_e2e_settle_container_cidfile ${shellQuote(env.DOCKER_E2E_CONTAINER_CIDFILE!)} && exec ${[
+        command: `exec ${[
           process.execPath,
           "--import",
           path.join(HARNESS_ROOT_DIR, "scripts/tsx.mjs"),
           path.join(HARNESS_ROOT_DIR, "scripts/upgrade-survivor-diagnostics.mjs"),
-          "installed-recovery",
+          recoveryIndex === -1 ? "installed-terminal" : "installed-recovery",
           env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR!,
           destination,
           String(result.status),
-          retirementCuts[recoveryIndex]!,
+          retirementCuts[recoveryIndex] ?? "",
           String(result.timedOut),
           packageSha256 ?? "",
+          result.signal ?? "",
         ]
           .map(shellQuote)
           .join(" ")}`,
@@ -1615,19 +1657,33 @@ async function runLane(
         label: `${name}-diagnostics`,
         logFile,
         captureUpgradeFailure: env.GITHUB_ACTIONS === "true",
-        timeoutMs: 30_000,
+        timeoutMs: remaining,
         timeoutKillGraceMs: 1_000,
       });
       publicationStatus = publication.status;
     } catch (cause) {
-      publicationStatus = null;
+      if (publicationStatus === 0) {
+        publicationStatus = null;
+      }
       publicationError = { cause };
+    } finally {
+      if (producerSettled && name === "installed-terminal") {
+        try {
+          await fs.promises.rm(
+            path.join(path.dirname(env.DOCKER_E2E_CONTAINER_CIDFILE!), "input"),
+            { recursive: true, force: true },
+          );
+        } catch (cause) {
+          publicationStatus = null;
+          publicationError ??= { cause };
+        }
+      }
     }
     if (publicationStatus !== 0) {
       requiredPublicationFailed = true;
     }
   }
-  const status = result.status || (publicationStatus ?? 1);
+  const status = result.status || (commandError ? 1 : (publicationStatus ?? 1));
   const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   if (status === 0) {
     console.log(`==> [${name}] pass ${elapsedSeconds}s`);
@@ -1640,6 +1696,7 @@ async function runLane(
   const completed = {
     command,
     attempts,
+    ...(!result.launched ? { skipped: true as const } : {}),
     ...(result.cancelled ? { cancelled: true as const } : {}),
     finishedAt: new Date().toISOString(),
     image: env.OPENCLAW_DOCKER_E2E_IMAGE,
@@ -1650,12 +1707,15 @@ async function runLane(
     rerunCommand: buildLaneRerunCommand(name, baseEnv),
     startedAt: startedAtIso,
     status,
-    ...(recoveryIndex === -1 ? {} : { publicationStatus }),
+    ...(settlesProducer && result.launched ? { publicationStatus } : {}),
     noOutputTimedOut: result.noOutputTimedOut,
     timedOut: result.timedOut,
   };
   // Keep the observed lane outcome even if publication cannot start or join.
   // Rethrow through the pool's existing fatal/drain path; null is not an exit code.
+  if (commandError) {
+    throw new LanePublicationError(completed, commandError.cause);
+  }
   if (publicationError) {
     throw new LanePublicationError(completed, publicationError.cause);
   }
@@ -1899,9 +1959,7 @@ function printUpgradeFailureMetadata(bytes: Buffer | undefined) {
     failure.exitStatus < 0 ||
     failure.exitStatus > 255 ||
     (failure.signal !== null &&
-      failure.signal !== "SIGHUP" &&
-      failure.signal !== "SIGINT" &&
-      failure.signal !== "SIGTERM")
+      (typeof failure.signal !== "string" || !Object.hasOwn(osConstants.signals, failure.signal)))
   ) {
     return;
   }
@@ -1953,6 +2011,7 @@ function throwIfSchedulerStopping(result?: Pick<ShellCommandResult, "status" | "
 
 function shellCommandSkippedForShutdown() {
   return {
+    launched: false,
     cancelled: true as const,
     noOutputTimedOut: false,
     signal: null,

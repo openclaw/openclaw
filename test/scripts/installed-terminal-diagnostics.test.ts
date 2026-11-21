@@ -1,20 +1,31 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import vm from "node:vm";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import { publishInstalledTerminalDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
-import { writeInstalledRecoveryEvidence } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs";
+import {
+  installedRecoveryEvidenceMode,
+  openInstalledRecoveryEvidence,
+  writeInstalledRecoveryEvidence,
+} from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs";
 import {
   buildInstalledTerminalSummary,
   publishInstalledTerminalEvidence,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs";
+import {
+  hasUnjoinedWork,
+  type runManagedCommand,
+} from "../../scripts/lib/managed-child-process.mts";
 import { redactSensitiveText } from "../../src/logging/redact.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copySurvivorCaptureClosure } from "../helpers/upgrade-survivor-diagnostics.js";
+import { createSyntheticChild } from "./managed-child-process.test-support.js";
 import { readJson, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -196,6 +207,411 @@ it("publishes a near-cap native manifest with complete compact provenance", asyn
   expect(manifest.files).toHaveLength(JSON.parse(privateBytes.toString()).files.length);
   expect(readJson(path.join(f.destination, "publication.json")).outcome).toBe("passed");
   expectPublicProjection(f);
+});
+
+// Load complete owner blocks, as in the stop-policy fixture. Process injection
+// tests driver ordering; the exporter and publisher still consume real files.
+function driverFixture() {
+  const f = fixture("checkpoint");
+  Reflect.deleteProperty(f.summary, "runtimeRemoved");
+  const runtime = path.join(f.root, "runtime");
+  fs.mkdirSync(runtime);
+  const owner = path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal.mjs");
+  const source = fs.readFileSync(owner, "utf8");
+  const section = (start: string, end: string) => {
+    expect(source.split(start)).toHaveLength(2);
+    expect(source.split(end)).toHaveLength(2);
+    const offset = source.indexOf(start);
+    const limit = source.indexOf(end, offset);
+    expect(limit).toBeGreaterThan(offset);
+    return source.slice(offset, limit).replaceAll("import.meta.url", "moduleUrl");
+  };
+  const managed = vi.fn<typeof runManagedCommand>();
+  const close = vi.fn(fs.closeSync);
+  const open = vi.fn(openInstalledRecoveryEvidence);
+  const save = vi.fn(() =>
+    writeInstalledRecoveryEvidence(path.join(f.raw, "installed-terminal.json"), f.summary),
+  );
+  const remove = vi.fn(fs.rmSync);
+  const readIdentity = vi.fn();
+  const heartbeat = vi.fn();
+  const parse = vi.fn(JSON.parse);
+  const cellRun = vi.fn(async (_name: string, ..._args: unknown[]) => ({
+    code: 0,
+    stdout: "{}",
+    stderr: "",
+    pid: 1,
+  }));
+  const capture = vi.fn((): Array<{ errorCode: string | null }> => []);
+  const restore = vi.fn(() => ({ status: "not-needed" }));
+  const contract = vi.fn(() => ({ npm: { cli: path.join(f.root, "npm-cli.js") }, tree: {} }));
+  const processState = { execPath: process.execPath, env: { PATH: process.env.PATH }, exitCode: 0 };
+  const api = vm.runInNewContext(
+    `(() => {
+      ${section("const diagnostic = ", "\nasync function main()")}
+      let unjoined = false, candidate;
+      ${section("  function checkpoint()", "\n  async function run(")}
+      ${section("  async function run(", "\n  function readDatabase(")}
+      ${section("  async function inspectBaseline(", "\n  try {\n    candidate =")}
+      return {
+        run,
+        inspectBaseline,
+        cell: async (name) => {
+          const run = cellRun;
+          ${section("  async function cell(", "\n  let candidate;")}
+          return cell(name, "source.tgz", false, false);
+        },
+        candidate: async () => {
+          ${section('    candidate = path.join(runtime, "candidate.tgz");', "\n    summary.candidateSha256 =")}
+        },
+        published: async () => {
+          ${section('    const packed = await run(\n      "published-control-pack",', "\n    assert.equal(metadata.name,")}
+        },
+        settle: async (operation) => {
+          try { await operation();
+          ${section('  } catch (error) {\n    summary.status = "failed";', "\n}\n\ntry {")}
+        }
+      };
+    })()`,
+    {
+      assert,
+      Buffer,
+      createHash,
+      AbortController,
+      URL,
+      fileURLToPath,
+      path,
+      fs: { ...fs, closeSync: close, rmSync: remove },
+      Date: { now: () => 1_000 },
+      deadline: 121_000,
+      maxOutput: 8 * 1024 * 1024,
+      process: processState,
+      console: { log: vi.fn(), error: vi.fn() },
+      JSON: { parse, stringify: JSON.stringify },
+      summary: f.summary,
+      runtime,
+      artifacts: f.raw,
+      moduleUrl: pathToFileURL(owner).href,
+      sourcePackage: path.join(f.root, "source.tgz"),
+      npm: { cli: path.join(f.root, "npm-cli.js") },
+      fetchEnv: { PATH: process.env.PATH },
+      save,
+      runManagedCommand: managed,
+      hasUnjoinedWork,
+      readWorkerCellPackageIdentity: readIdentity,
+      retainHeartbeat: heartbeat,
+      cellRun,
+      captureInstalledTerminalProcessAbsence: capture,
+      restoreInstalledTerminalLauncher: restore,
+      readContract: contract,
+      readInstalledTerminalEvents: () => [],
+      validateObservation: () => ({}),
+      assertWorkerCellPackageIdentity: () => {},
+      readInstalledTerminalMetadata: () => ({ schemaVersions: { state: 7 } }),
+      installedTerminalNpmOwner: () => ({ cli: path.join(f.root, "npm-cli.js") }),
+      installedRecoveryEvidenceMode,
+      readDatabase: (_file: string, read: (db: unknown) => unknown) =>
+        read({ prepare: () => ({ get: () => ({ schema_version: 7 }), all: () => [] }) }),
+      DatabaseSync: class {
+        exec() {}
+        prepare() {
+          return { run() {} };
+        }
+        close() {}
+      },
+      schema: "",
+      candidateIdentity: { version: "fixture", buildInfo: {}, files: {} },
+      sourceIdentity: {},
+      candidateMetadata: { schemaVersions: { state: 7, agent: 9 } },
+      candidateHasher: { sha256: "c".repeat(64) },
+      candidateHeartbeat: {},
+      heartbeatPackages: { "source-identity": {} },
+      heartbeatEntries: {},
+      prepared: { references: { current: { encoded: "{}" } } },
+      write: () => {},
+      readActivation: () => ({
+        phase: "anchor-retired",
+        descriptor_json: JSON.stringify({ authority: { databasePath: "fixture" } }),
+      }),
+      openInstalledRecoveryEvidence: open,
+      writeInstalledRecoveryEvidence,
+      publishInstalledTerminalEvidence,
+      buildInstalledTerminalSummary,
+    },
+  ) as {
+    run: (name: string, bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<unknown>;
+    cell: (name: string) => Promise<void>;
+    inspectBaseline: (name: string, tarball: string, commit: string) => Promise<unknown>;
+    candidate: () => Promise<void>;
+    published: () => Promise<void>;
+    settle: (operation: () => Promise<unknown>) => Promise<void>;
+  };
+  const checkpoint = () => readJson(path.join(f.raw, "installed-terminal.json"));
+  return {
+    ...f,
+    runtime,
+    api,
+    managed,
+    close,
+    open,
+    save,
+    remove,
+    readIdentity,
+    heartbeat,
+    parse,
+    cellRun,
+    capture,
+    restore,
+    contract,
+    processState,
+    checkpoint,
+  };
+}
+
+it.each(["install", "attestation", "initialize", "update"])(
+  "marks the stopped cell failed after %s rejects, without starting a later cell",
+  async (phase) => {
+    const f = driverFixture();
+    f.summary.cells.length = f.summary.commands.length = 0;
+    const error = new Error(`${phase} failed`);
+    if (phase === "attestation")
+      f.contract.mockImplementation(() => {
+        throw error;
+      });
+    else
+      f.cellRun.mockImplementation(async (name) => {
+        if (name === `healthy-${phase}`) throw error;
+        return { code: 0, stdout: "{}", stderr: "", pid: 1 };
+      });
+    await f.api.settle(async () => {
+      await f.api.cell("healthy");
+      await f.api.cell("late-failure");
+    });
+    expect(f.summary).toMatchObject({ status: "failed", error: String(error) });
+    expect(f.summary.cells).toMatchObject([
+      { name: "healthy", status: "failed", error: String(error) },
+    ]);
+    expect(f.summary.cells).toHaveLength(1);
+    expect(f.restore).not.toHaveBeenCalled();
+    expect(f.cellRun.mock.calls.every(([name]) => name.startsWith("healthy-"))).toBe(true);
+  },
+);
+
+it.each([null, "EPERM", "ESRCH"])(
+  "holds restoration and export only while observed child custody is %s",
+  async (errorCode) => {
+    const f = driverFixture();
+    f.summary.cells.length = f.summary.commands.length = 0;
+    f.capture.mockReturnValue([{ errorCode }]);
+    await f.api.settle(() => f.api.cell("healthy"));
+    expect(f.capture).toHaveBeenCalledOnce();
+    expect(f.restore).toHaveBeenCalledTimes(errorCode === "ESRCH" ? 1 : 0);
+    expect(fs.existsSync(path.join(f.exported, "manifest.json"))).toBe(errorCode === "ESRCH");
+    if (errorCode !== "ESRCH") {
+      expect(f.summary).toMatchObject({
+        unjoined: true,
+        cells: [{ status: "failed", cleanup: { status: "held" } }],
+      });
+      expect(fs.existsSync(f.runtime)).toBe(true);
+    }
+  },
+);
+
+it("exports a failed final summary after runtime removal fails", async () => {
+  const f = driverFixture();
+  const error = new Error("runtime removal refused");
+  f.remove.mockImplementationOnce(() => {
+    throw error;
+  });
+  await f.api.settle(async () => {});
+  expect(f.remove).toHaveBeenCalledWith(f.runtime, { recursive: true });
+  expect(f.checkpoint()).toMatchObject({
+    status: "failed",
+    cleanupError: String(error),
+    unjoined: false,
+  });
+  expect(f.checkpoint().runtimeRemoved).not.toBe(true);
+  expect(fs.existsSync(f.runtime)).toBe(true);
+  expect(f.processState.exitCode).toBe(1);
+  expect(readJson(path.join(f.exported, "manifest.json")).status).toBe("complete");
+  expect(readJson(path.join(f.exported, "installed-terminal.json")).cleanupError).toBe(
+    String(error),
+  );
+  expect(await publish(f, 1)).toMatchObject({ exitStatus: 1 });
+  expect(readJson(path.join(f.destination, "installed-terminal.json")).status).toBe("failed");
+});
+
+it.each([false, true])(
+  "retains failed extraction exactly while custody is unjoined=%s",
+  async (unjoined) => {
+    const f = driverFixture();
+    f.summary.commands.length = f.summary.cells.length = 0;
+    f.summary.status = "running";
+    const error = Object.assign(new Error("extraction failed"), {
+      processTreeState: unjoined ? "indeterminate" : "terminated",
+    });
+    f.managed.mockRejectedValue(error);
+    await f.api.settle(() =>
+      f.api.inspectBaseline("source-identity", "source.tgz", "b".repeat(40)),
+    );
+    expect(f.checkpoint()).toMatchObject({ status: "failed", error: String(error), unjoined });
+    expect(f.checkpoint().commands).toMatchObject([
+      { name: "source-identity", status: "failed", treeJoined: !unjoined },
+    ]);
+    expect(fs.existsSync(path.join(f.runtime, "source-identity"))).toBe(unjoined);
+    expect(fs.existsSync(f.runtime)).toBe(true);
+    expect(f.readIdentity).not.toHaveBeenCalled();
+    expect(f.heartbeat).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledTimes(2);
+    expect(f.processState.exitCode).toBe(1);
+    expect(fs.existsSync(path.join(f.exported, "manifest.json"))).toBe(!unjoined);
+    if (unjoined) expect(f.checkpoint().evidenceError).toContain("producer custody is unknown");
+    else expect(readJson(path.join(f.exported, "installed-terminal.json")).status).toBe("failed");
+  },
+);
+
+it.each(
+  (["candidate", "published"] as const).flatMap((mode) =>
+    [false, true].map((unjoined) => ({ mode, unjoined })),
+  ),
+)(
+  "records $mode packing timeout despite cleanup rejection=$unjoined",
+  async ({ mode, unjoined }) => {
+    const f = driverFixture();
+    f.summary.commands.length = f.summary.cells.length = 0;
+    f.summary.status = "running";
+    const error = Object.assign(new Error(unjoined ? "cleanup failed" : "packing timed out"), {
+      code: unjoined ? "CLEANUP_FAILED" : "ETIMEDOUT",
+      processTreeState: unjoined ? "indeterminate" : "terminated",
+    });
+    const child = createSyntheticChild("both");
+    f.managed.mockImplementation(async (options) => {
+      options.onReady?.(child.child);
+      const ended = Promise.all([
+        once(child.child.stdout!, "end"),
+        once(child.child.stderr!, "end"),
+      ]);
+      child.child.stdout!.push(Buffer.from("partial"));
+      child.child.stdout!.push(null);
+      child.child.stderr!.push(null);
+      await ended;
+      child.close();
+      options.onTimeout?.({
+        elapsedMs: 30_000,
+        exit: null,
+        stdout: { bytes: 7, lastDataElapsedMs: 10, closed: true },
+        stderr: { bytes: 0, lastDataElapsedMs: null, closed: true },
+      });
+      throw error;
+    });
+    try {
+      await f.api.settle(f.api[mode]);
+    } finally {
+      child.destroyOutput();
+    }
+    const name = mode === "candidate" ? "candidate-first-hop" : "published-control-pack";
+    expect(f.checkpoint()).toMatchObject({
+      status: "failed",
+      error: String(error),
+      cells: [],
+      unjoined,
+    });
+    expect(f.checkpoint().commands).toMatchObject([
+      {
+        name,
+        status: "failed",
+        treeJoined: !unjoined,
+        timeout: { elapsedMs: 30_000 },
+        outputEnded: [true, true],
+        outputBytes: [7, 0],
+        outputComplete: false,
+      },
+    ]);
+    expect(f.managed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        bin: process.execPath,
+        timeoutMs: 30_000,
+        timeoutKillGraceMs: 5_000,
+        signalKillGraceMs: 5_000,
+        abortKillGraceMs: 5_000,
+        cleanupDrainTimeoutMs: 5_000,
+        requireProcessTreeExit: true,
+        timeoutForceKillOnLeaderExit: true,
+      }),
+    );
+    const [managedCall] = f.managed.mock.calls;
+    assert.ok(managedCall);
+    expect(managedCall[0].args).toContain(
+      mode === "candidate" ? "first-hop-tarball" : "openclaw@2026.10.9",
+    );
+    expect(f.parse).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledTimes(2);
+    for (const [fd] of f.close.mock.calls) expect(() => fs.fstatSync(fd)).toThrow();
+    expect(f.processState.exitCode).toBe(1);
+    if (unjoined) {
+      expect(fs.existsSync(f.runtime)).toBe(true);
+      expect(fs.existsSync(path.join(f.exported, "manifest.json"))).toBe(false);
+    }
+  },
+);
+
+it("closes the first output after the second output cannot be opened", async () => {
+  const f = driverFixture();
+  const error = new Error("stderr creation failed");
+  f.open.mockImplementationOnce(openInstalledRecoveryEvidence).mockImplementationOnce(() => {
+    throw error;
+  });
+  await f.api.settle(() => f.api.run("probe", process.execPath, [], {}));
+  expect(f.managed).not.toHaveBeenCalled();
+  expect(f.close).toHaveBeenCalledTimes(1);
+  const [closedCall] = f.close.mock.calls;
+  assert.ok(closedCall);
+  expect(() => fs.fstatSync(closedCall[0])).toThrow();
+  const receipt = f.checkpoint().commands.at(-1);
+  expect(receipt).toMatchObject({ status: "failed", error: String(error), outputComplete: false });
+  expect(receipt.exit).toBeUndefined();
+  expect(receipt.outputEnded).toEqual([false, false]);
+});
+
+it("retains the extraction error when removing its joined scratch also fails", async () => {
+  const f = driverFixture();
+  const error = new Error("extraction failed");
+  const cleanup = new Error("scratch removal failed");
+  f.managed.mockRejectedValue(error);
+  f.remove.mockImplementation(() => {
+    throw cleanup;
+  });
+  await f.api.settle(() => f.api.inspectBaseline("source-identity", "source.tgz", "b".repeat(40)));
+  expect(f.checkpoint()).toMatchObject({
+    error: String(error),
+    extractionCleanupError: { name: "source-identity", error: String(cleanup) },
+    unjoined: false,
+  });
+  expect(fs.existsSync(path.join(f.runtime, "source-identity"))).toBe(true);
+  expect(fs.existsSync(path.join(f.exported, "manifest.json"))).toBe(true);
+});
+
+it("retains the command error and exports joined evidence after checkpoint failure", async () => {
+  const f = driverFixture();
+  const error = new Error("command failed");
+  const checkpointError = new Error("checkpoint failed");
+  f.managed.mockRejectedValue(error);
+  f.save
+    .mockImplementationOnce(() => {})
+    .mockImplementation(() => {
+      throw checkpointError;
+    });
+  await f.api.settle(() => f.api.run("probe", process.execPath, [], {}));
+  expect(f.summary).toMatchObject({
+    error: String(error),
+    checkpointError: String(checkpointError),
+    status: "failed",
+  });
+  expect(readJson(path.join(f.exported, "installed-terminal.json"))).toMatchObject({
+    error: String(error),
+    checkpointError: String(checkpointError),
+    status: "failed",
+  });
 });
 
 it.each(["write", "rename"] as const)(

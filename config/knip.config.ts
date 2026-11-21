@@ -403,6 +403,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
+  // Installed terminal lane invokes its driver and preloads its observer by path.
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",
