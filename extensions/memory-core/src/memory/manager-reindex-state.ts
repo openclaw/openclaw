@@ -173,7 +173,8 @@ export function resolveConfiguredScopeHash(params: {
       const path = entry.path.replaceAll("\\", "/");
       return entry.pattern ? { path, pattern: entry.pattern } : path;
     })
-    .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    // Persisted scope hashes need identical collation in Gateway and CLI processes.
+    .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right), "en-US"));
   return hashText(
     JSON.stringify({
       extraPaths,

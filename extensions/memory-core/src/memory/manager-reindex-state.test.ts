@@ -397,6 +397,18 @@ describe("memory reindex state", () => {
     ).toBe(true);
   });
 
+  it("keeps extra path scope hashes on the persisted en-US collation", () => {
+    const paths = [
+      { path: "notes/备", pattern: "reference/**/*.md" },
+      { path: "notes/阿", pattern: "reference/**/*.md" },
+    ];
+
+    const persistedScopeHash = "64b0edd0082f34c4531b871e3fb2bc509ae1d6a7b37fa053afb5ec92a5906ee2";
+
+    expect(scope(paths)).toBe(persistedScopeHash);
+    expect(scope(paths.toReversed())).toBe(persistedScopeHash);
+  });
+
   it("keeps scope identity stable when only extra-path recency policy changes", () => {
     expect(scope([{ path: "reference", pattern: "**/*.md", evergreen: true }])).toBe(
       scope([{ path: "reference", pattern: "**/*.md" }]),
