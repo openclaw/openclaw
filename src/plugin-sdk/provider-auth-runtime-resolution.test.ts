@@ -4,6 +4,7 @@ import type { Model } from "../llm/types.js";
 import { getRuntimeAuthForModel, resolveApiKeyForProvider } from "./provider-auth-runtime.js";
 
 const runtime = vi.hoisted(() => ({
+  loaded: vi.fn(),
   provider:
     vi.fn<
       typeof import("../plugins/runtime/runtime-model-auth.runtime.js").resolveProviderRuntimeApiKey
@@ -15,10 +16,16 @@ const runtime = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Keep credential lookup and provider initialization outside this resolution fixture.
-vi.mock("../plugins/runtime/runtime-model-auth.runtime.js", () => ({
-  resolveProviderRuntimeApiKey: runtime.provider,
-  getRuntimeAuthForModelCore: runtime.model,
+vi.mock("../agents/model-auth-provider.js", () => ({
+  resolveApiKeyForProviderCore: runtime.provider,
 }));
+vi.mock("../plugins/runtime/runtime-model-auth.runtime.js", () => {
+  runtime.loaded();
+  return {
+    resolveProviderRuntimeApiKey: runtime.provider,
+    getRuntimeAuthForModelCore: runtime.model,
+  };
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -45,7 +52,9 @@ it("resolves provider and model auth when runtime code has no physical file", as
   const request = { model };
 
   await expect(resolveApiKeyForProvider(provider)).resolves.toBe(credential);
+  expect(runtime.loaded).not.toHaveBeenCalled();
   await expect(getRuntimeAuthForModel(request)).resolves.toBe(credential);
+  expect(runtime.loaded).toHaveBeenCalledOnce();
   expect(runtime.provider).toHaveBeenCalledWith(provider);
   expect(runtime.model).toHaveBeenCalledWith(request);
 });
