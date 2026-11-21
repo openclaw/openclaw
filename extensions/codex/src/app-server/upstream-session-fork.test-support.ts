@@ -44,6 +44,7 @@ export function forkResponse(threadId = "thread-forked") {
   return {
     ...response,
     model: "gpt-5.6-luna",
+    reasoningEffort: null,
     thread: {
       ...response.thread,
       sessionId: "session-forked",

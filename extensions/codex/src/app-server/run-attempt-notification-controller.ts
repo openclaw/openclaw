@@ -3,6 +3,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isCodexTurnAbortMarkerNotification,
   completePendingOpenClawDynamicToolNotification,
@@ -28,7 +29,7 @@ export function createCodexAttemptNotificationController(
   const { prompt, state: resourceState, projectorRef } = resources;
   const { context, turnState } = prompt;
   const { attemptTools, runtime } = context;
-  const { appServer, runAbortController } = runtime.connection;
+  const { appServer, bindingIdentity, bindingStore, runAbortController } = runtime.connection;
   const { allocateCodexToolOutcomeOrdinal } = attemptTools;
   const {
     state,
@@ -63,6 +64,27 @@ export function createCodexAttemptNotificationController(
   const handleNotification = async (notification: CodexPreparedServerNotification) => {
     if (state.projectionClosed) {
       return;
+    }
+    if (notification.method === "thread/settings/updated" && isRecord(notification.params)) {
+      const threadId = notification.params.threadId;
+      const settings = notification.params.threadSettings;
+      const reasoningEffort = isRecord(settings) ? settings.effort : undefined;
+      if (
+        threadId === resourceState.thread.threadId &&
+        (typeof reasoningEffort === "string" || reasoningEffort === null)
+      ) {
+        // Settings updates can precede turn/start's response. Move the live fact
+        // only after the durable generation owner accepts the same thread update.
+        const updated = await bindingStore.mutate(
+          bindingIdentity,
+          { kind: "patch", threadId, patch: { reasoningEffort } },
+          runtime.connection.assertCurrent,
+          runtime.connection.authority,
+        );
+        if (updated) {
+          resourceState.thread.reasoningEffort = reasoningEffort;
+        }
+      }
     }
     const projector = projectorRef.current;
     const turnId = turnIdRef.current;
