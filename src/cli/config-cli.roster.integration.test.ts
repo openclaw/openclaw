@@ -29,6 +29,50 @@ const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
 describe("config cli roster integration", () => {
+  it.each([false, true])("refuses roster removal in the preview (json=%s)", async (json) => {
+    const raw = JSON.stringify({ agents: { entries: { main: {} } } });
+    const message =
+      "Config write would drop agent roster entries without an explicit deletion: main.";
+    await withConfig(raw, async ({ configPath }) => {
+      const args = ["agents.entries", "{}", "--replace", "--strict-json"];
+      await reject(set(...args, "--dry-run", ...(json ? ["--json"] : [])));
+      if (json) {
+        expect(JSON.parse(logs.join("\n"))).toMatchObject({
+          ok: false,
+          operations: 1,
+          inputModes: ["json"],
+          checks: { schema: true, resolvability: true, resolvabilityComplete: true },
+          errors: [{ kind: "schema", message }],
+        });
+      } else {
+        expect(errors.join("\n")).toContain(message);
+      }
+      await reject(set(...args));
+      expect(errors.join("\n")).toContain(message);
+      expect(read(configPath)).toBe(raw);
+      expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+    });
+  });
+
+  it("keeps an unchanged included roster as a no-op in preview and write", async () => {
+    const raw = JSON.stringify({ agents: { $include: "./agents.json" } });
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const includePath = path.join(tempDir, "agents.json");
+      const included = JSON.stringify({ entries: { main: {} } });
+      fs.writeFileSync(includePath, included);
+      const args = ["agents.entries", '{"main":{}}', "--replace", "--strict-json"];
+      await set(...args, "--dry-run", "--json");
+      expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: true, operations: 1 });
+      logs.length = 0;
+      await set(...args);
+      expect(logs.join("\n")).toContain("No change");
+      expect(read(configPath)).toBe(raw);
+      expect(read(includePath)).toBe(included);
+      expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+      expect(fs.existsSync(`${includePath}.bak`)).toBe(false);
+    });
+  });
+
   it("preserves a shorthand subagent primary through an indexed roster edit", async () => {
     const raw = JSON.stringify({
       agents: { entries: { main: { subagents: { model: "fixture-model/allowed" } } } },
@@ -216,6 +260,17 @@ describe("config cli roster integration", () => {
       try {
         setTestEnvValue("CONFIG_REFERENCE_A", "/opt/example/browser");
         setTestEnvValue("CONFIG_REFERENCE_B", "/opt/example/browser");
+        await set(
+          "browser.executablePath",
+          JSON.stringify("${CONFIG_REFERENCE_B}"),
+          "--strict-json",
+          "--dry-run",
+          "--json",
+        );
+        expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: true, operations: 1 });
+        expect(read(configPath)).toBe(rootRaw);
+        expect(read(ownedPath)).toBe(ownedRaw);
+        logs.length = 0;
         await set("browser.executablePath", "${CONFIG_REFERENCE_B}");
         expect(readBrowser().executablePath).toBe("${CONFIG_REFERENCE_B}");
         expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
