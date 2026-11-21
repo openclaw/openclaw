@@ -283,7 +283,7 @@ function selectSessionTranscriptProjection(
 type VisitProjectionMessage = (
   message: unknown,
   seq: number,
-  entry: Parameters<typeof sqliteMessageEventWithSeq>[0],
+  entry?: Parameters<typeof sqliteMessageEventWithSeq>[0],
 ) => void;
 
 function visitProjectionMessages(
