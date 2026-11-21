@@ -190,6 +190,13 @@ describe("backend policy edges", () => {
   });
 
   it("starts every load with a clean loop state", () => {
+    const previous = createPluginLoadLoopState([], undefined);
+    previous.seenIds.set("previous", "config");
+    previous.selectedMemoryPluginId = "previous";
+    previous.memorySlotMatched = true;
+    previous.memoryBackendsRequested = true;
+    previous.pluginLoadAttemptCount = 1;
+
     expect(createPluginLoadLoopState([], undefined)).toEqual({
       seenIds: new Map(),
       selectedMemoryPluginId: null,
@@ -197,15 +204,28 @@ describe("backend policy edges", () => {
       memoryBackendsRequested: false,
       pluginLoadAttemptCount: 0,
     });
+    expect(previous.seenIds.get("previous")).toBe("config");
+    expect(previous.selectedMemoryPluginId).toBe("previous");
   });
 });
 
 describe("legacy backends", () => {
-  it("forwards close hooks bound to the runtime", async () => {
+  it("forwards reload and close hooks bound to the runtime", async () => {
     const calls: string[] = [];
     const runtime = {
       getMemorySearchManager: async () => ({ manager: null }),
       resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
+      prepareReload(this: unknown) {
+        calls.push(this === runtime ? "reload:bound" : "reload:unbound");
+        return {
+          async drain() {
+            calls.push("drain");
+          },
+          resume() {
+            calls.push("resume");
+          },
+        };
+      },
       async closeMemorySearchManager(this: unknown) {
         calls.push(this === runtime ? "one:bound" : "one:unbound");
       },
@@ -214,9 +234,12 @@ describe("legacy backends", () => {
       },
     } as unknown as MemoryPluginRuntime;
     const backend = createLegacyBackendProviderRuntime("memory-core", runtime);
+    const reload = backend.prepareReload!({ retireRuntime: true, retiringEmbeddingProviders: [] });
+    await reload.drain();
+    reload.resume();
     await backend.closeMemorySearchManager!({ cfg: {}, agentId: "a" });
     await backend.closeAllMemorySearchManagers!();
-    expect(calls).toEqual(["one:bound", "all:bound"]);
+    expect(calls).toEqual(["reload:bound", "drain", "resume", "one:bound", "all:bound"]);
     const bare = createLegacyBackendProviderRuntime("memory-core", {
       getMemorySearchManager: async () => ({ manager: null }),
       resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),

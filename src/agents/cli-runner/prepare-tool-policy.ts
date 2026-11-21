@@ -126,11 +126,21 @@ export async function resolveCliRuntimeToolPolicy(input: {
       agentId: input.policyAgentId,
       sessionKey: input.policySessionKey,
     }).host !== "node";
+  // A bounded session mode is enforced by the Gateway on OpenClaw's tools, so a backend that would
+  // otherwise keep its own native tools runs on the mediated surface; mediated Claude already does.
+  const permissionModeMediation =
+    (params.controlOperation === undefined || !input.skipsTurnPreparation) &&
+    !(input.isSideQuestion && input.sideQuestionToolMode === "disabled") &&
+    params.sessionEntry?.permissionMode !== undefined &&
+    params.sessionEntry.permissionMode !== "full" &&
+    !ordinaryClaudeMediation &&
+    (params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0);
   if (
     (params.trustedInternalHandoff ||
       senderRestricted ||
       delegatedExecution ||
       workspaceOnly ||
+      permissionModeMediation ||
       ordinaryClaudeMediation) &&
     params.disableTools !== true
   ) {
@@ -142,7 +152,9 @@ export async function resolveCliRuntimeToolPolicy(input: {
       params.trustedInternalHandoff?.settleBatch !== undefined
     ) {
       throw new Error(
-        `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : delegatedExecution ? "delegated execution" : params.trustedInternalHandoff ? "completion" : "workspace-only"} tool policy`,
+        permissionModeMediation && !senderRestricted && !delegatedExecution && !workspaceOnly
+          ? `CLI backend ${input.backendId} uses its own tools here and cannot keep this chat's ${params.sessionEntry?.permissionMode} permissions. Change this chat to Full access, or choose another runtime.`
+          : `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : delegatedExecution ? "delegated execution" : params.trustedInternalHandoff ? "completion" : "workspace-only"} tool policy`,
       );
     }
     // Only uncapped ordinary and verified completion turns reach this list, so both kinds
