@@ -201,8 +201,14 @@ Worker reply attachments inside the assigned workspace are copied through the
 node transport before workspace reconciliation. Relative and absolute `MEDIA:`
 paths use the worker's bytes, including completed live replies. Raw paths outside
 that workspace produce a remote-file attachment error; allowed managed media
-references and HTTP URLs retain their existing delivery policy. Final chat
-completion still waits for reconciliation and includes any conflict summary.
+references and HTTP URLs retain their existing delivery policy.
+For a successful hosted worker turn, the final chat reply is
+delivered once its terminal reply is committed and its reply attachments are
+prepared, before workspace reconciliation completes. Reconciliation continues
+afterward: conflicts are appended as separate visible transcript notices, while
+reconciliation failures are recorded as visible notices on a best-effort basis
+and logged as background settlement failures. The already-delivered reply is
+not rewritten, and a subsequent turn waits for the previous turn's settlement.
 
 By default, each node has one worker slot per available CPU core. Configure the slot count with
 `nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
