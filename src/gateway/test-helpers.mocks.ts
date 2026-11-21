@@ -123,12 +123,14 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     "../agents/sessions/index.js",
   );
 
+  type RegistryForkArgs = Parameters<typeof modelSessions.ModelRegistry.prototype.fork>;
+
   type ActualRegistry = {
     getAll: () => Array<{ provider?: string; id?: string }>;
     getAvailable: () => Array<{ provider?: string; id?: string }>;
     find: (provider: string, modelId: string) => unknown;
     getProviderMetadataOwners: () => unknown;
-    fork: (authStorage: never, published?: unknown) => ActualRegistry;
+    fork: (...args: RegistryForkArgs) => ActualRegistry;
   };
 
   const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
@@ -146,9 +148,16 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
   class MockModelRegistry {
     private readonly modelsFile: string;
     private readonly actualRegistry?: ActualRegistry;
+    private readonly publishedModels?: RegistryForkArgs[1];
 
-    constructor(authStorage: unknown, modelsFile: string, forkedRegistry?: ActualRegistry) {
+    constructor(
+      authStorage: unknown,
+      modelsFile: string,
+      forkedRegistry?: ActualRegistry,
+      publishedModels?: RegistryForkArgs[1],
+    ) {
       this.modelsFile = modelsFile;
+      this.publishedModels = publishedModels;
       if (forkedRegistry) {
         this.actualRegistry = forkedRegistry;
         return;
@@ -161,12 +170,26 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     // Prepared model runtimes fork the lifecycle-owned template registry once per run
     // (createStores in prepared-model-runtime.full-catalog.ts), so this stand-in has to
     // offer fork too. The fork stays a mock so discovery keeps routing through the harness.
-    fork(authStorage: unknown, published?: unknown) {
+    fork(...args: RegistryForkArgs) {
+      const published = args[1];
       return new MockModelRegistry(
-        authStorage,
+        args[0],
         this.modelsFile,
-        this.actualRegistry?.fork(authStorage as never, published),
+        this.actualRegistry?.fork(...args),
+        published ? new Map([...(this.publishedModels ?? []), ...published]) : this.publishedModels,
       );
+    }
+
+    private getMockModels() {
+      const models = agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      const published = this.publishedModels;
+      // Explicit publications replace providers; other fixtures remain live.
+      return published
+        ? [
+            ...models.filter((model) => !published.has(model.provider ?? "")),
+            ...Array.from(published.values()).flat(),
+          ]
+        : models;
     }
 
     // resolveExplicitModelWithRegistry reads the metadata owners unconditionally, so a
@@ -180,21 +203,21 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
         return this.actualRegistry?.getAll() ?? [];
       }
       agentDiscoveryMock.discoverCalls += 1;
-      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      return this.getMockModels();
     }
 
     getAvailable() {
       if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.getAvailable() ?? [];
       }
-      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      return this.getMockModels();
     }
 
     find(provider: string, modelId: string) {
       if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.find(provider, modelId);
       }
-      return (agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>).find(
+      return this.getMockModels().find(
         (model) => model.provider === provider && model.id === modelId,
       );
     }
