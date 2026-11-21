@@ -150,7 +150,7 @@ class GatewaySessionCustomHeadersTest {
         try {
           val response =
             when (scenario) {
-              "missing", "password" -> MockResponse().setResponseCode(401).setHeader("WWW-Authenticate", "Basic realm="proxy"")
+              "missing", "password" -> MockResponse().setResponseCode(401).setHeader("WWW-Authenticate", "Basic realm=\"proxy\"")
               "forbidden" -> MockResponse().setResponseCode(403)
               "redirect" -> MockResponse().setResponseCode(302).setHeader("Location", server.url("/other"))
               "foreign" -> MockResponse().setResponseCode(302).setHeader("Location", foreign.url("/must-not-load"))
