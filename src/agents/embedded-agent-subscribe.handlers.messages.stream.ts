@@ -306,7 +306,7 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  return accumulatedText.includes(content) ? "" : content;
+  return "";
 }
 
 export function createStreamingReplyResolver(): StreamingReplyResolver {
