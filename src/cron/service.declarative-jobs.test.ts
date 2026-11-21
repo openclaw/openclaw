@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { resolveCronSession } from "./isolated-agent/session.js";
 import { toPublicCronJob } from "./public-job.js";
@@ -340,6 +340,7 @@ it.each(["ordinary update", "declarative convergence"] as const)(
       );
       const replacement = ownedDeclaration(next, { declarationKey, ...changes });
       if (mutationPath === "ordinary update") {
+        assert(replacement.payload.kind === "script" || replacement.payload.kind === "agentTurn");
         await cron.update(created.id, {
           trigger: replacement.trigger ?? null,
           payload: replacement.payload,

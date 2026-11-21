@@ -45,6 +45,7 @@ export const runWhatsAppAutomation: NonNullable<
         delivery: { mode: "none" },
         failureAlert: false,
         owner: { sessionKey, accountId: payload.accountId, agentId: job.agentId },
+        inferenceBinding: job.inferenceBinding,
         sourceConversation: { sessionKey, sessionId: payload.task.sessionId },
         scheduledToolPolicy: {
           version: 1,

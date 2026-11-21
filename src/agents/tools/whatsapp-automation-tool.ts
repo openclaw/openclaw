@@ -5,6 +5,7 @@ import { getWhatsAppAutomationTurn } from "../../cron/whatsapp-automation-turn.j
 import { manageWhatsAppAutomations } from "../../cron/whatsapp-automation.js";
 import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
+import type { ModelAwareToolContext } from "../openclaw-tools.model-context.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { jsonResult, type AnyAgentTool } from "./common.js";
 import type { CronToolOptions } from "./cron-tool.types.js";
@@ -46,6 +47,7 @@ export function createWhatsAppAutomationTool(
   runId?: string,
   sessionKey?: string,
   creator?: Pick<CronToolOptions, "creatorToolAllowlist" | "creatorToolAllowlistCaptureRef"> & {
+    model?: Pick<ModelAwareToolContext, "modelProvider" | "modelId" | "modelAuthProfileId">;
     agentSessionId?: string;
   },
 ): AnyAgentTool | null {
@@ -120,6 +122,13 @@ export function createWhatsAppAutomationTool(
                     ? [{ name: tool.name, ...(tool.pluginId ? { pluginId: tool.pluginId } : {}) }]
                     : [],
                 ),
+              }
+            : undefined,
+          creator?.model?.modelAuthProfileId
+            ? {
+                provider: creator.model.modelProvider,
+                model: creator.model.modelId,
+                profileId: creator.model.modelAuthProfileId,
               }
             : undefined,
         ),

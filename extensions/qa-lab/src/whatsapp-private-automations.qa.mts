@@ -2,15 +2,18 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { startAutomationProvider } from "./control-ui-automation-provider.test-support.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild } from "./gateway-child.ts";
+import { writeQaAuthProfiles } from "./providers/shared/auth-store.ts";
 
 async function run() {
   const outputDir = await mkdtemp(path.join(homedir(), "whatsapp-qa-"));
   console.log("QA output", outputDir);
-  const provider = await startAutomationProvider("whatsapp_automations");
+  const accounts = { original: "qa-synthetic-original", alternate: "qa-synthetic-alternate" };
+  const provider = await startAutomationProvider("whatsapp_automations", accounts);
   const owner = createQaGatewayChild();
   let transport: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>> | undefined;
   await runQaGatewayFixture(
@@ -94,6 +97,23 @@ async function run() {
           (agents.qa ??= {}).tools = tools;
           return cfg;
         },
+      });
+      await gateway.restartAfterStateMutation(async ({ configPath, stateDir }) => {
+        const cfg = JSON.parse(await readFile(configPath, "utf8"));
+        delete cfg.models.providers["mock-openai"].apiKey;
+        cfg.auth ??= {};
+        cfg.auth.order = { ...cfg.auth.order, "mock-openai": Object.keys(accounts) };
+        await writeQaAuthProfiles({
+          stateDir,
+          agentId: "qa",
+          profiles: Object.fromEntries(
+            Object.entries(accounts).map(([id, key]) => [
+              id,
+              { provider: "mock-openai", type: "api_key", key },
+            ]),
+          ),
+        });
+        await writeFile(configPath, JSON.stringify(cfg));
       });
       await adapter.waitReady({ gateway });
       const job = {
@@ -289,6 +309,45 @@ async function run() {
       );
       assert.equal(task.mode, "task");
       assert.ok((await readJobs()).some((j) => j.id === task.id));
+      assert.deepEqual(provider.inferenceAccounts.get("schedule-orders"), new Set(["original"]));
+      const stored = (() => {
+        using db = new DatabaseSync(
+          path.join(gateway.tempRoot, "state", "state", "openclaw.sqlite"),
+          { readOnly: true },
+        );
+        return db
+          .prepare(
+            "SELECT json_extract(job_json, '$.inferenceBinding.profileId') AS profile, json_extract(job_json, '$.payload.task.sessionId') AS session FROM cron_jobs WHERE job_id = ?",
+          )
+          .get(task.id);
+      })();
+      assert.equal(stored?.profile, "original");
+      assert.ok(stored.session);
+      const selection = (await gateway.call("config.get", {})) as { hash: string };
+      await gateway.call("config.patch", {
+        baseHash: selection.hash,
+        replacePaths: ["auth.order.mock-openai"],
+        raw: JSON.stringify({ auth: { order: { "mock-openai": ["alternate", "original"] } } }),
+      });
+      const reset = (await gateway.call("sessions.reset", {
+        key: chatKey,
+        expectedSessionId: stored.session,
+      })) as {
+        ok: boolean;
+        key: string;
+      };
+      assert.ok(reset.ok);
+      assert.equal(reset.key, chatKey);
+      assert.ok(
+        JSON.parse(await ask(alice, "after-reset", { action: "list" })).jobs.some(
+          (j: { id: string }) => j.id === task.id,
+        ),
+      );
+      assert.deepEqual(provider.inferenceAccounts.get("after-reset"), new Set(["alternate"]));
+      assert.match(
+        await ask(bob, "foreign-task", { action: "update", id: task.id, text: "Changed" }),
+        /not found/i,
+      );
       await setOrders([3, 8]);
       const countBeforeTask = outbound().length;
       const summary = await adapter
@@ -313,6 +372,7 @@ async function run() {
           );
         });
       await completed(task.id, "ok");
+      assert.deepEqual(provider.inferenceAccounts.get("due-orders"), new Set(["original"]));
       assert.equal(summary.conversation.id, replyPeers.get(alice));
       assert.equal(summary.accountId, adapter.accountId);
       assert.deepEqual(JSON.parse(provider.results.get("due-orders")!), { quantities: [3, 8] });
@@ -325,15 +385,22 @@ async function run() {
           action: "add",
           mode: "task",
           text: "Mark my orders reviewed. [automation-proof:due-review]",
-          schedule: { kind: "at", at: new Date(Date.now() + 12_000).toISOString() },
+          schedule: { kind: "at", at: new Date(Date.now() + 20_000).toISOString() },
         }),
       );
+      const trimmed = (await gateway.call("sessions.compact", { key: chatKey, maxLines: 2 })) as {
+        compacted: boolean;
+        key: string;
+      };
+      assert.ok(trimmed.compacted);
+      assert.equal(trimmed.key, chatKey);
       const receipt = await adapter.waitForOutbound({
         sinceIndex: outbound().length,
         textIncludes: "Marked 2 orders reviewed.",
         timeoutMs: 60_000,
       });
       await completed(write.id, "ok");
+      assert.deepEqual(provider.inferenceAccounts.get("due-review"), new Set(["alternate"]));
       assert.equal(receipt.accountId, adapter.accountId);
       assert.equal(receipt.conversation.id, replyPeers.get(alice));
       assert.deepEqual(JSON.parse((await readFile(ordersFile + ".reviews", "utf8")).trim()), {
@@ -354,6 +421,29 @@ async function run() {
           { account: adapter.accountId, peer: "+15550000001", action: "mark_reviewed" },
         ],
       );
+      const beforeDisconnect = outbound().length;
+      await gateway.restartAfterStateMutation(async ({ stateDir }) => {
+        await writeQaAuthProfiles({
+          stateDir,
+          agentId: "qa",
+          replace: true,
+          profiles: {
+            alternate: { type: "api_key", provider: "mock-openai", key: accounts.alternate },
+          },
+        });
+      });
+      await adapter.waitReady({ gateway });
+      await gateway.call("cron.run", { id: task.id, mode: "force" });
+      await completed(task.id, "error");
+      const runs = (await gateway.call("cron.runs", { id: task.id })) as {
+        entries: { status: string; error?: string }[];
+      };
+      assert.match(
+        runs.entries.find((entry) => entry.status === "error")?.error ?? "",
+        /account original|inference account|authorization was disconnected/i,
+      );
+      assert.equal(await readAccesses(), accesses);
+      await adapter.waitForNoOutbound({ sinceIndex: beforeDisconnect });
       const config = (await gateway.call("config.get", {})) as { hash: string };
       await gateway.call("config.patch", {
         baseHash: config.hash,

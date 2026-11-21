@@ -62,6 +62,13 @@ access to the sender’s account. For requester-scoped MCP servers, OpenClaw
 resolves that connection again at run time. A disconnected account or a tool
 requiring an interactive approval cannot perform the scheduled action.
 Client-only tools and interactive execution grants require a fresh turn.
+
+If the creating turn uses a stored model account, the scheduler records that
+account. Changing the default model account leaves the task on its original
+account. Disconnecting or replacing the recorded account prevents the task
+from using it. Resetting or compacting the private chat preserves its schedules.
+Each new occurrence uses the current conversation permissions.
+
 The Gateway sends the result from the same WhatsApp account to the same
 private chat. Gateway operators retain administrative access to the schedules.
 

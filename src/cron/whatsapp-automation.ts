@@ -1,3 +1,4 @@
+import type { AuthProfileAuthorization } from "../agents/auth-profiles/authorization-contract.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronServiceContract } from "./service-contract.js";
@@ -39,9 +40,15 @@ export async function hasWhatsAppAutomationPermission(
 
 export async function manageWhatsAppAutomations(
   cron: CronServiceContract,
-  owner: WhatsAppAutomationPeer & { agentId: string; sessionKey: string; assertCurrent(): void },
+  owner: WhatsAppAutomationPeer & {
+    agentId: string;
+    sessionKey: string;
+    getConfig(): OpenClawConfig;
+    assertCurrent(): void;
+  },
   request: WhatsAppAutomationRequest,
   task?: { sessionId: string; tools: { name: string; pluginId?: string }[] },
+  inferenceAccount?: { provider?: string; model?: string; profileId: string },
 ) {
   const owns = (job: CronJob) =>
     job.agentId === owner.agentId &&
@@ -66,6 +73,45 @@ export async function manageWhatsAppAutomations(
     if (request.mode === "task" && !task) {
       throw new Error("This turn could not capture its executable tools.");
     }
+    using inferenceLease = new DisposableStack();
+    let authority: AuthProfileAuthorization | undefined;
+    let inferenceBinding;
+    const commitGuard = () => {
+      owner.assertCurrent();
+      authority?.assertCurrent();
+    };
+    if (request.mode === "task" && inferenceAccount) {
+      const { provider, model, profileId } = inferenceAccount;
+      if (!provider || !model) {
+        throw new Error("This turn could not capture its inference account.");
+      }
+      const { captureCronInferenceBinding } = await import("./inference-binding.runtime.js");
+      inferenceBinding = await captureCronInferenceBinding({
+        cfg: owner.getConfig(),
+        agentId: owner.agentId,
+        model: `${provider}/${model}@${profileId}`,
+        authorizeProfile: async (selected) => {
+          owner.assertCurrent();
+          if (selected !== profileId) {
+            throw new Error("Scheduling requires the inference account used by this turn.");
+          }
+          return owner.assertCurrent;
+        },
+        retainAuthorization(captured) {
+          authority = captured;
+          inferenceLease.defer(captured.dispose);
+        },
+      });
+      if (
+        inferenceBinding?.provider !== provider ||
+        inferenceBinding.profileId !== profileId ||
+        inferenceBinding.runtime !== "openclaw"
+      ) {
+        throw new Error(
+          "This turn’s inference account is unavailable for scheduled OpenClaw work.",
+        );
+      }
+    }
     const saved = await cron.add(
       {
         agentId: owner.agentId,
@@ -84,7 +130,7 @@ export async function manageWhatsAppAutomations(
           ...(request.mode === "task" ? { task } : {}),
         },
       },
-      { commitGuard: owner.assertCurrent },
+      { inferenceBinding, commitGuard },
     );
     return view(saved);
   }

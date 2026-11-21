@@ -13,7 +13,11 @@ import {
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
 
-export async function startAutomationProvider(toolName = "automations") {
+export async function startAutomationProvider(
+  toolName = "automations",
+  syntheticAccounts: Record<string, string> = {},
+) {
+  const inferenceAccounts = new Map<string, Set<string>>();
   const requests = new Map<string, Record<string, unknown>>();
   const requestedTools = new Map<string, string>();
   const surfaces = new Map<string, string[]>();
@@ -49,6 +53,14 @@ export async function startAutomationProvider(toolName = "automations") {
         (restartHold && JSON.stringify(input).includes(`[automation-proof:${restartHold.marker}]`)
           ? restartHold.marker
           : undefined);
+      if (marker && Object.keys(syntheticAccounts).length) {
+        const account = Object.entries(syntheticAccounts).find(
+          ([, key]) => request.headers.authorization === `Bearer ${key}`,
+        )?.[0];
+        const seen = inferenceAccounts.get(marker) ?? new Set<string>();
+        seen.add(account ?? "unrecognized");
+        inferenceAccounts.set(marker, seen);
+      }
       if (hold && marker === hold.marker) {
         hold.reached = true;
         await hold.gate;
@@ -122,6 +134,7 @@ export async function startAutomationProvider(toolName = "automations") {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
     requestedTools,
+    inferenceAccounts,
     surfaces,
     results,
     toolAvailability,

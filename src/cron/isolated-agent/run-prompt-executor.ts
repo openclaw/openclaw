@@ -315,7 +315,7 @@ export function createCronPromptExecutor(
           modelOverride,
           runOptions.agentHarnessRuntimeOverride,
         );
-        personal?.checkRuntime(!cliExecution && candidateRuntime === "openclaw");
+        personal?.checkRuntime(!cliExecution && candidateRuntime === "openclaw", providerOverride);
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({

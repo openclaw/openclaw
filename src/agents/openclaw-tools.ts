@@ -511,6 +511,7 @@ function* createOpenClawToolsSteps(
             sessionKey,
             {
               agentSessionId: options?.sessionId,
+              model: options,
               creatorToolAllowlist: options?.cronCreatorToolAllowlist,
               creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             },

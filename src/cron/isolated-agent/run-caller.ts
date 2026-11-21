@@ -82,8 +82,8 @@ export function prepareCronCaller(
           scheduledExecution.result.facts.authority.owner ||
           scheduledExecution.result.facts.principal.kind !== "parent" ||
           !params.occurrence.parentPermissions ||
-          scheduledExecution.result.facts.principal.parent.sessionId !==
-            params.job.sourceConversation?.sessionId
+          scheduledExecution.result.facts.principal.parent.sessionKey !== sessionKey ||
+          scheduledExecution.result.facts.principal.parent.agentId !== params.job.agentId
         ) {
           scheduledExecution.release();
           throw new Error("Personal task requires an admitted non-owner conversation.");
@@ -94,9 +94,12 @@ export function prepareCronCaller(
         params.occurrence.childParent?.assertCurrent();
         params.occurrence.parentPermissions?.assertCurrent();
       },
-      checkRuntime(embedded: boolean) {
+      checkRuntime(embedded: boolean, provider: string) {
         if (!embedded) {
           throw new Error("Personal tasks require the OpenClaw runtime.");
+        }
+        if (params.job.inferenceBinding && params.job.inferenceBinding.provider !== provider) {
+          throw new Error("Personal task requires its recorded inference account.");
         }
         personal.assertCurrent();
       },

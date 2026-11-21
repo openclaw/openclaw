@@ -693,7 +693,12 @@ type ChannelSecurityDmRouteContext<ResolvedAccount> = ChannelSecurityContext<Res
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
-  /** Re-evaluate the same DM access decision used on ingress, without generating a message. */
+  /**
+   * At deferred intake, check the verified private sender against this account’s current DM
+   * policy. This observation must not initiate pairing or grant tool or owner authority.
+   * Callers requiring deferred admission fail closed when the adapter omits it. An admitted
+   * operation uses its normal lifecycle fences until settlement.
+   */
   isDirectSenderAdmitted?: (
     ctx: ChannelSecurityContext<ResolvedAccount> & { accountId: string; senderId: string },
   ) => Promise<boolean>;
