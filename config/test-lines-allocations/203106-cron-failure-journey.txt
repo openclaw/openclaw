@@ -1,0 +1,6 @@
+# Exact net regression-test lines for #203106 beyond the allowance: the incident replay of the
+# throwing trigger through the production script runtime and scheduler (service.trigger-failure-
+# schedule), manual runs that evaluate the trigger and the skipTrigger escape for force and due
+# runs (service.manual-run-trigger), and notice-before-repair ordering. Three PRs were folded into
+# one; the source-grep ratchet test was deleted to offset part of the growth.
+69
