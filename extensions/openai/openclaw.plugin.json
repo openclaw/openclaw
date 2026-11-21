@@ -131,7 +131,8 @@
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
               "supportsTemperature": false,
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "cachesInstructions": false
             }
           },
           {
@@ -175,7 +176,8 @@
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
               "supportsTemperature": false,
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "cachesInstructions": false
             }
           },
           {
@@ -578,7 +580,7 @@
       "capabilities": ["image", "audio"],
       "defaultModels": {
         "image": "gpt-6-astra",
-        "audio": "gpt-4o-transcribe"
+        "audio": "gpt-transcribe"
       },
       "autoPriority": {
         "image": 20,

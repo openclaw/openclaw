@@ -42,11 +42,7 @@ import {
   type SessionFileEntry,
 } from "./chat-session-workspace-session-files.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
-import {
-  hasTranscriptAttachments,
-  representedArtifactIds,
-  transcriptAttachmentMatches,
-} from "./chat-transcript-attachments.ts";
+import { hasTranscriptAttachments, representedArtifactIds } from "./chat-transcript-attachments.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
 import { FileDisclosure } from "./file-disclosure.tsx";
@@ -162,9 +158,8 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const root = () => props.workspace.browserPath;
   const searchArtifacts = createMemo(() =>
     representedArtifactIds(
-      (props.workspace.transcriptAttachments?.entries ?? []).filter((entry) =>
-        transcriptAttachmentMatches(entry, props.workspace.browserSearch),
-      ),
+      props.workspace.transcriptAttachments?.entries,
+      props.workspace.browserSearch,
     ),
   );
   const searchResults = createMemo(() =>

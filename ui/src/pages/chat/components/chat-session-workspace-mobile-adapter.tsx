@@ -25,11 +25,7 @@ import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
 import { createSessionWorkspaceRead } from "./chat-session-workspace-read.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
-import {
-  hasTranscriptAttachments,
-  representedArtifactIds,
-  transcriptAttachmentMatches,
-} from "./chat-transcript-attachments.ts";
+import { hasTranscriptAttachments, representedArtifactIds } from "./chat-transcript-attachments.ts";
 import "./chat-session-workspace-mobile.css";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
@@ -397,16 +393,13 @@ export function MobileWorkspaceContents(props: {
           });
         }
       }
-      const represented = representedArtifactIds(
+      const represented =
         workspace.filter === "all"
-          ? (workspace.transcriptAttachments?.entries ?? []).filter((entry) =>
-              transcriptAttachmentMatches(entry, searchQuery),
-            )
-          : [],
-      );
+          ? representedArtifactIds(workspace.transcriptAttachments?.entries, searchQuery)
+          : undefined;
       const artifacts =
         workspaceList?.artifacts?.filter(
-          (artifact) => matches(artifact.title) && !represented.has(artifact.id),
+          (artifact) => matches(artifact.title) && !represented?.has(artifact.id),
         ) ?? [];
       if (artifacts.length && (workspace.filter === "all" || workspace.filter === "artifacts")) {
         groups.push({ kind: "artifacts", artifacts, expanded: expandedGroups?.artifacts ?? false });

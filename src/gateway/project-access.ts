@@ -148,7 +148,7 @@ async function isPublicGitHubOrigin(
  * Restricted requesters may use agent-workspace pseudo-projects (governed by
  * roles.agents) and public GitHub repositories on the configured host.
  */
-async function canRequesterUseProject(
+export async function canRequesterUseProject(
   cfg: OpenClawConfig,
   project: Pick<ProjectRegistryIdentity, "source" | "originUrl">,
   requester: ProjectRequester,

@@ -6,6 +6,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
+import * as sessionInventory from "../config/sessions/session-transcript-worker-resources.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -29,7 +30,7 @@ import {
   registerSessionAutomationSource,
   sessionHasAutomation,
 } from "./session-automation-index.js";
-import * as sessionSharing from "./session-sharing.js";
+import * as sharingReads from "./session-sharing-target-read.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -51,6 +52,16 @@ function emitSettlement(f: Fixture, cfg: OpenClawConfig = {}) {
     { accessChanged: false, rowScope: "runtime" },
   );
 }
+
+it("selects each cold Inbox target once before reading its display", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const inventory = vi.spyOn(sessionInventory, "prepareSessionStoreCandidatesInWorker");
+    const reopened = f.openInbox("cold-selection");
+    const items = await f.items(f.bobClient, reopened);
+    expect(items).toMatchObject([{ sessionKey: SESSION_KEY, sessionTitle: "Design review" }]);
+    expect(inventory).toHaveBeenCalledTimes(1);
+  }));
 
 it("shares maintenance across a reconnect wave without overtaking a queued dismissal", () =>
   withMentionInbox(async (f) => {
@@ -106,7 +117,7 @@ it("reads unchanged inboxes without preparing another recipient's unavailable ta
     expect(await f.items(f.carolClient)).toHaveLength(1);
     sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "session-entry" });
     const resolve = vi
-      .spyOn(sessionSharing, "resolveSessionSharingTargetAsync")
+      .spyOn(sharingReads, "prepareSessionSharingRead")
       .mockRejectedValue(new Error("Unrelated session target is unavailable"));
 
     const [carol, alice, bob] = await Promise.all(
@@ -132,14 +143,12 @@ it("recovers background views when a session is replaced during cold target prep
   withMentionInbox(async (f) => {
     await f.post();
     await f.items();
-    const resolve = sessionSharing.resolveSessionSharingTargetAsync;
-    vi.spyOn(sessionSharing, "resolveSessionSharingTargetAsync").mockImplementationOnce(
-      async (...args) => {
-        const display = await resolve(...args);
-        await f.replaceSessionIdentity();
-        return display;
-      },
-    );
+    const resolve = sharingReads.prepareSessionSharingRead;
+    vi.spyOn(sharingReads, "prepareSessionSharingRead").mockImplementationOnce(async (...args) => {
+      const display = await resolve(...args);
+      await f.replaceSessionIdentity();
+      return display;
+    });
     await f.inbox.invalidateAsync();
     expect(await f.items()).toEqual([]);
     await f.setSession({ sessionId: SESSION_ID });

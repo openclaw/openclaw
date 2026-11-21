@@ -15,18 +15,26 @@ import type {
   SidebarContent,
 } from "./chat-sidebar-content-types.ts";
 
-export function representedArtifactIds(entries: readonly TranscriptAttachmentEntry[]) {
-  return new Set(
-    entries.flatMap((entry) => {
-      const id =
-        entry.kind === "image"
-          ? entry.image.artifactId
-          : entry.item.type === "attachment"
-            ? entry.item.attachment.artifactId
-            : undefined;
-      return id ? [id] : [];
-    }),
-  );
+export function representedArtifactIds(
+  entries: readonly TranscriptAttachmentEntry[] | undefined,
+  query?: string,
+) {
+  const ids = new Set<string>();
+  for (const entry of entries ?? []) {
+    if (query !== undefined && !transcriptAttachmentMatches(entry, query)) {
+      continue;
+    }
+    const id =
+      entry.kind === "image"
+        ? entry.image.artifactId
+        : entry.item.type === "attachment"
+          ? entry.item.attachment.artifactId
+          : undefined;
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
 }
 
 /** The catalog and chat fallback share message and media slot identities. */

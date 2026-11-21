@@ -48,6 +48,7 @@
   --shell-chrome-controls-gap: 4px;
   /* Settings takeover and the main sidebar share the same bottom divider geometry. */
   --shell-sidebar-footer-height: 53px;
+  --rail-band: var(--mac-band, var(--openclaw-native-titlebar-height, 52px));
   --shell-native-titlebar-controls-inset: var(--openclaw-native-controls-inset, 92px);
   --shell-native-titlebar-controls-width: 60px;
   --shell-content-leading-inset: 20px;
@@ -325,6 +326,9 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   );
   --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
   --shell-native-titlebar-controls-width: 124px;
+  /* Trim the empty space below the controls without moving AppKit's centerline. */
+  --mac-trim: 4px;
+  --mac-band: calc(var(--openclaw-native-titlebar-height, 52px) - var(--mac-trim));
   --shell-titlebar-inset: max(
     12px,
     calc(
@@ -341,7 +345,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   &::after {
     position: absolute;
     z-index: 30;
-    inset: var(--openclaw-native-titlebar-height, 52px) 0 0 var(--shell-nav-rail-width, 0px);
+    inset: var(--mac-band) 0 0 var(--shell-nav-rail-width, 0px);
     border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
     box-shadow:
       0 0 0 var(--radius-lg) var(--sidebar-rail-surface),
@@ -361,17 +365,14 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   .shell-nav {
     min-height: 0;
-    padding-top: var(--openclaw-native-titlebar-height, 52px);
+    padding-top: var(--mac-band);
     background-color: var(--sidebar-rail-surface);
-    border-image: linear-gradient(
-        transparent var(--openclaw-native-titlebar-height, 52px),
-        var(--resize-handle-rest-color) 0
-      )
-      0 1;
+    border-image: linear-gradient(transparent var(--mac-band), var(--resize-handle-rest-color) 0) 0
+      1;
   }
 
   .sidebar-resizer {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    margin-top: var(--mac-band);
   }
 
   .settings-sidebar__header {
@@ -411,7 +412,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   /* New session has no chat header, but keeps the same native titlebar surface. */
   .content--new-session .new-session-page::before {
-    flex: 0 0 var(--openclaw-native-titlebar-height, 52px);
+    flex: 0 0 var(--mac-band);
     margin-inline: calc(0px - var(--content-inline-padding));
     background: var(--sidebar-rail-surface);
     content: "";
@@ -430,25 +431,22 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   }
   /* Keep the native drag band outside page scrollports, including Settings. */
   background-image:
-    linear-gradient(
-      var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
-      transparent var(--openclaw-native-titlebar-height, 52px)
-    ),
+    linear-gradient(var(--sidebar-rail-surface) var(--mac-band), transparent var(--mac-band)),
     var(--app-background-image);
 
   .content--plugin-embed .plugin-tab-embed {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    margin-top: var(--mac-band);
   }
 
   .content:not(.content--chat, .content--custodian, .content--workboard, .content--plugin-embed) {
-    margin-top: var(--openclaw-native-titlebar-height, 52px);
-    padding-top: max(
-      0px,
-      calc(
-        var(--settings-content-block-start-padding, var(--openclaw-native-titlebar-height, 52px)) -
-          var(--openclaw-native-titlebar-height, 52px)
-      )
-    );
+    /* This scrollport already starts below chrome; don't reserve the toolbar again. */
+    --page-toolbar-padding: 0px;
+    margin-top: var(--mac-band);
+    padding-top: max(0px, calc(var(--settings-content-block-start-padding, 0px) - var(--mac-band)));
+
+    &::-webkit-scrollbar-track {
+      margin-top: var(--radius-lg);
+    }
   }
 }
 
@@ -471,6 +469,15 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 }
 
 .shell--mobile-nav .macos-titlebar-controls {
+  display: none;
+}
+
+/* Settings still needs an exit when titlebar Back is hidden or disabled. */
+html.openclaw-native-macos
+  .shell--settings:not(.shell--mobile-nav)
+  > openclaw-macos-titlebar-controls:has(.macos-titlebar-controls__back:enabled)
+  ~ .shell-nav
+  .settings-sidebar__back {
   display: none;
 }
 
@@ -559,50 +566,33 @@ div.shell.shell--onboarding {
   background: var(--sidebar-bg);
 }
 
+/* Back, title and agent avatar share one row. 8px top pad centers the 32px
+   controls on the shared 24px chrome centerline, mirroring .sidebar-shell;
+   macOS overrides with titlebar clearance. */
 .settings-sidebar__header {
   flex-shrink: 0;
-  /* 8px top pad centers the 32px back button on the shared 24px chrome
-     centerline, mirroring .sidebar-shell; macOS overrides with titlebar
-     clearance. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   padding: 8px 12px 6px;
 }
 
-/* Header, picker, search and nav rows share the 12px panel inset, a 32px
-   control height and the field radius; text and glyphs start 10px inside each
-   row (the nav rows reach it with a 1px border plus 9px padding). */
-.settings-sidebar__back {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 32px;
-  padding: 0 10px;
-  border: none;
-  border-radius: var(--field-radius);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: calc(12.5px * var(--control-ui-text-scale));
-  font-weight: 550;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.settings-sidebar__back-icon {
-  display: inline-flex;
-  width: var(--chrome-icon-size);
-  height: var(--chrome-icon-size);
-}
-
+/* Search and nav rows share the 12px panel inset, a 32px control height and the
+   field radius; text and glyphs start 10px inside each row (the nav rows reach it
+   with a 1px border plus 9px padding). */
 .settings-sidebar__title {
-  margin: 14px 0 0;
-  padding: 0 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
   font-size: calc(21px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
   color: var(--text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-sidebar__agent {
@@ -611,10 +601,20 @@ div.shell.shell--onboarding {
   padding: 8px 12px 0;
 }
 
+.settings-sidebar__agent--header {
+  padding: 0;
+}
+
 .settings-sidebar__loading-agent {
   display: block;
   height: 32px;
   border-radius: var(--field-radius);
+}
+
+/* Matches the header trigger: a 24px avatar and chevron in a 32px pill. */
+.settings-sidebar__agent--header .settings-sidebar__loading-agent {
+  width: 54px;
+  border-radius: var(--radius-full);
 }
 
 @media (pointer: coarse) {
@@ -632,12 +632,6 @@ div.shell.shell--onboarding {
   margin: 8px 12px 0;
   padding-bottom: 8px;
   color: var(--muted);
-}
-
-.settings-sidebar__back-icon svg {
-  width: var(--chrome-icon-size);
-  height: var(--chrome-icon-size);
-  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-sidebar__nav {
@@ -1002,7 +996,6 @@ div.shell.shell--onboarding {
 
 .sidebar-brand__icon:hover:not(:disabled, [aria-disabled="true"]),
 .sidebar-brand__icon:focus-visible,
-.settings-sidebar__back:hover,
 .settings-sidebar__search-clear:hover,
 .topbar-icon-btn:hover:not(:disabled),
 .sidebar-issues-button:hover,
@@ -1334,20 +1327,6 @@ div.shell.shell--onboarding {
   color: var(--text);
 }
 
-/* The section icon distinguishes personal sections from shared groups. */
-.personal-session-groups__icon {
-  display: inline-flex;
-  flex: none;
-  /* Sit closer to the label than the row's standard gap. */
-  margin-inline-end: -3px;
-  color: var(--muted);
-}
-
-.personal-session-groups__icon svg {
-  width: 12px;
-  height: 12px;
-}
-
 .sidebar-recent-sessions__head--draggable {
   cursor: grab;
 }
@@ -1549,10 +1528,6 @@ div.shell.shell--onboarding {
 .sidebar-session-group-actions[aria-expanded="true"] {
   color: var(--text);
   opacity: 1;
-
-  &:not(.sidebar-new-session) {
-    background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  }
 }
 
 /* Trailing header actions sit edge to edge like row actions, not the 8px header gap.
@@ -3740,7 +3715,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .shell-chrome-controls__button:focus-visible,
-.settings-sidebar__back:focus-visible,
 .settings-sidebar__search-clear:focus-visible,
 .settings-sidebar__item:focus-visible,
 .settings-sidebar__subitem:focus-visible,
@@ -3909,6 +3883,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
    under the row. */
 .shell:not(.shell--mobile-nav):not(.shell--settings) .content:not(.content--chat) {
   --page-toolbar-height: 52px;
+  --page-toolbar-padding: var(--page-toolbar-height);
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
@@ -4015,7 +3990,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
      hosts float chrome there; on the web the rail holds those controls. */
   :is(html.openclaw-native-macos, html.openclaw-native-nav)
     &:not(.content--toolbar-header, .content--plugin-embed) {
-    padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
+    padding-top: calc(var(--page-toolbar-padding) + var(--page-toolbar-clearance) + 16px);
   }
 
   html.openclaw-native-nav & {
@@ -4039,7 +4014,7 @@ html.openclaw-native-web-chrome
   );
 
   &:not(.content--toolbar-header, .content--plugin-embed) {
-    padding-top: calc(var(--page-toolbar-height) + 16px);
+    padding-top: calc(var(--page-toolbar-padding) + 16px);
   }
 }
 

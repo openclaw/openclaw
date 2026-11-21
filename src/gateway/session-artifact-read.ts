@@ -40,8 +40,6 @@ import {
 } from "./artifacts-content.js";
 import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
 import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
-import { sessionFileAttachmentMessage } from "./session-file-attachment-message.js";
-import type { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import type {
   SessionTranscriptPageReader,
   SessionTranscriptVisitor,
@@ -320,9 +318,13 @@ function collectArtifactsFromMessage(
   }
 }
 
+type AttachmentProjector =
+  typeof import("./session-file-attachment-message.js").sessionFileAttachmentMessage;
+
 function createArtifactListCollector(
   query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
   sessionId?: string,
+  projectAttachment?: AttachmentProjector,
 ) {
   const attachments: ArtifactsListResult["attachments"] =
     query.includeAttachments && sessionId ? { sessionId, messages: [] } : undefined;
@@ -333,11 +335,7 @@ function createArtifactListCollector(
     ? new Set(query.downloadArtifactIds)
     : undefined;
   const blockRows = attachments ? new Map<number, ArtifactRecord>() : undefined;
-  const visit = (
-    message: unknown,
-    seq: number,
-    entry?: Parameters<typeof sqliteMessageEventWithSeq>[0],
-  ) => {
+  const visit = (message: unknown, seq: number, entry?: Parameters<AttachmentProjector>[2]) => {
     const byBlock = attachments?.truncated ? undefined : blockRows;
     byBlock?.clear();
     collectArtifactsFromMessage({
@@ -352,8 +350,8 @@ function createArtifactListCollector(
       downloadArtifactIds,
     });
     const record = asOptionalRecord(message);
-    if (attachments && byBlock && record) {
-      const projected = sessionFileAttachmentMessage(record, byBlock, entry);
+    if (attachments && byBlock && record && projectAttachment) {
+      const projected = projectAttachment(record, byBlock, entry);
       if (projected) {
         metadataBytes += Buffer.byteLength(JSON.stringify(projected));
         if (metadataBytes <= 4 * 1024 * 1024) {
@@ -376,6 +374,7 @@ const summaryLists = new WeakMap<
 export function readArtifactSummariesFromProjection(
   projection: CurrentTranscriptProjection,
   query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
+  projectAttachment?: AttachmentProjector,
 ): Extract<SessionArtifactReadResult, { kind: "list" }> {
   const cacheable =
     !hasUncommittedSqliteWrites(projection.database.db) &&
@@ -408,6 +407,7 @@ export function readArtifactSummariesFromProjection(
       includeDownloadData: false,
     },
     projection.resolved.sessionId,
+    projectAttachment,
   );
   const visible = resolveVisibleMessagePositions(projection);
   for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
@@ -490,7 +490,14 @@ export async function selectSessionArtifacts(
     };
   }
   if (query.kind === "list") {
-    const { artifacts, attachments, visit } = createArtifactListCollector(query, scope.sessionId);
+    const projectAttachment = query.includeAttachments
+      ? (await import("./session-file-attachment-message.js")).sessionFileAttachmentMessage
+      : undefined;
+    const { artifacts, attachments, visit } = createArtifactListCollector(
+      query,
+      scope.sessionId,
+      projectAttachment,
+    );
     await readers.visitSessionMessagesAsync(scope, visit);
     return { kind: "list", artifacts, ...(attachments ? { attachments } : {}) };
   }

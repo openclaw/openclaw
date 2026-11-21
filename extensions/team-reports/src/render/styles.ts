@@ -246,7 +246,8 @@ a:hover { color: var(--oc-text-primary); text-decoration: underline; text-underl
 .brand-mark { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .site-links { display: flex; align-items: center; justify-content: flex-end; gap: var(--oc-space-1); overflow-x: auto; white-space: nowrap; }
-.site-links a { min-height: 32px; padding: var(--oc-space-2) var(--oc-space-3); color: var(--oc-text-muted); font: 650 13px/1 var(--oc-font-body); }
+.site-links a { color: var(--oc-text-muted); }
+.site-links .oc-segmented-item { min-height: 32px; padding: var(--oc-space-2) var(--oc-space-3); font: 650 13px/1 var(--oc-font-body); }
 .site-links a:hover { color: var(--oc-text-primary); text-decoration: none; }
 .site-links a.is-active { color: var(--oc-text-primary); background: var(--oc-surface-interactive-hover); }
 .theme-toggle { flex: 0 0 auto; width: 34px; min-height: 34px; height: 34px; padding: 0; color: var(--oc-text-primary); cursor: pointer; }

@@ -340,11 +340,12 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
   return parseSessionChangedEvent(payload)?.[0] ?? null;
 }
 
-// Null source confirms inheritance; omission on a lifecycle event preserves selection.
+// Null is a fact here: inherited pin source, allowed workspace read; omission preserves selection.
 const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
   "updatedAt",
   "activeLeafEntryId",
   "modelOverrideSource",
+  "workspaceReadDisabledReason",
 ]);
 
 export type SessionRowObservation = {

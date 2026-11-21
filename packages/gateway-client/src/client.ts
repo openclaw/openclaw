@@ -10,6 +10,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
   readGatewayOperatorAccessClose,
+  readPairingConnectErrorDetails,
 } from "@openclaw/gateway-protocol/connect-error-details";
 import type { ConnectParams, EventFrame, HelloOk } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
@@ -26,16 +27,19 @@ import { createAbortError, raceWithTimeout } from "@openclaw/retry";
 import {
   formatGatewayClientErrorForLog,
   isGatewayClientStoppedError,
-  normalizeTlsFingerprint,
   normalizeGatewayErrorText,
 } from "./client-address-utils.js";
 import {
   GatewayClientDeviceAuth,
   type DeviceAuthTokenRecord,
   type DeviceAuthTokenObservation,
-  type GatewayClientDeviceAuthStorage,
   type MaybePromise,
 } from "./client-device-auth.js";
+import {
+  resolveHostDeps,
+  type DeviceIdentity,
+  type GatewayClientHostDeps,
+} from "./client-host-deps.js";
 import { readUpgradeErrorBody } from "./client-upgrade-error.js";
 import {
   buildGatewayConnectAuth,
@@ -83,55 +87,9 @@ import {
 } from "./websocket-transport.js";
 import { WebSocket, type GatewayWebSocketTargetOptions } from "./websocket.js";
 
-export type DeviceIdentity = {
-  deviceId: string;
-  privateKeyPem: string;
-  publicKeyPem: string;
-};
-
 export type { DeviceAuthTokenRecord } from "./client-device-auth.js";
 
-// The package stays reusable by depending on host callbacks for OpenClaw-owned
-// state: device keys, token storage, proxy routing, logging, and TLS formatting.
-export type GatewayClientHostDeps = GatewayClientDeviceAuthStorage & {
-  loadOrCreateDeviceIdentity?: () => DeviceIdentity | undefined;
-  signDevicePayload?: (privateKeyPem: string, payload: string) => string;
-  publicKeyRawBase64UrlFromPem?: (publicKeyPem: string) => string;
-  beforeConnect?: () => void;
-  registerGatewayLoopbackBypass?: (url: string) => (() => void) | undefined;
-  logDebug?: (message: string) => void;
-  logError?: (message: string) => void;
-  redactForLog?: (message: string) => string;
-  normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
-};
-
-const DEFAULT_HOST_DEPS: Required<GatewayClientHostDeps> = {
-  loadOrCreateDeviceIdentity: () => undefined,
-  signDevicePayload: () => {
-    throw new Error("GatewayClient device signature dependency is not configured");
-  },
-  publicKeyRawBase64UrlFromPem: () => {
-    throw new Error("GatewayClient public key dependency is not configured");
-  },
-  loadDeviceAuthToken: () => null,
-  storeDeviceAuthToken: () => {},
-  clearDeviceAuthToken: () => {},
-  beforeConnect: () => {},
-  registerGatewayLoopbackBypass: () => undefined,
-  logDebug: () => {},
-  logError: () => {},
-  redactForLog: (message) => message,
-  normalizeTlsFingerprint,
-};
-
-function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayClientHostDeps> {
-  return Object.fromEntries(
-    Object.entries(DEFAULT_HOST_DEPS).map(([key, fallback]) => [
-      key,
-      overrides?.[key as keyof GatewayClientHostDeps] ?? fallback,
-    ]),
-  ) as Required<GatewayClientHostDeps>;
-}
+export type { DeviceIdentity, GatewayClientHostDeps } from "./client-host-deps.js";
 
 export type GatewayClientRequestOptions = GatewayProtocolRequestOptions;
 
@@ -192,6 +150,12 @@ export type GatewayClientOptions = GatewayWebSocketTargetOptions &
     mode?: GatewayClientMode;
     role?: string;
     scopes?: string[];
+    /**
+     * Called when the Gateway refuses a scope upgrade and reports the device's
+     * approved scopes. Returned scopes replace the request for one immediate
+     * reconnect instead of pausing; undefined keeps the refusal.
+     */
+    fitScopesToApprovedGrant?: (approvedScopes: string[]) => string[] | undefined;
     modelCatalog?: ConnectParams["modelCatalog"];
     caps?: string[];
     commands?: string[];
@@ -244,6 +208,7 @@ export class GatewayClient {
   private deviceTokenRetryBudgetUsed = false;
   private approvalRuntimeTokenCompatibilityDisabled = false;
   private approvalRuntimeTokenRetryBudgetUsed = false;
+  private approvedGrantRetryPending = false;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
@@ -903,6 +868,22 @@ export class GatewayClient {
     );
   }
 
+  private resolveApprovedGrantScopes(error: GatewayProtocolRequestError): string[] | undefined {
+    const pairing =
+      this.opts.fitScopesToApprovedGrant && error instanceof GatewayClientRequestError
+        ? readPairingConnectErrorDetails(error.details)
+        : null;
+    if (pairing?.reason !== "scope-upgrade" || !pairing.approvedScopes?.length) {
+      return undefined;
+    }
+    const scopes = this.opts.fitScopesToApprovedGrant?.(pairing.approvedScopes);
+    const requested = new Set(this.opts.scopes ?? []);
+    // One retry per grant: an identical request would only be refused again.
+    return scopes && (scopes.length !== requested.size || scopes.some((s) => !requested.has(s)))
+      ? scopes
+      : undefined;
+  }
+
   private resolveConnectRequestFailure(
     error: GatewayProtocolRequestError,
     assembled: AssembledConnect,
@@ -922,6 +903,14 @@ export class GatewayClient {
       return { closeCode: 1008, closeReason: "connect retry" };
     }
     this.nodeProtocolTransitionPending = false;
+    const grantScopes = this.resolveApprovedGrantScopes(error);
+    if (grantScopes) {
+      this.opts = { ...this.opts, scopes: grantScopes };
+      this.approvedGrantRetryPending = true;
+      this.protocol.resetReconnectBackoff(250);
+      this.logDebug("gateway refused a scope upgrade; retrying within the approved grant");
+      return { closeCode: 1008, closeReason: "connect retry" };
+    }
     const detailCode =
       error instanceof GatewayClientRequestError ? readConnectErrorDetailCode(error.details) : null;
     const shouldRetryWithDeviceToken = shouldRetryGatewayWithDeviceToken({
@@ -995,6 +984,10 @@ export class GatewayClient {
       closeError instanceof GatewayClientRequestError ? closeError.details : undefined;
     const detailCode = readConnectErrorDetailCode(details);
     const info = describeGatewayClientClose(context, this.transportValidated, closeError);
+    if (this.approvedGrantRetryPending) {
+      this.approvedGrantRetryPending = false;
+      return { retry: true, notify: false };
+    }
     if (context.code === 1013 && context.connectFailure?.reconnectDelayMs !== undefined) {
       return {
         retry: true,

@@ -5,6 +5,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -321,7 +322,9 @@ export async function assertCronDoesNotTargetAgentHarness(
 export async function captureCronCreatorSession(
   job: CronJobCreate & Partial<Pick<CronStoredJob, "operatorSource" | "streamOperatorSource">>,
   callerScope: CronCallerScope | undefined,
-  caller: InferenceCaller,
+  caller: InferenceCaller & {
+    onOperatorAuthority?: (authority: AdmittedRunOperatorAuthority) => void;
+  },
   cfg: OpenClawConfig,
   hasRuntimeAuthority = false,
 ) {
@@ -474,6 +477,10 @@ export async function captureCronCreatorSession(
       throw new TypeError(
         "This requester cannot retain the authenticated execution authority for the automation.",
       );
+    }
+    // Optional work inside this request may use the same grant; never put it into job options.
+    if (operatorAuthority) {
+      caller.onOperatorAuthority?.(operatorAuthority);
     }
     return {
       ...inference,

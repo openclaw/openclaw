@@ -150,7 +150,7 @@ export async function loadBoundDeviceBootstrapContextReadOnly(
   baseDir?: string,
 ) {
   const { reply } = await readPairing(
-    { type: "devicePairing.bootstrapContext", input },
+    { type: "devicePairing.bootstrapContext", input: { ...input } },
     baseDir,
     true,
   );

@@ -29,11 +29,11 @@ export function sessionFileAttachmentMessage(
     !hasMediaSyntax(stored.content) &&
     !raw.some((b) => hasMediaSyntax(b.text) || b.type === "attachment_error")
   ) {
-    return;
+    return undefined;
   }
   const message = entry ? asOptionalRecord(sqliteMessageEventWithSeq(entry)) : stored;
   if (!message) {
-    return;
+    return undefined;
   }
   // Bind the durable catalog id before display sanitation can remove/reorder blocks.
   const field = Array.isArray(message[ASSISTANT_DISPLAY_CONTENT_FIELD])
@@ -50,7 +50,7 @@ export function sessionFileAttachmentMessage(
     : message;
   const visible = projectChatDisplayMessage(tagged, { maxChars: Number.MAX_SAFE_INTEGER });
   if (!visible) {
-    return;
+    return undefined;
   }
   const meta = asOptionalRecord(visible["__openclaw"]);
   const content: Record<string, unknown>[] = [];
@@ -183,7 +183,7 @@ export function sessionFileAttachmentMessage(
     }),
   );
   if (!content.length && !media?.some((fact) => fact.path || fact.url)) {
-    return;
+    return undefined;
   }
   const sender = asOptionalRecord(visible.senderSession);
   return {
