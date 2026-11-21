@@ -124,9 +124,18 @@ enum ChatMarkdownPreprocessor {
     }
 
     struct InlineImage: Identifiable {
-        let id = UUID()
+        struct ID: Hashable {
+            let source: String
+            let occurrence: Int
+        }
+
+        let id: ID
         let label: String
-        let image: OpenClawPlatformImage?
+        let base64: Substring
+
+        func decode() -> OpenClawPlatformImage? {
+            Data(base64Encoded: String(self.base64)).flatMap(OpenClawPlatformImage.init(data:))
+        }
     }
 
     struct Result {
@@ -155,27 +164,32 @@ enum ChatMarkdownPreprocessor {
         }
 
         var images: [InlineImage] = []
+        var occurrences: [String: Int] = [:]
         let cleaned = NSMutableString(string: markdown)
 
-        for occurrence in collector.images.reversed() {
-            let range = NSRange(occurrence.range, in: markdown)
-            if let inlineImage = self.inlineImage(
-                label: occurrence.label,
-                source: occurrence.source)
-            {
-                images.append(inlineImage)
-                cleaned.replaceCharacters(in: range, with: "")
+        // Assign occurrence IDs in authored order, so appending another copy
+        // does not change the identity of an image already on screen.
+        let replacements = collector.images.map { occurrence -> String in
+            if let base64 = self.inlineImageBase64(source: occurrence.source) {
+                let index = occurrences[occurrence.source, default: 0]
+                occurrences[occurrence.source] = index + 1
+                images.append(InlineImage(
+                    id: .init(source: occurrence.source, occurrence: index),
+                    label: occurrence.label,
+                    base64: base64))
+                return ""
             } else {
-                cleaned.replaceCharacters(
-                    in: range,
-                    with: self.fallbackImageLabel(occurrence.label))
+                return self.fallbackImageLabel(occurrence.label)
             }
         }
+        for (occurrence, replacement) in zip(collector.images, replacements).reversed() {
+            cleaned.replaceCharacters(in: NSRange(occurrence.range, in: markdown), with: replacement)
+        }
 
-        return Result(cleaned: self.normalize(cleaned as String), images: images.reversed())
+        return Result(cleaned: self.normalize(cleaned as String), images: images)
     }
 
-    private static func inlineImage(label: String, source: String) -> InlineImage? {
+    private static func inlineImageBase64(source: String) -> Substring? {
         let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let comma = trimmed.firstIndex(of: ","),
               trimmed[..<comma].range(
@@ -185,9 +199,9 @@ enum ChatMarkdownPreprocessor {
             return nil
         }
 
-        let b64 = String(trimmed[trimmed.index(after: comma)...])
-        let image = Data(base64Encoded: b64).flatMap(OpenClawPlatformImage.init(data:))
-        return InlineImage(label: label, image: image)
+        // Text-only callers discard the images. Decode only in the retained
+        // image view, not while preparing each growing Markdown snapshot.
+        return trimmed[trimmed.index(after: comma)...]
     }
 
     private static func fallbackImageLabel(_ label: String) -> String {

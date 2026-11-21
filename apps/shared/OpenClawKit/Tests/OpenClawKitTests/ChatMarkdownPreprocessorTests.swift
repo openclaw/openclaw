@@ -19,7 +19,42 @@ struct ChatMarkdownPreprocessorTests {
 
         #expect(result.cleaned == "Hello")
         #expect(result.images.count == 1)
-        #expect(result.images.first?.image != nil)
+        #expect(result.images.first?.decode() != nil)
+    }
+
+    @Test func keepsImageIdentityAcrossStreamingUpdatesAndDuplicateAppends() throws {
+        let source = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        let first = ChatMarkdownPreprocessor.preprocess(markdown: "![First](\(source))")
+        let appended = ChatMarkdownPreprocessor.preprocess(
+            markdown: "![First](\(source)) More text\n![Second](\(source))")
+        let interleaved = ChatMarkdownPreprocessor.preprocess(
+            markdown: "![Other](data:image/gif;base64,R0lGODlhAQABAAAAACw=)")
+        let updated = ChatMarkdownPreprocessor.preprocess(
+            markdown: "![Renamed](\(source)) More text\n![Second](\(source)) Still streaming")
+
+        #expect(first.images.count == 1)
+        #expect(appended.images.count == 2)
+        #expect(Set(appended.images.map(\.id)).count == 2)
+        #expect(first.images.first?.id == appended.images.first?.id)
+        #expect(updated.images.map(\.id) == appended.images.map(\.id))
+        #expect(updated.images.map(\.label) == ["Renamed", "Second"])
+        #expect(interleaved.images.first?.id != first.images.first?.id)
+
+        let replacement = ChatMarkdownPreprocessor.preprocess(
+            markdown: "![First](data:image/png;base64,changed)")
+        let replacementID = try #require(replacement.images.first).id
+        let firstID = try #require(first.images.first).id
+        #expect(replacementID != firstID)
+    }
+
+    @Test func retainsInvalidInlineImagesForTheExistingLabelFallback() throws {
+        let result = ChatMarkdownPreprocessor.preprocess(
+            markdown: "Before ![Broken](data:IMAGE/png;BASE64,not-base64) after")
+
+        #expect(result.cleaned == "Before  after")
+        let image = try #require(result.images.first)
+        #expect(image.label == "Broken")
+        #expect(image.decode() == nil)
     }
 
     @Test func flattensRemoteMarkdownImagesIntoText() {
@@ -34,7 +69,7 @@ struct ChatMarkdownPreprocessorTests {
 
         #expect(result.cleaned == "Leak")
         #expect(result.images.count == 1)
-        #expect(result.images.first?.image != nil)
+        #expect(result.images.first?.decode() != nil)
     }
 
     @Test func usesFallbackTextForUnlabeledRemoteMarkdownImages() {
@@ -92,7 +127,7 @@ struct ChatMarkdownPreprocessorTests {
 
         #expect(result.cleaned == "Visible")
         #expect(result.images.map(\.label) == ["Pixel"])
-        #expect(result.images.first?.image != nil)
+        #expect(result.images.first?.decode() != nil)
     }
 
     @Test func preservesImageSyntaxInsideFencedCode() {
@@ -149,7 +184,7 @@ struct ChatMarkdownPreprocessorTests {
 
         #expect(result.cleaned == "Remote")
         #expect(result.images.map(\.label) == ["First", "Second"])
-        #expect(result.images.allSatisfy { $0.image != nil })
+        #expect(result.images.allSatisfy { $0.decode() != nil })
     }
 
     @Test func processesOnlyRealImagesAlongsideUnicodeAndCode() {
