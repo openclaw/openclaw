@@ -10,6 +10,7 @@ import { resolveOpenAIRealtimeRequestHeaders } from "./realtime-provider-shared.
 import {
   buildOpenAIQuicksilverBackgroundContext,
   OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS,
+  OPENAI_QUICKSILVER_PROGRESS_INSTRUCTIONS,
 } from "./realtime-quicksilver-instructions.js";
 import {
   isOpenAIGptLiveModel,
@@ -101,6 +102,7 @@ export function buildOpenAIQuicksilverSession(params: {
   const publicApi = isOpenAIGptLiveApiModel(params.model);
   const instructions = [
     params.instructions?.trim(),
+    OPENAI_QUICKSILVER_PROGRESS_INSTRUCTIONS,
     params.hostControlsInput ? OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS : undefined,
   ]
     .filter(Boolean)

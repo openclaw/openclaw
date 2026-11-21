@@ -341,6 +341,25 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
+  it("grounds client-owned WebRTC acknowledgments without host-control policy", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => createCallResponse());
+    const { realtime, runAgentConsult } = makeBroker({ fetchImpl });
+    const reservation = await reserve(realtime, {
+      providerConfig: {},
+      model: "gpt-live-test",
+      runAgentConsult,
+      instructions: "Keep my answers brief.",
+    });
+    expect((await post(realtime, { token: reservation.clientSecret })).res.statusCode).toBe(200);
+    const body = fetchImpl.mock.calls[0]?.[1]?.body;
+    assert(typeof body === "string");
+    const { session } = JSON.parse(body);
+    expect(session.instructions).toContain("Do not invent acknowledgments or progress claims.");
+    expect(session.instructions).toContain("Keep my answers brief.");
+    expect(session.instructions).not.toContain("Wait for the host control result");
+    expect(session.instructions).not.toContain("Only that fresh result establishes");
+  });
+
   it("uses a relative single-use offer route and normalizes voice", async () => {
     const { realtime } = makeBroker();
     const reservation = await reserveLiveSession(realtime, { voice: "invalid" });
@@ -511,7 +530,9 @@ describe("GPT-Live browser session lifecycle", () => {
         classified ? { type: "client", ack_filler: false } : { type: "client" },
       );
       if (!classified) {
-        expect(session.instructions).toBe("Keep my answers brief.");
+        expect(session.instructions).toContain("Keep my answers brief.");
+        expect(session.instructions).toContain("Do not invent acknowledgments or progress claims.");
+        expect(session.instructions).not.toContain("Wait for the host control result");
         expect(session.initial_items).toEqual(
           request.initialItems.map(({ role, text }) => ({
             type: "message",
