@@ -377,7 +377,12 @@ describe("learn command", () => {
       });
 
       expect(nonOwner?.reply?.text).toContain("not authorized to use this owner-only command");
-      expect(unauthorized).toEqual({ shouldContinue: false });
+      expect(unauthorized).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "You are not authorized to use this command. Ask your Gateway administrator for command access.",
+        },
+      });
       expect(missingAdmin?.reply?.text).toBe(
         "❌ /learn undo requires operator.admin for gateway clients.",
       );

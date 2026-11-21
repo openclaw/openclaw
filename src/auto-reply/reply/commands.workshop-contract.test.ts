@@ -528,7 +528,7 @@ describe("/learn undo through the command registry and persisted state", () => {
       owner: false,
       authorized: false,
       scopes: ["operator.admin"],
-      text: undefined,
+      text: "You are not authorized to use this command. Ask your Gateway administrator for command access.",
     },
     {
       name: "owner with write but not admin",
