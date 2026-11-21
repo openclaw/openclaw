@@ -41,6 +41,12 @@ import {
   waitForEngineTranscript,
   type EngineScenario,
 } from "./control-ui-engine-boot-scenarios.ts";
+import {
+  filterInstalledDiscoverySkills,
+  openInstalledDiscoverySkills,
+  waitForEnginePageReady as ready,
+  type EnginePageReadiness,
+} from "./control-ui-engine-page-interactions.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import type {
@@ -57,15 +63,10 @@ type PageAction = {
 type NoChangeAction = PageAction & {
   kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
 };
-type PageDefinition = {
-  ready: string;
+type PageDefinition = EnginePageReadiness & {
   pathname?: string;
-  rows?: { selector: string; minimum: number; totalSelector?: string };
-  /** Keep the measurement open through incremental mounting, after first visibility. */
-  completion?: { selector: string; minimum: number; maximum?: number }[];
   /** First rows can precede the code font's final layout. */
   fontFamily?: string;
-  landed?: RouteId;
   search?: string;
   action?: PageAction;
   actionUnavailable?: string;
@@ -377,29 +378,6 @@ const workboardCardMenu: PageAction = {
     return { opened: true };
   },
 };
-
-export async function openInstalledDiscoverySkills(page: Page) {
-  await page.getByRole("button", { name: "Installed skills (1,000)", exact: true }).click();
-  const installed = '.skill-discovery [data-catalog-section="installed"]';
-  await ready(page, "skills", {
-    ready: `${installed} [data-skill-id]`,
-    rows: {
-      selector: `${installed} [data-skill-id]`,
-      minimum: 1000,
-      totalSelector: `${installed} [role="listitem"][aria-setsize]`,
-    },
-  });
-}
-
-export async function filterInstalledDiscoverySkills(page: Page) {
-  await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
-  await page.waitForFunction(() => {
-    const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
-    return rows.length === 1 && rows[0]?.getAttribute("data-skill-id") === "local:data-skill-0999";
-  });
-  await frames(page);
-  return { matchingSkills: 1 };
-}
 
 const definitions: Partial<Record<RouteId, PageDefinition>> = {
   settings: {
@@ -1789,66 +1767,6 @@ async function navigate(page: Page, id: RouteId, search = "") {
       window.openclawControlUi!.navigate(routeId, { pathname, search: routeSearch }),
     { id, pathname: pathForRoute(id), search },
   );
-}
-async function ready(page: Page, id: RouteId, definition: PageDefinition) {
-  await waitForControlUiRoute(page, { routeId: definition.landed ?? id });
-  await page
-    .locator(definition.ready)
-    .filter({ visible: true })
-    .first()
-    .waitFor({ state: "visible" });
-  if (definition.rows) {
-    await page.waitForFunction(
-      ({ selector, minimum, totalSelector }) =>
-        document.querySelectorAll(selector).length >= minimum ||
-        Boolean(
-          totalSelector &&
-          [...document.querySelectorAll(totalSelector)].some(
-            (row) => row.getAttribute("aria-setsize") === String(minimum),
-          ),
-        ),
-      definition.rows,
-    );
-  }
-  if (definition.completion) {
-    await page.waitForFunction(
-      (requirements) =>
-        requirements.every(({ selector, minimum, maximum }) => {
-          const count = document.querySelectorAll(selector).length;
-          return count >= minimum && (maximum === undefined || count <= maximum);
-        }),
-      definition.completion,
-    );
-  }
-  if (id === "cloud-workers") {
-    await page.waitForFunction(() => {
-      const reads: { rpcs: ColdLoadRpcRecord[]; pendingMethods: string[]; queued: number } =
-        Reflect.get(window, "__coldLoad").read();
-      const completed = reads.rpcs.filter(
-        (rpc) =>
-          rpc.method === "environments.list" && rpc.responseOk && rpc.dispatchMs !== undefined,
-      );
-      return (
-        reads.queued === 0 &&
-        !reads.pendingMethods.includes("environments.list") &&
-        completed.some(
-          ({ params }) =>
-            params !== null &&
-            typeof params === "object" &&
-            "projection" in params &&
-            params.projection === "profiles",
-        ) &&
-        completed.some(
-          ({ params }) =>
-            params !== null &&
-            typeof params === "object" &&
-            "includePreparedDetails" in params &&
-            params.includePreparedDetails === true,
-        )
-      );
-    });
-  }
-  await frames(page);
 }
 export async function collectEnginePageStructure(page: Page): Promise<InteractionEvidence> {
   return page

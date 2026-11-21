@@ -7,10 +7,10 @@ import "../../../src/test-utils/prepare-compiled-subprocesses.ts";
 // Scenario probes use the action-timing owner's optional Window hook.
 import "../../../scripts/lib/control-ui-engine-action-timing.ts";
 import {
-  createEnginePageScenarios,
   filterInstalledDiscoverySkills,
   openInstalledDiscoverySkills,
-} from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
+} from "../../../scripts/lib/control-ui-engine-page-interactions.ts";
+import { createEnginePageScenarios } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
 import { frames } from "../../../scripts/lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
