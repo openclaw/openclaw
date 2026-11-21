@@ -310,8 +310,20 @@ export function buildFallbackSlashCommands(): SlashCommandDef[] {
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
+const slashCommandListeners = new Set<() => void>();
+
+export function subscribeSlashCommands(listener: () => void) {
+  slashCommandListeners.add(listener);
+  return () => {
+    slashCommandListeners.delete(listener);
+  };
+}
+
 export function replaceSlashCommands(next: SlashCommandDef[]) {
   SLASH_COMMANDS.splice(0, SLASH_COMMANDS.length, ...next);
+  for (const listener of slashCommandListeners) {
+    listener();
+  }
 }
 
 export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {

@@ -1,13 +1,14 @@
 import type { HumanMention } from "../chat/chat-types.ts";
 import { HUMAN_MENTION_CLIPBOARD_TYPE, readHumanMentions } from "../chat/human-mentions.ts";
+import { registerComposerActivation } from "../composer-input.ts";
 import { createIdleImport } from "../idle-import.ts";
 import { useOptionalApplication } from "./context.ts";
 import { elementRef } from "./element-ref.ts";
 import { listen } from "./listener.ts";
 
 /** One foreign-DOM owner shared by Chat and New Session. Load CM only when a
- * selected person needs inline layout; retain it until this draft unmounts. */
-export function createMentionComposerBinding(
+ * person or skill reference needs inline layout; retain it until this draft unmounts. */
+export function createReferenceComposerBinding(
   getMentions: () => readonly HumanMention[],
   avatarUrls?: ReadonlyMap<string, string>,
 ) {
@@ -15,39 +16,61 @@ export function createMentionComposerBinding(
   return elementRef<HTMLTextAreaElement>((node) => {
     const native = new AbortController();
     let composing = false;
+    let editingSkillValue: string | undefined;
+    let nativeEdit: InputEvent | undefined;
     let entryHistory:
       | import("../../pages/chat/components/composer-editor-mentions.tsx").ComposerMentionSnapshot
       | undefined;
-    let mountEditor:
-      | typeof import("../../pages/chat/components/composer-editor-mentions.tsx").mountMentionComposerEditor
+    let previousInput: typeof entryHistory;
+    let feature:
+      | typeof import("../../pages/chat/components/composer-editor-references.ts")
       | undefined;
-    let editor: ReturnType<NonNullable<typeof mountEditor>> | undefined;
+    let editor: ReturnType<NonNullable<typeof feature>["mountReferenceComposerEditor"]> | undefined;
+    let readSkills:
+      | typeof import("../chat/skill-references.ts").readComposerSkillReferences
+      | undefined;
+    let stopCatalog: (() => void) | undefined;
+    const skillsLoader = createIdleImport(
+      () => import("../chat/skill-references.ts"),
+      (module) => {
+        readSkills = module.readComposerSkillReferences;
+        stopCatalog = module.subscribeSlashCommands(requestActivation);
+      },
+    );
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
+    const editingAt = () =>
+      (nativeEdit?.inputType === "insertText" && !nativeEdit.defaultPrevented) ||
+      editingSkillValue === node.value
+        ? node.selectionStart
+        : undefined;
     // A transfer mounts for its own insertion, which the editor's history then owns.
     function activate(forTransfer = false) {
-      if (
-        !native.signal.aborted &&
-        !composing &&
-        (forTransfer || mentions().length) &&
-        mountEditor
-      ) {
-        editor = mountEditor(
+      if (!native.signal.aborted && !composing && feature) {
+        editor = feature.mountReferenceComposerEditor(
           node,
           getMentions,
           application,
-          forTransfer ? undefined : entryHistory,
+          entryHistory,
           avatarUrls,
+          forTransfer,
+          editingAt(),
+          previousInput,
         );
-        entryHistory = undefined;
+        if (!editor) {
+          return;
+        }
+        entryHistory = previousInput = undefined;
+        nativeEdit = undefined;
         // Retire only after a successful handoff; a failed mount keeps native editing.
         native.abort();
+        stopActivation();
+        stopCatalog?.();
       }
     }
     const loader = createIdleImport(
-      () => import("../../pages/chat/components/composer-editor-mentions.tsx"),
+      () => import("../../pages/chat/components/composer-editor-references.ts"),
       (module) => {
-        mountEditor = module.mountMentionComposerEditor;
-        activate();
+        feature = module;
       },
     );
     const snapshot = () => ({
@@ -65,6 +88,7 @@ export function createMentionComposerBinding(
       () => {
         if (!composing && !mentions().length) {
           entryHistory = snapshot();
+          previousInput = undefined;
         }
       },
       { signal: native.signal },
@@ -72,26 +96,64 @@ export function createMentionComposerBinding(
     listen(
       node,
       "input",
+      (event) => {
+        if (!composing) {
+          editingSkillValue = event.inputType === "insertText" ? node.value : undefined;
+          nativeEdit = undefined;
+          // Keep both sides until the lazy feature can distinguish a skill
+          // insertion from a literal dollar followed by a person query.
+          previousInput = entryHistory;
+          if (!readSkills?.(node.value).length) {
+            entryHistory = snapshot();
+          }
+          requestActivation();
+        }
+      },
+      { signal: native.signal },
+    );
+    listen(
+      node,
+      "selectionchange",
       () => {
         if (!composing) {
-          entryHistory = snapshot();
+          requestActivation();
         }
       },
       { signal: native.signal },
     );
     // One observer follows the native port before and after rich-editor activation.
     // Both attributes and feature metadata reconcile through the same owner.
-    const observer = new MutationObserver(() => {
+    function requestActivation() {
       if (editor) {
         editor.sync();
-      } else if (!composing && mentions().length) {
-        // The load callback fires once; a later mention must still activate.
-        void loader.load().then(
-          () => activate(),
-          () => undefined,
-        );
+      } else if (!composing && (mentions().length || node.value.includes("$"))) {
+        void loadAndActivate();
       }
-    });
+    }
+    async function loadAndActivate() {
+      try {
+        if (!mentions().length) {
+          const skills = await skillsLoader.load();
+          if (
+            native.signal.aborted ||
+            composing ||
+            (!mentions().length &&
+              !skills.readComposerSkillReferences(node.value, editingAt()).length)
+          ) {
+            return;
+          }
+        }
+        // Only admitted references need the rich editor. Literal dollars may
+        // load the small parser, never CodeMirror. Await also keeps widget
+        // roots outside the Solid apply phase after a module has loaded.
+        await loader.load();
+        activate();
+      } catch {
+        // Optional decoration failed to load; keep the usable native draft.
+      }
+    }
+    const stopActivation = registerComposerActivation(node, requestActivation);
+    const observer = new MutationObserver(requestActivation);
     observer.observe(node, { attributes: true });
     // Recipient transfers have one owner, the rich editor: mount it, then replay the
     // paste or drop there. DataTransfer is readable only during its event.
@@ -144,6 +206,9 @@ export function createMentionComposerBinding(
       node,
       "beforeinput",
       (event) => {
+        // Native input listeners can run microtasks between callbacks. An owner
+        // echo must already know this is typing before our input callback runs.
+        nativeEdit = event;
         const copied = dropped;
         dropped = undefined;
         if (event.inputType === "insertFromDrop") {
@@ -167,21 +232,23 @@ export function createMentionComposerBinding(
       () => {
         composing = false;
         entryHistory = snapshot();
-        requestAnimationFrame(() => activate());
+        requestAnimationFrame(() => {
+          if (!native.signal.aborted) {
+            requestActivation();
+          }
+        });
       },
       { signal: native.signal },
     );
-    if (mentions().length) {
-      void loader.load().then(
-        () => activate(),
-        () => undefined,
-      );
-    }
+    requestActivation();
     return () => {
       native.abort();
+      stopActivation();
       observer.disconnect();
       editor?.destroy();
       loader.dispose();
+      skillsLoader.dispose();
+      stopCatalog?.();
     };
   });
 }
