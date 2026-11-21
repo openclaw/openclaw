@@ -142,6 +142,13 @@ it.each([false, true])(
     await f.service.create({ repoRoot: f.repo, name: "first", provisionIgnoredFiles: !sourceOnly });
     const next = await f.advance("advanced\n");
     await f.pass();
+    const template = vi.mocked(f.backend.cloneTemplate).mock.lastCall![1];
+    expect(await git(template, "rev-parse", "HEAD")).toBe(next);
+    // Stale stat data must not let ready-generation validation rewrite its index.
+    await fs.utimes(path.join(template, "README.md"), 1, 1);
+    const index = path.resolve(template, await git(template, "rev-parse", "--git-path", "index"));
+    const indexBefore = await fs.readFile(index);
+    const indexStatBefore = await fs.stat(index);
     const before = vi.mocked(f.backend.cloneTemplate).mock.calls.length;
     const second = await f.service.create({
       repoRoot: f.repo,
@@ -152,6 +159,8 @@ it.each([false, true])(
     expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("advanced\n");
     expect(await git(second.path, "status", "--porcelain")).toBe("");
     expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length - before).toBe(1);
+    expect(await fs.readFile(index)).toEqual(indexBefore);
+    expect((await fs.stat(index)).mtimeMs).toBe(indexStatBefore.mtimeMs);
   },
 );
 
