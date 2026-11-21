@@ -263,11 +263,8 @@ export async function monitorWebChannel(
             };
             statusController.noteTransportActivity(snapshot.lastTransportActivityAt, authAgeMs);
 
-            if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
-              heartbeatLogger.warn(
-                logData,
-                "⚠️ web gateway heartbeat - no messages in 30+ minutes",
-              );
+            if (Date.now() - snapshot.lastTransportActivityAt > transportTimeoutMs) {
+              heartbeatLogger.warn(logData, "web gateway heartbeat - transport inactive");
             } else {
               heartbeatLogger.info(logData, "web gateway heartbeat");
             }
