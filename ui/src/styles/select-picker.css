@@ -36,7 +36,6 @@
   flex-direction: column;
   overflow: hidden;
   max-width: calc(100vw - 16px);
-  max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
 }
 
 /* Select keeps its own slower presentation; the wrapper alone animates, never its list.
@@ -132,35 +131,15 @@
   color: var(--accent);
 }
 
-/* Flat peers share their actual icon column; grouped rows have their own indent. */
-.picker-select__options[role="listbox"]
-  > div:not(.picker-select__window):has(> .picker-select__option > .picker-select__leading):has(
-    > .picker-select__option > .picker-select__copy:first-child
-  ) {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
-  column-gap: var(--space-2);
-
-  > .picker-select__option {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
-  }
-
-  .picker-select__copy {
-    grid-column: 2;
-  }
+/* The flat list shares the icon and 8px gap (20px artwork, 24px for channels).
+   A window sizer contains the leading icons even when their rows are offscreen. */
+.picker-select__menu:not(.picker-select__menu--grouped):has(.picker-select__leading)
+  .picker-select__copy:first-child {
+  margin-inline-start: var(--picker-icon-inset, 28px);
 }
 
-/* Absolute model rows cannot subgrid. Their intrinsic sizer retains every icon
-   group, including the ones outside the rendered window. */
-.model-picker .picker-select__menu:has(> .picker-select__sizer .picker-select__leading) {
-  --picker-window-leading-inset: calc(var(--space-5) + var(--space-2));
-}
-
-.picker-select__sizer .picker-select__copy:first-child,
-.picker-select__option--windowed > .picker-select__copy:first-child {
-  margin-inline-start: var(--picker-window-leading-inset, 0px);
+.channel-picker {
+  --picker-icon-inset: 32px;
 }
 
 .picker-select__leading {
@@ -169,7 +148,6 @@
 }
 
 .picker-select__label {
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -187,7 +165,6 @@
 }
 
 .picker-select__description {
-  min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--muted) 80%, var(--text));
   font-size: 0.75rem;
@@ -275,7 +252,6 @@ openclaw-select-picker {
   /* Keep the picker budget when the shared overlay stylesheet loads later. */
   max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
   min-width: anchor-size(width);
-  width: max-content;
 }
 
 @media (max-width: 640px) {
@@ -424,7 +400,8 @@ openclaw-select-picker {
   animation: picker-sheet-page-in var(--motion-sheet);
 }
 
-.picker-select--sheet .picker-select__options {
+.picker-select--sheet .picker-select__options,
+.picker-select__menu--phone-sheet .picker-select__options {
   flex: 1 1 auto;
   overscroll-behavior: contain;
 }
@@ -575,11 +552,6 @@ openclaw-select-picker {
     .header-search[data-searching]
   ) {
   height: calc(var(--shell-canvas-height, 100dvh) - var(--safe-area-top) - var(--space-7));
-}
-
-.picker-select__menu--phone-sheet .picker-select__options {
-  flex: 1 1 auto;
-  overscroll-behavior: contain;
 }
 
 @keyframes picker-sheet-in {
