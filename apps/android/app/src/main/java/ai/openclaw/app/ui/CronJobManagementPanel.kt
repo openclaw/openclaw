@@ -9,6 +9,7 @@ import ai.openclaw.app.GatewayCronPayloadEdit
 import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayCronRunSummary
 import ai.openclaw.app.GatewayCronScheduleEdit
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -45,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -70,6 +72,11 @@ internal fun CronJobManagementPanel(
   onSave: (GatewayCronJobEdit) -> Unit,
   onRefreshHistory: () -> Unit,
   onDelete: () -> Unit,
+  sessions: List<ChatSessionEntry> = emptyList(),
+  sessionsLoadingMore: Boolean = false,
+  sessionsHasMore: Boolean = false,
+  sessionsLoadFailed: Boolean = false,
+  onLoadMoreSessions: () -> Unit = {},
 ) {
   val busy = actionState is GatewayCronActionState.Running
   val notice = (actionState as? GatewayCronActionState.Notice)?.takeIf { it.id == job.id }
@@ -143,6 +150,11 @@ internal fun CronJobManagementPanel(
     canRevert = !busy && !editorDraft.savePending && !editorDraft.saveSucceeded,
     busy = busy,
     onSave = onSave,
+    sessions = sessions,
+    sessionsLoadingMore = sessionsLoadingMore,
+    sessionsHasMore = sessionsHasMore,
+    sessionsLoadFailed = sessionsLoadFailed,
+    onLoadMoreSessions = onLoadMoreSessions,
   )
   CronRunHistoryPanel(
     jobId = job.id,
@@ -221,6 +233,11 @@ private fun CronEditorPanel(
   canRevert: Boolean,
   busy: Boolean,
   onSave: (GatewayCronJobEdit) -> Unit,
+  sessions: List<ChatSessionEntry>,
+  sessionsLoadingMore: Boolean,
+  sessionsHasMore: Boolean,
+  sessionsLoadFailed: Boolean,
+  onLoadMoreSessions: () -> Unit,
 ) {
   val edit = draft.edit
   ClawPanel(verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -261,13 +278,19 @@ private fun CronEditorPanel(
       enabled = enabled,
       onChange = { onDraftChange(draft.withEdit(edit.withSchedule(it))) },
     )
-    ClawTextField(
-      value = edit.sessionTarget,
-      onValueChange = { onDraftChange(draft.withEdit(edit.copy(sessionTarget = it))) },
-      placeholder = nativeString("main, isolated, current, or session:<id>"),
-      label = nativeString("Session target"),
-      enabled = enabled,
-    )
+    key(job.id) {
+      CronSessionTargetEditor(
+        value = edit.sessionTarget,
+        payload = edit.payload,
+        onChange = { onDraftChange(draft.withEdit(edit.copy(sessionTarget = it))) },
+        enabled = enabled,
+        sessions = sessions,
+        loadingMore = sessionsLoadingMore,
+        hasMore = sessionsHasMore,
+        loadFailed = sessionsLoadFailed,
+        onLoadMore = onLoadMoreSessions,
+      )
+    }
     val wakeModeOptions = cronWakeModeOptions()
     ClawSegmentedControl(
       options = wakeModeOptions.map(CronWakeModeOption::label),
