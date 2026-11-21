@@ -159,11 +159,14 @@ account, or thread, or perform actions other than `send`. Explicit `replyTo` sta
 limited to the current message or thread; inline reply and audio directives remain
 restricted. See [message tool access](/tools#configure-access-and-approvals).
 
-After `sessions_yield`, the frozen batch waits for its own children and their
-descendants to settle. Children paused to wait for a message remain resumable and
-retain their completion wake, while the batch offers its ready results. A
-still-running child from an earlier requester turn does not delay that batch's
-result; the earlier batch retains its own completion wake.
+After `sessions_yield`, each finished child result in the frozen batch wakes the
+parent as soon as it and its descendants settle. Siblings that are still running,
+or paused on their own `sessions_yield`, keep their completion wake and wake the
+parent again when they finish; a result is delivered once. The wake names the
+siblings that are still working, so the parent can act on the ready results or
+call `sessions_yield` again to wait for the rest. A still-running child from an
+earlier requester turn does not delay that batch's result; the earlier batch
+retains its own completion wake.
 
 Private results are addressed to the current requester chat by its recorded agent
 and session key, regardless of the session store path recorded at spawn. If a new
