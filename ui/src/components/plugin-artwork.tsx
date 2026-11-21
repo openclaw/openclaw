@@ -1,11 +1,10 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
-import type { McpAppIcon as AppIcon } from "../../../src/shared/mcp-app-extensions.js";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
-import { McpAppIcon } from "./mcp-app-icon.tsx";
 
-type Props = { pluginId: string; icons: readonly AppIcon[]; class?: string };
+type Props = { pluginId: string; fallback: JSX.Element; class?: string };
 
 function Artwork(props: Props) {
   const context = useApplication();
@@ -29,11 +28,11 @@ function Artwork(props: Props) {
     };
   });
   return (
-    <Show when={url()} fallback={<McpAppIcon icons={props.icons} class={props.class} />}>
+    <Show when={url()} fallback={props.fallback}>
       {(src) => (
         <img
           src={src()}
-          class={props.class ?? "mcp-app-icon"}
+          class={props.class}
           alt=""
           onError={() => owner.handleError(props.pluginId)}
         />
@@ -42,9 +41,9 @@ function Artwork(props: Props) {
   );
 }
 
-export default function PluginAppIcon(props: Props) {
+export default function PluginArtwork(props: Props) {
   const gateway = projectGateway(useApplication().gateway);
-  // Artwork belongs to one connection, just like the App that requested it.
+  // The same plugin ID can have different artwork on a different Gateway.
   const identity = createMemo(
     () => ({ id: props.pluginId, connection: gateway.read().connectionRevision }),
     {
@@ -53,7 +52,7 @@ export default function PluginAppIcon(props: Props) {
   );
   return (
     <Show when={identity()} keyed>
-      {(scope) => <Artwork pluginId={scope.id} icons={props.icons} class={props.class} />}
+      {(scope) => <Artwork pluginId={scope.id} fallback={props.fallback} class={props.class} />}
     </Show>
   );
 }

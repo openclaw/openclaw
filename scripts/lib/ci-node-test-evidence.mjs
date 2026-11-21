@@ -240,7 +240,12 @@ export function parseNodeFailureReport(log, requireComplete) {
       failureHeaders++;
       const failure =
         /^FAIL\s+(?:\S+(?:\s+\([^()\r\n]+\))?\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
-      const message = lines[index + 1];
+      // Native reporters separate a failure header from its error with blank lines.
+      let messageIndex = index + 1;
+      while (lines[messageIndex] === "") {
+        messageIndex++;
+      }
+      const message = lines[messageIndex];
       if (
         !failure ||
         !isNodeTestEvidencePath(failure[1]) ||
@@ -248,17 +253,16 @@ export function parseNodeFailureReport(log, requireComplete) {
       ) {
         return [];
       }
-      let end = index + 2;
+      let end = messageIndex + 1;
       while (
         end < lines.length &&
         !/^(?:FAIL\s|Test Files\s|Tests\s|\[test\]|⎯+(?:\[\d+\/\d+\])?⎯*$)/u.test(lines[end])
       ) {
         end++;
       }
-      const assertion = lines
-        .slice(index + 1, end)
-        .join("\n")
-        .trim();
+      const assertion = lines.slice(messageIndex, end).join("\n").trim();
+      // The consumed error belongs to this header, not a second loose error.
+      index = messageIndex;
       assertionMessages.add(message);
       signatures.push({ kind: "vitest", file: failure[1], test: `${failure[2]} :: ${assertion}` });
     }

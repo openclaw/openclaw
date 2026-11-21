@@ -112,6 +112,10 @@ suite.define(() => {
               expect(overlaps).toBe(false);
             }
           }
+          const access = page.getByRole("heading", { name: "Provider access", exact: true });
+          const section = page.locator(".settings-section").filter({ has: access });
+          const group = section.locator(":scope > .settings-group");
+          expect((await access.boundingBox())!.x).toBe((await group.boundingBox())!.x);
           await primary.scrollIntoViewIfNeeded();
           const beforeDiscovery = await primary.boundingBox();
           await primary.click();

@@ -9,6 +9,7 @@ import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -76,11 +77,15 @@ suite.define(() => {
       const activeKey = "agent:main:loading-active";
       const parentKey = "agent:main:loading-parent";
       const childKey = "agent:main:loading-child";
-      const activeRow = sessionRow(activeKey, "Active session", baseTime + 1);
+      const activeRow = sessionRow(activeKey, "Active session", baseTime - 4, {
+        createdAt: baseTime - 4,
+      });
       const parentRow = sessionRow(parentKey, "Research handoff", baseTime, {
+        createdAt: baseTime,
         childSessions: [childKey],
       });
       const childRow = sessionRow(childKey, "Background research", baseTime - 1, {
+        createdAt: baseTime - 1,
         spawnedBy: parentKey,
         hasActiveRun: true,
         status: "running",
@@ -88,6 +93,8 @@ suite.define(() => {
       });
       await withPage(
         async (page) => {
+          // Isolate unrequested movement from the Updated sort intentionally reordering roots.
+          await seedStorage(page, { "openclaw:sidebar:sessions:sort-mode": "created" });
           await page.clock.setFixedTime(baseTime + 9_000);
           if (textScale !== 100) {
             await seedStorage(page, {
@@ -135,61 +142,52 @@ suite.define(() => {
           }
           await gateway.deferNext("sessions.list", { spawnedBy: parentKey });
           await childToggle.click();
+          await page.mouse.move(width - 5, 5);
           await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parentKey } });
 
           const children = page.locator(
             `[data-session-tree="${parentKey}"] > .sidebar-session-tree__children`,
           );
-          const loading = children.locator(":scope > .sidebar-session-tree__loading");
-          await expectCount(loading, 1);
-          expect(await children.locator(":scope > .skeleton").count()).toBe(1);
-          expect(await loading.getAttribute("aria-busy")).toBe("true");
-          expect(await loading.getAttribute("aria-label")).toBe("Loading…");
-          expect(
-            await loading
-              .locator("a, button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
-              .count(),
-          ).toBe(0);
-          const loadingGeometry = await loading.evaluate((element) => ({
-            left: element.getBoundingClientRect().left,
-            rowHeight: element.parentElement!.getBoundingClientRect().height,
-          }));
-          if (textScale === 100) {
-            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 32);
-          } else {
-            expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
-          }
-
+          // A read is not a chat. Announce it without borrowing a row from the list.
+          expect(await childToggle.getAttribute("aria-busy")).toBe("true");
+          expect(await children.evaluate((el) => el.getBoundingClientRect().height)).toBe(0);
+          const proof = (state: string) =>
+            captureUiProof(
+              suite,
+              page,
+              ["child", state, colorScheme, width, pointer, textScale].join("-") + ".png",
+            );
+          await proof("loading");
           await gateway.resolveDeferred("sessions.list");
-          await expectCount(loading, 0);
-          const child = page.locator(`[data-session-key="${childKey}"]`);
-          await child.waitFor({ state: "visible" });
-          const childGeometry = await child.evaluate((element) => ({
-            left: element.querySelector(".sidebar-recent-session__name")!.getBoundingClientRect()
-              .left,
-            rowHeight: element.parentElement!.parentElement!.getBoundingClientRect().height,
-          }));
-          expect(childGeometry.left).toBe(loadingGeometry.left);
-          // Chromium can quantize empty and text line boxes 1/64 CSS px apart.
-          expect(childGeometry.rowHeight).toBeCloseTo(loadingGeometry.rowHeight, 1);
-
-          const clock = child.locator("openclaw-elapsed-time");
-          await expectText(clock, "9s");
-          const clockGeometry = () =>
-            child.evaluate((element) => {
-              const range = document.createRange();
-              range.selectNodeContents(element.querySelector("openclaw-elapsed-time")!);
-              return {
-                x: range.getBoundingClientRect().x,
-                titleWidth: element
-                  .querySelector(".sidebar-recent-session__name")!
-                  .getBoundingClientRect().width,
-              };
+          const child = page.locator('[data-session-key="' + childKey + '"]');
+          await child.waitFor();
+          const retained = await child.elementHandle();
+          const geometry = () =>
+            child.evaluate((el) => {
+              const title = el.querySelector(".sidebar-recent-session__name")!;
+              const { x, y, width: titleWidth, height } = title.getBoundingClientRect();
+              return [x, y, titleWidth, height, el.getBoundingClientRect().height];
             });
-          const beforeTick = await clockGeometry();
-          await page.clock.setFixedTime(baseTime + 10_000);
-          await expectText(clock, "10s");
-          expect(await clockGeometry()).toEqual(beforeTick);
+          const running = await geometry();
+          const frameProbe = await child.evaluateHandle((el) => {
+            const title = el.querySelector(".sidebar-recent-session__name")!;
+            const origin = title.getBoundingClientRect();
+            let shifted = false;
+            let frame = 0;
+            const sample = () => {
+              const rect = title.getBoundingClientRect();
+              shifted ||= !el.isConnected || rect.x !== origin.x || rect.y !== origin.y;
+              frame = requestAnimationFrame(sample);
+            };
+            sample();
+            return () => {
+              cancelAnimationFrame(frame);
+              return shifted;
+            };
+          });
+          expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
+          expect(await childToggle.getAttribute("aria-busy")).toBeNull();
+          await proof("running");
 
           await deferChildRefresh(page, gateway, parentKey, baseTime + 2);
           expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
@@ -198,12 +196,51 @@ suite.define(() => {
           await gateway.resolveDeferred(
             "sessions.list",
             sessionsListResponse([
-              { ...childRow, label: "Updated research", updatedAt: baseTime + 3 },
+              {
+                ...childRow,
+                label: "Updated research",
+                updatedAt: baseTime + 3,
+                hasActiveRun: false,
+                status: "done",
+              },
             ]),
           );
           await expectText(child, "Updated research");
           expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
           expect(await child.count()).toBe(1);
+          expect(await geometry()).toEqual(running);
+          expect(await retained?.evaluate((el) => el.isConnected)).toBe(true);
+          expect(await child.locator('[aria-label="Done"]').count()).toBe(0);
+          await proof("finished");
+
+          if (width === 1440 && textScale === 100 && colorScheme === "dark") {
+            const sibling = sessionRow(
+              "agent:main:verification",
+              "Verify citations",
+              baseTime - 2,
+              { spawnedBy: parentKey, createdAt: baseTime - 2 },
+            );
+            const siblingRow = page.locator('[data-session-key="agent:main:verification"]');
+            const settled = {
+              ...childRow,
+              label: "Updated research",
+              status: "done",
+              hasActiveRun: false,
+              updatedAt: baseTime + 3,
+            };
+            for (const present of [true, false]) {
+              await deferChildRefresh(page, gateway, parentKey, baseTime + (present ? 4 : 5));
+              await gateway.resolveDeferred(
+                "sessions.list",
+                sessionsListResponse(present ? [settled, sibling] : [settled]),
+              );
+              await expectCount(siblingRow, Number(present));
+              expect(await retained?.evaluate((el) => el.isConnected)).toBe(true);
+              expect(await geometry()).toEqual(running);
+              await proof(present ? "sibling-added" : "sibling-removed");
+            }
+          }
+          expect(await frameProbe.evaluate((stop) => stop())).toBe(false);
         },
         {
           colorScheme,

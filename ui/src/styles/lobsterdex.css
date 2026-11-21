@@ -34,7 +34,8 @@
 .lobsterdex-page__card {
   position: relative;
   display: grid;
-  grid-template-rows: 94px auto minmax(42px, auto) auto;
+  grid-row: span 4;
+  grid-template-rows: subgrid;
   gap: 7px;
   justify-items: center;
   min-width: 0;
@@ -76,6 +77,8 @@
   width: 90px;
   height: auto;
   aspect-ratio: 120 / 105;
+  /* Center the sprite in its 94px artwork slot without an extra grid item. */
+  margin-block: calc((94px - 90px * 105 / 120) / 2);
   align-self: center;
   transform: none;
   pointer-events: none;
@@ -88,6 +91,7 @@
 }
 
 .lobsterdex-page__lore {
+  min-height: 42px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
