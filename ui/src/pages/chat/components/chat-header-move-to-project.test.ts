@@ -21,7 +21,7 @@ import {
 } from "./chat-pane-header.test-support.ts";
 import "./chat-header-session-menu.ts";
 
-function renderMenu(request: GatewayRequestHandler, scope = "operator.write") {
+function renderMenu(request: GatewayRequestHandler, scope = "operator.write", projectId?: string) {
   const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture({
       request: (method, params) =>
@@ -39,7 +39,7 @@ function renderMenu(request: GatewayRequestHandler, scope = "operator.write") {
   const container = document.body.appendChild(document.createElement("div"));
   const header = pane.renderPaneHeader(
     createPaneHeaderWorkspaceFixture(state),
-    row({ key: "agent:main:current" }),
+    row({ key: "agent:main:current", projectId }),
     false,
     undefined,
     false,
@@ -68,7 +68,10 @@ it("omits Move when the catalog contains only the agent workspace", async () => 
   expect(menu.querySelector('button[data-value="quick:move-to-project"]')).toBeNull();
 });
 
-it.each(["operator.write", "operator.sessions.write"])("moves with %s", async (scope) => {
+it.each([
+  { scope: "operator.write" },
+  { scope: "operator.sessions.write", projectId: "workspace:main" },
+])("moves with $scope", async ({ scope, projectId }) => {
   installDialogPolyfill();
   const request = vi.fn<GatewayRequestHandler>(async (method) => {
     if (method === "projects.list") {
@@ -81,7 +84,7 @@ it.each(["operator.write", "operator.sessions.write"])("moves with %s", async (s
     }
     return method === "projects.moveSession" ? { status: "pending", projectId: "project-2" } : {};
   });
-  const menu = renderMenu(request, scope);
+  const menu = renderMenu(request, scope, projectId);
   await selectNativeMenu(menu, "quick:move-to-project");
 
   const picker = await waitForSolid(() =>

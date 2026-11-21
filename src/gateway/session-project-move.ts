@@ -52,7 +52,7 @@ export async function moveSessionIntoProject(params: {
     storePath: loaded.storePath,
   };
   const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
-  if (!isUnboundProjectSession(entry, workspaceDir)) {
+  if (!isUnboundProjectSession(entry, target.agentId, workspaceDir)) {
     // A retried move of the same conversation returns its recorded intent.
     if (
       entry.projectId === params.projectId &&
@@ -120,7 +120,7 @@ export async function moveSessionIntoProject(params: {
     target,
     (current) => {
       assertCurrent();
-      if (!isUnboundProjectSession(current, workspaceDir)) {
+      if (!isUnboundProjectSession(current, target.agentId, workspaceDir)) {
         throw new Error("This conversation already has a project or workspace; nothing was moved.");
       }
       oldFiles.assertCurrent(context.getRuntimeConfig(), current);
@@ -181,19 +181,23 @@ export async function openMovedSession(params: {
   if (!entry) {
     throw new Error("This conversation could not be found.");
   }
-  if (entry.pendingWorktree) {
-    await prepareSessionWorkspaceForRun({
-      entry,
-      cfg,
-      agentId: loaded.agentId,
-      runId: params.runId,
-      sessionKey: loaded.canonicalKey,
-      storePath: loaded.storePath,
-      context: params.context,
-      signal: params.signal ?? new AbortController().signal,
-      assertCurrent: params.assertCurrent,
-      runSetupScript: params.runSetupScript,
-    });
+  if (!entry.pendingWorktree) {
+    return entry.worktree?.branch;
   }
-  return entry.worktree?.branch;
+  // The worker snapshot is immutable. Preparation updates the caller's entry
+  // with the committed checkout details, just as it does for chat.send.
+  const preparedEntry = { ...entry };
+  await prepareSessionWorkspaceForRun({
+    entry: preparedEntry,
+    cfg,
+    agentId: loaded.agentId,
+    runId: params.runId,
+    sessionKey: loaded.canonicalKey,
+    storePath: loaded.storePath,
+    context: params.context,
+    signal: params.signal ?? new AbortController().signal,
+    assertCurrent: params.assertCurrent,
+    runSetupScript: params.runSetupScript,
+  });
+  return preparedEntry.worktree?.branch;
 }

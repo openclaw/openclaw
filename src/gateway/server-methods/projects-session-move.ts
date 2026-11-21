@@ -48,7 +48,7 @@ async function resolveCarrySource(
     projection: "full",
   });
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  if (!entry || !isUnboundProjectSession(entry, workspaceDir)) {
+  if (!entry || !isUnboundProjectSession(entry, agentId, workspaceDir)) {
     return { reason: "Only a conversation in the general workspace can move into a project." };
   }
   const sandbox = await resolveSandboxContext({

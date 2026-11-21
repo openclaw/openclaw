@@ -19,7 +19,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
-import { moveSessionIntoProject } from "./session-project-move.js";
+import { moveSessionIntoProject, openMovedSession } from "./session-project-move.js";
 import { listCarryCheckouts, type CarrySource } from "./session-workspace-carry.js";
 
 const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit"];
@@ -183,19 +183,33 @@ it.each(["sandbox", "host"] as const)(
         expect(pending.worktree).toBeUndefined();
         await expect(move("another")).rejects.toThrow("moves into a project only once");
 
-        // The next turn opens it through the project open path.
-        await prepareSessionWorkspaceForRun({
-          ...target,
-          entry: pending,
-          cfg,
-          runId: "next-turn",
-          context,
-          signal: new AbortController().signal,
-          assertCurrent() {},
-          runSetupScript: where === "host",
-        });
+        const branch =
+          where === "host"
+            ? await openMovedSession({
+                context,
+                session: target,
+                runId: "move-handoff",
+                runSetupScript: true,
+                assertCurrent() {},
+              })
+            : undefined;
+        if (where === "sandbox") {
+          await prepareSessionWorkspaceForRun({
+            ...target,
+            entry: pending,
+            cfg,
+            runId: "next-turn",
+            context,
+            signal: new AbortController().signal,
+            assertCurrent() {},
+            runSetupScript: false,
+          });
+        }
         const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
-        assert(worktree, "The next turn must open a managed project checkout");
+        assert(worktree, "The move must open a managed project checkout");
+        if (where === "host") {
+          expect(branch).toBe(worktree.branch);
+        }
         expect(loadSessionEntryReadOnly(target)).toMatchObject({
           projectId: project.id,
           sessionRoot: worktree.path,

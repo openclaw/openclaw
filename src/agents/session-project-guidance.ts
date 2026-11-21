@@ -11,7 +11,9 @@ export function isSessionProjectMoveEligible(
   entry: Partial<InternalSessionEntry> | null | undefined,
 ): boolean {
   return Boolean(
-    config && entry && isUnboundProjectSession(entry, resolveAgentWorkspaceDir(config, agentId)),
+    config &&
+    entry &&
+    isUnboundProjectSession(entry, agentId, resolveAgentWorkspaceDir(config, agentId)),
   );
 }
 

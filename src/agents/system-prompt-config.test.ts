@@ -156,6 +156,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(eligible).toContain(hint);
     expect(eligible).toContain('{"id":"website","name":"Website"}');
     expect(eligible).toContain("as your first tool call");
+    expect(await prompt(workspace.id)).toContain(hint);
+    expect(await prompt("workspace:another-agent")).not.toContain(hint);
     expect(await prompt(website.id)).not.toContain(hint);
     expect(await prompt(undefined, [])).not.toContain(hint);
   });

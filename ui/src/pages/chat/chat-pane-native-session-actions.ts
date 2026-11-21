@@ -40,7 +40,7 @@ export class ChatPaneNativeSessionActions {
     );
     const canMoveToProject = Boolean(
       row &&
-      !row.projectId &&
+      (!row.projectId || row.projectId === `workspace:${row.key.split(":")[1]}`) &&
       !row.worktree &&
       !row.deviceFolder &&
       !row.execNode &&
