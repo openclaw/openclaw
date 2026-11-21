@@ -296,3 +296,33 @@ it("rechecks retained file links when read permissions change, ignoring old answ
     view.unmount();
   }
 });
+
+it("rechecks only file links when their availability scope changes", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  const { MarkdownCodeHighlights } = await import("./markdown-code-highlight.ts");
+  const sync = vi.spyOn(MarkdownCodeHighlights.prototype, "sync").mockImplementation(() => {});
+  const root = document.createElement("div");
+  root.innerHTML = `<div class="code-block-wrapper"><div class="code-block-viewport"><code data-code-highlight>x</code></div></div><a data-file-path="a">a</a>`;
+  const checked = vi.fn();
+  let change!: (scope: string) => void;
+  const view = renderSolidRef(
+    () => {
+      const [scope, setScope] = createSignal("workspace");
+      change = setScope;
+      return markdownBlocksRef(() => true, checked, scope);
+    },
+    { targetElement: root },
+  );
+  await waitForSolid(() => expect(sync).toHaveBeenCalledOnce());
+  change("full");
+  await waitForSolid(() => expect(checked).toHaveBeenCalledTimes(2));
+  expect(sync).toHaveBeenCalledOnce();
+  view.unmount();
+});

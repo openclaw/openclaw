@@ -117,7 +117,8 @@ export class MarkdownBlocks {
       return;
     }
     this.#fileLinkScope = scope;
-    this.#collectBlocks(this.#root);
+    // Only availability answers changed; settled code blocks keep their enhancements.
+    this.#collectBlocks(this.#root, fileLinkSelector);
   }
 
   update(presented: boolean): void {
@@ -242,8 +243,10 @@ export class MarkdownBlocks {
     }
   }
 
-  #collectBlocks(root: HTMLElement): void {
-    const selector = this.#onFileLinks ? `${blockSelector}, ${fileLinkSelector}` : blockSelector;
+  #collectBlocks(
+    root: HTMLElement,
+    selector = this.#onFileLinks ? `${blockSelector}, ${fileLinkSelector}` : blockSelector,
+  ): void {
     for (const element of [root, ...root.querySelectorAll<HTMLElement>(selector)]) {
       if (element.matches(blockSelector)) {
         this.#pendingBlocks.add(element);
