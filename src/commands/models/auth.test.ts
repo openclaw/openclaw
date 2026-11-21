@@ -766,7 +766,7 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
       "Scope: System / agent",
       "Agent: coder",
       "Location: the machine running OpenClaw",
-      "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      "Personal model accounts are managed in Settings → Profile → Connected accounts.",
     ].join("\n"),
     "Provider sign-in",
   );

@@ -44,7 +44,6 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
-import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import {
   createMissingReplyNotice,
   MISSING_REPLY_NOTICE_TEXT,
@@ -206,7 +205,8 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
     reason: error.reason,
     provider: error.provider,
     allInCooldown: error.authProfileFailure.allInCooldown,
-    recoveryHint: buildProviderAuthRecoveryHint({ provider: error.provider }),
+    // Chat reply: the app or `/login` recovers it, never a terminal command.
+    recoveryHint: "Open Models in the OpenClaw app to sign in again or choose another login.",
   });
 }
 
