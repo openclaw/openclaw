@@ -50,6 +50,17 @@ export function createContext(
     sessionKey: "global",
   });
   const subscribe = () => () => undefined;
+  // Workshop pages live in the route's query (?skill= / ?draft=); keep it like the router does.
+  const location = { pathname: "/skills/workshop", search: options?.search ?? "" };
+  const routeListeners = new Set<() => void>();
+  const go = (route: string, next?: { search?: string }) => {
+    if (route === "skill-workshop") {
+      location.search = next?.search ?? "";
+      for (const listener of routeListeners) {
+        listener();
+      }
+    }
+  };
   const selectionListeners = new Set<() => void>();
   const selectionState = { selectedId: "research" };
   return {
@@ -73,10 +84,7 @@ export function createContext(
         return () => selectionListeners.delete(listener);
       },
     },
-    agentIdentity: {
-      get: () => ({ agentId: "research", name: "Research" }),
-      subscribe,
-    },
+    agentIdentity: { get: () => ({ agentId: "research", name: "Research" }), subscribe },
     sessions: {
       state: { result: null, loading: false },
       presentation: {
@@ -87,11 +95,14 @@ export function createContext(
     },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
-    navigate: vi.fn(),
+    navigate: vi.fn(go),
+    replace: vi.fn(go),
     router: {
-      getState: () => ({
-        location: { pathname: "/skills/workshop", search: options?.search ?? "" },
-      }),
+      subscribe: (listener: () => void) => {
+        routeListeners.add(listener);
+        return () => routeListeners.delete(listener);
+      },
+      getState: () => ({ location: { ...location } }),
     },
   } as unknown as ApplicationContext;
 }

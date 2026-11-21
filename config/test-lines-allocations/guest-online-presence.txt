@@ -1,2 +1,0 @@
-# Guest person-only presence across hello, system-presence, events, and demoted guests.
-59

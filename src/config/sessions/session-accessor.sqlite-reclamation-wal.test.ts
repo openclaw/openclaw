@@ -188,6 +188,8 @@ test.each(["reclaim", "resource-close", "shared-state-close"] as const)(
 
 test("periodic vacuum waits for an admitted reclamation to settle", async () => {
   const { database, databaseOptions, freePages } = createFixture();
+  // Allocate statistics before measuring pages reclaimed by periodic vacuum.
+  database.db.exec("ANALYZE");
   // sqlite-allow-raw -- Disposable free pages exercise the real incremental vacuum.
   database.db.exec(`CREATE TABLE reclamation_fixture (payload BLOB);
       INSERT INTO reclamation_fixture VALUES (zeroblob(8388608));

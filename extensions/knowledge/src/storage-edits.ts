@@ -15,6 +15,7 @@ import {
 } from "./evidence-reconciliation-contract.js";
 import { prepareEvidenceRevision } from "./evidence-reconciliation.js";
 import { parseYaml } from "./files.js";
+import { hashMatches } from "./hash-fence.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
 import { linkTargets, mergeRedirects } from "./merge.js";
 import { approvedRecall, Envelope, type LoadedRecord, type Recall } from "./model.js";
@@ -76,7 +77,7 @@ export class StorageEdits extends StoragePublication {
         !previous.valid ||
         previous.kind !== "page" ||
         previous.lifecycle !== "active" ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash) ||
         previous.revision !== input.expectedRevision
       ) {
         throw new Error("Body edit conflict: target unavailable or changed.");
@@ -152,7 +153,7 @@ export class StorageEdits extends StoragePublication {
           !found.valid ||
           found.kind !== "page" ||
           found.lifecycle !== "active" ||
-          found.hash !== fence.expectedHash ||
+          !hashMatches(found.hash, fence.expectedHash) ||
           found.revision !== fence.expectedRevision ||
           !current.some((r) => r.id === found.id)
         ) {
@@ -343,9 +344,6 @@ export class StorageEdits extends StoragePublication {
         appended: landed.body.length - text.length,
         destinationId,
       });
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return {
         record: landed,
         previous: target,
@@ -422,9 +420,6 @@ export class StorageEdits extends StoragePublication {
               .join(", "),
         );
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return {
         previous,
         record: encoded.record,
@@ -496,7 +491,7 @@ export class StorageEdits extends StoragePublication {
         previous = matches.length === 1 ? matches[0] : undefined;
       if (
         !previous ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash) ||
         previous.revision !== input.expectedRevision
       ) {
         throw new Error("Annotation conflict: target unavailable or changed.");
@@ -593,9 +588,6 @@ export class StorageEdits extends StoragePublication {
       if (Buffer.byteLength(record.raw) > RECORD_MAX_BYTES) {
         throw new Error("Annotation exceeds record limits.");
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return {
         previous,
         record,
@@ -643,7 +635,7 @@ export class StorageEdits extends StoragePublication {
       );
       if (
         !previous ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash) ||
         previous.revision !== input.expectedRevision
       ) {
         throw new Error(
@@ -701,9 +693,6 @@ export class StorageEdits extends StoragePublication {
         hash: digest(raw),
         revision: metadata.revision,
       };
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during automatic recall validation.");
-      }
       return { record, previous, data, snapshot, artifacts: {}, metadataOnly: true };
     });
     return this.accept(input.requestId, intent, prepared, access, actor);

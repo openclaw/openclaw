@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import type { FetchLike } from "@modelcontextprotocol/client";
@@ -258,7 +258,7 @@ async function runExternalScenario(root: string): Promise<void> {
       );
     }
   };
-  const hooks = registerHooks({
+  const hooks = nodeModule.registerHooks({
     resolve(specifier, context, nextResolve) {
       observeModuleAttempt(specifier);
       const resolved = nextResolve(specifier, context);

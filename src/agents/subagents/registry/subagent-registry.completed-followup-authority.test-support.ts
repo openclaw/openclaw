@@ -140,18 +140,14 @@ export function registerCompletedFollowupAuthorityTests({
           (revokeOriginal ? original.revoked : followup.revoked).abort(
             new Error("operator revoked"),
           );
-          expect(() => completionSource(revokeOriginal ? retained : successor)).toThrow(
-            /authority/,
-          );
+          expect(completionSource(revokeOriginal ? retained : successor)).toBeUndefined();
           expect(completionSource(revokeOriginal ? successor : retained)).toBe(
             revokeOriginal ? followup.authority.source : original.authority.source,
           );
           await releaseSubagentRun(entry.runId);
           await releaseSubagentRun(successor.runId);
           expect(original.authority.assertCurrent).toThrow();
-          expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-            /authority/,
-          );
+          expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
         } finally {
           original.release();
           followup?.release();

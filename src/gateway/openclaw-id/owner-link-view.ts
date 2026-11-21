@@ -1,11 +1,15 @@
 // Owner-only People projection; no proof keys or service lifecycle state is owned here.
-import type {
-  IrohEndpointKey,
-  MemberRole,
+import {
+  isAdmitted,
+  type IrohEndpointKey,
+  type MemberRecord,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 import { listInviteViews } from "./invites-view.js";
+import { listMemberBrowserRequests } from "./member-browser-requests.js";
+import { describeMemberDevices } from "./membership-views.js";
 import { listNodeInviteViews } from "./node-invites.js";
 import type { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
@@ -13,6 +17,8 @@ import type { OpenClawIdEffects } from "./service.js";
 
 export async function readOwnerLinkStatus(params: {
   enabled: boolean;
+  /** Probe whether roles that require a sandbox can start one (People page only). */
+  includeSandboxReadiness?: true;
   getAuthority: () => Promise<OpenClawIdAuthority>;
   getEffects: () => Promise<OpenClawIdEffects> | undefined;
   lastPublish: PublishOutcome | undefined;
@@ -26,28 +32,39 @@ export async function readOwnerLinkStatus(params: {
   // reported when they joined by invite (display only), when the owner approved
   // them (seconds), and each device key's live activity read from this Gateway.
   const describeMembers = async (
-    members: Record<string, { role: MemberRole; peer_keys: IrohEndpointKey[] }>,
+    members: Record<string, MemberRecord>,
     approvedAt: StoredClaw["member_approved_at"],
   ) => {
     const effects = await getEffects();
     const profiles = await (await getAuthority()).memberProfiles(Object.keys(members));
     const keys = Object.values(members).flatMap((member) => member.peer_keys);
     const activity = effects?.describeActivity?.(keys) ?? {};
-    return Object.entries(members).map(([accountId, member]) => {
-      const profile = profiles[accountId];
-      return {
-        accountId,
-        role: member.role,
-        peerKeys: member.peer_keys,
-        email: profile?.email ?? null,
-        displayName: profile?.displayName ?? null,
-        approvedAt: approvedAt?.[accountId] ?? null,
-        devices: member.peer_keys.map((peerKey) => ({
-          peerKey,
-          ...(activity[peerKey] ?? { connections: 0, lastSeenAt: null, runs: [] }),
-        })),
-      };
-    });
+    return Promise.all(
+      Object.entries(members).map(async ([accountId, member]) => {
+        const profile = profiles[accountId];
+        return {
+          accountId,
+          role: profile?.effectiveRole ?? "unassigned",
+          recoveryKit: Boolean(member.recovery_kit),
+          peerKeys: member.peer_keys,
+          email: profile?.email ?? null,
+          displayName: profile?.displayName ?? null,
+          approvedAt: approvedAt?.[accountId] ?? null,
+          devices: (await describeMemberDevices(member)).map((device) =>
+            Object.assign(
+              {
+                peerKey: device.peer_key,
+                deviceFp: device.device_fp,
+                label: device.label,
+                approvedBy: device.approved_by,
+                lastSeen: device.last_seen,
+              },
+              activity[device.peer_key] ?? { connections: 0, lastSeenAt: null, runs: [] },
+            ),
+          ),
+        };
+      }),
+    );
   };
 
   if (!enabled) {
@@ -57,24 +74,73 @@ export async function readOwnerLinkStatus(params: {
   const state = record?.authority;
   const { describeOwnerDevices } = await import("./owner-devices-view.js");
 
+  const members = state ? await describeMembers(state.members, record?.member_approved_at) : [];
+  const cfg = getRuntimeConfigSnapshot() ?? undefined;
+  const definitions = cfg?.gateway?.roles?.definitions ?? {};
+  const sandboxReadiness = params.includeSandboxReadiness
+    ? (await import("./sandbox-availability.js")).createRoleSandboxReadinessCheck(cfg)
+    : undefined;
+  const defined = (name: string) => Object.hasOwn(definitions, name);
   return {
+    roles: await Promise.all(
+      [...new Set([...Object.keys(definitions), ...members.map((member) => member.role)])]
+        .toSorted()
+        .map(async (name) => {
+          const definition = defined(name) ? definitions[name] : undefined;
+          if (!definition) {
+            return { name, defined: false as const, requiresSandbox: false };
+          }
+          const requiresSandbox = definition.sandbox === "required";
+          const sandbox =
+            requiresSandbox && sandboxReadiness
+              ? await sandboxReadiness(definition.agents)
+              : undefined;
+          return {
+            name,
+            defined: true as const,
+            sessions: definition.sessions.others,
+            requiresSandbox,
+            sandbox,
+            admin: definition.scopes.includes("operator.admin"),
+          };
+        }),
+    ),
     linked: Boolean(state),
     clawId: record?.claw_id,
     hostname: record?.hostname ?? undefined,
     rootPub: state?.anchor.root_pub,
     seq: state?.seq,
+    // The machine keys the stored binding names, and how far Discovery has caught up.
+    binding: record?.binding
+      ? {
+          bindingSeq: record.binding.body.binding_seq,
+          kSrv: record.binding.body.k_srv,
+          kGw: record.binding.body.k_gw,
+          publishedBindingSeq: record.discovery.published_binding_seq,
+        }
+      : undefined,
     ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
-    members: state ? await describeMembers(state.members, record?.member_approved_at) : [],
+    members: members.map((member) => Object.assign(member, { roleDefined: defined(member.role) })),
+    browserRequests: listMemberBrowserRequests(record, members, Math.floor(Date.now() / 1000)),
+    recoveryUses: record?.member_recovery_uses ?? [],
+    existingProfiles: await (await getAuthority()).inviteProfiles(),
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
-    nodes: Object.entries(state?.nodes ?? {}).map(([peerKey, node]) => ({
-      peerKey,
-      label: node.label,
-      description: node.description,
-      listedSeq: node.listed_seq,
-      addedBy: node.added_by,
-      lastSeen: node.last_seen,
-      inviteId: node.invite_id,
-    })),
+    nodes: Object.entries(state?.nodes ?? {})
+      .filter(
+        ([key]) =>
+          // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
+          state && isAdmitted(state, key as IrohEndpointKey, Math.floor(Date.now() / 1000)),
+      )
+      .map(([peerKey, node]) => ({
+        peerKey,
+        label: node.label,
+        description: node.description,
+        listedSeq: node.listed_seq,
+        addedBy: node.added_by,
+        lastSeen: node.last_seen,
+        inviteId: node.invite_id,
+        ownerDevice: node.owner_device,
+      })),
     nodeInvites: await listNodeInviteViews(record, Math.floor(Date.now() / 1000)),
     // After a restart, the last publication recorded with the claw stands in.
     publication:

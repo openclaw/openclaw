@@ -1,2 +1,0 @@
-66
-# Regression for pre-parse preview bounds, blank visibility, full-text TTS/mirror identity, and safe reply quotes.

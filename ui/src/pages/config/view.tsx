@@ -54,6 +54,13 @@ import type { ConfigProps } from "./view-types.ts";
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
 export function Config(props: ConfigProps) {
+  const loading = () => (
+    <ConfigReadLoading
+      message={t("common.loading")}
+      embedded={props.embeddedEditor}
+      title={props.sectionTitle}
+    />
+  );
   const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
   function resetContentScroll() {
@@ -218,7 +225,8 @@ export function Config(props: ConfigProps) {
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
     return {
-      displayReady: props.activeSection === "__appearance__" && props.appearanceDisplayReady,
+      // Personal controls do not depend on permission to read Gateway-wide configuration.
+      displayReady: ["__appearance__", "__notifications__"].includes(props.activeSection ?? ""),
       showModeToggle,
       includeVirtualSections: props.includeVirtualSections ?? true,
       include: includedSections(),
@@ -403,25 +411,17 @@ export function Config(props: ConfigProps) {
                     <span class="settings-count">
                       {rawSecretsLabel(sensitiveCount(), view().rawRevealed, props.raw)}
                     </span>
-                    <openclaw-tooltip
-                      prop:content={t(
-                        view().rawRevealed
-                          ? "configView.hideSensitive"
-                          : "configView.revealSensitive",
-                      )}
+                    <button
+                      class={["btn btn--icon config-raw-toggle", { active: view().rawRevealed }]}
+                      aria-label={t("configView.toggleRawRedaction")}
+                      aria-pressed={view().rawRevealed ? "true" : "false"}
+                      onClick={() => {
+                        view().rawRevealed = !view().rawRevealed;
+                        refresh();
+                      }}
                     >
-                      <button
-                        class={["btn btn--icon config-raw-toggle", { active: view().rawRevealed }]}
-                        aria-label={t("configView.toggleRawRedaction")}
-                        aria-pressed={view().rawRevealed ? "true" : "false"}
-                        onClick={() => {
-                          view().rawRevealed = !view().rawRevealed;
-                          refresh();
-                        }}
-                      >
-                        <Icon name={view().rawRevealed ? "eye" : "eyeOff"} />
-                      </button>
-                    </openclaw-tooltip>
+                      <Icon name={view().rawRevealed ? "eye" : "eyeOff"} />
+                    </button>
                   </>
                 ) : null}
               </span>
@@ -620,7 +620,7 @@ export function Config(props: ConfigProps) {
         }
         aria-label={state().showSectionTabs ? undefined : t("common.settingsSections")}
       >
-        <ConfigReadBoundary config={props} displayReady={state().displayReady}>
+        <ConfigReadBoundary config={props} displayReady={state().displayReady} fallback={loading()}>
           {props.activeSection === "__appearance__" ? (
             state().includeVirtualSections ? (
               <AppearanceSection {...props} />
@@ -657,10 +657,7 @@ export function Config(props: ConfigProps) {
                   />
                 )}
               >
-                <Loading
-                  on={hasSchema() ? undefined : schemaRead()}
-                  fallback={<ConfigReadLoading message={t("common.loading")} />}
-                >
+                <Loading on={hasSchema() ? undefined : schemaRead()} fallback={loading()}>
                   <Show when={readSchemaReady()}>
                     {(message) => (
                       <ConfigReadError

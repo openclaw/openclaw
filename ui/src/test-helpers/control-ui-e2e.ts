@@ -176,10 +176,9 @@ export async function waitForControlUiSettingsTakeover(
   pathname = "/settings/appearance",
 ): Promise<{ search: Locator; sidebar: Locator }> {
   await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
-  const appSidebar = page.locator("openclaw-app-sidebar");
   const sidebar = page.locator(".settings-sidebar");
   const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-  await appSidebar.waitFor({ state: "detached" });
+  await page.locator(".sidebar-shell").waitFor({ state: "hidden" });
   await search.waitFor({ state: "visible" });
   return { search, sidebar };
 }
@@ -737,6 +736,20 @@ function installControlUiMockGateway(
     {
       rows: canonicalSessionRows,
       mainKey: scenario.mainSessionKey,
+      models: scenario.models,
+      hasMessages: (row) => {
+        if (typeof row.key !== "string") {
+          return undefined;
+        }
+        // Inspect the configured initial read without advancing wire-response sequences.
+        for (const method of ["chat.startup", "chat.history"]) {
+          const { value } = responseFixtures.select(method, { sessionKey: row.key }, false);
+          if (isRecord(value) && Array.isArray(value.messages)) {
+            return value.messages.length > 0 || value.hasMore === true;
+          }
+        }
+        return chatHistoryMessages(row.key).length > 0;
+      },
     },
     isRecord,
   );
@@ -1572,8 +1585,8 @@ function installControlUiMockGateway(
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,
-          avatar: "",
-          avatarStatus: "none",
+          avatar: scenario.assistantAvatar,
+          avatarStatus: scenario.assistantAvatarStatus,
           name: scenario.assistantName,
         };
       case "agents.list":
@@ -1581,7 +1594,7 @@ function installControlUiMockGateway(
           agents: [
             {
               id: scenario.defaultAgentId,
-              identity: { name: scenario.assistantName },
+              identity: { name: scenario.assistantName, avatar: scenario.assistantAvatar },
               ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
               name: scenario.assistantName,
               ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
@@ -2073,7 +2086,8 @@ function installControlUiMockGateway(
         event: "connect.challenge",
         payload: {
           nonce: "control-ui-e2e-nonce",
-          ts: Date.now(),
+          // Playwright can expose fractional Date.now() inside virtual timer callbacks.
+          ts: Math.trunc(Date.now()),
           capabilities: scenario.connectCapabilities,
         },
         type: "event",
@@ -2379,9 +2393,7 @@ function installControlUiMockGateway(
       isViteHmr ||
       scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
     ) {
-      return protocols === undefined
-        ? new NativeWebSocket(resolvedUrl)
-        : new NativeWebSocket(resolvedUrl, protocols);
+      return new NativeWebSocket(resolvedUrl, protocols);
     }
     return new MockWebSocket(resolvedUrl);
   };

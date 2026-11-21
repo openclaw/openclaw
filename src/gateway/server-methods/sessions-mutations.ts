@@ -23,6 +23,7 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
@@ -145,6 +146,8 @@ function createSessionPatchHandler(
         signal,
         diagnostics,
         operatorAuthority: preparingOperator,
+        followSharingRegistration: sessionMutationAuthorization?.followRegistration,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
         onCreatedSessionCommitted: request.many
           ? undefined
           : sessionMutationAuthorization?.recordCreatedSession,
@@ -416,7 +419,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             ErrorCodes.INVALID_REQUEST,
             `unknown session owner "${params.owner.id}". ${
               params.owner.type === "human"
-                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the Control UI."
+                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the OpenClaw app."
                 : "Agent owners must name a configured agent."
             }`,
           );
@@ -622,6 +625,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     try {
       const result = await performGatewaySessionReset({
         operatorAuthority: captured?.authority,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
+        getCurrentSessionAccessCap: () => operatorSessionCap(client, context.getRuntimeConfig()),
         key,
         ...(p.agentId ? { agentId: p.agentId } : {}),
         reason,

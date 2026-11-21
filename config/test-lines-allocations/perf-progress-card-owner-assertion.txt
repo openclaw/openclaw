@@ -1,0 +1,2 @@
+# Exact regression growth: one live worker-boundary check catches duplicate caller authority invocations.
+26

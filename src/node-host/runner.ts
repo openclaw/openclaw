@@ -26,7 +26,12 @@ import { redactRegisteredSecretValues } from "../logging/secret-redaction-regist
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
-import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import {
+  configureNodeHost,
+  loadNodeHostConfig,
+  refreshNodeHostOpenClawIdTarget,
+  type NodeHostGatewayConfig,
+} from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import { canReuseNodeHostDeviceToken } from "./gateway-auth.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
@@ -46,10 +51,16 @@ import {
   setNodeHostLauncherRestartArguments,
   watchNodeHostParentStdin,
 } from "./launcher-client.js";
+import {
+  dialableNodeHostOpenClawIdTarget,
+  sameNodeHostOpenClawIdScope,
+} from "./openclaw-id-target.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 
 type NodeHostRunOptions = {
+  /** Enrollment signs this exact prepared surface before asking the owner to approve. */
+  preparedRuntime?: Awaited<ReturnType<typeof prepareNodeHostRuntime>>;
   gatewayTarget?: NodeHostGatewayConfig;
   gatewayHost: string;
   gatewayPort: number;
@@ -175,7 +186,7 @@ export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayCon
     : undefined;
 }
 
-export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
+export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected: true } | void> {
   const workSignal = getAsyncWorkSignal();
   if (workSignal?.aborted) {
     return;
@@ -307,17 +318,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       cloudflareAccessByCandidate.set(candidate, credentials);
     }
   });
-  const preparedRuntime = await prepareNodeHostRuntime({
-    config: cfg,
-    env: process.env,
-    enableAgentRuns: true,
-    receivesLocalMcpPolicy: true,
-    forceWorkerRuns: opts.forceWorkerRuns,
-    ephemeral: opts.ephemeral,
-    installedAppsSharingEnabled: config.installedAppsSharing,
-    desktopSharingEnabled: opts.desktopSharingEnabled,
-    commands: config.commands,
-  });
+  const preparedRuntime =
+    opts.preparedRuntime ??
+    (await prepareNodeHostRuntime({
+      config: cfg,
+      env: process.env,
+      enableAgentRuns: true,
+      receivesLocalMcpPolicy: true,
+      forceWorkerRuns: opts.forceWorkerRuns,
+      ephemeral: opts.ephemeral,
+      installedAppsSharingEnabled: config.installedAppsSharing,
+      desktopSharingEnabled: opts.desktopSharingEnabled,
+      commands: config.commands,
+    }));
   logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
   const deviceIdentity = resumeIdentity ?? (await loadOrCreateDeviceIdentityAsync());
   const { token, password } =
@@ -336,7 +349,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   let autoUpdateStart: Promise<void> | undefined;
   let autoUpdater: { stop: () => Promise<void> } | undefined;
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
-    if (resumeConfig) {
+    if (resumeConfig || gateway.kind === "openclaw-id") {
       return;
     }
     void configureNodeHost({
@@ -354,11 +367,31 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     gateway.kind === "openclaw-id" && gateway.openclawId
       ? await import("./openclaw-id-transport.js").then(({ startNodeTunnelTransport }) =>
           startNodeTunnelTransport({
-            target: gateway.openclawId!,
+            target: dialableNodeHostOpenClawIdTarget(gateway.openclawId!),
+            readTarget: async () => {
+              const current = await loadNodeHostConfig();
+              if (
+                current?.nodeId !== nodeId ||
+                current.gateway?.kind !== "openclaw-id" ||
+                !current.gateway.openclawId
+              ) {
+                throw new Error("OpenClaw ID node target changed; restart the node host");
+              }
+              const target = current.gateway.openclawId;
+              const initial = gateway.openclawId!;
+              if (!sameNodeHostOpenClawIdScope(target, initial)) {
+                throw new Error("OpenClaw ID node target changed; restart the node host");
+              }
+              return dialableNodeHostOpenClawIdTarget(target);
+            },
+            persistTarget: (target, expected) =>
+              refreshNodeHostOpenClawIdTarget({ nodeId, expected, target }),
             onTerminal: (error) => {
               writeStderrLine(error.message);
               void finish(1);
             },
+            onRefusal: (error) =>
+              writeStderrLine(`OpenClaw ID connection refused: ${error.message}`),
           }),
         )
       : undefined;
@@ -366,6 +399,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     await tunnel.close();
     throw new Error("OpenClaw ID node targets cannot fall back to another transport");
   }
+  let firstHelloReceived = false;
+  let stoppedSuccessfully = false;
   const client = createNodeHostGatewayCandidateConnection({
     candidates: gatewayCandidates,
     candidateUrls: tunnel ? new Map([[gateway, tunnel.url]]) : undefined,
@@ -441,6 +476,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       }
     },
     onHelloOk: (hello, url, tlsFingerprint, cloudflareAccess) => {
+      firstHelloReceived = true;
       consecutivePermanentGatewayRejections = 0;
       writeStderrLine(
         `node host gateway connected: ${tunnel ? tunnel.formatDiagnostic(url) : url}`,
@@ -631,6 +667,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       writeStderrLine(`node host shutdown failed: ${formatErrorMessage(error)}`);
     } finally {
       removeSignalHandlers();
+      stoppedSuccessfully = finalExitCode === 0;
       process.exitCode = finalExitCode;
       resolveStopped();
     }
@@ -666,4 +703,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     throw error;
   }
   await stopped;
+  if (
+    opts.stopAfterFirstConnect &&
+    firstHelloReceived &&
+    stoppedSuccessfully &&
+    !workSignal?.aborted
+  ) {
+    return { connected: true };
+  }
 }

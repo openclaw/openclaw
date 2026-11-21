@@ -8,6 +8,7 @@ import {
   captureCronStreamSandboxTarget,
 } from "../agents/sandbox/stream-context.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntrySync,
@@ -15,6 +16,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { loadCronJobsStore, saveCronJobsStore } from "../cron/store.js";
 import { parseCronStreamSandboxTarget } from "../cron/stream-sandbox-target.js";
 import { makeCronStreamSandboxTarget } from "../cron/stream-sandbox.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -25,6 +27,8 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { commitBackgroundResultToSession } from "../sessions/background-session-result.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { linkCanonicalOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.js";
 import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
@@ -32,11 +36,17 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronStreamSandboxAuthority } from "./cron-stream-sandbox-authority.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
+import { migrateSharedOpenClawIdMemberSources } from "./openclaw-id/member-source-role-import-shared.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdMemberAccountLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import {
+  invalidateOperatorRolePolicy,
+  publishOperatorRoleConfigChange,
+} from "./operator-role-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const mocks = vi.hoisted(() => ({
@@ -50,10 +60,10 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
+    captureOpenClawAgentDatabaseExecutionAsync: async (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecutionAsync>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecutionAsync> => {
+      const owned = await actual.captureOpenClawAgentDatabaseExecutionAsync(...args);
       return {
         ...owned,
         get fileIdentity() {
@@ -153,6 +163,7 @@ function sandboxFixture(
 async function withAuthorityFixture(
   run: (fixture: {
     job: CronStoredJob;
+    storePath: string;
     config: OpenClawConfig;
     profileId: string;
     grant: AbortController;
@@ -219,6 +230,7 @@ async function withAuthorityFixture(
     try {
       await run({
         job,
+        storePath: state.statePath("cron", "jobs.json"),
         config,
         profileId: profile.id,
         grant,
@@ -393,10 +405,6 @@ it("keeps sandbox source authority through a real background notification commit
     const result = await commitBackgroundResultToSession({
       agentId: target.agentId,
       sessionKey: target.sessionKey,
-      expectedGeneration: {
-        sessionId: target.sessionId,
-        lifecycleRevision: target.lifecycleRevision,
-      },
       text: "Watcher found a new error.",
       idempotencyKey: "watcher-result:1",
       provenance: { kind: "cron", jobId: fixture.job.id, runId: "watcher-run:1" },
@@ -572,9 +580,10 @@ it.each(["grant revocation", "target replacement"] as const)(
   },
 );
 
-it.each(["member", "owner"] as const)(
+it.each(["member", "owner", "definition", "legacy member", "catalog member"] as const)(
   "restores a serialized OCID %s sandbox stream with its original peer dependency",
-  async (kind) => {
+  async (scenario) => {
+    const kind = scenario === "owner" ? "owner" : "member";
     await withAuthorityFixture(async (fixture) => {
       let principal: OpenClawIdTunnelPrincipal | undefined = {
         ...(kind === "member"
@@ -590,19 +599,55 @@ it.each(["member", "owner"] as const)(
       };
       fixture.target.operator!.openclawIdPrincipal = principal;
       if (kind === "member") {
+        await linkCanonicalOpenClawIdUserProfile({
+          profileId: fixture.profileId,
+          accountId: "stream-member",
+          email: null,
+        });
+        setOpenClawIdMemberAccountLookup(
+          (accountId) => principal?.kind === "member" && principal.accountId === accountId,
+        );
+        await setCanonicalUserProfileRole(fixture.profileId, "operator");
+        if (scenario !== "legacy member") {
+          fixture.target.operator!.assignedRole = "operator";
+        }
         fixture.config.gateway = {
+          openclawId: { enabled: true },
           roles: {
-            default: "reader",
+            ...(scenario === "catalog member" ? {} : { default: "reader" }),
             definitions: {
+              ...MEMBER_ROLE_PRESETS,
               reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
             },
           },
         };
       }
+      setRuntimeConfigSnapshot(fixture.config);
+      if (scenario === "legacy member") {
+        await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [fixture.job] });
+        await migrateSharedOpenClawIdMemberSources(
+          {
+            profileId: fixture.profileId,
+            accountId: "stream-member",
+            role: "operator",
+            policy: MEMBER_ROLE_PRESETS.operator,
+          },
+          () => {},
+        );
+        await closeOpenClawStateDatabaseAsync();
+        const restored = (await loadCronJobsStore(fixture.storePath)).jobs[0]!;
+        expect(restored.streamSandbox).toEqual({
+          ...fixture.target,
+          operator: { ...fixture.target.operator, assignedRole: "operator" },
+        });
+        Object.assign(fixture.job, restored);
+      }
       const savedTarget = JSON.stringify(fixture.target);
       const serialized = JSON.parse(savedTarget);
       expect(parseCronStreamSandboxTarget(serialized)).toEqual(fixture.target);
-      fixture.job.streamSandbox = serialized;
+      if (scenario !== "legacy member") {
+        fixture.job.streamSandbox = serialized;
+      }
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {
         const retained = await fixture.prepare();
@@ -620,6 +665,14 @@ it.each(["member", "owner"] as const)(
           },
         });
         expect(captured.operator?.openclawIdPrincipal).toEqual(principal);
+        if (scenario === "definition") {
+          fixture.config.gateway!.roles!.definitions.operator = MEMBER_ROLE_PRESETS.viewer;
+          setRuntimeConfigSnapshot(fixture.config);
+          publishOperatorRoleConfigChange({});
+          expect(retained.signal.aborted).toBe(true);
+          expect(retained.assertCurrent).toThrow();
+          return;
+        }
         const original = structuredClone(principal);
         principal = undefined;
         setOpenClawIdTunnelPrincipalLookup(() => principal);
@@ -636,6 +689,7 @@ it.each(["member", "owner"] as const)(
         expect(retained.assertCurrent).toThrow();
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
       }
     });
   },

@@ -1,6 +1,9 @@
 // External observer only: all journal bytes and filesystem mutations belong to
 // the installed writer. A process kill is not a claim about power-loss durability.
+// The displaced cut also keeps the writer's exchange tools from starting: only a
+// publication without an atomic exchange displaces the package before publishing.
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -67,6 +70,21 @@ if (specPath) {
     }
     process.kill(process.pid, "SIGKILL");
   };
+  if (cut === "displaced") {
+    const execFile = childProcess.execFile;
+    childProcess.execFile = Object.defineProperties((file, args, ...rest) => {
+      const exchangeTool =
+        ["/usr/bin/osascript", "/usr/bin/perl"].includes(file) ||
+        args?.[0] === "--experimental-ffi";
+      if (!exchangeTool) {
+        return execFile(file, args, ...rest);
+      }
+      report("exchange-tool-withheld");
+      const missing = Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT" });
+      queueMicrotask(() => rest.at(-1)(missing, "", ""));
+      return undefined;
+    }, Object.getOwnPropertyDescriptors(execFile));
+  }
   fsp.rename = async (source, destination) => {
     const matches =
       cut === "displaced" && source === root && destination === path.join(anchor, "previous");

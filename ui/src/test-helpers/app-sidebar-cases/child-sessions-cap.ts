@@ -75,7 +75,7 @@ it("caps visible children until requested and resets the cap after collapse", as
 });
 
 it("keeps live children visible past the cap", async () => {
-  const { find } = await mountChildSessions([
+  const { sidebar, find } = await mountChildSessions([
     {
       key: "agent:main:dashboard:grandchild",
       spawnedBy: childKeys[5],
@@ -85,6 +85,9 @@ it("keeps live children visible past the cap", async () => {
       hasActiveRun: true,
     },
   ]);
+
+  sidebar.setSessionSortMode("created");
+  await sidebar.updateComplete;
 
   expect(find(`[data-child-session-toggle="${parentKey}"]`)?.getAttribute("aria-expanded")).toBe(
     "true",
@@ -107,6 +110,7 @@ it("orders capped children by the selected session sort instead of their keys", 
       row.getAttribute("data-session-key")?.replace("agent:main:dashboard:", ""),
     );
 
+  sidebar.setSessionSortMode("created");
   expect(find("[data-child-session-toggle]")?.getAttribute("aria-expanded")).toBe("true");
   await waitForFast(() =>
     expect(visibleChildren()).toEqual(["child-2", "child-4", "child-6", "child-1"]),

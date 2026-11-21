@@ -53,7 +53,7 @@ export async function runTalkNodePermissionParity({
   runEmbeddedAgent,
   rpc,
   waitForDispatchEnd,
-  expectRevokedWriter,
+  setFailureReporter,
   publicOnly = false,
 }: TalkParityFixture & {
   publicOnly?: boolean;
@@ -64,8 +64,12 @@ export async function runTalkNodePermissionParity({
   storePath: string;
   connectionId: string;
   rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  expectRevokedWriter: (runId: string, isCurrent: () => boolean) => void;
+  setFailureReporter: (report: () => void) => void;
 }) {
+  const diagnostic = { cell: "setup", lastCompletedAwait: "none", cleanup: "none" };
+  setFailureReporter(() => {
+    console.error("[talk-node-parity]", JSON.stringify({ publicOnly, ...diagnostic }));
+  });
   const scope = { agentId, sessionKey: canonicalKey, sessionId, storePath };
   const matchesSourceScope = captureRpcSourceScopeMatcher({
     storePath,
@@ -141,10 +145,15 @@ export async function runTalkNodePermissionParity({
   }
   const node = await createTalkParityNodeFixture(config, harness.port, token);
   const provider = await installTalkParityProviderFixture(publicOnly);
+  diagnostic.lastCompletedAwait = "provider-installed";
   const originalConnections = context.getClientConnIds;
   context.getClientConnIds = (filter) => new Set(!filter || filter(client) ? [connectionId] : []);
   const { closeTalkClientGatewayControlSession } = await import("./talk/client-gateway-control.js");
   const workspace = expectDefined(config.agents?.defaults?.workspace, "fixture workspace");
+  // Keep workspace content independent of the effect marker: removing the only
+  // file after a consult attests the workspace correctly looks like data loss.
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.writeFile(path.join(workspace, "README.md"), "Synthetic Talk permission workspace.\n");
   const marker = path.join(workspace, "node-parity-effects");
   let requested = createDeferred<Record<string, unknown>>();
   let approvalEvents = 0;
@@ -168,7 +177,10 @@ export async function runTalkNodePermissionParity({
       });
   const observed: unknown[] = [];
   const scenarios = publicOnly
-    ? ([{ ingress: "direct", decision: "source-revoke" }] as const)
+    ? ([
+        { ingress: "direct", decision: "source-revoke" },
+        { ingress: "direct", decision: "cancel" },
+      ] as const)
     : (["text", "direct", "chat-backed"] as const).flatMap((ingress) =>
         (
           ["permitted", "policy-deny", "allow-once", "deny", "cancel", "source-revoke"] as const
@@ -177,6 +189,9 @@ export async function runTalkNodePermissionParity({
   try {
     for (const { ingress, decision } of scenarios) {
       const key = ingress + "-" + decision;
+      diagnostic.cell = key;
+      diagnostic.lastCompletedAwait = "none";
+      diagnostic.cleanup = "none";
       const requiresApproval = decision !== "permitted" && decision !== "policy-deny";
       const invocationCount = node.invokes.length;
       await fs.rm(marker, { force: true });
@@ -189,6 +204,7 @@ export async function runTalkNodePermissionParity({
         permissionMode:
           decision === "permitted" ? "full" : decision === "policy-deny" ? "read-only" : "guarded",
       });
+      diagnostic.lastCompletedAwait = "session-replaced";
       const source = captureGatewayDeviceRevocation(
         context,
         { deviceId: identity.identity.deviceId, role: "operator" },
@@ -334,7 +350,17 @@ export async function runTalkNodePermissionParity({
           task = dispatch(method, params);
         }
         void task.catch((error: unknown) => finished.resolve({ error: String(error) }));
-        const runId = await started.promise;
+        // Direct callbacks settle with execution, unlike RPC dispatch acknowledgments.
+        const runId =
+          ingress === "direct"
+            ? await Promise.race([
+                started.promise,
+                task.then(() => {
+                  throw new Error("Direct consult settled before model start");
+                }),
+              ])
+            : await started.promise;
+        diagnostic.lastCompletedAwait = "model-started";
         if (requiresApproval) {
           const pending = await Promise.race([
             requested.promise,
@@ -342,35 +368,54 @@ export async function runTalkNodePermissionParity({
               throw new Error("No ordinary approval: " + JSON.stringify(outcome));
             }),
           ]);
+          diagnostic.lastCompletedAwait = "approval-requested";
           expect(await effectText()).toBe("");
           const approvalId = expectDefined(pending.id, "host approval ID");
           if (decision === "cancel") {
-            await rpc("chat.abort", { sessionKey, runId });
+            expect(await rpc("chat.abort", { sessionKey, runId })).toMatchObject({
+              aborted: true,
+              runIds: [runId],
+            });
+            expect(activeSignal?.aborted).toBe(true);
+            diagnostic.lastCompletedAwait = "abort-requested";
           } else if (decision === "source-revoke") {
-            // The real pre-commit guard may reject an already prepared lifecycle write.
-            // Accept only that exact refusal while this deliberately revoked source is stale.
-            expectRevokedWriter(runId, source.isCurrent);
             invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
-            if (publicOnly) {
-              expect(activeSignal?.aborted, "public callback retains source cancellation").toBe(
-                true,
-              );
-            }
+            expect(activeSignal?.aborted, "admitted work survives device revocation").toBe(false);
+            await expect(
+              captureGatewayOperatorRunAuthority({
+                client,
+                context,
+                hasCurrentClientAuthority: source.isCurrent,
+              }),
+            ).rejects.toThrow("Gateway caller authority is no longer active.");
+            expect(
+              (
+                await rpcReq(reviewer, "exec.approval.resolve", {
+                  id: approvalId,
+                  decision: "allow-once",
+                })
+              ).ok,
+            ).toBe(true);
+            diagnostic.lastCompletedAwait = "approval-resolved-after-revocation";
           } else {
             expect(
               (await rpcReq(reviewer, "exec.approval.resolve", { id: approvalId, decision })).ok,
             ).toBe(true);
             await rpcReq(reviewer, "exec.approval.resolve", { id: approvalId, decision });
+            diagnostic.lastCompletedAwait = "approval-resolved";
           }
         }
         const result = await finished.promise;
-        if (ingress === "direct" && (decision === "cancel" || decision === "source-revoke")) {
+        diagnostic.lastCompletedAwait = "model-finished";
+        if (ingress === "direct" && decision === "cancel") {
           await expect(task).rejects.toMatchObject({ name: "AbortError" });
         } else {
           await task;
         }
+        diagnostic.lastCompletedAwait = "request-settled";
         await waitForDispatchEnd();
-        if (publicOnly) {
+        diagnostic.lastCompletedAwait = "dispatch-settled";
+        if (publicOnly && decision === "source-revoke") {
           expect(
             listRpcSourceEntries().some(
               ([candidateRunId, rpcSource]) =>
@@ -381,16 +426,16 @@ export async function runTalkNodePermissionParity({
             /authority|active|closed|stopped/i,
           );
         }
-        if (decision === "permitted" || decision === "allow-once") {
+        const completed =
+          decision === "permitted" || decision === "allow-once" || decision === "source-revoke";
+        if (completed) {
           expect(result, key + ": " + JSON.stringify(result)).toMatchObject({
             status: "completed",
             exitCode: 0,
             nodeId: node.nodeId,
           });
         }
-        expect(await effectText()).toBe(
-          decision === "permitted" || decision === "allow-once" ? "effect" : "",
-        );
+        expect(await effectText()).toBe(completed ? "effect" : "");
         expect(approvalEvents - eventCount).toBe(requiresApproval ? 1 : 0);
         const cellInvocations = node.invokes.slice(invocationCount);
         expect(cellInvocations.filter((frame) => frame.command === "system.which")).toHaveLength(1);
@@ -401,14 +446,18 @@ export async function runTalkNodePermissionParity({
           );
         }
       } finally {
+        diagnostic.cleanup = "source-revoke";
         invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
-        // Cleanup after a failed assertion must not mask the original revocation result.
-        if (publicOnly && activeRunId && activeSignal?.aborted === false) {
+        // Device revocation does not cancel admitted work, including a failed test's pending approval.
+        if (activeRunId && activeSignal?.aborted === false) {
           await rpc("chat.abort", { sessionKey, runId: activeRunId });
         }
+        diagnostic.cleanup = "request-settlement";
         await task?.catch(() => {});
+        diagnostic.cleanup = "dispatch-settlement";
         await waitForDispatchEnd();
         if (directVoiceSessionId) {
+          diagnostic.cleanup = "direct-session-close";
           await closeTalkClientGatewayControlSession({
             voiceSessionId: directVoiceSessionId,
             sessionKey,
@@ -416,6 +465,7 @@ export async function runTalkNodePermissionParity({
           });
         }
         source.release();
+        diagnostic.cleanup = "cell-done";
       }
     }
     expect(observed).toEqual(
@@ -428,14 +478,16 @@ export async function runTalkNodePermissionParity({
       })),
     );
     expect(node.invokes.filter((frame) => frame.command === "system.run")).toHaveLength(
-      publicOnly ? 0 : 6,
+      publicOnly ? 1 : 9,
     );
   } finally {
     context.getClientConnIds = originalConnections;
     provider.restore();
     reviewer.off("message", onMessage);
+    diagnostic.cleanup = "node-close";
     await node.close();
     reviewer.close();
+    diagnostic.cleanup = "done";
   }
 }
 

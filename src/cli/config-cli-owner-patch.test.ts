@@ -6,10 +6,13 @@ import { withDatabaseEngineSelection } from "../infra/database-engine/context.js
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { bindConfigOwner } from "./config-cli-owner-patch.js";
 
+let lastCommitted: unknown;
+
 // Commits one change through a synthetic owner and returns the config.patch request it sent.
 async function commitThroughOwner(
   change: { previous: OpenClawConfig; next: OpenClawConfig },
   hash?: string,
+  patchResponse: Record<string, unknown> = {},
 ) {
   const env = { OPENCLAW_CONFIG_PATH: path.resolve("synthetic-owner", "openclaw.json") };
   const sent: Record<string, unknown>[] = [];
@@ -18,17 +21,30 @@ async function commitThroughOwner(
       sent.push(params);
     }
     // SAFETY: both synthetic responses match the fields the binder reads.
-    return (method === "config.get" ? { path: resolveConfigPath(env), hash } : {}) as R;
+    return (method === "config.get" ? { path: resolveConfigPath(env), hash } : patchResponse) as R;
   };
   const commit = await withDatabaseEngineSelection(
     { effectiveEngines: resolveDatabaseFamilyEngines({}) },
     () => bindConfigOwner(requestOwner, env),
   );
-  await commit(change);
+  lastCommitted = await commit(change);
   return sent[0] as { raw: string; baseHash?: string; replacePaths?: string[] };
 }
 
 describe("bindConfigOwner", () => {
+  it("returns the owner's billing-route warnings with the restart hint", async () => {
+    const warning = "Billing route changed for agents.defaults.subagents.model (agent main).";
+    await commitThroughOwner(
+      { previous: {}, next: { gateway: { reload: { mode: "off" } } } },
+      "base-hash",
+      { restart: { scheduled: true }, billingRouteWarnings: [warning] },
+    );
+    expect(lastCommitted).toEqual({
+      hint: "The Gateway is restarting to apply it.",
+      warnings: [warning],
+    });
+  });
+
   it("sends only the change, with array replacement and deletion as explicit intent", async () => {
     const previous: OpenClawConfig = {
       gateway: { reload: { mode: "hybrid" }, nodes: { commands: { allow: ["a", "b"] } } },

@@ -1,5 +1,6 @@
 // Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -62,6 +63,34 @@ export function isRegularFile(filePath: string): boolean {
 
 const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
 
+function isWindowsExecutable(filePath: string, env?: NodeJS.ProcessEnv): boolean {
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
+  // PATHEXT controls suffix probing, not an explicitly named native file.
+  return (
+    !ext ||
+    WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(ext) ||
+    resolveWindowsExecutableExtSet(env).has(ext)
+  );
+}
+
+export async function isExecutableFileAsync(
+  filePath: string,
+  options?: { env?: NodeJS.ProcessEnv },
+): Promise<boolean> {
+  try {
+    if (!(await fsp.stat(filePath)).isFile()) {
+      return false;
+    }
+    if (process.platform === "win32") {
+      return isWindowsExecutable(filePath, options?.env);
+    }
+    await fsp.access(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Checks a supplied path without PATH lookup or lexical normalization. */
 export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
   if (!isRegularFile(filePath)) {
@@ -69,12 +98,7 @@ export function isExecutableFile(filePath: string, options?: { env?: NodeJS.Proc
   }
   try {
     if (process.platform === "win32") {
-      const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-      // PATHEXT controls suffix probing, not an explicitly named native file.
-      if (!ext || WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(ext)) {
-        return true;
-      }
-      return resolveWindowsExecutableExtSet(options?.env).has(ext);
+      return isWindowsExecutable(filePath, options?.env);
     }
     fs.accessSync(filePath, fs.constants.X_OK);
     return true;
@@ -91,28 +115,34 @@ type ExecutablePathCacheEntry = {
   resolved: string | null;
 };
 
-const executablePathCache = new Map<string, ExecutablePathCacheEntry>();
+let executablePathCache = new Map<string, ExecutablePathCacheEntry>();
 
-function cacheExecutablePath(key: string, resolved: string | undefined): void {
-  executablePathCache.set(key, {
+function cacheExecutablePath(
+  cache: Map<string, ExecutablePathCacheEntry>,
+  key: string,
+  resolved: string | undefined,
+): void {
+  cache.set(key, {
     expiresAt: Date.now() + EXECUTABLE_PATH_CACHE_TTL_MS,
     resolved: resolved ?? null,
   });
-  pruneMapToMaxSize(executablePathCache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
+  pruneMapToMaxSize(cache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
 }
 
 /** Clears process-local PATH probe results after the runtime environment changes. */
 export function clearExecutablePathCache(): void {
-  executablePathCache.clear();
+  // Retire pending async probes too: they can only populate their original map.
+  executablePathCache = new Map();
 }
 
 /** Prepared entries preserve delimiters introduced by caller-owned home expansion. */
-export function resolveExecutableFromPathEnv(
+function* executablePathProbes(
   executable: string,
   pathEnv: string | readonly string[],
   env?: NodeJS.ProcessEnv,
   options?: { includeExtensionless?: boolean; cwd?: string; useCache?: boolean },
-): string | undefined {
+): Generator<string, string | undefined, boolean> {
+  const cache = executablePathCache;
   const cwd = options?.cwd?.trim() ? path.resolve(options.cwd) : undefined;
   const useCache = options?.useCache !== false;
   const pathExt =
@@ -127,19 +157,19 @@ export function resolveExecutableFromPathEnv(
     // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
   }
   const cacheKey = `${process.platform}\0${executable}\0${JSON.stringify(pathEnv)}\0${pathExt}\0${options?.includeExtensionless !== false}\0${cacheCwd}\0${cwd !== undefined}`;
-  const cached = useCache ? executablePathCache.get(cacheKey) : undefined;
+  const cached = useCache ? cache.get(cacheKey) : undefined;
   const now = Date.now();
   if (cached && cached.expiresAt > now) {
     // Hits and misses remain valid while the same PATH/PATHEXT/cwd key is used; config reload clears
     // the map. Installs/removals under an unchanged key intentionally need reload or a 60s idle gap,
     // because steady pollers must never fall back into synchronous PATH stat loops.
     cached.expiresAt = now + EXECUTABLE_PATH_CACHE_TTL_MS;
-    executablePathCache.delete(cacheKey);
-    executablePathCache.set(cacheKey, cached);
+    cache.delete(cacheKey);
+    cache.set(cacheKey, cached);
     return cached.resolved ?? undefined;
   }
   if (cached) {
-    executablePathCache.delete(cacheKey);
+    cache.delete(cacheKey);
   }
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
   const entries = (typeof pathEnv === "string" ? pathEnv.split(delimiter) : pathEnv).filter(
@@ -159,39 +189,85 @@ export function resolveExecutableFromPathEnv(
       const candidate = hasParentTraversal
         ? `${rawDirectory}${path.sep}${executable}${ext}`
         : path.join(cwd === undefined ? entry : path.resolve(cwd, entry), executable + ext);
-      if (isExecutableFile(candidate, { env })) {
+      if (yield candidate) {
         if (useCache) {
-          cacheExecutablePath(cacheKey, candidate);
+          cacheExecutablePath(cache, cacheKey, candidate);
         }
         return candidate;
       }
     }
   }
   if (useCache) {
-    cacheExecutablePath(cacheKey, undefined);
+    cacheExecutablePath(cache, cacheKey, undefined);
   }
   return undefined;
 }
 
-export function resolveExecutablePath(
+// The synchronous adapter preserves the public node-host SDK contract and CLI callers.
+// Runtime command preparation uses the async adapter over the same search policy.
+export function resolveExecutableFromPathEnv(
+  ...args: Parameters<typeof executablePathProbes>
+): string | undefined {
+  const probes = executablePathProbes(...args);
+  let next = probes.next();
+  while (!next.done) {
+    next = probes.next(isExecutableFile(next.value, { env: args[2] }));
+  }
+  return next.value;
+}
+
+export async function resolveExecutableFromPathEnvAsync(
+  ...args: Parameters<typeof executablePathProbes>
+): Promise<string | undefined> {
+  const probes = executablePathProbes(...args);
+  let next = probes.next();
+  while (!next.done) {
+    next = probes.next(await isExecutableFileAsync(next.value, { env: args[2] }));
+  }
+  return next.value;
+}
+
+function* executableCandidateProbes(
   rawExecutable: string,
   options?: { cwd?: string; env?: NodeJS.ProcessEnv; useCache?: boolean },
-): string | undefined {
+): Generator<string, string | undefined, boolean> {
   const candidate = resolveExecutablePathCandidate(rawExecutable, options);
   if (!candidate) {
     return undefined;
   }
   if (candidate.includes("/") || candidate.includes("\\")) {
-    return isExecutableFile(candidate, options) ? candidate : undefined;
+    return (yield candidate) ? candidate : undefined;
   }
   const envPath =
     resolveEnvironmentValue(options?.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??
     "";
-  return resolveExecutableFromPathEnv(candidate, envPath, options?.env, {
+  return yield* executablePathProbes(candidate, envPath, options?.env, {
     cwd: options?.cwd,
     useCache: options?.useCache,
   });
+}
+
+export function resolveExecutablePath(
+  ...args: Parameters<typeof executableCandidateProbes>
+): string | undefined {
+  const probes = executableCandidateProbes(...args);
+  let next = probes.next();
+  while (!next.done) {
+    next = probes.next(isExecutableFile(next.value, args[1]));
+  }
+  return next.value;
+}
+
+export async function resolveExecutablePathAsync(
+  ...args: Parameters<typeof executableCandidateProbes>
+): Promise<string | undefined> {
+  const probes = executableCandidateProbes(...args);
+  let next = probes.next();
+  while (!next.done) {
+    next = probes.next(await isExecutableFileAsync(next.value, args[1]));
+  }
+  return next.value;
 }
 
 /**

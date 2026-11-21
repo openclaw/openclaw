@@ -53,7 +53,7 @@ type SlackTraceState = {
   tsCounter: number;
   /** Scripted benign rejection for the next chat.startStream call (scenario-owned). */
   rejectStartStreamCode: string | undefined;
-  rejectAppendStreamCode?: string;
+  rejectStreamCode?: string;
 };
 
 const traceRuntimeError = vi.fn();
@@ -130,7 +130,7 @@ afterEach(async () => {
   traceState.turnOutcome = null;
   traceState.dispatchDone = null;
   traceState.rejectStartStreamCode = undefined;
-  traceState.rejectAppendStreamCode = undefined;
+  traceState.rejectStreamCode = undefined;
 });
 
 const CHANNEL_ID = "C0TRACE";
@@ -263,9 +263,9 @@ function createRecordingSlackClient(): Record<string, unknown> {
   const acknowledge =
     (method: string, includeChannel = false) =>
     async (args: Record<string, unknown>) => {
-      if (method === "chat.appendStream" && traceState.rejectAppendStreamCode) {
-        const error = traceState.rejectAppendStreamCode;
-        traceState.rejectAppendStreamCode = undefined;
+      // An expired stream keeps rejecting appends and stop requests.
+      const error = method === "chat.update" ? undefined : traceState.rejectStreamCode;
+      if (error) {
         record(method, args, args.ts, { ok: false, error });
         throw Object.assign(new Error(`An API error occurred: ${error}`), {
           data: { ok: false, error },
@@ -563,7 +563,7 @@ function runSlackTrace(
     steps?: readonly DeliveryTraceStep[];
     configure?: Parameters<typeof setupSlackTrace>[2];
     record?: (call: RecordedWireCall) => void;
-    beforeStep?: (step: DeliveryTraceInStep) => void;
+    beforeStep?: (step: DeliveryTraceInStep) => void | Promise<void>;
     normalize?: boolean;
   } = {},
 ) {
@@ -592,7 +592,7 @@ function runSlackTrace(
         return dispatch;
       }
       return async (step) => {
-        beforeStep(step);
+        await beforeStep(step);
         await dispatch(step);
       };
     },
@@ -836,20 +836,17 @@ describe("slack delivery trace goldens", () => {
         { kind: "advance", ms: 2000 },
         { kind: "final", text: "All files checked." },
       ),
-      beforeStep: (step) => {
-        if (
-          step.kind === "partial" &&
-          step.text === "Checking the first file." &&
-          method === "start"
-        ) {
-          traceState.rejectStartStreamCode = code;
-        }
-        if (
-          step.kind === "partial" &&
-          step.text === "Checking the second file." &&
-          method === "append"
-        ) {
-          traceState.rejectAppendStreamCode = code;
+      beforeStep: async (step) => {
+        if (step.kind === "partial") {
+          if (step.text === "Checking the first file." && method === "start") {
+            traceState.rejectStartStreamCode = code;
+          }
+          if (step.text === "Checking the second file." && method === "append") {
+            await traceState.turn?.replyOptions?.onReasoningStream?.({
+              text: "Waiting for checks.",
+            });
+            traceState.rejectStreamCode = code;
+          }
         }
       },
     });
@@ -859,6 +856,13 @@ describe("slack delivery trace goldens", () => {
         data: expect.objectContaining({ result: { ok: false, error: code } }),
       }),
     );
+    if (method === "append") {
+      expect(wirePayloads(events, "chat.appendStream").at(-1)).toMatchObject({
+        chunks: expect.arrayContaining([
+          expect.objectContaining({ title: "🧠 Waiting for checks." }),
+        ]),
+      });
+    }
     const posts = wirePayloads(events, "chat.postMessage");
     const edits = wirePayloads(events, "chat.update");
     expect(posts).toContainEqual(
@@ -867,9 +871,7 @@ describe("slack delivery trace goldens", () => {
     expect(edits).toContainEqual(
       expect.objectContaining({ text: expect.stringContaining("Checking the last file.") }),
     );
-    expect(
-      posts.filter((payload) => (payload as { text?: string }).text === "All files checked."),
-    ).toHaveLength(1);
+    expect(posts.at(-1)).toMatchObject({ text: "All files checked." });
     expect(
       collectSlackWireTexts(events).filter((text) => text.includes("All files checked.")),
     ).toHaveLength(1);

@@ -10,6 +10,7 @@ import type {
   GitHubPublicationRow as PublicationRow,
   RepositoryGitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
+import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
@@ -156,11 +157,16 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           input.requester.signal,
         );
       } catch (error) {
-        if (
-          !(error instanceof GitHubPublicationRecoveryPendingError) ||
-          !initialAuthority.loaded.entry.worktree?.githubPullRequest
-        ) {
+        if (!(error instanceof GitHubPublicationRecoveryPendingError)) {
           throw error;
+        }
+        const observe = JSON.stringify({ action: "readiness", requestId: row.request_id });
+        const pendingError = new GitHubPublicationRecoveryPendingError(
+          `GitHub publication ${row.request_id}: ${formatErrorMessage(error)} Call github_publish(${observe}) to observe the original receipt; readiness does not recover it. Automatic recovery continues after this turn. If it remains pending, an operator must inspect the Gateway's GitHub publication recovery warning and repair the reported workspace, repository, or publisher access problem (publisher accounts: Settings → Profile → GitHub accounts). Then publish again to recover this request before starting another publication.`,
+          { cause: error },
+        );
+        if (!initialAuthority.loaded.entry.worktree?.githubPullRequest) {
+          throw pendingError;
         }
         // Native recovery retains this accepted request; a new tool call has a different key.
         params.assertCurrent();
@@ -169,7 +175,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         params.assertCurrent();
         assertRequester();
         if (!retained) {
-          throw error;
+          throw pendingError;
         }
         const result = publicationResult(retained);
         return result.status === "requested" || result.status === "publishing"
@@ -235,10 +241,31 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       }
     };
     const claim = placement ? exactClaimForPlacement(placement) : undefined;
-    if (claim && input.expectedRunId && claim.runId === input.expectedRunId) {
+    const requestingClaim =
+      claim && input.expectedRunId && claim.runId === input.expectedRunId ? claim : undefined;
+    const existing = await readGitHubPublicationRequestAsync({
+      sessionId,
+      idempotencyKey: input.idempotencyKey,
+    });
+    assertRequester();
+    if (!existing && (!placement || placement.state === "local") && (!claim || requestingClaim)) {
+      const [pending] = await listSharedGitHubPublicationsAsync({ sessionId, pending: true });
+      assertRequester();
+      if (
+        pending?.head_commit &&
+        sameWorktree(pending, initialAuthority.worktree, initialAuthority.publicationBranch)
+      ) {
+        assertExpectedSharedGitHubPublisher(expected, publicationResult(pending).publisher!);
+        // A new tool call must recover the accepted request before capturing later work.
+        return await processDuringRun(pending, () =>
+          claim ? params.placements.validateTurnClaim(claim) : validateLocalExecution(),
+        );
+      }
+    }
+    if (requestingClaim) {
       const claimRequest = {
         expectedPublisher: expected,
-        claim,
+        claim: requestingClaim,
         sessionKey: loaded.canonicalKey,
         agentId: input.agentId,
         idempotencyKey: input.idempotencyKey,
@@ -256,7 +283,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       if (!row) {
         throw new Error("GitHub publication request disappeared.");
       }
-      return await processDuringRun(row, () => params.placements.validateTurnClaim(claim));
+      return await processDuringRun(row, () =>
+        params.placements.validateTurnClaim(requestingClaim),
+      );
     }
     if (claim && placement?.state === "local") {
       throw new Error(
@@ -269,10 +298,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     const worktreeOwner = initialAuthority;
     const { worktree } = worktreeOwner;
     assertRequester();
-    const existing = await readGitHubPublicationRequestAsync({
-      sessionId,
-      idempotencyKey: input.idempotencyKey,
-    });
     const requestDigest = digestRequest({
       sessionId,
       idempotencyKey: input.idempotencyKey,
@@ -328,7 +353,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       workspaceTree: string;
     }): Promise<PublicationRow> => {
       const now = Date.now();
-      const requestId = randomUUID();
+      const requestId = input.requester.snapshot.origin
+        ? deriveGitHubPublicationTaskId(input.requester.snapshot.origin, input.idempotencyKey)
+        : randomUUID();
       assertRequester();
       {
         worktreeOwner.assertCurrent();
@@ -413,14 +440,27 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     async resumeSessionRequests(
       isStopping?: () => boolean,
       isPendingEmpty?: () => boolean,
+      requestId?: string,
     ): Promise<void> {
       if (isStopping?.()) {
         return;
       }
-      const rows = isPendingEmpty?.()
+      const pendingRows = isPendingEmpty?.()
         ? []
         : await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
-      params.recovery?.shared.retain(rows.map((row) => row.request_id));
+      const selectedIndex = requestId
+        ? pendingRows.findIndex((row) => row.request_id === requestId)
+        : -1;
+      const selected = pendingRows[selectedIndex];
+      // Selected recovery may not overtake earlier unfinished work on this checkout.
+      const earlier =
+        selected &&
+        pendingRows.slice(0, selectedIndex).some((row) => row.worktree_id === selected.worktree_id);
+      const rows = requestId ? (selected && !earlier ? [selected] : []) : pendingRows;
+      // A selected observer cannot retire another request’s recovery backoff.
+      if (!requestId) {
+        params.recovery?.shared.retain(rows.map((row) => row.request_id));
+      }
       params.assertCurrent();
       if (isStopping?.() || rows.length === 0) {
         return;
@@ -597,4 +637,48 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return row ? publicationResult(row) : undefined;
     },
   };
+}
+
+/** Resume native queues without letting a selected shared request visit another owner. */
+export async function resumeGitHubPublicationSessionRequests(params: {
+  shared: Pick<
+    ReturnType<typeof createGitHubPublicationCoordinatorMethods>,
+    "resumeSessionRequests"
+  >;
+  repository: { resumeSessionRequests(isStopping?: () => boolean): Promise<void> };
+  isStopping?: () => boolean;
+  isPendingEmpty?: (kind: "shared" | "repository") => boolean;
+  sharedRequestId?: string;
+}) {
+  const failures: unknown[] = [];
+  for (const coordinator of [params.shared, params.repository]) {
+    if (params.isStopping?.()) {
+      break;
+    }
+    if (
+      coordinator === params.repository &&
+      (params.sharedRequestId || params.isPendingEmpty?.("repository"))
+    ) {
+      continue;
+    }
+    try {
+      if (coordinator === params.shared) {
+        await params.shared.resumeSessionRequests(
+          params.isStopping,
+          () => params.isPendingEmpty?.("shared") ?? false,
+          params.sharedRequestId,
+        );
+      } else {
+        await params.repository.resumeSessionRequests(params.isStopping);
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      failures.map((error) => (error instanceof Error ? error.message : String(error))).join("; "),
+    );
+  }
 }

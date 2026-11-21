@@ -335,9 +335,11 @@ A session without a human principal uses ordinary system-event authority. Saved
 operator or requester snapshots do not grant permissions.
 
 The marker records the IDs of accepted user messages still queued at shutdown.
-Only those messages follow the resume input in FIFO order, each under its recorded
-sender's current authority. Older crash-left queued rows remain inert. A sender that
-cannot be admitted gets an ordinary failed send and can resend. New messages during
+Only those messages follow the resume input in FIFO order. Each retains its original
+app grant, ID membership, and scope and model limits, revalidated against current
+authority before replay and tool effects. Another sign-in by the same person cannot
+replace that source. Older crash-left queued rows remain inert. Missing or revoked
+sources produce an ordinary failed send that the sender can resend. New messages during
 the resumed run use normal steering and queue rules; they do not wait behind a
 special recovery predecessor.
 

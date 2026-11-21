@@ -1,2 +1,0 @@
-# Guarantee caller-owned worker probe cleanup after failed assertions.
-4

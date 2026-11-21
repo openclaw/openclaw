@@ -282,6 +282,9 @@ export function completeEmbeddedAttemptResult(
   });
   const keptAnswer = evidence.keptAnswer;
   const keptReply = keptAnswer ? prepareTerminalAssistantReply(keptAnswer.assistant) : closingReply;
+  const finalPresentation = input.preparedStreamRuntime.stream.getFinalPresentation(
+    keptAnswer?.assistant ?? terminalAssistant,
+  );
   const assistant = resolveCurrentAttemptAssistant(state);
   let textToolCallAttempt = false;
   let textToolCallRecovery: EmbeddedRunAttemptResult["textToolCallRecovery"];
@@ -362,6 +365,7 @@ export function completeEmbeddedAttemptResult(
     ...evidence,
     ...(attempt.inputAlreadyDelivered ? { inputAlreadyDelivered: true as const } : {}),
     preparedTerminalReply: keptReply,
+    ...(finalPresentation ? { finalPresentation } : {}),
     sandboxRuntime: input.setup.sandboxRuntime,
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,

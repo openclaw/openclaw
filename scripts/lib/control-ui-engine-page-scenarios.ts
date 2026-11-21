@@ -51,11 +51,11 @@ import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.
 
 type PageAction = {
   label: string;
+  prepare?: InteractionScenario["prepare"];
   run: InteractionScenario["run"];
 };
 type NoChangeAction = PageAction & {
   kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
-  prepare?: InteractionScenario["prepare"];
 };
 type PageDefinition = {
   ready: string;
@@ -63,6 +63,8 @@ type PageDefinition = {
   rows?: { selector: string; minimum: number; totalSelector?: string };
   /** Keep the measurement open through incremental mounting, after first visibility. */
   completion?: { selector: string; minimum: number; maximum?: number }[];
+  /** First rows can precede the code font's final layout. */
+  fontFamily?: string;
   landed?: RouteId;
   search?: string;
   action?: PageAction;
@@ -738,6 +740,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   "plugin-settings": {
     ready: "openclaw-plugins-page [data-plugin-id]",
+    fontFamily: "JetBrains Mono",
     completion: [
       { selector: "openclaw-plugins-page [data-plugin-id]", minimum: quantity.catalog },
       {
@@ -825,6 +828,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   secrets: {
+    fontFamily: "JetBrains Mono",
     ready:
       "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
     rows: {
@@ -873,14 +877,21 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    ready: ".skill-discovery [data-skill-id]",
-    rows: {
-      selector: ".skill-discovery [data-skill-id]",
-      minimum: 1000,
-      totalSelector: ".skill-discovery [aria-setsize]",
-    },
+    ready: ".skill-discovery .skill-installed-shelf",
     action: {
-      label: "Filter discovered skills to one installed skill",
+      label: "Filter 1,000 installed skills to one match from discovery",
+      prepare: async (page) => {
+        await page.locator(".skill-discovery .skill-installed-shelf").click();
+        await page.waitForFunction(() => {
+          const discovery = document.querySelector(".skill-discovery");
+          const total = Number(
+            discovery?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0,
+          );
+          return (
+            total >= 1000 || (discovery?.querySelectorAll("[data-skill-id]").length ?? 0) >= 1000
+          );
+        });
+      },
       run: async (page) => {
         await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
         await page.waitForFunction(() => {
@@ -896,6 +907,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   "skill-settings": {
     ready: ".skills-group .plugins-item",
+    fontFamily: "JetBrains Mono",
     rows: { selector: ".skills-group .plugins-item", minimum: 1000 },
     action: {
       label: "Type a search to filter 1,000 installed skills to one match",
@@ -1304,18 +1316,16 @@ function createPageFixture(
     };
     const templates = templateEntries();
     const templateCategories = [
-      "personal",
-      "health",
+      "engineering",
+      "operations",
+      "household",
+      "entertainment",
       "travel",
       "productivity",
       "research",
-      "engineering",
-      "governance",
-      "operations",
-      "finance",
+      "health",
       "sales",
       "product",
-      "people",
       "other",
     ];
     const environments: EnvironmentSummary[] = [
@@ -1833,6 +1843,7 @@ async function measureVisit(
       selector,
       rows,
       completion,
+      fontFamily,
       timeoutMs: limitMs,
     }) =>
       new Promise<{
@@ -1909,12 +1920,18 @@ async function measureVisit(
             routeId === "config"
               ? document.getElementById("settings-language")?.getBoundingClientRect().top
               : undefined;
+          // The floating phone header reserves the anchor's scroll destination.
+          const scrollPaddingTop =
+            anchorTop === undefined
+              ? 0
+              : Number.parseFloat(getComputedStyle(scrollport).scrollPaddingTop) || 0;
           const anchorSettled =
             routeId !== "config" ||
             (anchorTop !== undefined &&
               anchorTop >= -1 &&
               anchorTop < window.innerHeight &&
-              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top) < 1 ||
+              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top - scrollPaddingTop) <
+                1 ||
                 Math.abs(scrollport.scrollHeight - scrollport.clientHeight - scrollport.scrollTop) <
                   1) &&
               anchorTop === previousAnchorTop);
@@ -1922,6 +1939,13 @@ async function measureVisit(
           const contentReady =
             pageReady &&
             anchorSettled &&
+            (!fontFamily ||
+              ([...document.fonts].some(
+                (face) =>
+                  face.family.replace(/^['"]|['"]$/gu, "") === fontFamily &&
+                  face.status === "loaded",
+              ) &&
+                document.fonts.check(`12px "${fontFamily}"`))) &&
             (!completion ||
               completion.every(({ selector: contentSelector, minimum, maximum }) => {
                 const count = document.querySelectorAll(contentSelector).length;
@@ -1952,6 +1976,7 @@ async function measureVisit(
       selector: definition.ready,
       rows: definition.rows,
       completion: definition.completion,
+      fontFamily: definition.fontFamily,
       timeoutMs,
     },
   );
@@ -2154,6 +2179,7 @@ export function createEnginePageScenarios(
       prepare: async (page, gateway) => {
         await enter(page);
         await definition.source?.prepare(page, gateway);
+        await definition.action?.prepare?.(page, gateway);
       },
       run: async (page, gateway) => {
         const evidence = await definition.action!.run(page, gateway);

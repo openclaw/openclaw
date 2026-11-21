@@ -25,7 +25,6 @@ import {
 } from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-providers.css";
-import "../../styles/usage.css";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";
@@ -38,7 +37,6 @@ import {
 import {
   hasVerifiedProvider,
   isProviderUsable,
-  needsModelSetup,
   renderMutationMessage,
   ModelProviderConnectAction,
 } from "./view-status.tsx";
@@ -106,7 +104,7 @@ function AddProvider(props: ModelProvidersViewProps) {
                   class="btn primary"
                   disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
                   // With no usable model yet, saving also makes this key the agent's model.
-                  onClick={() => props.onAddProvider(needsModelSetup(props))}
+                  onClick={() => props.onAddProvider(props.modelRequired)}
                 >
                   {props.busy["check:add"]
                     ? t("modelProviders.apiKey.checking")
@@ -133,17 +131,20 @@ function AddProvider(props: ModelProvidersViewProps) {
   );
 }
 
-/** Setup prompt shown only until a usable model exists; Provider access takes over after. */
+/** Setup prompt shown only until the agent has a model; Provider access takes over after. */
 function ModelReadiness(props: ModelProvidersViewProps) {
-  const signedIn = () => props.cards.some(hasVerifiedProvider);
+  // "No usable models" is true only while nothing in the catalog can be chosen.
+  const signedInNoModels = () =>
+    props.cards.some(hasVerifiedProvider) &&
+    !props.configuredModels.some((model) => model.available !== false);
   return (
-    <Show when={needsModelSetup(props)}>
+    <Show when={props.modelRequired}>
       <div class="model-providers__setup" data-model-readiness="model-required">
         <SettingsSection title={t("modelProviders.readiness.title")}>
           <SettingsRow
             title={t("modelProviders.readiness.heading")}
             description={
-              signedIn()
+              signedInNoModels()
                 ? t("modelProviders.readiness.signedInNoModels")
                 : t("modelProviders.readiness.notConfigured")
             }
@@ -152,7 +153,7 @@ function ModelReadiness(props: ModelProvidersViewProps) {
                 <SettingsStatus
                   kind="warn"
                   label={
-                    signedIn()
+                    signedInNoModels()
                       ? t("modelProviders.readiness.noModels")
                       : t("modelProviders.readiness.modelRequired")
                   }
@@ -260,18 +261,16 @@ function ProviderAccess(props: ModelProvidersViewProps) {
   });
   const connected = () => groups().connected;
   const unconnected = () => groups().unconnected;
-  const refreshLabel = () =>
-    props.refreshing ? t("modelProviders.refreshing") : t("common.refresh");
   // The last refresh time lives in the refresh tooltip instead of the header row.
   const refreshTooltip = () =>
     props.updatedAt && !props.refreshing
-      ? `${refreshLabel()} · ${t("modelProviders.updated", {
+      ? t("modelProviders.updated", {
           time: formatTimeMs(props.updatedAt, { hour: "numeric", minute: "2-digit" }),
-        })}`
-      : refreshLabel();
+        })
+      : undefined;
   // Setup with nothing connected has no list to filter.
   const nothingToSearch = () =>
-    needsModelSetup(props) && props.cards.length === 0 && !props.error && !search();
+    props.modelRequired && props.cards.length === 0 && !props.error && !search();
   const providerRows = () => (
     <>
       <Show when={!nothingToSearch()}>
@@ -306,7 +305,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
             {renderProviderNoticeRow(t("usage.providerUsage.unavailable"))}
           </SettingsGroup>
         ) : undefined}
-        {props.cards.length === 0 ? (
+        {props.cards.length === 0 && !props.error ? (
           <SettingsGroup>
             <SettingsEmpty
               message={
@@ -360,12 +359,12 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           <button type="button" class="btn btn--sm btn--ghost" onClick={() => props.onOpenUsage()}>
             {t("modelProviders.viewUsage")}
           </button>
-          {needsModelSetup(props) ? undefined : props.providerScope}
+          {props.modelRequired ? undefined : props.providerScope}
           <RefreshButton
             class="model-providers__refresh-button"
-            label={refreshLabel()}
+            label={t("common.refresh")}
             tooltip={refreshTooltip()}
-            busy={props.refreshing}
+            disabled={props.refreshing}
             onClick={() => props.onRefresh()}
           />
         </>

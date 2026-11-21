@@ -27,13 +27,14 @@ export type TranscriptLayoutProps = {
   getContent: (index: number) => TranscriptContent;
   activeRowKeys: ReadonlySet<string>;
   preparingRowKey?: string;
+  forecastRowKeys?: ReadonlySet<string>;
+  unsettledRowKeys?: ReadonlySet<string>;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   overlay: JSX.Element;
   header: JSX.Element;
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
-  measureRows: boolean;
   initialPositionPending: () => boolean;
   layout: TranscriptLayoutOwner;
   headerHeight: number;

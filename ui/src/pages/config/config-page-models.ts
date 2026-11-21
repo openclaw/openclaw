@@ -3,7 +3,7 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
-import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { isGatewayAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import {
@@ -67,7 +67,7 @@ export function createConfigPageModels(options: {
       }
     },
     onError: (error) => {
-      if (isMissingOperatorReadScopeError(error)) {
+      if (isGatewayAccessDeniedError(error)) {
         systemInfo = null;
         systemInfoUnavailable = true;
       }
@@ -94,9 +94,12 @@ export function createConfigPageModels(options: {
       cancelModels();
       setModelsRead(null);
       unavailable = !agentId;
+      if (!agentId) {
+        modelsAgent = null;
+      }
       return;
     }
-    if (modelsAgent === agentId && (modelsRequest || !force)) {
+    if (modelsAgent === agentId && (modelsRequest || unavailable || !force)) {
       return;
     }
     const changed = modelsAgent !== agentId;
@@ -118,6 +121,7 @@ export function createConfigPageModels(options: {
       )
       .catch((error: unknown) => {
         if (modelsRequest === request) {
+          unavailable = isGatewayAccessDeniedError(error);
           throw error;
         }
         return undefined;

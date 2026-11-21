@@ -2,12 +2,15 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
+  createApiKeyProviderData,
   createAuthStatus,
   createHarness,
   drainPageUpdates,
+  expandProvider,
   modelPicker,
   requestCount,
   saveKey,
@@ -61,6 +64,47 @@ describe("ModelProvidersPage mutation presentation", () => {
       expect(page.querySelector(".model-providers__inline-form")).toBeNull(),
     );
     expect(requestCount(request, "models.authSetApiKey")).toBe(2);
+  });
+
+  it("keeps the newer Test access result when an older saved-key check finishes last", async () => {
+    const { context, request } = createHarness("main");
+    const savedCheck = deferred<ModelsProbeResult>();
+    const originalRequest = request.getMockImplementation()!;
+    let checks = 0;
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        return {
+          models: [{ id: "test-model", name: "Test model", provider: "openai", available: true }],
+          providerOutcomes: [{ provider: "openai", status: "ready" }],
+        };
+      }
+      if (method === "models.authStatus") {
+        return createApiKeyProviderData().authStatus;
+      }
+      if (method === "models.authSetApiKey") {
+        return { provider: "openai", profileId: "openai:key" };
+      }
+      if (method === "models.probe") {
+        return ++checks === 1
+          ? savedCheck.promise
+          : { provider: "openai", status: "billing", results: [] };
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await saveKey(page, "synthetic-replacement");
+    await waitForSolid(() => expect(checks).toBe(1));
+    const row = await expandProvider(page, "openai");
+    row.querySelector<HTMLButtonElement>('button[aria-label="Test access: OpenAI"]')!.click();
+    const badge = () => row.querySelector(".provider-row__status")?.textContent;
+    await waitForSolid(() => expect(badge()).toBe("Billing problem"));
+
+    savedCheck.resolve({ provider: "openai", status: "ok", results: [] });
+    await waitForSolid(() => expect(page.view.props.busy["key:openai"]).toBeUndefined());
+    expect(badge()).toBe("Billing problem");
+    expect(row.textContent).toContain("API key saved.");
+    expect(row.textContent).not.toContain("API key saved and verified.");
   });
 
   it("retains disabled defaults during a write and restores the saved selection on failure", async () => {

@@ -147,6 +147,7 @@ const codexPluginConfigSchema = z.strictObject({
       args: z.union([z.array(z.string()), z.string()]).optional(),
       url: z.string().optional(),
       authToken: SecretInputSchema.optional(),
+      tlsPeerCertificate: z.string().min(1).max(16384).optional(),
       headers: z.record(z.string(), SecretInputSchema).optional(),
       clearEnv: z.array(z.string()).optional(),
       remoteWorkspaceRoot: z.string().trim().min(1).optional(),
@@ -175,7 +176,6 @@ const codexPluginConfigSchema = z.strictObject({
         })
         .optional(),
       codeModeOnly: z.boolean().optional(),
-      loopDetectionPreToolUseRelay: z.boolean().optional(),
       requestTimeoutMs: z.number().positive().optional(),
       approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
       sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
