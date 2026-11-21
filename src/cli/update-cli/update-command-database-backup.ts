@@ -230,9 +230,11 @@ export async function discardOnlineUpdateDatabaseCapture(
         continue;
       }
       // Each store on its own: one unreadable manifest must not strand the others' schemas.
-      await discardPostgresSchemaCaptures(online.config, [exportDirectory]).catch((error) => {
-        failure ??= formatErrorMessage(error);
-      });
+      await discardPostgresSchemaCaptures(online.config, [exportDirectory]).catch(
+        (error: unknown) => {
+          failure ??= formatErrorMessage(error);
+        },
+      );
     }
     // A schema that could not be dropped keeps its manifest for recovery.
     if (!failure) {
