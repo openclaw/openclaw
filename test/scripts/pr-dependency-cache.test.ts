@@ -1082,8 +1082,19 @@ describePosix("PR cache anchor lifetime", () => {
       let waiter: ReturnType<typeof metadataWorker> | undefined;
       try {
         await holder.ready("held", signal);
-        waiter = metadataWorker(f, 'withDependencyCacheLock(cache, () => report("acquired"));');
-        await waiter.ready("contended", signal);
+        waiter = metadataWorker(
+          f,
+          `
+if (${JSON.stringify(fault)} === "missing cache") {
+  const kill = process.kill;
+  process.kill = function(pid, ...args) {
+    if (pid === ${holder.worker.pid}) { report("owner-probe"); gate(); }
+    return kill.call(process, pid, ...args);
+  };
+}
+withDependencyCacheLock(cache, () => report("acquired"));`,
+        );
+        await waiter.ready(fault === "missing cache" ? "owner-probe" : "contended", signal);
         if (fault !== "normal release") {
           renameSync(f.cache, `${f.cache}.retained`);
           if (fault === "replaced cache") {
@@ -1091,6 +1102,11 @@ describePosix("PR cache anchor lifetime", () => {
           }
         }
         holder.release();
+        if (fault === "missing cache") {
+          // Exit after the waiter reads ownership, before its real liveness probe.
+          await withinTest(holder.completed, signal);
+          waiter.release();
+        }
         if (fault === "normal release") {
           await waiter.ready("acquired", signal);
         }
