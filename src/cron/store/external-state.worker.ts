@@ -48,12 +48,13 @@ export function mutateCronExternalStateInWorker(
               Object.assign(job.state, change.statePatch);
               setCronSourceIdentity(job, sourceIdentity);
               if (change.kind === "failure") {
-                const { nowMs, cronConfig, defaultAgentId } = policy;
+                const { nowMs, cronConfig, defaultAgentId, userTimezone } = policy;
                 const state: CronJobPolicyContext = {
                   deps: {
                     nowMs: () => nowMs,
                     cronConfig,
                     defaultAgentId,
+                    resolveUserTimezone: () => userTimezone,
                     log: createCronMutationLogger(outcome.logs),
                   },
                   preparedFailureAlert: {

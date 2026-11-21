@@ -187,6 +187,7 @@ export type CronRuntimeMutationContracts = {
     snapshot: {
       nowMs: number;
       defaultAgentId?: string;
+      userTimezone?: string;
       notificationRouting: CronNotificationRouting;
       cronConfig?: CronConfig;
       ownership: CronScheduleOwnershipFacts[];
@@ -202,7 +203,12 @@ export type CronRuntimeMutationContracts = {
 
   "cron.mutateExternalState": {
     input: CronRuntimeMutationInputs["cron.mutateExternalState"];
-    snapshot: { nowMs: number; cronConfig?: CronConfig; defaultAgentId?: string };
+    snapshot: {
+      nowMs: number;
+      cronConfig?: CronConfig;
+      defaultAgentId?: string;
+      userTimezone?: string;
+    };
     outcome: {
       job?: CronJob;
       nowMs: number;
@@ -245,6 +251,8 @@ export type CronRuntimeMutationContracts = {
       receiptOnly?: boolean;
       nowMs: number;
       defaultAgentId?: string;
+      /** Notice times use this zone; the worker cannot read config. */
+      userTimezone?: string;
       cronConfig?: CronConfig;
       outcomes: CronRunFinalizationOutcome[];
     };

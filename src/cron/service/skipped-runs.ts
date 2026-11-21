@@ -42,6 +42,7 @@ export async function recordSkippedCronRuns(params: {
       snapshot: {
         nowMs: params.nowMs,
         defaultAgentId,
+        userTimezone: state.deps.resolveUserTimezone?.(),
         notificationRouting: captureCronNotificationRouting(
           defaultAgentId,
           state.deps.defaultAgentId,

@@ -88,6 +88,8 @@ async function startWatcher(params: {
     cronEnabled: true,
     log: logger,
     cronConfig: { triggers: { enabled: true } },
+    // The schedule zone is UTC; notices still show the user's own time.
+    resolveUserTimezone: () => "Asia/Kolkata",
     enqueueSystemEvent: vi.fn(),
     enqueueSessionEvent,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -148,7 +150,7 @@ describe("a scheduled trigger script that throws", () => {
         expect(h.runCronFailureRepair).toHaveBeenCalledTimes(1);
         // The plain notice reached the user first; the repair brief carries it.
         expect(h.runCronFailureRepair.mock.calls[0]?.[0].message).toContain(
-          "It is still on. Next attempt: ",
+          "It is still on. Next attempt: 2026-11-18 23:30 GMT+5:30.",
         );
       } finally {
         h.cron.stop();
