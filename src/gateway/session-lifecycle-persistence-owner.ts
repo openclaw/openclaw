@@ -72,7 +72,10 @@ export function createSessionLifecyclePersistenceOwner() {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
     });
-    const persist = prepareGatewaySessionLifecycleEvent(params);
+    const preparedPersistence = prepareGatewaySessionLifecycleEvent(params);
+    const persist = async () => {
+      await preparedPersistence();
+    };
     const key = JSON.stringify([target.agentId, target.canonicalKey]);
     const previous = pendingBySession.get(key);
     const promise = previous ? previous.then(persist, persist) : persist();

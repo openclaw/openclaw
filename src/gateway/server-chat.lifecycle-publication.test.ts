@@ -11,10 +11,12 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { abortChatRunById } from "./chat-abort.js";
-import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
+import {
+  createAgentEventTestHarness,
+  type AgentEventTestHarnessOptions,
+} from "./server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
 import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
-import type { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 // mock-isolation: Publication tests use injected persistence without operator config or SQLite.
@@ -25,9 +27,9 @@ vi.mock("./session-utils-store-worker.js", () => ({
 }));
 
 describe("single lifecycle publication", () => {
-  const persistGatewaySessionLifecycleEventMock = vi.fn<typeof persistGatewaySessionLifecycleEvent>(
-    async () => {},
-  );
+  const persistGatewaySessionLifecycleEventMock = vi.fn<
+    NonNullable<AgentEventTestHarnessOptions["persistGatewaySessionLifecycleEventForEvent"]>
+  >(async () => {});
   beforeEach(() => {
     resetAgentEventsForTest();
     persistGatewaySessionLifecycleEventMock.mockClear();

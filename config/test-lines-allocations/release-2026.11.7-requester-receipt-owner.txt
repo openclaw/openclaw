@@ -1,0 +1,3 @@
+26
+# Requester receipt ownership: extend existing real lifecycle/deletion regressions
+# for recorded versus retained outcomes, retaining rollback/replay failure assertions.

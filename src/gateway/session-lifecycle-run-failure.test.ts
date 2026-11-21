@@ -240,8 +240,9 @@ describe("durable pre-reply run failure", () => {
           let persistence: Promise<void> | undefined;
           const h = createAgentEventTestHarness({
             lifecycleErrorRetryGraceMs: 0,
-            persistGatewaySessionLifecycleEventForEvent: (params) =>
-              persistGatewaySessionLifecycleEvent({ ...params, ...target }),
+            persistGatewaySessionLifecycleEventForEvent: async (params) => {
+              await persistGatewaySessionLifecycleEvent({ ...params, ...target });
+            },
             trackTrackedRunTerminalPersistence: (params) => {
               persistence = params.persistence;
             },
@@ -370,8 +371,9 @@ describe("durable pre-reply run failure", () => {
       let persistence: Promise<void> | undefined;
       const h = createAgentEventTestHarness({
         lifecycleErrorRetryGraceMs: 0,
-        persistGatewaySessionLifecycleEventForEvent: (params) =>
-          persistGatewaySessionLifecycleEvent({ ...params, ...target }),
+        persistGatewaySessionLifecycleEventForEvent: async (params) => {
+          await persistGatewaySessionLifecycleEvent({ ...params, ...target });
+        },
         trackTrackedRunTerminalPersistence: (params) => {
           persistence = params.persistence;
         },
@@ -536,7 +538,7 @@ describe("durable pre-reply run failure", () => {
         sessionKey: "agent:main:requester",
         sessionId: "requester-session",
       });
-      await withOwnedSessionTranscriptWrites(
+      const persistence = await withOwnedSessionTranscriptWrites(
         {
           sessionTarget: { ...requester, expectedWriterRunId: "requester-run" },
           assertCommitAllowed: () => {
@@ -546,6 +548,7 @@ describe("durable pre-reply run failure", () => {
         },
         () => persistGatewaySessionLifecycleEvent({ ...target, event }),
       );
+      expect(persistence).toBe("failure-notice-recorded");
       const pausedGoal = loadSessionEntry(target)?.goal;
       expect(pausedGoal).toMatchObject({
         id: "failure-goal",
@@ -622,7 +625,7 @@ describe("durable pre-reply run failure", () => {
       providerStarted: false,
     },
   ] as const)(
-    "records a run-timeout kill delivered as an aborted $phase event",
+    "records a run-timeout kill delivered as an aborted event (case %#)",
     async ({ phase, error: timeoutError, reason, ...timeoutFields }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
@@ -742,7 +745,7 @@ describe("durable pre-reply run failure", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       await seed();
-      await persistGatewaySessionLifecycleEvent({
+      const persistence = await persistGatewaySessionLifecycleEvent({
         ...target,
         event: {
           ...event,
@@ -751,6 +754,7 @@ describe("durable pre-reply run failure", () => {
           data: { ...event.data, startedAt: 500 },
         },
       });
+      expect(persistence).toBeUndefined();
       expect(await reports()).toEqual([]);
     });
   });

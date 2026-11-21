@@ -45,6 +45,7 @@ import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
 import { createSubscriptionTestFixture } from "../server-runtime-subscriptions.test-support.js";
+import * as lifecycleState from "../session-lifecycle-state.js";
 import { withAgentTerminalOpenAdmission } from "../terminal/open-admission.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import {
@@ -116,6 +117,22 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
       const entry = registration.entry;
       registration.initializeTiming();
       expect(registration.markExecutionStarted()).toBe(true);
+      let retainedOutcome: Awaited<
+        ReturnType<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+      > = undefined;
+      const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
+      vi.spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent").mockImplementation(
+        (params) => {
+          const persist = prepareLifecycle(params);
+          return async () => {
+            const result = await persist();
+            if (params.event.runId === runId && params.event.data?.phase === "error") {
+              retainedOutcome = result;
+            }
+            return result;
+          };
+        },
+      );
       const aborted = createDeferred();
       const terminalSettled = createDeferred();
       const finishExecution = createDeferred();
@@ -144,6 +161,7 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
       try {
         await awaitGateBeforeSettlement(terminalSettled.promise, deleting, "cancellation skipped");
         expect(terminalPersistence).toBeInstanceOf(Promise);
+        expect(retainedOutcome).toBe("terminal-retained");
         expect(getRpcSourceForGateway(runId, getGatewayContextResolver(entry.input), target)).toBe(
           entry,
         );

@@ -178,7 +178,7 @@ it.for([
         }
         return () => {
           const committed = persist();
-          void committed.then(startCommitted.resolve, startCommitted.reject);
+          void committed.then(() => startCommitted.resolve(), startCommitted.reject);
           return committed;
         };
       });

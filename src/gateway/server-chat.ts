@@ -166,7 +166,9 @@ export type AgentEventHandlerOptions = {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   loadGatewaySessionLifecycleSnapshotForEvent?: SessionEventSnapshotDependencies["loadGatewaySessionLifecycleSnapshotForEvent"];
   getSessionRowProjection?: () => SessionRowProjection | undefined;
-  persistGatewaySessionLifecycleEventForEvent?: typeof persistGatewaySessionLifecycleEvent;
+  persistGatewaySessionLifecycleEventForEvent?: (
+    params: Parameters<typeof persistGatewaySessionLifecycleEvent>[0],
+  ) => Promise<void>;
   lifecycleErrorRetryGraceMs?: number;
   delegateChatError?: (runId: string) => boolean;
   clearTrackedActiveRun?: (params: {
@@ -236,7 +238,9 @@ export function createAgentEventHandler({
   sessionMessageSubscribers,
   loadGatewaySessionLifecycleSnapshotForEvent = () => ({ row: null }),
   getSessionRowProjection,
-  persistGatewaySessionLifecycleEventForEvent = persistGatewaySessionLifecycleEvent,
+  persistGatewaySessionLifecycleEventForEvent = async (params) => {
+    await persistGatewaySessionLifecycleEvent(params);
+  },
   lifecycleErrorRetryGraceMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   delegateChatError = () => false,
   clearTrackedActiveRun,

@@ -131,12 +131,12 @@ it("persists current-run timing after pre-start failure and clears it on the nex
   let persistence = Promise.resolve();
   const unsubscribe = onAgentEvent((event) => {
     if (event.sessionKey === target.sessionKey && event.stream === "lifecycle") {
-      persistence = persistence.then(() =>
-        lifecycleState.persistGatewaySessionLifecycleEvent({
+      persistence = persistence.then(async () => {
+        await lifecycleState.persistGatewaySessionLifecycleEvent({
           sessionKey: target.sessionKey,
           event,
-        }),
-      );
+        });
+      });
     }
   });
   const createBackstop = (runId: string) =>
@@ -371,7 +371,7 @@ it.each(["success", "failed-write"])(
           return () => {
             const persistence = persist();
             if (params.event.runId === runId && params.event.data?.phase === "start") {
-              startPersisted.resolve(persistence);
+              startPersisted.resolve(persistence.then(() => undefined));
             }
             return persistence;
           };

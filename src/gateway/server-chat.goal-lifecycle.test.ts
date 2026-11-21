@@ -119,9 +119,9 @@ describe("agent event goal lifecycle", () => {
         ...read(),
         key: sessionKey,
       }));
-      persistGatewaySessionLifecycleEventMock.mockImplementation(
-        persistGatewaySessionLifecycleEvent,
-      );
+      persistGatewaySessionLifecycleEventMock.mockImplementation(async (params) => {
+        await persistGatewaySessionLifecycleEvent(params);
+      });
       const { broadcast, broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
         resolveSessionKeyForRun: () => sessionKey,
       });

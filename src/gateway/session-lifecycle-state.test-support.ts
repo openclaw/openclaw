@@ -15,7 +15,7 @@ export function createPreparedLifecycleWriteTracker() {
   const writes: Promise<void>[] = [];
   return {
     accepted: accepted.promise,
-    track(persist: () => Promise<void>) {
+    track(persist: () => ReturnType<typeof persistGatewaySessionLifecycleEvent>) {
       const settled = createDeferred();
       writes.push(settled.promise);
       // Observe early rejection while retaining it for drain's error propagation.

@@ -39,14 +39,19 @@ type GatewaySessionLifecycleEventParams = {
   };
 };
 
+// Retention transfers ownership to deletion; it does not certify a committed receipt.
+type LifecyclePersistenceOutcome = void | "failure-notice-recorded" | "terminal-retained";
+
 export async function persistGatewaySessionLifecycleEvent(
   params: GatewaySessionLifecycleEventParams,
-): Promise<void> {
-  await runOutsideAsyncWorkScope(() => prepareGatewaySessionLifecycleEvent(params)());
+): Promise<LifecyclePersistenceOutcome> {
+  return runOutsideAsyncWorkScope(() => prepareGatewaySessionLifecycleEvent(params)());
 }
 
 /** Capture lookup custody before the lifecycle owner waits for an earlier event. */
-export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecycleEventParams) {
+export function prepareGatewaySessionLifecycleEvent(
+  params: GatewaySessionLifecycleEventParams,
+): () => Promise<LifecyclePersistenceOutcome> {
   const phase = resolveLifecyclePhase(params.event);
   if (!phase) {
     return async () => {};
@@ -62,7 +67,7 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   return async () => {
     const sessionEntry = await prepared;
     try {
-      await persistPreparedGatewaySessionLifecycleEvent(params, phase, sessionEntry);
+      return await persistPreparedGatewaySessionLifecycleEvent(params, phase, sessionEntry);
     } catch (error) {
       // Drain settlement transfers the outcome to deletion, not to a successful write.
       if (
@@ -76,17 +81,19 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
               path: sessionEntry.storePath,
             },
             // The run has drained. Deletion now owns replay of this captured outcome.
-            persist: (assertCommitAllowed) =>
-              persistPreparedGatewaySessionLifecycleEvent(
+            persist: async (assertCommitAllowed) => {
+              await persistPreparedGatewaySessionLifecycleEvent(
                 { ...params, assertCommitAllowed },
                 phase,
                 sessionEntry,
-              ),
+              );
+            },
           },
         )
       ) {
         throw error;
       }
+      return "terminal-retained";
     }
   };
 }
@@ -95,7 +102,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   params: GatewaySessionLifecycleEventParams,
   phase: LifecyclePhase,
   sessionEntry: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-): Promise<void> {
+): Promise<LifecyclePersistenceOutcome> {
   if (!sessionEntry.entry) {
     return;
   }
@@ -227,5 +234,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       },
       () => recordGatewaySessionRunFailure(receipt),
     );
+    return "failure-notice-recorded";
   }
 }

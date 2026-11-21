@@ -247,9 +247,10 @@ export function createRequesterWakeSettlement(params: {
             outcome?.error ?? "Child completion could not continue the yielded request.";
           const notice = renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed");
           const runId = admittedWake?.requesterRunId;
+          let failureNoticeOwned = false;
           if (runId) {
             // A newer turn, reset, or Stop cannot inherit the failed batch's terminal.
-            await persistGatewaySessionLifecycleEvent({
+            const persistence = await persistGatewaySessionLifecycleEvent({
               sessionKey: requester.requesterSessionKey,
               agentId: requester.requesterAgentId,
               expectedWriter: {
@@ -265,13 +266,17 @@ export function createRequesterWakeSettlement(params: {
                 data: { phase: "error", error, errorNotice: notice },
               },
             });
+            failureNoticeOwned =
+              persistence === "failure-notice-recorded" || persistence === "terminal-retained";
           }
           // The failed partition belongs in the current chat, but never terminates its new writer.
-          const current = await readSessionEntryReadOnlyInWorker({
-            sessionKey: requester.requesterSessionKey,
-            agentId: requester.requesterAgentId,
-            storePath: requester.requesterStorePath,
-          });
+          const current = failureNoticeOwned
+            ? undefined
+            : await readSessionEntryReadOnlyInWorker({
+                sessionKey: requester.requesterSessionKey,
+                agentId: requester.requesterAgentId,
+                storePath: requester.requesterStorePath,
+              });
           if (current?.sessionId && current.status !== "killed") {
             const { batchKey } = buildRequesterSettleWakeIdentity({
               requesterSessionKey: requester.requesterSessionKey,

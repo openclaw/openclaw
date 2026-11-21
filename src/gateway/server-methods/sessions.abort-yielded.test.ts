@@ -131,7 +131,7 @@ it.each([
   expect(resolveActiveEmbeddedRunOwner(parentId)).toBeUndefined();
   const captured = expectDefined(loadSessionEntry(target), "seeded parent");
   const replacement = { ...captured, lifecycleRevision: "new-incarnation" };
-  let replacementPersistence: Promise<void> | undefined;
+  let replacementPersistence: ReturnType<typeof persistGatewaySessionLifecycleEvent> | undefined;
   const childAbort = vi.fn(() => {
     // The child signal follows the parent snapshot; replace it before Stop can persist.
     if (race === "new turn") {
