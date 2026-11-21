@@ -237,6 +237,15 @@ Every failed apply ends the campaign so the UI does not remain on
 **Updating…**. Failures after a managed-service handoff starts are also recorded
 in the restart sentinel and surface after the Gateway returns.
 
+Two identical activation failures of the same candidate pause automatic updates
+before a new run starts. The counted checks are `openclaw doctor`,
+`post-update verification`, and `activated-gateway-startup`, and both `failed`
+and `rolled-back` runs count. The Gateway logs `Warning: Automatic updates
+paused after repeated activation failure.` Inspect the failure with
+`openclaw update status`, fix the cause, and run `openclaw update`; a new
+candidate version also resumes automatic updates. Installed updaters through
+`v2026.11.5` use the earlier candidate-Doctor pause instead.
+
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
 `OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
