@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { readServiceChildMessage, sendServiceChildMessage } from "./service-child-protocol.js";
+import { sendServiceChildMessage } from "./service-child-protocol.js";
 import type { ProcessCleanupResult } from "./types.js";
 
 /** The outside subreaper, not its command anchor, certifies a strict Linux tree. */
@@ -22,13 +22,6 @@ export function retainServiceChildNativeCustody(params: {
       params.onLost("custody owner exited without kernel descendant extinction");
     }
   };
-  params.child.on("message", (raw: unknown) => {
-    const message = readServiceChildMessage(raw);
-    if (message?.type === "custody-closed" && message.generation === params.generation) {
-      confirmed = true;
-      closed.resolve();
-    }
-  });
   params.child.once("exit", () => {
     exited = true;
     finish();
@@ -38,6 +31,10 @@ export function retainServiceChildNativeCustody(params: {
     finish();
   });
   return {
+    confirm() {
+      confirmed = true;
+      closed.resolve();
+    },
     get confirmed() {
       return confirmed;
     },

@@ -373,9 +373,7 @@ export async function createServiceChildRelayAdapter(
       if (!closingReceipt) {
         state = "closing";
         if (!rootResult) {
-          resultError ??= new Error(
-            "service child anchor exited before reporting the command result",
-          );
+          resultError ??= new Error("service child anchor exited before its command result");
           startup.reject(resultError);
           settleWait();
         }
@@ -598,7 +596,9 @@ export async function createServiceChildRelayAdapter(
     if (message.generation !== generation) {
       return;
     }
-    if (message.type === "relay-error") {
+    if (message.type === "custody-closed") {
+      custody?.confirm();
+    } else if (message.type === "relay-error") {
       if (!retirement.recordSignalError(new Error(message.error))) {
         loseIdentity(message.error);
       }

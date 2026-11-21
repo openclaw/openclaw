@@ -254,6 +254,7 @@ it.skipIf(process.platform === "win32")(
           path.join(root, "process-owner"),
           "serviceChildRelay",
           {
+            serviceChildRelay: resolveRuntimeProcessEntrypointUrl("serviceChildRelay"),
             serviceChildGroupAnchor: resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor"),
           },
         );
