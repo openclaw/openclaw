@@ -289,17 +289,21 @@ suite.define(() => {
         const position = await carol.boundingBox();
         const snapshot = await evaluateControlUiContext(
           page,
-          ({ gateway }) => gateway.snapshot.hello?.snapshot,
+          ({ gateway: connection }) => connection.snapshot.hello?.snapshot,
         );
         const presence = readPresenceEntries(snapshot);
         expect(presence).toHaveLength(2);
         const after = await gateway.deferNext("users.list");
+        const ada = presence?.find((entry) => entry.user?.id === "ada");
+        if (!ada?.user) {
+          throw new Error("Expected Ada in the presence fixture");
+        }
+        const avatarUpdate = {
+          ...ada,
+          user: { ...ada.user, avatarUrl: "/api/users/ada/avatar?v=2" },
+        };
         await gateway.emitGatewayEvent("presence", {
-          presence: presence?.map((entry) =>
-            entry.user?.id === "ada"
-              ? { ...entry, user: { ...entry.user, avatarUrl: "/api/users/ada/avatar?v=2" } }
-              : entry,
-          ),
+          presence: presence?.map((entry) => (entry === ada ? avatarUpdate : entry)),
         });
         await gateway.waitForRequest("users.list", { after });
         const busy = page.locator('.sidebar-online__list[aria-busy="true"]');
