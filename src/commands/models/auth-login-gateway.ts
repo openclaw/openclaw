@@ -78,12 +78,20 @@ export async function readGatewayLoginParams(
   return { sessionId, authChoice, agentId: opts.agent };
 }
 
+/** Sanitize each line on its own so the Gateway's authored line breaks survive rendering. */
+function sanitizeLoginMessage(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => sanitizeTerminalText(line))
+    .join("\n");
+}
+
 async function answerLoginStep(
   step: WizardStep,
   prompter: WizardPrompter,
   signal: AbortSignal,
 ): Promise<unknown> {
-  const message = sanitizeTerminalText(step.message ?? step.title ?? "Continue");
+  const message = sanitizeLoginMessage(step.message ?? step.title ?? "Continue");
   if (step.externalUrl) {
     await prompter.note(sanitizeTerminalText(step.externalUrl), "Open this URL to continue");
   }
