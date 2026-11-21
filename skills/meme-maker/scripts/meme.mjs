@@ -297,10 +297,18 @@ async function renderLocal(template, texts, flags) {
     try {
       const { chromium } = await import("playwright-core");
       const executablePath = chromium.executablePath();
-      browser = await chromium.launch({
-        headless: true,
-        ...(existsSync(executablePath) ? { executablePath } : { channel: "chrome" }),
-      });
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          ...(existsSync(executablePath) ? { executablePath } : { channel: "chrome" }),
+        });
+      } catch (error) {
+        const systemChromium =
+          process.platform === "linux" &&
+          ["/usr/bin/chromium", "/usr/bin/chromium-browser"].find(existsSync);
+        if (!systemChromium) throw error;
+        browser = await chromium.launch({ headless: true, executablePath: systemChromium });
+      }
     } catch {
       // Keep this message free of package-install advice: agents follow it
       // literally and can corrupt pnpm-managed OpenClaw installs (see #109405).
