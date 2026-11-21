@@ -100,6 +100,10 @@ final class WebChatManager {
     @ObservationIgnored private var fleetShutdownTask: Task<Void, Never>?
     private var gatewayWindows: [UUID: GatewayWindowInstance] = [:]
     private var gatewayWindowOrder: [UUID] = []
+    // Retain each window's Gateway-bound composer, attachments and pending sends
+    // when switching away, just as hiding a window retains its content.
+    private var retainedGatewayChats: [UUID: [DashboardGatewayTarget: GatewayWindowInstance]] = [:]
+    @ObservationIgnored private var gatewaySwitchTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var unavailableProfileIDs: Set<String> = []
     @ObservationIgnored private(set) var sessionObserverOwners = WebChatSessionObserverVisibilityOwners()
     @ObservationIgnored private var sessionObserverMonitors: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -216,10 +220,25 @@ final class WebChatManager {
     #endif
 
     @discardableResult
+    func switchGateway(
+        _ target: DashboardGatewayTarget,
+        in source: WebChatSwiftUIWindowController) -> Task<Void, Never>?
+    {
+        guard let (windowID, instance) = self.gatewayWindows.first(where: { $0.value.controller === source }),
+              source.isWindowOpen else { return nil }
+        self.gatewaySwitchTasks.removeValue(forKey: windowID)?.cancel()
+        guard instance.target != target else { return nil }
+        let task = self.openGatewayWindow(for: target, replacing: source)
+        self.gatewaySwitchTasks[windowID] = task
+        return task
+    }
+
+    @discardableResult
     func openGatewayWindow(
         for target: DashboardGatewayTarget,
         newWindow: Bool = false,
         route: WebChatRoute? = nil,
+        replacing source: WebChatSwiftUIWindowController? = nil,
         sourceIsCurrent: @escaping () -> Bool = { true }) -> Task<Void, Never>
     {
         if target == .primary {
@@ -228,10 +247,16 @@ final class WebChatManager {
         }
         let generation = self.windowGeneration
         let primaryGeneration = self.primaryGeneration
+        let sourceWindowID = source.flatMap { source in
+            self.gatewayWindows.first { $0.value.controller === source }?.key
+        }
         return Task { @MainActor [weak self] in
             guard let self, generation == self.windowGeneration,
                   target != .primary || primaryGeneration == self.primaryGeneration
             else { return }
+            defer {
+                if !Task.isCancelled, let sourceWindowID { self.gatewaySwitchTasks[sourceWindowID] = nil }
+            }
             do {
                 let name: String
                 switch target {
@@ -248,11 +273,13 @@ final class WebChatManager {
                     name: name,
                     newWindow: newWindow,
                     requestedRoute: route,
+                    replacing: source,
                     sourceIsCurrent: sourceIsCurrent)
             } catch is CancellationError {
                 // Owner retirement cancels the pending open.
             } catch {
-                guard generation == self.windowGeneration else { return }
+                guard !Task.isCancelled, generation == self.windowGeneration,
+                      source == nil || source?.isWindowOpen == true else { return }
                 Self.showProfileError(error, message: "Could Not Open Gateway Window")
             }
         }
@@ -263,6 +290,7 @@ final class WebChatManager {
         name: String,
         newWindow: Bool,
         requestedRoute: WebChatRoute?,
+        replacing source: WebChatSwiftUIWindowController?,
         sourceIsCurrent: () -> Bool) async throws
     {
         let generation = self.windowGeneration
@@ -271,7 +299,7 @@ final class WebChatManager {
         await self.fleetShutdownTask?.value
         try self.requireCurrentWindowRequest(generation, target: target)
         guard target != .primary || primaryGeneration == self.primaryGeneration else { throw CancellationError() }
-        if !newWindow, self.showExistingWindow(for: target) { return }
+        if source == nil, !newWindow, self.showExistingWindow(for: target) { return }
         let connection: GatewayConnection
         let chatStoreID: String?
         let autosaveID: String
@@ -304,9 +332,40 @@ final class WebChatManager {
         }
         // Another admission can finish while connection setup is suspended.
         // Recheck at the presentation boundary to keep ordinary opens single-window.
-        if !newWindow, self.showExistingWindow(for: target) { return }
+        if source == nil, !newWindow, self.showExistingWindow(for: target) { return }
         guard sourceIsCurrent() else { throw CancellationError() }
         let route = requestedRoute ?? WebChatRoute(sessionKey: resolved.sessionKey, agentID: nil)
+        if let source {
+            guard source.isWindowOpen,
+                  let (windowID, previous) = self.gatewayWindows.first(where: { $0.value.controller === source }),
+                  let window = source.detachWindowForGatewaySwitch() else { throw CancellationError() }
+            self.retainedGatewayChats[windowID, default: [:]][previous.target] = previous
+            let retained = self.retainedGatewayChats[windowID]?.removeValue(forKey: target)
+            let controller: WebChatSwiftUIWindowController
+            if let retained, retained.connection === connection {
+                controller = retained.controller
+                controller.attachWindow(window)
+            } else {
+                retained?.controller.close()
+                controller = WebChatSwiftUIWindowController(
+                    sessionKey: route.sessionKey,
+                    agentID: route.agentID,
+                    connection: connection,
+                    gatewayID: chatStoreID,
+                    gatewayTarget: target,
+                    windowTitle: target == .primary ? name : "\(name) — OpenClaw",
+                    reusingWindow: window)
+            }
+            self.install(
+                controller,
+                target: target,
+                route: controller.currentRoute,
+                connection: connection,
+                windowID: windowID,
+                cascade: false)
+            self.gatewaySwitchTasks[windowID] = nil
+            return
+        }
         if target == .primary {
             self.presentChat(sessionKey: route.sessionKey, agentID: route.agentID, draft: nil, newWindow: newWindow)
             return
@@ -343,14 +402,20 @@ final class WebChatManager {
         _ controller: WebChatSwiftUIWindowController,
         target: DashboardGatewayTarget,
         route: WebChatRoute,
-        connection: GatewayConnection?)
+        connection: GatewayConnection?,
+        windowID: UUID = UUID(),
+        cascade: Bool = true)
     {
-        let windowID = UUID()
         let previousController = self.gatewayWindowOrder.reversed().lazy
             .compactMap { self.gatewayWindows[$0] }
             .first { $0.target == target }?.controller
-        controller.onBecameKey = { [weak self] in
-            guard let self, let instance = self.gatewayWindows[windowID] else { return }
+        controller.gatewaySelection.select = { [weak self, weak controller] target in
+            guard let self, let controller else { return nil }
+            return self.switchGateway(target, in: controller)
+        }
+        controller.onBecameKey = { [weak self, weak controller] in
+            guard let self, let instance = self.gatewayWindows[windowID],
+                  instance.controller === controller else { return }
             self.keyChatWindowID = instance.controller.isKeyChatWindow ? windowID : nil
             self.gatewayWindowOrder.removeAll { $0 == windowID }
             self.gatewayWindowOrder.append(windowID)
@@ -358,12 +423,14 @@ final class WebChatManager {
             self.selection.select(instance.target)
             if instance.target == .primary { self.currentPrimaryWindowID = windowID }
         }
-        controller.onResignedKey = { [weak self] in
-            if self?.keyChatWindowID == windowID { self?.keyChatWindowID = nil }
+        controller.onResignedKey = { [weak self, weak controller] in
+            guard let self, self.gatewayWindows[windowID]?.controller === controller else { return }
+            if self.keyChatWindowID == windowID { self.keyChatWindowID = nil }
         }
         controller.onVisibilityChanged = { [weak self, weak controller] visible in
             guard let self, let controller else { return }
-            if !visible, self.keyChatWindowID == windowID { self.keyChatWindowID = nil }
+            if !visible, self.keyChatWindowID == windowID,
+               self.gatewayWindows[windowID]?.controller === controller { self.keyChatWindowID = nil }
             if let connection { self.setSessionObserverVisible(visible, owner: controller, connection: connection) }
             self.updateWindowVisibility()
         }
@@ -371,6 +438,11 @@ final class WebChatManager {
             guard let self, let controller else { return }
             if let connection { self.setSessionObserverVisible(false, owner: controller, connection: connection) }
             guard self.gatewayWindows[windowID]?.controller === controller else { return }
+            self.gatewaySwitchTasks.removeValue(forKey: windowID)?.cancel()
+            let retained = self.retainedGatewayChats.removeValue(forKey: windowID) ?? [:]
+            for content in retained.values {
+                content.controller.close()
+            }
             if target == .primary { self.cancelPrimaryOpen() }
             self.gatewayWindows.removeValue(forKey: windowID)
             self.gatewayWindowOrder.removeAll { $0 == windowID }
@@ -384,18 +456,26 @@ final class WebChatManager {
             }
             self.updateWindowVisibility()
         }
-        controller.onSessionTargetChanged = { [weak self] target in
+        controller.onSessionTargetChanged = { [weak self, weak controller] target in
             // Only the current primary window can supply Mac-wide voice/session
             // ownership. Saved Gateways and background windows retain their own routes.
-            self?.gatewayWindows[windowID]?.route = WebChatRoute(sessionKey: target.sessionKey, agentID: target.agentID)
+            guard let self, self.gatewayWindows[windowID]?.controller === controller else { return }
+            self.gatewayWindows[windowID]?.route = WebChatRoute(sessionKey: target.sessionKey, agentID: target.agentID)
+        }
+        if self.currentPrimaryWindowID == windowID, target != .primary {
+            self.currentPrimaryWindowID = self.gatewayWindowOrder.reversed().first {
+                $0 != windowID && self.gatewayWindows[$0]?.target == .primary &&
+                    self.gatewayWindows[$0]?.controller.isWindowOpen == true
+            }
         }
         self.gatewayWindows[windowID] = GatewayWindowInstance(
             target: target,
             route: route,
             connection: connection,
             controller: controller)
+        self.gatewayWindowOrder.removeAll { $0 == windowID }
         self.gatewayWindowOrder.append(windowID)
-        controller.cascade(from: previousController)
+        if cascade { controller.cascade(from: previousController) }
         controller.show()
     }
 
@@ -408,6 +488,10 @@ final class WebChatManager {
 
     func hideWindows() {
         self.windowGeneration &+= 1
+        for task in self.gatewaySwitchTasks.values {
+            task.cancel()
+        }
+        self.gatewaySwitchTasks.removeAll()
         self.cancelPrimaryOpen()
         let order = self.gatewayWindowOrder
         let target = self.frontmostGatewayTarget
@@ -440,7 +524,8 @@ final class WebChatManager {
 
     var openProfileIDs: Set<String> {
         // Hidden windows still retain their saved route until the window owner closes them.
-        Set(self.gatewayWindows.values.compactMap {
+        let contents = Array(self.gatewayWindows.values) + self.retainedGatewayChats.values.flatMap(\.values)
+        return Set(contents.compactMap {
             guard case let .profile(id) = $0.target else { return nil }
             return id
         })
@@ -458,10 +543,19 @@ final class WebChatManager {
     private func closeGatewayWindows(target: DashboardGatewayTarget) {
         // Fence in-flight opens before retiring windows or their connection.
         self.windowGeneration &+= 1
+        self.closeRetainedGatewayChats(target: target)
         let instances = self.gatewayWindows.values.filter { $0.target == target }
         for instance in instances {
             instance.controller.close()
             if let connection = instance.connection { self.retireSessionObserver(connection: connection) }
+        }
+    }
+
+    private func closeRetainedGatewayChats(target: DashboardGatewayTarget) {
+        for windowID in Array(self.retainedGatewayChats.keys) {
+            guard let retained = self.retainedGatewayChats[windowID]?.removeValue(forKey: target) else { continue }
+            retained.controller.close()
+            if let connection = retained.connection { self.retireSessionObserver(connection: connection) }
         }
     }
 
@@ -485,6 +579,7 @@ final class WebChatManager {
 
     func resetPrimaryConnections() {
         self.cancelPrimaryOpen()
+        self.closeRetainedGatewayChats(target: .primary)
         self.currentPrimaryWindowID = nil
         for instance in self.gatewayWindows.values.filter({ $0.target == .primary }) {
             instance.controller.close()

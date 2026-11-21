@@ -2,10 +2,16 @@ import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
+@MainActor
+final class MacGatewaySelectionAction {
+    var select: ((DashboardGatewayTarget) -> Task<Void, Never>?)?
+}
+
 /// Adapts the existing menu catalog; the window's admitted target owns every route.
 struct MacSidebarIdentityMenu: ViewModifier {
     let target: DashboardGatewayTarget?
     let healthy: Bool
+    let selection: MacGatewaySelectionAction
 
     func body(content: Content) -> some View {
         let gateways = DashboardGatewayMenuModel.items(from: DashboardManager.shared.gatewayEntries)
@@ -22,7 +28,7 @@ struct MacSidebarIdentityMenu: ViewModifier {
                             Toggle(isOn: Binding(
                                 get: { gateway.target == target },
                                 set: { selected in
-                                    if selected { AppNavigationActions.openGateway(gateway.target) }
+                                    if selected { _ = self.selection.select?(gateway.target) }
                                 })) {
                                     Label {
                                         Text(verbatim: gateway.isPrimary
