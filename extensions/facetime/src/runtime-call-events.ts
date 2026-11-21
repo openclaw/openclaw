@@ -161,6 +161,14 @@ export function createFaceTimeCallEventHandler(params: {
       ) {
         throw new Error("FaceTime call closed before answer");
       }
+      await call.talk?.readyForAudio();
+      if (
+        call.lifecycleAbort.signal.aborted ||
+        params.calls.active !== call ||
+        call.carrierHangupPending
+      ) {
+        throw new Error("FaceTime call closed before answer");
+      }
       const generation = call.beginAnswering();
       answerAttempted = true;
       const answerResult = await call.runCarrierCommand({
