@@ -1622,6 +1622,9 @@ describe("Docker scheduler trusted harness execution", () => {
       "timeout",
       "daemon-query-failure",
       "publication-directory-failure",
+      "log-write-failure",
+      "log-close-failure",
+      "sibling-shutdown-failure",
     ].flatMap((mode) =>
       ["package-installed-recovery-partial-previous", "installed-terminal"].map((name) => ({
         mode,
@@ -1633,6 +1636,8 @@ describe("Docker scheduler trusted harness execution", () => {
     { timeout: 30_000 },
     async ({ mode, name }, { signal }) => {
       const fixture = setupFixture("split", false, true);
+      const siblingFailure = mode === "sibling-shutdown-failure";
+      const cleanupClock = siblingFailure ? observeCleanupClock() : undefined;
       const cid = "a".repeat(64);
       const published = path.join(fixture.root, "published");
       const producer = spawn(
@@ -1736,6 +1741,7 @@ if (${JSON.stringify(mode)} === 'timeout') {
 const producerLane = mainLanes.find(lane => lane.name === ${JSON.stringify(name)});
 producerLane.command = ${JSON.stringify(`exec ${quote(process.execPath)} ${quote(marker)}`)};
 producerLane.timeoutMs = 1000;
+${siblingFailure ? `mainLanes.find(lane => lane.name === 'live-models').command = ${JSON.stringify(`exec ${quote(process.execPath)} -e 'setInterval(() => {}, 1000)'`)};` : ""}
 `,
         );
         writeFileSync(
@@ -1751,22 +1757,83 @@ fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence
           fixture,
           signal,
           {
-            OPENCLAW_DOCKER_ALL_LANES: name,
+            OPENCLAW_DOCKER_ALL_LANES: siblingFailure ? `${name},live-models` : name,
             PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+            ...(siblingFailure
+              ? { ...parallelEnv, OPENCLAW_DOCKER_ALL_START_STAGGER_MS: "0" }
+              : {}),
           },
           // The regression needs real SIGKILL/group settlement, not a ten-second grace wait.
-          mode === "timeout"
+          (mode === "timeout"
             ? `
             const nativeTimeout = globalThis.setTimeout;
             globalThis.setTimeout = (callback, ms, ...args) => nativeTimeout(callback, ms === 10_000 ? 1 : ms, ...args);
           `
-            : "",
+            : "") +
+            (mode.startsWith("log-") || siblingFailure
+              ? `
+              const mode = ${JSON.stringify(mode)}, siblingFailure = ${siblingFailure};
+              const nativeCreate = fs.createWriteStream.bind(fs);
+              const nativeWrite = fs.write.bind(fs), nativeClose = fs.close.bind(fs);
+              const nativeSpawn = cp.spawn, nativeKill = process.kill.bind(process);
+              let injected = false, siblingPid, pending;
+              cp.spawn = (...args) => {
+                const child = nativeSpawn(...args);
+                if (args[0] === 'bash' && args[2]?.env?.OPENCLAW_DOCKER_ALL_LANE_NAME === 'live-models') {
+                  siblingPid = child.pid;
+                  if (pending) queueMicrotask(pending);
+                }
+                return child;
+              };
+              process.kill = (pid, signal) => {
+                if (siblingFailure && signal === 0 && pid === -siblingPid) {
+                  throw Object.assign(new Error('sibling cleanup probe denied'), { code: 'EPERM' });
+                }
+                return nativeKill(pid, signal);
+              };
+              fs.createWriteStream = (file, options) => {
+                if (!String(file).endsWith(${JSON.stringify(`/${name}.log`)})) return nativeCreate(file, options);
+                return nativeCreate(file, { ...options, fs: {
+                  open: fs.open.bind(fs),
+                  write(fd, buffer, offset, length, position, callback) {
+                    const fail = !injected && mode !== 'log-close-failure' &&
+                      buffer.toString('utf8', offset, offset + length).includes('finished:');
+                    if (fail) injected = true;
+                    nativeWrite(fd, buffer, offset, length, position, (error, bytes) => {
+                      const done = () => callback(error || (fail ? new Error('owned producer log write failed') : null), bytes);
+                      if (fail && siblingFailure && !siblingPid) pending = done;
+                      else done();
+                    });
+                  },
+                  close(fd, callback) {
+                    const fail = !injected && mode === 'log-close-failure';
+                    if (fail) injected = true;
+                    nativeClose(fd, error => callback(error || (fail ? new Error('owned producer log close failed') : null)));
+                  },
+                } });
+              };
+              syncBuiltinESMExports();
+              ${cleanupClock?.probe ?? ""}
+              `
+              : ""),
         );
         await withScheduler(
           owner,
           async () => {
-            await expectExit(owner, 1);
-            const lane = readJson(path.join(fixture.root, "logs/summary.json")).lanes[0];
+            await cleanupClock?.advance(owner);
+            await expectExit(owner, siblingFailure ? 2 : 1);
+            const summary = readJson(path.join(fixture.root, "logs/summary.json"));
+            const lane = summary.lanes.find((entry: { name: string }) => entry.name === name);
+            expect(summary.status).toBe("failed");
+            if (mode.startsWith("log-") || siblingFailure) {
+              expect(owner.stderr()).toContain(
+                mode === "log-close-failure"
+                  ? "owned producer log close failed"
+                  : "owned producer log write failed",
+              );
+            }
+            if (siblingFailure)
+              expect(owner.stderr()).toContain("Docker lane process group did not stop");
             expect(lane.status).toBe(mode === "timeout" ? 128 : 7);
             expect(lane.timedOut).toBe(mode === "timeout");
             expect(
@@ -1803,6 +1870,51 @@ fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence
         }
         await producerClosed;
       }
+    },
+  );
+
+  posixIt(
+    "records preparation interrupted before the installed producer launches as skipped",
+    { timeout: 30_000 },
+    async ({ signal }) => {
+      const fixture = setupFixture("split", false, true);
+      const launches = path.join(fixture.root, "producer-launches.json");
+      const owner = startOwnedScheduler(
+        fixture,
+        signal,
+        { OPENCLAW_DOCKER_ALL_LANES: "installed-terminal" },
+        `
+        const launches = [], nativeSpawn = cp.spawn;
+        fs.writeFileSync(${JSON.stringify(launches)}, JSON.stringify(launches));
+        cp.spawn = (...args) => {
+          if (args[2]?.env?.OPENCLAW_DOCKER_ALL_LANE_NAME === 'installed-terminal') {
+            launches.push(args[0]);
+            fs.writeFileSync(${JSON.stringify(launches)}, JSON.stringify(launches));
+          }
+          return nativeSpawn(...args);
+        };
+        const nativeWrite = fs.promises.writeFile.bind(fs.promises);
+        fs.promises.writeFile = async (...args) => {
+          const result = await nativeWrite(...args);
+          if (String(args[0]).endsWith('/installed-terminal.log')) process.emit('SIGTERM');
+          return result;
+        };
+        syncBuiltinESMExports();
+        `,
+      );
+      await withScheduler(owner, async () => {
+        await expectExit(owner, 143);
+        expect(readJson(launches)).toEqual([]);
+        const lane = readJson(path.join(fixture.root, "logs/summary.json")).lanes[0];
+        expect(lane).toMatchObject({
+          name: "installed-terminal",
+          status: 143,
+          skipped: true,
+          cancelled: true,
+          attempts: [],
+        });
+        expect(lane).not.toHaveProperty("publicationStatus");
+      });
     },
   );
 

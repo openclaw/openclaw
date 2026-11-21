@@ -111,6 +111,17 @@ async function main() {
   let unjoined = false;
   save();
 
+  function checkpoint() {
+    try {
+      save();
+    } catch (error) {
+      summary.checkpointError ??= String(error);
+      summary.status = "failed";
+      process.exitCode = 1;
+      return error;
+    }
+  }
+
   async function run(
     name,
     bin,
@@ -128,13 +139,15 @@ async function main() {
     const buffers = [[], []];
     const sizes = [0, 0];
     const ended = [false, false];
-    const outputFds = ["out", "err"].map((suffix) =>
-      openInstalledRecoveryEvidence(path.join(artifacts, `${name}.${suffix}`)),
-    );
+    const outputFds = [];
     const controller = new AbortController();
     let outputError;
+    let primaryError;
     let result;
     try {
+      for (const suffix of ["out", "err"]) {
+        outputFds.push(openInstalledRecoveryEvidence(path.join(artifacts, `${name}.${suffix}`)));
+      }
       result = await runManagedCommand({
         bin,
         args,
@@ -149,6 +162,10 @@ async function main() {
         requireProcessTreeExit: true,
         timeoutForceKillOnLeaderExit: true,
         signal: controller.signal,
+        onTimeout({ elapsedMs }) {
+          // Cleanup can reject instead of ETIMEDOUT; keep the observed deadline fact.
+          receipt.timeout = { elapsedMs };
+        },
         onReady(child) {
           receipt.pid = child.pid;
           child.once("exit", (code, signal) => {
@@ -186,9 +203,17 @@ async function main() {
       receipt.error = String(outputError ?? error);
       if (outputError && outputError !== error) receipt.commandError = String(error);
       receipt.treeJoined = !hasUnjoinedWork(error);
-      throw outputError ?? error;
+      primaryError = outputError ?? error;
     } finally {
-      outputFds.forEach((fd) => fs.closeSync(fd));
+      for (const fd of outputFds) {
+        try {
+          fs.closeSync(fd);
+        } catch (error) {
+          receipt.outputCloseError ??= String(error);
+          primaryError ??= error;
+          receipt.status = "failed";
+        }
+      }
       receipt.elapsedMs = Date.now() - receipt.startedAt;
       receipt.outputBytes = sizes;
       receipt.outputEnded = ended;
@@ -203,7 +228,8 @@ async function main() {
         !outputError &&
         ended.every(Boolean) &&
         sizes.every((size, index) => size === receipt.capturedOutputBytes[index]);
-      save();
+      const checkpointError = checkpoint();
+      primaryError ??= checkpointError;
       console.error(`[installed-terminal] command-outcome ${JSON.stringify(receipt)}`);
       if (
         receipt.status !== "completed" ||
@@ -217,6 +243,7 @@ async function main() {
         }
       }
     }
+    if (primaryError) throw primaryError;
     assert(expected === null || expected.includes(result), `${name}: unexpected exit ${result}`);
     return {
       pid: receipt.pid,
@@ -340,6 +367,18 @@ async function main() {
       cleanup: { status: "not-started" },
     };
     summary.cells.push(record);
+    try {
+      await runCell(record, baseline);
+    } catch (error) {
+      record.status = "failed";
+      record.error = String(error);
+      checkpoint();
+      throw error;
+    }
+  }
+
+  async function runCell(record, baseline) {
+    const { name, historical, fault } = record;
     save();
     const directory = path.join(runtime, name);
     const evidence = path.join(artifacts, name);
@@ -525,7 +564,20 @@ async function main() {
         status: "held",
         reason: "Updater did not return a natural joined command result",
       };
-      save();
+      checkpoint();
+      throw error;
+    }
+    let processAbsence;
+    try {
+      processAbsence = captureInstalledTerminalProcessAbsence(evidence);
+      record.processAbsence = processAbsence;
+      assert(
+        processAbsence.every(({ errorCode }) => errorCode === "ESRCH"),
+        "Observed child custody is live or unknown",
+      );
+    } catch (error) {
+      unjoined = true;
+      record.cleanup = { status: "held", reason: "Observed child custody is unverified" };
       throw error;
     }
     let verdict;
@@ -534,7 +586,7 @@ async function main() {
     try {
       const observationSpec = {
         ...spec,
-        processAbsence: captureInstalledTerminalProcessAbsence(evidence),
+        processAbsence,
       };
       writeInstalledRecoveryEvidence(specPath, observationSpec);
       verdict = validateObservation(
@@ -599,13 +651,13 @@ async function main() {
       record.status = "failed";
       record.cleanup = { ...record.cleanup, status: "held", error: String(error) };
       record.oracleError = validationError && String(validationError);
-      save();
+      checkpoint();
       throw validationError ?? error;
     }
     if (validationError) {
       record.status = "failed";
       record.oracleError = String(validationError);
-      save();
+      checkpoint();
       throw validationError;
     }
     Object.assign(record, {
@@ -668,6 +720,7 @@ async function main() {
   async function inspectBaseline(name, tarball, commit) {
     const directory = path.join(runtime, name);
     fs.mkdirSync(directory);
+    let primaryError;
     try {
       await run(
         name,
@@ -687,8 +740,18 @@ async function main() {
       assert.equal(identity.buildInfo.commit, commit);
       retainHeartbeat(name, tarball, path.join(directory, "package"), identity);
       return identity;
+    } catch (error) {
+      primaryError = error;
+      throw error;
     } finally {
-      if (!unjoined) fs.rmSync(directory, { recursive: true });
+      if (!unjoined) {
+        try {
+          fs.rmSync(directory, { recursive: true });
+        } catch (error) {
+          summary.extractionCleanupError = { name, error: String(error) };
+          if (!primaryError) throw error;
+        }
+      }
     }
   }
   try {
@@ -815,7 +878,7 @@ async function main() {
         process.exitCode = 1;
       }
     }
-    save();
+    checkpoint();
     try {
       assert(!unjoined, "Evidence export refused while producer custody is unknown");
       publishInstalledTerminalEvidence(artifacts, summary);
@@ -824,7 +887,7 @@ async function main() {
       summary.evidenceError = String(error);
       process.exitCode = 1;
       console.error(`[installed-terminal] evidence-error ${JSON.stringify(diagnostic(error))}`);
-      save();
+      checkpoint();
     }
     const exportedSummary = path.join(artifacts, "export/installed-terminal.json");
     try {
@@ -844,7 +907,7 @@ async function main() {
       console.error(
         `[installed-terminal] summary-export-error ${JSON.stringify(diagnostic(error))}`,
       );
-      save();
+      checkpoint();
     }
     console.error(
       `[installed-terminal] outcome ${JSON.stringify(

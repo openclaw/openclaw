@@ -23,6 +23,10 @@ trap cleanup EXIT
 
 CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 2700 ))}"
 [[ "$CELL_DEADLINE_EPOCH_SECONDS" =~ ^[1-9][0-9]*$ ]] || exit 2
+if [ "$CELL_DEADLINE_EPOCH_SECONDS" -le "$(date +%s)" ]; then
+  echo 'Installed terminal deadline expired before package preparation' >&2
+  exit 2
+fi
 export CELL_DEADLINE_EPOCH_SECONDS
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
@@ -30,8 +34,20 @@ if [ -z "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]; then
   echo 'Use node scripts/test-docker-all.mjs --lanes=installed-terminal for bounded producer settlement' >&2
   exit 2
 fi
+if [ "$(docker_build_resolve_platform "${DOCKER_DEFAULT_PLATFORM:-}")" != linux/amd64 ]; then
+  echo 'Installed terminal package admission requires linux/amd64' >&2
+  exit 2
+fi
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz installed-terminal "${1:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}")"
+# The caller may supply a private 0600 file. Share an identical, read-only copy
+# with the app user's supplementary group; the scheduler retains it through CID join.
+INPUT_DIR="$(dirname "$DOCKER_E2E_CONTAINER_CIDFILE")/input"
+mkdir -m 0700 "$INPUT_DIR"
+cp "$PACKAGE_TGZ" "$INPUT_DIR/package.tgz"
+cmp "$PACKAGE_TGZ" "$INPUT_DIR/package.tgz"
+chgrp "$(id -g)" "$INPUT_DIR/package.tgz"
+chmod 0640 "$INPUT_DIR/package.tgz"
 ARTIFACT_DIR="${2:-${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/installed-terminal}}"
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
@@ -47,11 +63,15 @@ chmod 0640 "$ARTIFACT_DIR/installed-terminal-contracts.json"
 IMAGE_NAME="$(docker_e2e_resolve_image openclaw-installed-terminal-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" installed-terminal \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
-docker_e2e_package_mount_args "$PACKAGE_TGZ"
+if [ "$(docker_e2e_docker_cmd image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_NAME")" != linux/amd64 ]; then
+  echo 'Installed terminal runner image must be linux/amd64' >&2
+  exit 2
+fi
+docker_e2e_package_mount_args "$INPUT_DIR/package.tgz"
 fixture_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
 status=0
 docker_e2e_run_with_harness \
-  --init --group-add "$(id -g)" \
+  --init --platform linux/amd64 --group-add "$(id -g)" \
   -e CELL_DEADLINE_EPOCH_SECONDS -e OPENCLAW_DOCKER_E2E_SELECTED_SHA \
   -v "$fixture_root/test/fixtures/sqlite/openclaw-agent-schema-v25.sql:/app/test/fixtures/sqlite/openclaw-agent-schema-v25.sql:ro" \
   -v "$ARTIFACT_DIR:/tmp/installed-terminal-artifacts" \
