@@ -158,10 +158,11 @@ function createSessionWorkspaceFileContent(
       root: result.root,
       download,
     };
-    if (file.mimeType === "application/pdf") {
+    const isAudio = file.mimeType?.startsWith("audio/");
+    if (isAudio || file.mimeType === "application/pdf") {
       return {
         kind: "attachment",
-        attachmentKind: "document",
+        attachmentKind: isAudio ? "audio" : "document",
         title: name,
         mimeType: file.mimeType,
         sizeBytes: file.size,
