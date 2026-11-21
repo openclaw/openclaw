@@ -1620,16 +1620,6 @@ div.shell.shell--onboarding {
   overflow-anchor: none;
 }
 
-/* While an archived row fades out (app-sidebar-archive-exit.ts), the rows below
-   and the sections after the list glide into its slot; 60 + 180 ms matches it. */
-.sidebar-session-window[data-sidebar-archive-exiting] {
-  transition: height 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
-}
-
-.sidebar-session-window[data-sidebar-archive-exiting] > .sidebar-session-tree {
-  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
-}
-
 .sidebar-recent-sessions__list {
   min-height: 12px;
 }
@@ -1656,8 +1646,7 @@ div.shell.shell--onboarding {
   text-align: left;
 }
 
-.sidebar-session-tree__show-more:hover,
-.sidebar-session-tree__show-more:focus-visible {
+.sidebar-session-tree__show-more:is(:hover, :focus-visible) {
   color: var(--text);
 }
 
