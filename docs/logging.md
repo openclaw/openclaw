@@ -704,7 +704,7 @@ settle. Missing records do not establish that there were no stalls.
 
 ### Codex catalog phases
 
-The same `gateway/session-catalog` logger records three Codex summaries when
+The same `gateway/session-catalog` logger records two Codex summaries when
 process diagnostics and warning-level logging are enabled. Each summary is
 emitted only after its observed operation settles and takes at least one second:
 
@@ -715,25 +715,18 @@ emitted only after its observed operation settles and takes at least one second:
   `managedSnapshotMs` is absent when the optional snapshot method or store is
   unavailable. `nodeRegistryCalls` and `nodeRegistryMs` measure the existing node
   registry invocation; `pairedNodeCalls`, `pairedNodeSettled` and `nodeWaitSumMs`
-  describe the paired-node promises reached by the list. Cache counters
-  `coldStarts`, `refreshStarts`, `freshHits`, `staleHits` and `pendingJoins`
-  distinguish new producers, background refreshes, immediate cached delivery
-  and callers awaiting an existing cold page.
+  describe the paired-node promises reached by the list.
 - `slow Codex catalog page producer` measures one control-page calculation.
-  `listOperationId` identifies its originating list when observed. `origin` is
-  `cold`, `refresh` or `uncached`. `controlRequestCalls` counts
-  entered control requests; `inclusiveControlRequestWaitMs` sums their elapsed
-  waits and `inclusiveControlRequestWaitMaxMs` reports the longest one.
-  `postResponseMs` covers subsequent provenance checks and page projection.
+  `listOperationId` identifies its originating list when observed; background
+  hydration does not inherit the caller's list context. `origin` is `cold`.
+  `controlRequestCalls` counts entered control requests. Both
+  `inclusiveControlRequestWaitMs` and `inclusiveControlRequestWaitMaxMs`
+  report the elapsed time of the request loop, including any page-size retries.
+  `postResponseMs` covers the measured page-projection work, including its
+  provenance checks.
   `provenanceChecks`, `provenanceCacheHits`, `provenanceReadCalls` and
   `provenanceMs` describe the existing provenance path. `provenanceReadCalls`
   counts calls to the metadata reader, not filesystem read syscalls or chunks.
-  `stopReason`, when reached, is `exhausted`, `limit` or `page-bound`.
-- `slow Codex catalog cache wait` measures a caller waiting for a pending cold
-  page. `producerOperationId` links it to an observed producer;
-  `listOperationId` links the surrounding list when available.
-  `producerObserved=false` means the producer's diagnostic identity is
-  unavailable, not that no producer exists.
 
 Page-producer summaries also accumulate elapsed time at the existing control
 phase transitions. Repeated phases, including selection retries, and multiple
@@ -779,8 +772,8 @@ or a response reached the client. The containing list can resolve with an
 unavailable host after a control call rejects.
 
 `operationId` is local to `diagnosticEpoch`, PID and thread. It is not a session,
-native request or audit execution identity. One producer can serve several
-waiters, and a stale refresh can continue after a list returns. `outcome=resolved`
+native request or audit execution identity. Resident catalog hydration can
+continue after a list returns. `outcome=resolved`
 means that the observed operation returned; a resolved list can include
 disconnected or error-bearing hosts.
 
@@ -798,7 +791,7 @@ while a reached stage may report zero milliseconds.
 
 The tracker admits at most 64 active diagnostic observations per JavaScript
 runtime isolate and shares a budget of 60 records per fixed 60-second window
-across these three summaries. These limits suppress observations, not catalog
+across these summaries. These limits suppress observations, not catalog
 work. Each record's metadata is capped at 28 scalar fields and 2 KiB, excluding
 the logger envelope. `omittedObservations` reports accumulated capacity, rate
 or metadata-limit suppression on a later emitted record. Window-boundary bursts
