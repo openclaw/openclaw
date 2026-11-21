@@ -29,6 +29,7 @@ import {
 } from "./github-publication-requester.test-support.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
 import type { PrepareRepositoryPublicationIntegration } from "./repository-publication-integration.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import { createNodeWorkerBundleTestNode } from "./worker-environments/node-worker-bundle.test-support.js";
@@ -459,7 +460,8 @@ describe("combined native publication proof", () => {
         } else if (scenario === "different-requester") {
           await expect(retry).rejects.toThrow("different requester");
         } else {
-          await expect(retry).rejects.toBeInstanceOf(GitHubPublicationRequesterUnavailableError);
+          // A fresh caller must pass admission before it can reopen the accepted request.
+          await expect(retry).rejects.toBeInstanceOf(GatewayOperatorAccessDeniedError);
         }
         expect(native.readRef()).toBe(beforeRef);
         expect(native.observed.physicalCas).toBe(0);

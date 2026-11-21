@@ -449,7 +449,9 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
               { openclawIdPrincipal: principal, grant: gateway ? gateway.grant : grant },
             );
       access?.assertCurrent();
-      grant = access?.gatewayAccessGrant ?? null;
+      if (access) {
+        grant = access.gatewayAccessGrant;
+      }
     }
     const role = structuredClone(
       profile

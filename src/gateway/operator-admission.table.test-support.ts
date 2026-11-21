@@ -212,7 +212,10 @@ export class AdmissionFixture {
   }
   async publish(next: OpenClawConfig, signal?: AbortSignal) {
     const application = createRuntimeConfigWriteApplication();
-    await writeConfigFile(next, attachRuntimeConfigWriteApplication({}, application));
+    await writeConfigFile(
+      next,
+      attachRuntimeConfigWriteApplication({ allowConfigSizeDrop: true }, application),
+    );
     expect(await (signal ? withinTest(application.result, signal) : application.result)).toBe(
       "applied",
     );

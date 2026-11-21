@@ -216,14 +216,12 @@ export async function handleChatSendWithStorage(
         assertSource();
       },
     );
-    const assertInputAdmissionCurrent = options?.stageCreatedInput
-      ? createDynamicSessionSourceAssertion(
-          () => assertAcceptedInputCurrent ?? assertUnacceptedInputCurrent,
-          () => {
-            throw new Error("Chat input custody changed before admission");
-          },
-        )
-      : assertUnacceptedInputCurrent;
+    const assertInputAdmissionCurrent = createDynamicSessionSourceAssertion(
+      () => assertAcceptedInputCurrent ?? assertUnacceptedInputCurrent,
+      () => {
+        throw new Error("Chat input custody changed before admission");
+      },
+    );
     assertInputAdmissionCurrent();
     const goalCommitGuard = request.goalOperation
       ? createChatSendGoalCommitGuard({
@@ -621,6 +619,7 @@ export async function handleChatSendWithStorage(
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
     admission.markInputAccepted();
+    assertAcceptedInputCurrent ??= pendingAdmission.assertAdmittedCurrent;
     if (requestAuthority.family === "worker") {
       acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     }

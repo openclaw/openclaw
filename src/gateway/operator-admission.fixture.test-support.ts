@@ -34,6 +34,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./client.js";
 import { listenProvider } from "./gateway-provider-fixture.test-support.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
   setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
@@ -273,7 +274,9 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
     );
     assert(legacy?.origin_source_json);
     if (c.row.credential === "fallback") {
-      expect(legacy.origin_source_json).not.toContain("fallbackCredentialGeneration");
+      expect(
+        JSON.parse(legacy.origin_source_json).snapshot.authPolicy.fallbackCredentialGeneration,
+      ).toBeUndefined();
     } else {
       expect(JSON.parse(legacy.origin_source_json).snapshot.device).toBeUndefined();
     }
@@ -624,6 +627,7 @@ export async function runCase(
       setOpenClawIdTunnelPrincipalResolver(undefined);
       setOpenClawIdTunnelPrincipalLookup(undefined);
       setOpenClawIdMemberAccountLookup(undefined);
+      setDeviceTokenBindingOwner(undefined);
       if (
         c.profileId &&
         ["narrowed-role", "empty-after-role", "goal-agent-excluded"].includes(scenario)

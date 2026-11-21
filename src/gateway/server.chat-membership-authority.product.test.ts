@@ -606,9 +606,10 @@ it(
         } finally {
           hold.resume.resolve();
         }
-        expect(await terminal).toMatchObject({ status: expect.stringMatching(/^(ok|error)$/) });
+        expect(await terminal).toMatchObject({ status: "ok" });
         expect(forbidden.supplied).toBe(true);
-        await expect(fs.stat(forbidden.file)).rejects.toMatchObject({ code: "ENOENT" });
+        // Removal denies the next start, not the tool call of this admitted turn.
+        expect(await fs.readFile(forbidden.file, "utf8")).toBe(forbidden.message);
         expect(await fs.readFile(allowed.file, "utf8")).toBe(allowed.message);
       }
       expect(providerErrors).toEqual([]);

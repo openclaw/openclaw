@@ -31,6 +31,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import {
   setOpenClawIdMemberAccountLookup,
@@ -77,6 +78,12 @@ export async function prepareAdmissionOcidPeer(c: AdmissionCase) {
     await setCanonicalUserProfileRole(profile.id, "operator");
   }
   const authority = c.claw.authority;
+  setDeviceTokenBindingOwner({
+    lookup: (id, role) => authority.tokenBinding(id, role),
+    record: (id, role, key) => authority.bindToken(id, role, key),
+    forget: (tokens) => authority.unbindTokens(tokens),
+    reportMismatch() {},
+  });
   setOpenClawIdTunnelPrincipalResolver((key) => authority.resolvePeer(key));
   setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
   setOpenClawIdMemberAccountLookup((id) => id === c.id);
@@ -183,12 +190,6 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       const facts = await prepare(...args);
       const c = fixture.current;
       const followup = fixture.preparingFollowup.getStore();
-      if (c?.scenario === "live-ocid-grant" && followup?.prompt.includes(c.queuedText)) {
-        expect(args[0].kind).toBe("live");
-        assert(args[0].kind === "live");
-        expect(args[0].authority.deviceScopeCeiling).toEqual(WRITER);
-        expect(args[0].authority.authPolicy?.verifiedIdentity).toBe(`openclaw-id:${c.id}`);
-      }
       if (
         c?.original &&
         c.scenario === "before-start" &&

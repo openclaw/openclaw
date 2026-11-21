@@ -485,10 +485,10 @@ export function withSessionMutationCommitGuard(
   if (!assertCommitAllowed && !assertExpectedProfile) {
     return authorization;
   }
-  // Committed input keeps its original host and session authority. A later
-  // account selection change cannot revoke custody already transferred to it.
+  // Accepted input keeps its target and explicit host lifetime, not the
+  // submitting request's permission or transport checks.
   const assertAdmittedInputCurrent = composeSessionSourceAssertion([
-    assertAdmittedSourceCurrent ?? assertCommitAllowed,
+    assertAdmittedSourceCurrent,
     authorization?.assertAdmittedInputCurrent ?? authorization?.assertCurrent,
   ]);
   const admitted = authorization?.admittedInputAuthority;
@@ -500,7 +500,7 @@ export function withSessionMutationCommitGuard(
   return {
     ...authorization,
     assertAdmittedSourceCurrent: composeSessionSourceAssertion([
-      assertAdmittedSourceCurrent ?? assertCommitAllowed,
+      assertAdmittedSourceCurrent,
       authorization?.assertAdmittedSourceCurrent,
     ]),
     ...(authorization?.prepareWorkerGrant
@@ -532,9 +532,9 @@ export function withSessionMutationCommitGuard(
     assertAdmittedInputCurrent,
     ...(admitted
       ? {
-          admittedInputAuthority: withSessionPendingInputAuthorityGuard(admitted, () =>
-            (assertAdmittedSourceCurrent ?? assertCommitAllowed)?.(),
-          ),
+          admittedInputAuthority: assertAdmittedSourceCurrent
+            ? withSessionPendingInputAuthorityGuard(admitted, assertAdmittedSourceCurrent)
+            : admitted,
         }
       : {}),
     ...(authorization?.withCurrent

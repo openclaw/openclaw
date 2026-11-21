@@ -262,16 +262,21 @@ describe("undecodable scheduled authority", () => {
             ),
           });
         }
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-        expect(sendCronFailureAlert).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "telegram",
-            to: "fixture-recipient",
-            payload: {
-              text: 'Automation "Test Job" failed\nCheck automation history for details.',
-            },
-          }),
-        );
+        if (unavailable) {
+          // A transient admission outage schedules a quick retry before alerting.
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        } else {
+          expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+          expect(sendCronFailureAlert).toHaveBeenCalledWith(
+            expect.objectContaining({
+              channel: "telegram",
+              to: "fixture-recipient",
+              payload: {
+                text: 'Automation "Test Job" failed\nCheck automation history for details.',
+              },
+            }),
+          );
+        }
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(h.resolveCronSessionMock).not.toHaveBeenCalled();
         expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
