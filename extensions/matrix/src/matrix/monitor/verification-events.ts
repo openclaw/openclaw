@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   normalizeNullableString,
@@ -176,11 +177,17 @@ function trackBounded(set: Set<string>, value: string): boolean {
 }
 
 export function createMatrixVerificationEventRouter(params: {
+  cfg?: Pick<OpenClawConfig, "accessGroups">;
   client: MatrixClient;
   allowFrom: string[];
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
+  /** Live account authorization; read at each check so a reload or revocation is visible. */
+  resolveLiveAuthorization?: () => Promise<{
+    cfg?: Pick<OpenClawConfig, "accessGroups">;
+    allowFrom: string[];
+  }>;
   logVerboseMessage: (message: string) => void;
   sasNoticeRetryDelayMs?: number;
   runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
@@ -218,12 +225,16 @@ export function createMatrixVerificationEventRouter(params: {
       );
       return false;
     }
+    const live = params.resolveLiveAuthorization
+      ? await params.resolveLiveAuthorization().catch(() => null)
+      : null;
     const storeAllowFrom =
       params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
         ? await params.readStoreAllowFrom()
         : [];
     const accessState = await resolveMatrixMonitorAccessState({
-      allowFrom: params.allowFrom,
+      ...((live?.cfg ?? params.cfg) ? { cfg: live?.cfg ?? params.cfg } : {}),
+      allowFrom: live?.allowFrom ?? params.allowFrom,
       storeAllowFrom,
       dmPolicy: params.dmPolicy,
       // Verification flows only exist in strict DMs, so room/group allowlists do
@@ -485,6 +496,12 @@ export function createMatrixVerificationEventRouter(params: {
         }
       }
       for (const body of notices) {
+        // The crypto lookup and retry above can outlive the authorization check.
+        // Re-read live authority at the transmission boundary so a revocation or
+        // channel reload during the wait cannot still send the notice.
+        if (!(await isVerificationNoticeAuthorized(senderId))) {
+          return;
+        }
         await sendVerificationNotice(roomId, body);
       }
     };

@@ -223,6 +223,35 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
+  it("keeps access-group references in live allowlists", async () => {
+    const resolveTargets = vi.spyOn(matrixTargets, "resolveMatrixTargets").mockResolvedValue([]);
+
+    const result = await resolveLive({
+      entries: ["accessGroup:Admins", "accessGroup:admins", "@alice:example.org"],
+    });
+
+    expect(result).toEqual(["accessGroup:Admins", "accessGroup:admins", "@alice:example.org"]);
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
+  it("keeps access-group references through startup allowlists and room users", async () => {
+    const resolveTargets = vi.spyOn(matrixTargets, "resolveMatrixTargets").mockResolvedValue([]);
+    const groupReferences = ["accessGroup:Admins", "accessGroup:admins"];
+
+    const result = await resolveConfig({
+      allowFrom: groupReferences,
+      groupAllowFrom: groupReferences,
+      roomsConfig: { "!ops:example.org": { enabled: true, users: groupReferences } },
+    });
+
+    expect(result.allowFrom).toEqual(groupReferences);
+    expect(result.groupAllowFrom).toEqual(groupReferences);
+    expect(result.roomsConfig).toEqual({
+      "!ops:example.org": { enabled: true, users: groupReferences },
+    });
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "default",

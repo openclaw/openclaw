@@ -1,4 +1,5 @@
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -170,6 +171,10 @@ export function registerMatrixMonitorEvents(params: {
   getHealthySyncSinceMs?: () => number | undefined;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
+  resolveLiveVerificationAuthorization?: () => Promise<{
+    cfg?: Pick<OpenClawConfig, "accessGroups">;
+    allowFrom: string[];
+  }>;
   sasNoticeRetryDelayMs?: number;
 }): () => void {
   const {
@@ -190,12 +195,14 @@ export function registerMatrixMonitorEvents(params: {
     getHealthySyncSinceMs,
     formatNativeDependencyHint,
     runDetachedTask,
+    resolveLiveVerificationAuthorization,
     sasNoticeRetryDelayMs,
   } = params;
   const postHealthySyncDecryptFailureTracker = createMatrixPostHealthySyncDecryptFailureTracker({
     getHealthySyncSinceMs,
   });
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
+    cfg,
     client,
     allowFrom,
     dmEnabled,
@@ -203,6 +210,7 @@ export function registerMatrixMonitorEvents(params: {
     readStoreAllowFrom,
     logVerboseMessage,
     runDetachedTask,
+    resolveLiveAuthorization: resolveLiveVerificationAuthorization,
     sasNoticeRetryDelayMs,
   });
 
