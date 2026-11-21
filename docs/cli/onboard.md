@@ -200,11 +200,13 @@ loopback Gateway, and waits up to five minutes. A successful connection
 continues in the browser; an unreachable Gateway or a timeout falls back to the
 same terminal hatch as before. Pass `--tui` to skip the browser handoff and
 force that terminal hatch.
-If applying setup fails after inference succeeds, the status identifies workspace,
-Gateway, or general setup failure rather than an AI check failure. The detailed
-error keeps its recovery guidance, and onboarding falls back to the conversational OpenClaw
-chat to finish interactively. Channels, agents,
-plugins, and other optional features remain OpenClaw chat territory: run
+If local single-agent setup fails after inference succeeds, guided onboarding
+identifies the workspace, Gateway, or general setup failure. By default, it
+opens the OpenClaw setup chat with details. With `--skip-ui`, it reports the
+failure and returns to the terminal. Resolve the error and rerun the same
+onboarding command.
+
+Channels, agents, plugins, and other optional features remain OpenClaw chat territory: run
 `openclaw` and use `open channel wizard for <channel>` to hand channel
 credential collection to a masked terminal wizard. To change the model
 provider or its authentication, exit OpenClaw and run `openclaw onboard`;
