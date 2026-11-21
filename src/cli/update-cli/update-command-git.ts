@@ -464,13 +464,16 @@ export async function updateGitInstall(params: {
     const checkoutRoot = releaseDriven
       ? await resolveGitReleaseCheckout(result.root, gitRoot, effectiveTimeout)
       : gitRoot;
-    const packageRoot =
-      installTarget?.packageRoot ??
-      (await findGlobalPackageLinkedTo(checkoutRoot, effectiveTimeout));
+    const releaseRoot = result.root;
+    const packageRoots = installTarget?.packageRoot
+      ? [installTarget.packageRoot]
+      : await findGlobalPackagesLinkedTo(checkoutRoot, effectiveTimeout);
     const warnings = [
-      packageRoot
-        ? await exposeGlobalPackageThroughRelease(packageRoot, result.root, checkoutRoot)
-        : undefined,
+      ...(await Promise.all(
+        packageRoots.map((packageRoot) =>
+          exposeGlobalPackageThroughRelease(packageRoot, releaseRoot, checkoutRoot),
+        ),
+      )),
       (
         await retireStandaloneGitWrapper({
           previousRoot: checkoutRoot,
@@ -513,9 +516,11 @@ export async function resolveGitReleaseCheckout(
   return path.basename(commonDir) === ".git" ? path.dirname(commonDir) : fallback;
 }
 
-/** The global package (npm, pnpm or Bun) linked to this checkout, by a user or an earlier switch. */
-async function findGlobalPackageLinkedTo(checkout: string, timeoutMs: number) {
-  // A checkout is linked globally with `npm link`, `pnpm add -g openclaw@link:` or `bun link`.
+/** Global packages (npm, pnpm or Bun) linked to this checkout, by a user or an earlier switch. */
+async function findGlobalPackagesLinkedTo(checkout: string, timeoutMs: number) {
+  // A checkout is linked globally with `npm link`, `pnpm add -g openclaw@link:` or `bun link`;
+  // whichever bin directory is first on PATH must run the release, so every link moves.
+  const linked = new Set<string>();
   for (const manager of ["npm", "pnpm", "bun"] as const) {
     const target = await resolveGlobalInstallTarget({
       manager,
@@ -536,10 +541,10 @@ async function findGlobalPackageLinkedTo(checkout: string, timeoutMs: number) {
       ).catch(() => undefined);
     }
     if (await isLinkTo(packageRoot, checkout)) {
-      return packageRoot;
+      linked.add(packageRoot);
     }
   }
-  return null;
+  return [...linked];
 }
 
 async function isLinkTo(link: string, dir: string): Promise<boolean> {

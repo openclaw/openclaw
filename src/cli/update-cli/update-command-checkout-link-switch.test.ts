@@ -239,15 +239,25 @@ it.each([true, false])(
 );
 
 it.each(["pnpm", "bun"] as const)(
-  "points a %s global link to the checkout at the release after a Git update",
+  "points npm's and %s's global links to the checkout at the release after a Git update",
   async (manager) => {
-    // The refusal above sends this topology to `openclaw update`; the CLI must then run the release.
+    // The refusal above sends this topology to `openclaw update`; the CLI must then run the
+    // release from whichever manager's bin directory is first on PATH.
     const release = path.join(base, "state", "git-install", "openclaw");
+    const npmLink = path.join(base, "npm-global", "lib", "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(npmLink), { recursive: true });
+    await fs.symlink(checkout, npmLink);
     vi.stubEnv("PATH", "");
     vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockImplementation(async (params) =>
       params.manager === manager
         ? { ...pnpmTarget(), manager, command: manager }
-        : { ...pnpmTarget(path.join(base, "absent", "openclaw")), manager: "npm", command: "npm" },
+        : params.manager === "npm"
+          ? { ...pnpmTarget(npmLink), manager: "npm", command: "npm" }
+          : {
+              ...pnpmTarget(path.join(base, "absent", "openclaw")),
+              manager: "npm",
+              command: "npm",
+            },
     );
     vi.spyOn(gitReleaseRunner, "updateGitRelease").mockResolvedValue({
       status: "ok",
@@ -271,11 +281,13 @@ it.each(["pnpm", "bun"] as const)(
     });
 
     expect(result.steps.filter((step) => step.name === "git-release-cli")).toEqual([]);
-    // The link is now a directory whose entry starts the release launcher; the checkout is untouched.
-    expect((await fs.lstat(link)).isDirectory()).toBe(true);
-    await expect(fs.readFile(path.join(link, "openclaw.mjs"), "utf8")).resolves.toContain(
-      path.join(base, "state", "git-install", "openclaw-launcher.mjs"),
-    );
+    // Each link is now a directory whose entry starts the release launcher.
+    for (const packageRoot of [npmLink, link]) {
+      expect((await fs.lstat(packageRoot)).isDirectory()).toBe(true);
+      await expect(fs.readFile(path.join(packageRoot, "openclaw.mjs"), "utf8")).resolves.toContain(
+        path.join(base, "state", "git-install", "openclaw-launcher.mjs"),
+      );
+    }
     await expect(fs.access(path.join(checkout, "package.json"))).resolves.toBeUndefined();
   },
 );
