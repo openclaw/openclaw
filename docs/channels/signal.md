@@ -548,7 +548,7 @@ Provider options:
 - `channels.signal.transport.url`: required for `external-native` and `container`; optional for `managed-native` when its connection endpoint differs from the daemon bind.
 - `channels.signal.transport.cliPath`: managed-native path to `signal-cli`.
 - `channels.signal.transport.configPath`: optional managed-native `signal-cli --config` directory.
-- `channels.signal.transport.httpHost`, `channels.signal.transport.httpPort`: managed-native daemon bind (default `127.0.0.1:8080`).
+- `channels.signal.transport.httpHost`, `channels.signal.transport.httpPort`: managed-native daemon bind (default `127.0.0.1:8080`). A `url` on another port, including a root-path local proxy such as `http://127.0.0.1:8082`, stays the client endpoint and does not move the daemon onto that port. Set `httpPort` when the daemon should bind a non-default port. Remote, HTTPS, path-prefixed, and cross-family URLs stay independent. A URL that already addresses the daemon bind is updated when that bind is reallocated.
 - `channels.signal.transport.startupTimeoutMs`: managed-native startup wait in ms (min 1000, cap 120000; default 30000).
 - `channels.signal.transport.receiveMode`: managed-native `on-start | manual`.
 - `channels.signal.ignoreAttachments`: skip inbound attachment downloads for this account.
