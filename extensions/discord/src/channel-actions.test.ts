@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
@@ -155,6 +156,22 @@ describe("discordMessageActions", () => {
     expect(schemaForAction(workDiscovery, "send")).toMatchObject({
       visibility: "all-configured",
     });
+  });
+
+  it("declares every Gateway-executed action in the manifest", () => {
+    const manifestPath = new URL("../openclaw.plugin.json", import.meta.url);
+    const actions = { roles: true, moderation: true, presence: true };
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: discordCfg({ token: "Bot token-main", actions }),
+    });
+    expect(
+      JSON.parse(fs.readFileSync(manifestPath, "utf8")).channelConfigs.discord
+        .gatewayMessageActions,
+    ).toEqual(
+      (discovery?.actions ?? []).filter(
+        (action) => discordMessageActions.resolveExecutionMode?.({ action }) === "gateway",
+      ),
+    );
   });
 
   it("keeps sticker-upload on local execution mode", () => {
