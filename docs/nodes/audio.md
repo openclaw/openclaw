@@ -66,6 +66,26 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 
 The provider inventory reports the local fallback winner separately from global provider selection, plus capable, requested, and observed backend fields. After transcription runs, `/status` reports the requested or observed backend in the media line. Explicit audio-capable `tools.media.models` CLI entries still bypass auto-selection; use their backend-specific flags such as sherpa `--provider=cuda` or whisper.cpp `--no-gpu`/`--device`.
 
+### Telegram group reuse for auto-detected local audio
+
+Within one active configuration, Telegram accounts can share the computation for
+the same group voice message when auto-detection selects the same local STT
+command. Each account still reads the attachment under its own media policy and
+performs its own authorization and mention checks. Several explicitly addressed
+bots can therefore respond to the same transcript.
+
+Reuse is process-local and matches the chat, topic, message, audio bytes, command
+arguments, environment, and transcription limits. It retains at most 64 pending
+or completed computations per configuration. Successful results are not reused
+after 15 seconds; expired entries are removed lazily at the next lookup, not by
+a timed memory purge. Failures, empty results, and results larger than 64 KiB are
+not retained. Publishing a new configuration starts a separate cache generation.
+
+Provider-backed transcription, explicitly configured/custom CLI commands, and
+operations with caller-owned cancellation or execution authority remain
+independent. This does not share credentials, admission decisions, or transcript
+echoes between accounts, and it does not coordinate different Gateway processes.
+
 ## OpenAI transcription alongside ChatGPT/Codex OAuth
 
 OpenAI audio uses the standard `/v1/audio/transcriptions` endpoint with the
