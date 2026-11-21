@@ -703,6 +703,14 @@ public actor GatewayChannelActor {
                     gatewayID: options.deviceAuthGatewayID,
                     profile: options.deviceIdentityProfile,
                     observedToken: rejectedToken)
+            } else if var authError = error as? GatewayConnectAuthError,
+                      authError.detail == .authTokenMismatch, authError.canRetryWithDeviceToken,
+                      self.token?.trimmedNonEmpty != nil
+            {
+                // The gateway offers this retry to every client that sent no device token. Without a
+                // stored one for this route, resending the rejected token only trips the auth rate limit.
+                authError.canRetryWithDeviceToken = false
+                throw authError
             }
             throw error
         }
