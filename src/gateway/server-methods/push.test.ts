@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
+import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
 import { pushSubscription } from "./push.test-support.js";
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   resolveProfileId: vi.fn<(profileId: string) => string | undefined>((profileId) => profileId),
   findBoundWebPushSubscriptionByEndpoint:
     vi.fn<(params: { endpoint: string }) => Promise<BoundWebPushSubscription | null>>(),
+  sendProfileWebPush: vi.fn(),
 }));
 const findBoundWebPushSubscriptionByEndpoint = mocks.findBoundWebPushSubscriptionByEndpoint;
 
@@ -32,6 +34,9 @@ vi.mock("../../infra/push-web.js", async () => ({
     ) => { start: () => T } | undefined | Promise<{ start: () => T } | undefined>,
   ) => (await prepare(await mocks.findBoundWebPushSubscriptionByEndpoint(params)))?.start(),
 }));
+
+// mock-isolation: Recipient selection and delivery are proven against their owner in event-web-push.test.ts.
+vi.mock("../event-web-push.js", () => ({ sendProfileWebPush: mocks.sendProfileWebPush }));
 
 vi.mock("../../state/user-preferences.js", () => ({
   getCanonicalUserPreferences: vi.fn(async () => ({ profileId: "profile-owner", entries: {} })),
@@ -343,6 +348,73 @@ describe("push.web.test handler", () => {
 
     const respond = await request("push.web.test", {}, {});
     expectErrorResponse(respond, "no web push subscriptions registered");
+  });
+});
+
+describe("push.web.send handler", () => {
+  beforeEach(() => {
+    mocks.sendProfileWebPush.mockReset();
+  });
+
+  it("requires operator.write", () => {
+    expect(authorizeOperatorScopesForMethod("push.web.send", ["operator.read"]).allowed).toBe(
+      false,
+    );
+    expect(authorizeOperatorScopesForMethod("push.web.send", ["operator.write"]).allowed).toBe(
+      true,
+    );
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["missing profile", { category: "agent-finished" }],
+    ["missing category", { profileId: "bob" }],
+    ["approval category", { profileId: "bob", category: "approval-requested" }],
+    ["unknown category", { profileId: "bob", category: "marketing" }],
+    ["absolute URL path", { profileId: "bob", category: "agent-finished", path: "https://x.test" }],
+    ["protocol-relative path", { profileId: "bob", category: "agent-finished", path: "//x.test" }],
+    ["oversized title", { profileId: "bob", category: "agent-finished", title: "t".repeat(81) }],
+    ["oversized body", { profileId: "bob", category: "agent-finished", body: "b".repeat(241) }],
+    ["invalid tag", { profileId: "bob", category: "agent-finished", tag: "has space" }],
+    ["invalid TTL", { profileId: "bob", category: "agent-finished", ttlSeconds: 86_401 }],
+    ["unknown field", { profileId: "bob", category: "agent-finished", icon: "x" }],
+  ])("rejects %s before delivery", async (_name, params) => {
+    const respond = await request("push.web.send", params, {});
+    expectErrorResponse(respond, "invalid push.web.send params");
+    expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
+  });
+
+  it("returns delivery counts, including zero counts without subscriptions", async () => {
+    const counts = { sent: 0, failed: 0, skipped: 0, pruned: 0 };
+    mocks.sendProfileWebPush.mockResolvedValue(counts);
+    const params = {
+      profileId: "bob",
+      category: "agent-question",
+      tag: "ticket-42",
+      path: "chat/research/thread%2E1?from=plugin",
+      title: "Ticket assigned",
+      body: "Review ticket 42",
+      agentId: "research",
+      urgency: "high",
+      ttlSeconds: 60,
+    };
+    const getRuntimeConfig = () => ({});
+    const respond = await request("push.web.send", params, { getRuntimeConfig });
+    expectSuccess(respond, counts);
+    expect(mocks.sendProfileWebPush).toHaveBeenCalledWith(expect.any(Function), params);
+  });
+
+  it("reports transport preparation failures as unavailable", async () => {
+    mocks.sendProfileWebPush.mockRejectedValue(new Error("invalid VAPID key"));
+    const respond = await request(
+      "push.web.send",
+      { profileId: "bob", category: "agent-finished" },
+      {},
+    );
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { code: ErrorCodes.UNAVAILABLE },
+    ]);
   });
 });
 
