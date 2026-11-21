@@ -7,7 +7,6 @@ import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channe
 import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -17,6 +16,7 @@ import {
 import { resolveSignalTarget } from "./aliases.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
 import { signalDoctor } from "./doctor.js";
+import { normalizeSignalAllowRecipient } from "./identity.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
@@ -33,9 +33,10 @@ const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalA
   clearBaseFields: ["account", "accountUuid", "transport", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
-    normalizeStringifiedEntries(allowFrom)
-      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-      .filter(Boolean),
+    normalizeStringifiedEntries(allowFrom).flatMap((entry) => {
+      const normalized = entry === "*" ? "*" : normalizeSignalAllowRecipient(entry)?.toLowerCase();
+      return normalized ? [normalized] : [];
+    }),
 });
 
 export const signalConfigAdapter = {
@@ -71,7 +72,7 @@ export const signalSecurityAdapter = createRestrictSendersChannelSecurity<Resolv
   mentionGated: false,
   findingTitle: "Signal security warning",
   policyPathSuffix: "dmPolicy",
-  normalizeDmEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
+  normalizeDmEntry: (raw) => normalizeSignalAllowRecipient(raw)?.toLowerCase() ?? "",
 });
 
 export function createSignalPluginBase(params: {
