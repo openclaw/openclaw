@@ -155,6 +155,37 @@ describe("balanced JSON extraction", () => {
   );
 
   it.each(["\n", "\r\n", "\r"])(
+    "uses original line boundaries and indentation outside declared framing (%j)",
+    (newline) => {
+      const child = '{"ok":true}';
+      for (const warning of ["warning: [", 'warning: [ "unfinished']) {
+        const prefix = `${warning}${newline}\t  `;
+        const source = prefix + child;
+        const options = { ...strictRecovery, strictJson: { source } };
+        const discovery = prefix.replace(/[\r\n]/g, " ").replace("\t  ", "xxx") + child;
+        for (const view of [source, discovery]) {
+          expect(extractBalancedJsonFragments(view, options)).toEqual(fragmentsAt(source, [child]));
+          expect(extractBalancedJsonPrefix(view, options)).toEqual(fragmentsAt(source, [child])[0]);
+        }
+        expect(extractBalancedJsonFragments(discovery.replace('{"ok"', ' "ok"'), options)).toEqual(
+          [],
+        );
+      }
+      for (const inline of [`warning: [${newline}prose ${child}`, `warning: [prose ${child}`]) {
+        const options = { ...strictRecovery, strictJson: { source: inline } };
+        for (const view of [
+          inline,
+          inline.replace("prose", "     "),
+          inline.replace("prose", "\n    "),
+        ]) {
+          expect(extractBalancedJsonFragments(view, options)).toEqual([]);
+          expect(extractBalancedJsonPrefix(view, options)).toBeNull();
+        }
+      }
+    },
+  );
+
+  it.each(["\n", "\r\n", "\r"])(
     "applies accepted framing to recovery eligibility in masked and unmasked views (%j)",
     (newline) => {
       const prefix = `warning: [${newline}`;
@@ -173,7 +204,13 @@ describe("balanced JSON extraction", () => {
           ],
         },
       };
-      for (const discovery of [source, source.replace(framing, " ".repeat(framing.length))]) {
+      for (const discovery of [
+        source,
+        source.replace(framing, " ".repeat(framing.length)),
+        source
+          .replace(newline, " ".repeat(newline.length))
+          .replace(framing, " ".repeat(framing.length)),
+      ]) {
         expect(extractBalancedJsonFragments(discovery, options)).toEqual(
           fragmentsAt(source, [child]),
         );
@@ -478,4 +515,31 @@ describe("balanced JSON extraction", () => {
     expect(extractBalancedJsonPrefix(raw)).toEqual(expected);
     expect(extractBalancedJsonPrefix(raw, { skipQuotedOpeners: false })).toEqual(expected);
   });
+
+  it.each([false, true])(
+    "avoids per-opener object entries without recovery (skipQuotedOpeners=%s)",
+    (skipQuotedOpeners) => {
+      const incomplete = "[".repeat(512);
+      const complete = incomplete + "0" + "]".repeat(512);
+      const push = Array.prototype.push;
+      let objectEntries = 0;
+      Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+        for (const item of items) {
+          if (item !== null && typeof item === "object") objectEntries++;
+        }
+        return Reflect.apply(push, this, items);
+      };
+      let completed: ReturnType<typeof extractBalancedJsonPrefix>;
+      let unfinished: ReturnType<typeof extractBalancedJsonPrefix>;
+      try {
+        completed = extractBalancedJsonPrefix(complete, { skipQuotedOpeners });
+        unfinished = extractBalancedJsonPrefix(incomplete, { skipQuotedOpeners });
+      } finally {
+        Array.prototype.push = push;
+      }
+      expect(completed).toEqual({ json: complete, startIndex: 0, endIndex: complete.length - 1 });
+      expect(unfinished).toBeNull();
+      expect(objectEntries).toBe(0);
+    },
+  );
 });
