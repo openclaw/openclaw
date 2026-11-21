@@ -525,7 +525,8 @@ export async function runIsolatedVitest(
     }
     temporary = fs.mkdtempSync(path.join(base, "vitest-isolated-"));
     const snapshot = path.join(temporary, "source");
-    fs.mkdirSync(snapshot);
+    // Mounted as /workspace, this root is an ancestor of the Gateway temp directory.
+    fs.mkdirSync(snapshot, { mode: 0o700 });
     const source = copyIsolatedVitestSource(root, snapshot, tracked);
     admitIsolatedVitestArgs(argv, source.copied);
     const manifest: unknown = JSON.parse(

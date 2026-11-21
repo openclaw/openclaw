@@ -524,6 +524,15 @@ describe.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
       }
     }
 
+    it("creates a private snapshot root", async () => {
+      const fixture = nativeFixture();
+      await expect(
+        launchFixture(fixture, async (snapshot) => {
+          expect(fs.statSync(snapshot).mode & 0o777).toBe(0o700);
+        }),
+      ).rejects.toThrow("prepared container boundary reached");
+    });
+
     it("copies only lock-qualified archives before container creation and the worker consumes them offline", async () => {
       const fixture = nativeFixture();
       const { source, files, bytes, manifest } = fixture;
