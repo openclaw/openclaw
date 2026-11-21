@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertNativeUnit,
@@ -20,7 +21,7 @@ describe("native upgrade survivor", () => {
       ["-p", "JSON.stringify({version:process.version,execPath:process.execPath})"],
       { env: { PATH: prepareNativeRuntimePath(runtime) }, encoding: "utf8" },
     );
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, inspect(result)).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       version: process.version,
       execPath: path.join(runtime, "node"),
