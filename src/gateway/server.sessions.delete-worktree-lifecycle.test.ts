@@ -112,8 +112,8 @@ async function expectWorktreePresent(worktree: Worktree, present = true) {
   }
 }
 
-test.each(["restore-failed", "placement-changed"] as const)(
-  "inbound admission restores the archived worktree before opening its session (failure=%s)",
+test.each(["removed", "placement-changed"] as const)(
+  "inbound admission requires explicit worktree restore and current placement (failure=%s)",
   async (failure) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
@@ -163,14 +163,12 @@ test.each(["restore-failed", "placement-changed"] as const)(
         : {},
       resolveOperationExpectedSessionId: () => sessionId,
     });
-    const restore =
-      failure === "restore-failed"
-        ? vi
-            .spyOn(ManagedWorktreeService.prototype, "restore")
-            .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
-        : undefined;
-    const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
-    const synchronize = worktreeLifecycle.restoreSessionWorktree;
+    if (failure === "placement-changed") {
+      await managedWorktrees.restore({ id: worktree.id });
+    }
+    using restore = vi.spyOn(ManagedWorktreeService.prototype, "restore");
+    const worktreeLifecycle = await import("../agents/worktrees/session-lifecycle.js");
+    const synchronize = worktreeLifecycle.resolveSessionWorktree;
     const sqliteScope = resolveSqliteScope({ storePath, sessionKey: key });
     const writerQueuePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(sqliteScope));
     const writer = createStartupGate();
@@ -178,7 +176,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     const placementChange = placements
       ? vi
-          .spyOn(worktreeLifecycle, "restoreSessionWorktree")
+          .spyOn(worktreeLifecycle, "resolveSessionWorktree")
           .mockImplementationOnce(async (params) => {
             const assertCurrent = await synchronize(params);
             heldWriter = runExclusiveSqliteSessionWrite(
@@ -194,7 +192,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
       admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
       void admission.catch(() => {});
       if (failure === "placement-changed") {
-        // Advance placement only after the restored session waits behind a real SQLite writer.
+        // Advance placement only after the explicitly restored session waits behind a writer.
         await Promise.race([writer.entered, admission]);
         expect(heldWriter).toBeDefined();
         await vi.waitFor(() => {
@@ -223,6 +221,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
         await expect(admission).rejects.toThrow(/worktree/i);
         await expect(fs.access(worktree.path)).rejects.toThrow();
       }
+      expect(restore).not.toHaveBeenCalled();
       expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
       await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
         transcript,
@@ -232,7 +231,6 @@ test.each(["restore-failed", "placement-changed"] as const)(
       await heldWriter;
       await admission?.catch(() => {});
       placementChange?.mockRestore();
-      restore?.mockRestore();
       coordinator.completeDispatchReplyOperation();
       await coordinator.releasePreDispatchLifecycleAdmission();
       expect(isSessionMutationActive(storePath, [key, sessionId])).toBe(false);

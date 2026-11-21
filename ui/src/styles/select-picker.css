@@ -39,31 +39,16 @@
   max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
 }
 
-/* Select keeps its own slower presentation; the wrapper alone animates, never its list. */
-:is(.picker-select__menu, .multi-select__menu).oc-overlay {
-  opacity: 0;
-  scale: 0.95;
-  transition:
-    opacity var(--oc-overlay-hide-duration, var(--select-exit-duration)) var(--overlay-ease-exit),
-    scale var(--oc-overlay-hide-duration, var(--select-exit-duration)) var(--overlay-ease-exit),
-    display var(--oc-overlay-hide-duration, var(--select-exit-duration)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--select-exit-duration)) allow-discrete;
+/* Select keeps its own slower presentation; the wrapper alone animates, never its list.
+   The shared overlay keyframes, not transitions (see overlay.css). */
+:is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase="opening"] {
+  animation: oc-overlay-enter var(--oc-overlay-show-duration, var(--select-enter-duration))
+    var(--overlay-ease-enter);
 }
 
-:is(.picker-select__menu, .multi-select__menu).oc-overlay:popover-open:where(
-    :not([data-phase="closing"])
-  ) {
-  opacity: 1;
-  scale: 1;
-  transition-duration: var(--oc-overlay-show-duration, var(--select-enter-duration));
-  transition-timing-function: var(--overlay-ease-enter);
-}
-
-@starting-style {
-  :is(.picker-select__menu, .multi-select__menu).oc-overlay:popover-open {
-    opacity: 0;
-    scale: 0.95;
-  }
+:is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase="closing"] {
+  animation: oc-overlay-exit var(--oc-overlay-hide-duration, var(--select-exit-duration))
+    var(--overlay-ease-exit) forwards;
 }
 
 .picker-select__option,
@@ -466,11 +451,11 @@ openclaw-select-picker {
 
 @media (prefers-reduced-motion: reduce) {
   .picker-select--sheet .picker-select__menu,
-  .picker-select--sheet:dir(rtl) .picker-select__menu {
+  .picker-select--sheet:dir(rtl) .picker-select__menu,
+  :is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase] {
     animation: none;
   }
 
-  :is(.picker-select__menu, .multi-select__menu).oc-overlay,
   :is(.picker-select__option, .multi-select__option)::before {
     transition: none;
   }
@@ -494,11 +479,6 @@ openclaw-select-picker {
   box-shadow: var(--overlay-shadow);
   backdrop-filter: none;
   animation: picker-sheet-in var(--motion-sheet);
-}
-
-.picker-select__menu.picker-select__menu--phone-sheet.oc-overlay:popover-open {
-  opacity: 1;
-  scale: 1;
 }
 
 .picker-select__menu--phone-sheet::backdrop {

@@ -516,6 +516,9 @@ export async function resolveLocalWorkspaceOwner(params: {
   assertCurrent?: () => void;
   stateOwnerPath?: SandboxStateOwnerPath;
 }): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.owner.session",
+  );
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
   const scope = {
@@ -585,6 +588,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       release();
       return undefined;
     }
+    phases.mark("attempt.setup.sandbox.workspace_selection.owner.registry");
     const selection = { id: entry.worktree.id, ownerKind: "session" } as const;
     const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", selection);
     const worktree = await readRegistryWorktree(context, entry.worktree.id);
@@ -639,6 +643,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       [Symbol.dispose]: release,
     };
     if (entry.localWorkspaceHandoff) {
+      phases.mark("attempt.setup.sandbox.workspace_selection.owner.handoff");
       const handoff = entry.localWorkspaceHandoff;
       await finishLocalWorkspaceHandoff(owner, handoff);
       await patchSessionEntryCore(scope, (current) => {

@@ -16,7 +16,7 @@ import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-confi
 import { hasWorktreeUnknownOutcome } from "../../agents/worktrees/errors.js";
 import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesystem-backend.js";
 import type { WorktreeFilesystemOptions } from "../../agents/worktrees/filesystem-backend.types.js";
-import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
+import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
@@ -25,7 +25,6 @@ import {
   prepareTemplateManifest,
 } from "../../agents/worktrees/template-registry-async.js";
 import type { WorktreeTemplateRecord } from "../../agents/worktrees/template-registry.js";
-import { prepareSessionSourceEffect } from "../../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -35,15 +34,6 @@ import { buildCacheInputPaths, WORKSPACE_PATH_EXCLUSIONS_JS } from "./workspace-
 
 const log = createSubsystemLogger("agents/worktrees");
 const TEMPLATE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template";
-
-async function removeTemplatePath(directory: string, guard: WorktreeFilesystemOptions) {
-  const source = await prepareSessionSourceEffect(guard.commitGuard);
-  await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
-  await prepareWorktreeFilesystemMutation(guard, source);
-  guard.signal?.throwIfAborted();
-  source.assertCurrent();
-  await fs.rm(directory, { recursive: true, force: true });
-}
 
 async function hasContainedVirtualStore(directory: string, workdir: string): Promise<boolean> {
   try {
@@ -144,7 +134,7 @@ async function validateTemplate(
           }
           continue;
         }
-        await removeTemplatePath(target, guard);
+        await nativeWorktreeFilesystem.remove(target, guard);
       }
       return true;
     },
@@ -334,7 +324,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       return;
     }
     phases.mark(`${TEMPLATE_PHASE}.rebuild`);
-    await removeTemplatePath(directory, templateGuard);
+    await nativeWorktreeFilesystem.remove(directory, templateGuard);
     await prepareSource(directory, templateGuard);
   };
   const record = await prepareWorktreeTemplate({
@@ -453,7 +443,7 @@ export async function cloneLocalWorkspaceTemplate(
       if (hasWorktreeUnknownOutcome(error)) {
         throw error;
       }
-      await removeTemplatePath(params.destination, guard);
+      await nativeWorktreeFilesystem.remove(params.destination, guard);
       log.warn("sandbox dependency snapshot unavailable; using source-only checkout");
       return false;
     }

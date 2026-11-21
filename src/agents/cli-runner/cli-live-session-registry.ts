@@ -27,7 +27,6 @@ type CliLiveSessionOwner = {
 type CliLiveSessionRecord = {
   handle: CliBackendLiveSessionHandle;
   owner: PreparedCliRunContext["preparedBackend"];
-  approvalGrants: Set<string>;
   cleanup?: () => Promise<void>;
   cleanupPromise?: Promise<void>;
   capture?: {
@@ -73,14 +72,6 @@ export function hasCliLiveSession(owner: CliLiveSessionOwner): boolean {
 /** Returns the opaque generation of this owner's registered execution session. */
 export function getCliLiveSessionGeneration(owner: CliLiveSessionOwner): string | undefined {
   return liveSessions.get(buildCliLiveRegistryKey(owner))?.handle.generation;
-}
-
-/** Reads owner-private standing approvals only from this exact current live process. */
-export function getCliLiveSessionApprovalGrants(
-  context: PreparedCliRunContext,
-): Set<string> | undefined {
-  const record = liveSessions.get(buildCliLiveSessionKey(context));
-  return record?.owner === context.preparedBackend ? record.approvalGrants : undefined;
 }
 
 export async function closeCliLiveSession(
@@ -330,9 +321,11 @@ export function createCliLiveSessionCapability(params: {
       credentialFingerprint: context.preparedBackend.secretInput?.fingerprint,
       // A warm child keeps the login it started with. Reuse it only while the native owner
       // this run was prepared under is the one it was started under.
-      nativeLoginOwnerHash: context.cliHistoryWriter?.bindsNativeLogin
-        ? sha256Hex(context.cliHistoryWriter.authFingerprint)
-        : undefined,
+      nativeLoginOwnerHash:
+        context.cliHistoryAdmission?.bindsNativeLogin &&
+        context.cliHistoryAdmission.accountFingerprint
+          ? sha256Hex(context.cliHistoryAdmission.accountFingerprint)
+          : undefined,
       skillsFingerprint,
       env: Object.keys(params.env)
         .toSorted()
@@ -421,7 +414,6 @@ export function createCliLiveSessionCapability(params: {
       const record: CliLiveSessionRecord = {
         handle,
         owner: params.context.preparedBackend,
-        approvalGrants: new Set(),
         ...(cleanup ? { cleanup } : {}),
         ...(grant && params.captureKey
           ? {
@@ -463,7 +455,6 @@ export function createCliLiveSessionCapability(params: {
       }
       record.capture?.revoke();
       liveSessions.delete(ownerKey);
-      record.approvalGrants.clear();
       retiringSessionHandles.add(handle);
       // Native runtime artifacts remain process-owned until its child exits.
       record.cleanupPromise = Promise.resolve()
