@@ -341,6 +341,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     }
     this.#dismissed = reconcileSidebarAttentionDismissals({
       active: this.#buildEntries().flatMap(retainedDismissals),
+      cronJobs: this.#cronJobs,
       key: this.#dismissalKey,
       scope,
     });
@@ -730,7 +731,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       return;
     }
     if (this.#dismissalKey) {
-      this.#dismissed = dismissSidebarAttention(this.#dismissalKey, dismissal);
+      this.#dismissed = dismissSidebarAttention(this.#dismissalKey, dismissal, this.#cronJobs);
       this.onChange();
     }
   }

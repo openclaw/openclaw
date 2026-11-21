@@ -1,7 +1,11 @@
 import type { CronCompactJob, CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
-import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
+import {
+  isCronJobActiveFailure,
+  isCronJobRunning,
+  resolveCronJobLastRunStatus,
+} from "../lib/cron-status.ts";
 import { clampText, formatTimeAgo } from "../lib/format.ts";
 import {
   hasRoutineOAuthExpiry,
@@ -49,6 +53,33 @@ export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean |
     job.state?.nextRunAtMs != null
     ? job.state.nextRunAtMs + CRON_OVERDUE_GRACE_MS
     : Infinity;
+}
+
+export function cronFailureSignatures(job: CronAttentionJob): string[] {
+  const failedAt: number[] = [];
+  const runFailed = resolveCronJobLastRunStatus(job) === "error";
+  if (runFailed && job.state.lastRunAtMs != null) {
+    failedAt.push(job.state.lastRunAtMs);
+  }
+  const autoDisabled = job.state.autoDisabled;
+  // An escalation and a failed run can coexist. Acknowledging the row covers
+  // both; enabling clears only the escalation, while a later run re-arms it.
+  if (autoDisabled) {
+    failedAt.push(autoDisabled.atMs);
+  }
+  const signatures = [...new Set(failedAt)]
+    .toSorted((a, b) => a - b)
+    .map((at) => `${job.id}@${at}`);
+  // Mark untimestamped history explicitly so it is not mistaken for an unmigrated
+  // legacy job-only dismissal when a later timestamped failure arrives.
+  if (runFailed && job.state.lastRunAtMs == null) {
+    signatures.unshift(`${job.id}@unknown`);
+  }
+  return signatures.length ? signatures : [`${job.id}@unknown`];
+}
+
+export function cronFailureSignature(job: CronAttentionJob): string {
+  return cronFailureSignatures(job).at(-1)!;
 }
 
 export function buildSidebarAttentionEntries(params: {
@@ -187,7 +218,7 @@ export function buildSidebarAttentionEntries(params: {
             arrivedAtMs: timestamp(job),
             action: { kind: "navigate", routeId: "cron" },
             // A later overdue episode must resurface after its planned run changes.
-            signature: failed ? job.id : `${job.id}@${job.state?.nextRunAtMs}`,
+            signature: failed ? cronFailureSignature(job) : `${job.id}@${job.state?.nextRunAtMs}`,
           },
           "automations",
         ),
