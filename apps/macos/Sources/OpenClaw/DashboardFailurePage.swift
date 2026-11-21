@@ -53,6 +53,12 @@ enum DashboardFailurePage {
             primaryButton: button)
     }
 
+    /// A newer sign-in for the same Gateway (another window or Settings) revokes
+    /// this one with `CancellationError`, which has no readable description.
+    static func signInError(_ error: Error) -> String {
+        error is CancellationError ? String(localized: "Sign-in cancelled. Try again.") : error.localizedDescription
+    }
+
     static func html(
         title: String, message: String, detail: String?, url: URL?, primaryButton: String? = nil) -> String
     {

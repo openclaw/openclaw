@@ -41,6 +41,17 @@ struct DashboardFailurePageTests {
         #expect(html.contains("Failed &lt;script&gt;&amp;&quot;&#39;"))
     }
 
+    @Test func `superseded sign in shows the retry sentence instead of the Swift error`() {
+        let page = DashboardFailurePage.SignedOut(
+            target: .profile("fixture"), name: "Fixture", host: "gateway.example", expiresAt: .distantPast)
+        let html = DashboardFailurePage.html(
+            signedOut: page, error: DashboardFailurePage.signInError(CancellationError()))
+        #expect(html.contains("Sign-in cancelled. Try again."))
+        #expect(!html.contains("CancellationError"))
+        #expect(DashboardFailurePage.signInError(MacGatewayProfileError.profileNotFound) ==
+            MacGatewayProfileError.profileNotFound.localizedDescription)
+    }
+
     @Test(arguments: [false, true], [false, true])
     func `browser recovery is available only during the current sign in`(signingIn: Bool, available: Bool) {
         let page = DashboardFailurePage.SignedOut(
