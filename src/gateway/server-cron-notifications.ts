@@ -14,7 +14,10 @@ import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-out
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
-import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import {
+  requiresExternalCronDelivery,
+  resolveDeliveryTarget,
+} from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import type { CronFailureRepairRequest, CronServiceDeps } from "../cron/service/state.js";
@@ -490,25 +493,31 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     // Release Gateway admission on deadline even when a transport ignores abort.
     const result = await withTimeout(
       (async () => {
+        const route = {
+          mode: "announce" as const,
+          source: "delivery" as const,
+          requested: true,
+          channel: params.channel,
+          target: params.target,
+          directPolicy: params.directPolicy,
+          to: params.to,
+          accountId: params.accountId,
+          threadId: params.threadId,
+        };
         const resolved = await resolveDeliveryTarget(
           runtimeConfig,
           agentId,
-          {
-            channel: params.channel,
-            target: params.target,
-            directPolicy: params.directPolicy,
-            to: params.to,
-            accountId: params.accountId,
-            threadId: params.threadId,
-            sessionKey,
-            sessionTarget: params.job.sessionTarget,
-          },
+          { ...route, sessionKey, sessionTarget: params.job.sessionTarget },
           { inheritSessionThread: params.inheritSessionThread },
         );
         if (!resolved.ok) {
           // Like its results, a conversation-bound job without an external route is
           // notified in the conversation that created it.
-          if (resolved.channel || params.job.sessionTarget !== "current" || !sessionKey) {
+          if (
+            requiresExternalCronDelivery(route, resolved) ||
+            params.job.sessionTarget !== "current" ||
+            !sessionKey
+          ) {
             throw resolved.error;
           }
           const committed = await commitCronConversationResult({
