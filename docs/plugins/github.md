@@ -121,6 +121,30 @@ The same limits below apply. Inspect `partial`, `bodyTruncated`,
 `commentsTruncated`, `filesTruncated`, and individual comment/patch/check markers;
 a bounded result does not establish that the full discussion or diff was read.
 
+## Read Code Scanning diagnostics
+
+`github_read` also accepts these fixed GitHub API URL forms for a public repository:
+
+- `https://api.github.com/repos/OWNER/REPO/code-scanning/analyses?ref=refs%2Fpull%2F42%2Fmerge`
+- `https://api.github.com/repos/OWNER/REPO/code-scanning/analyses/ANALYSIS_ID`
+- `https://api.github.com/repos/OWNER/REPO/code-scanning/sarifs/SARIF_UUID`
+
+These protected reads require the invoking agent's configured managed GitHub
+identity and **Code scanning alerts: Read** permission on the target repository.
+They never fall back to a service credential or anonymous access. The response
+identifies the actual reader's account ID and selection source; publication
+permission on a fork does not establish diagnostic access on its upstream.
+
+Analysis lists require `ref` and accept `page` (1–50), with 30 records per page.
+They return `nextPage` and mark possibly incomplete pages. Results contain only
+bounded analysis metadata or SARIF processing status/errors, not raw SARIF source
+or databases. HTTP access failures stay errors. Reads are fresh and retain the
+same invocation and identity checks as other reader operations.
+
+An upload that never reached GitHub may have no analysis or SARIF ID to read.
+Missing records do not identify the cause or mean that a scan passed. This tool
+does not rerun jobs or enable debug logging.
+
 ## Ask the agent to find issues or pull requests
 
 Use `github_search` with a chosen public `repository` such as `openclaw/openclaw`.

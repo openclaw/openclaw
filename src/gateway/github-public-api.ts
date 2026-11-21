@@ -36,6 +36,7 @@ export type ControlUiGitHubPreviewIdentity = {
   optionalAuth?: true;
   stale?: true;
   signal?: AbortSignal;
+  readerAccount?: { accountId: number; source: "agent-override" | "system-configured" };
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
@@ -56,6 +57,11 @@ type GitHubDetailTarget =
 
 type GitHubReadTarget =
   | GitHubDetailTarget
+  | ({ kind: "code-scanning"; owner: string; repo: string } & (
+      | { operation: "analyses"; ref: string; page: number }
+      | { operation: "analysis"; analysisId: number }
+      | { operation: "sarif"; sarifId: string }
+    ))
   | {
       kind: "job";
       owner: string;

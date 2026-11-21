@@ -1,0 +1,2 @@
+# Protected diagnostic metadata and registered Gateway reader identity tests.
+202

@@ -18,9 +18,58 @@ export type GitHubJobTarget = {
   runId: number;
   jobId: number;
 };
-export type GitHubReadTarget = GitHubTarget | GitHubJobTarget;
+export type GitHubCodeScanningTarget = { kind: "code-scanning"; owner: string; repo: string } & (
+  | { operation: "analyses"; ref: string; page: number }
+  | { operation: "analysis"; analysisId: number }
+  | { operation: "sarif"; sarifId: string }
+);
+export type GitHubReadTarget = GitHubTarget | GitHubJobTarget | GitHubCodeScanningTarget;
 
 export function parseGitHubReadTarget(value: unknown): GitHubReadTarget | null {
+  if (isRecord(value) && value.kind === "code-scanning") {
+    const { owner, repo } = value;
+    if (
+      typeof owner !== "string" ||
+      !isValidOwner(owner) ||
+      typeof repo !== "string" ||
+      !isValidRepo(repo)
+    ) {
+      return null;
+    }
+    const base = { kind: "code-scanning", owner, repo } as const;
+    if (
+      value.operation === "analyses" &&
+      typeof value.ref === "string" &&
+      value.ref.length > 0 &&
+      value.ref.length <= 256 &&
+      !value.ref.split("").some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      }) &&
+      typeof value.page === "number" &&
+      Number.isSafeInteger(value.page) &&
+      value.page >= 1 &&
+      value.page <= 50
+    ) {
+      return { ...base, operation: "analyses", ref: value.ref, page: value.page };
+    }
+    if (
+      value.operation === "analysis" &&
+      typeof value.analysisId === "number" &&
+      Number.isSafeInteger(value.analysisId) &&
+      value.analysisId > 0
+    ) {
+      return { ...base, operation: "analysis", analysisId: value.analysisId };
+    }
+    if (
+      value.operation === "sarif" &&
+      typeof value.sarifId === "string" &&
+      /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/iu.test(value.sarifId)
+    ) {
+      return { ...base, operation: "sarif", sarifId: value.sarifId };
+    }
+    return null;
+  }
   if (!isRecord(value) || value.kind !== "job") {
     return parseGitHubTarget(value);
   }
@@ -59,7 +108,42 @@ export function parseGitHubReadParams(value: unknown): {
     return null;
   }
   const url = URL.parse(value.url);
-  if (!url || url.origin !== "https://github.com" || url.username || url.password) {
+  if (!url || url.username || url.password) {
+    return null;
+  }
+  if (url.origin === "https://api.github.com" && !url.hash) {
+    const match =
+      /^\/repos\/([^/]+)\/([^/]+)\/code-scanning\/(analyses|sarifs)(?:\/([^/]+))?$/u.exec(
+        url.pathname,
+      );
+    if (!match) {
+      return null;
+    }
+    const [, owner, repo, resource, id] = match;
+    const list = resource === "analyses" && id === undefined;
+    if (
+      [...url.searchParams.keys()].some((key) => !list || !["ref", "page"].includes(key)) ||
+      [...url.searchParams.keys()].some((key) => url.searchParams.getAll(key).length !== 1)
+    ) {
+      return null;
+    }
+    const target = parseGitHubReadTarget({
+      kind: "code-scanning",
+      owner,
+      repo,
+      ...(list
+        ? {
+            operation: "analyses",
+            ref: url.searchParams.get("ref"),
+            page: Number(url.searchParams.get("page") ?? 1),
+          }
+        : resource === "analyses"
+          ? { operation: "analysis", analysisId: /^\d+$/u.test(id ?? "") ? Number(id) : undefined }
+          : { operation: "sarif", sarifId: id }),
+    });
+    return target ? { target, refresh: value.refresh === true } : null;
+  }
+  if (url.origin !== "https://github.com") {
     return null;
   }
   const match =

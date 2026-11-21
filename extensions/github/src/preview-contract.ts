@@ -9,6 +9,8 @@ export type ControlUiGitHubPreviewIdentity = {
   optionalAuth?: true;
   stale?: true;
   signal?: AbortSignal;
+  /** Effective managed reader, prepared by the host; never a caller-selected account. */
+  readerAccount?: { accountId: number; source: "agent-override" | "system-configured" };
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
