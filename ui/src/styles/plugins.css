@@ -321,6 +321,10 @@
   overflow-x: auto;
 }
 
+.skill-discovery .plugin-catalog-chip {
+  flex: none;
+}
+
 .skill-discovery .plugin-catalog-chip--skeleton {
   height: auto;
 }

@@ -113,7 +113,9 @@ suite.define(() => {
         // Include recent-input entries: fast navigation must not mask directory-arrival shifts.
         expect(await shifts.evaluate((probe) => probe.read().entries)).toEqual([]);
         await shifts.dispose();
-        await button(page, "Research").waitFor();
+        const research = button(page, "Research");
+        await research.waitFor();
+        expect(await research.evaluate((chip) => chip.scrollWidth <= chip.clientWidth)).toBe(true);
         await capture(page, `overview-${size}`, notebook.displayName);
 
         for (const [section, skill] of [
@@ -128,17 +130,14 @@ suite.define(() => {
         }
         expect(await gateway.getRequests("skills.search")).toHaveLength(1);
         expect(await gateway.getRequests("skills.categories")).toHaveLength(1);
-        const overflow = await page
-          .locator("[data-catalog-section] :is(h2, article, button)")
-          .evaluateAll((elements) =>
-            elements
-              .filter((el) => {
-                const { left, right } = el.getBoundingClientRect();
-                return left < -1 || right > document.documentElement.clientWidth + 1;
-              })
-              .map((el) => el.textContent),
-          );
-        expect(overflow).toEqual([]);
+        const content = page.locator("[data-catalog-section] :is(h2, article, button)");
+        const fits = await content.evaluateAll((elements) =>
+          elements.every((el) => {
+            const { left, right } = el.getBoundingClientRect();
+            return left >= -1 && right <= document.documentElement.clientWidth + 1;
+          }),
+        );
+        expect(fits).toBe(true);
       }));
   }
 
