@@ -8,6 +8,7 @@ const gatewayRuntime = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
   isImplicitLocalGatewayTargetFromCli: vi.fn(async () => false),
 }));
+const stateOwner = vi.hoisted(() => ({ assertCurrent: vi.fn() }));
 
 vi.mock(import("openclaw/plugin-sdk/gateway-runtime"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -20,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => ({
     runLocal,
   }: {
     runLocal: (scope: { assertCurrent(): void }) => unknown;
-  }) => runLocal({ assertCurrent() {} }),
+  }) => runLocal({ assertCurrent: stateOwner.assertCurrent }),
 }));
 
 async function captureStdout(run: () => Promise<unknown>): Promise<string> {
@@ -36,11 +37,14 @@ async function captureStdout(run: () => Promise<unknown>): Promise<string> {
 describe("registerWorkboardCli", () => {
   let store: WorkboardStore;
   let program: Command;
+  let beforeCardWrite: (() => void) | undefined;
   const parse = (...args: string[]) => program.parseAsync(["workboard", ...args], { from: "user" });
   const captureCli = (...args: string[]) => captureStdout(() => parse(...args));
 
   beforeEach(() => {
-    store = createWorkboardSqliteTestStore();
+    beforeCardWrite = undefined;
+    store = createWorkboardSqliteTestStore({ beforeCardWrite: () => beforeCardWrite?.() });
+    stateOwner.assertCurrent.mockReset();
     program = new Command().exitOverride().configureOutput({ writeErr() {}, writeOut() {} });
     registerWorkboardCli({ program, withStore: async (action) => action(store) });
     gatewayRuntime.callGatewayFromCli.mockReset();
@@ -59,6 +63,62 @@ describe("registerWorkboardCli", () => {
       ),
     );
   });
+
+  it("maintains a card by prefix and reads comments and proof back without its claim token", async () => {
+    const card = await store.create({ title: "Original", notes: "Old notes", labels: ["old"] });
+    await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
+    const id = card.id.slice(0, 8);
+    for (const args of [
+      ["edit", id, "--title", "Updated", "--notes", "", "--priority", "high", "--labels", ""],
+      ["comment", id, "--body", "Ready for review"],
+      ["proof", id, "--label", "Smoke", "--command", "echo recorded-only"],
+    ]) {
+      expect(await captureCli(...args, "--json")).not.toContain("secret-token");
+    }
+    const { card: updated } = JSON.parse(await captureCli("show", id, "--json"));
+    expect(updated).toMatchObject({
+      title: "Updated",
+      priority: "high",
+      labels: [],
+      metadata: {
+        comments: [{ body: "Ready for review" }],
+        proof: [{ label: "Smoke", command: "echo recorded-only", status: "unknown" }],
+        claim: { token: "[redacted]" },
+      },
+    });
+    expect(updated.notes).toBeUndefined();
+  });
+
+  it("refuses empty edits and invalid choices without changing the card", async () => {
+    const card = await store.create({ title: "Unchanged" });
+    for (const args of [
+      ["edit", card.id],
+      ["edit", card.id, "--priority", "highest"],
+      ["proof", card.id, "--label", "Smoke", "--status", "pass"],
+      ["comment", "missing-card", "--body", "Missing"],
+    ]) {
+      await expect(parse(...args)).rejects.toThrow();
+    }
+    expect(await store.get(card.id)).toEqual(card);
+  });
+
+  it.each([
+    ["edit", ["--title", "Must not persist"]],
+    ["comment", ["--body", "Must not persist"]],
+    ["proof", ["--label", "Must not persist"]],
+  ])(
+    "refuses %s when owner authority expires immediately before SQLite admission",
+    async (verb, flags) => {
+      const card = await store.create({ title: "Unchanged" });
+      beforeCardWrite = () => {
+        stateOwner.assertCurrent.mockImplementation(() => {
+          throw new Error("owner expired");
+        });
+      };
+      await expect(parse(verb, card.id, ...flags)).rejects.toThrow("owner expired");
+      expect(await store.get(card.id)).toEqual(card);
+    },
+  );
 
   it("requests minimum scopes unless full-host access is explicit", async () => {
     gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });

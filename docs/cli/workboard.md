@@ -7,7 +7,7 @@ read_when:
 title: "Workboard CLI"
 ---
 
-`openclaw workboard` is the terminal surface for the bundled [Workboard plugin](/plugins/workboard). It lets an operator list cards, create a card, inspect one card, and ask the running Gateway to dispatch ready work into subagent worker runs.
+`openclaw workboard` is the terminal surface for the bundled [Workboard plugin](/plugins/workboard). Operators can inspect and maintain cards, record comments and proof, and ask the running Gateway to dispatch ready work into subagent worker runs.
 
 Enable the plugin before using the command:
 
@@ -23,6 +23,9 @@ openclaw workboard list [--board <id>] [--status <status>] [--include-archived] 
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
 openclaw workboard move <id> --status <status> [--json]
+openclaw workboard edit <id> [--title <text>] [--notes <text>] [--priority <priority>] [--labels <items>] [--json]
+openclaw workboard comment <id> --body <text> [--json]
+openclaw workboard proof <id> --label <text> [--command <text>] [--status <status>] [--url <url>] [--note <text>] [--json]
 openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
@@ -85,6 +88,8 @@ openclaw workboard show 7f4a2c10 --json
 
 Text output prints the compact card line and notes. JSON output returns the full card record, including execution metadata, attempts, comments, links, proof, artifacts, worker logs, protocol state, diagnostics, and automation metadata.
 
+Comments are at `card.metadata.comments`; proof rows are at `card.metadata.proof`.
+
 Proof statuses in JSON are worker-reported outcomes. `passed` records the worker's
 self-assessment of the attached command or check. It is not an independent verification
 result.
@@ -100,6 +105,27 @@ openclaw workboard move 7f4a2c10 --status done --json
 
 This command writes through the selected state owner, using Gateway RPC while
 the Gateway is running and exclusive offline ownership when it is stopped.
+
+## `edit`
+
+```bash
+openclaw workboard edit 7f4a2c10 --title "Investigate worker timeout" --priority high
+openclaw workboard edit 7f4a2c10 --notes "Reproduced on the current build" --labels bug,workboard --json
+openclaw workboard edit 7f4a2c10 --notes "" --labels ""
+```
+
+Supply at least one of `--title`, `--notes`, `--priority`, or `--labels`. Omitted fields stay unchanged; empty notes or labels clear that field. Priorities match `create`. An edit refuses if another writer changed the card after the CLI resolved it; inspect the card and retry.
+
+## `comment` and `proof`
+
+```bash
+openclaw workboard comment 7f4a2c10 --body "Ready for review" --json
+openclaw workboard proof 7f4a2c10 --label "Smoke test" --command "pnpm test path/to/test" --status passed --note "Checked the current build" --json
+```
+
+`comment` requires `--body`. `proof` requires `--label` and accepts optional `--command`, `--status`, `--url`, and `--note`. Valid proof statuses are `passed`, `failed`, `skipped`, and `unknown` (default).
+
+`proof` records supplied metadata; it never executes `--command` or independently verifies the reported outcome. Both commands append metadata entries rather than replacing them. Like `edit`, they accept an unambiguous id prefix, write through the selected state owner, and return `{ "card": ... }` with `--json`. Claim tokens remain redacted. After an uncertain reply, inspect `show --json` before retrying an append.
 
 ## `dispatch`
 
@@ -187,7 +213,7 @@ Slash command dispatch also uses the Gateway subagent runtime. It follows the sa
 
 The CLI dispatch path normally requests Gateway `operator.write` and `operator.read` scopes. Workspace-bound cards run directly in an exact configured agent workspace. A worktree request is narrowed to that directory, so the host does not materialize repository-controlled code. The selected worker must have writable, non-shared Docker sandbox access to that exact workspace, a live container hash matching the requested mounts and policy, and no host escape capability. Pass `--admin` to explicitly request `operator.admin`, allow another host checkout, and use normal managed-worktree setup. The connection fails if that scope is not approved for the client. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers. Workspace limits do not otherwise change manual card movement for callers with Workboard mutation permission.
 
-Local `list`, `create`, `show`, and `move` commands operate on the local OpenClaw state directory used by the current profile. Use `--dev` or `--profile <name>` on the top-level `openclaw` command when you need a different state root.
+Local `list`, `create`, `show`, `move`, `edit`, `comment`, and `proof` commands operate on the local OpenClaw state directory used by the current profile. Mutations require Gateway `operator.write` permission when a Gateway is running. Use `--dev` or `--profile <name>` on the top-level `openclaw` command when you need a different state root.
 
 ## Troubleshooting
 
