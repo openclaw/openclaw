@@ -11,6 +11,8 @@ Completed work and retained checkouts are separate.
 
 Recent completed work and pending candidates. d / c = declarations / expanded cases.
 
+Queued hook accounts / `423ae0907203`: F1 from the existing Gateway-server audit repaired; all 14 cases remain. The case now holds a real same-session queue, removes the account from a replacement config, and checks that the second runner never starts. Reusing dispatch-time config passed the original row but failed the corrected runner-count assertion. Boat baseline and candidate 14/14; account-selection sibling 4/4; targeted format, lint and type checks passed. Production bytes restored.
+
 Host CPU invalid ticks / `6577f41b9aba`: F1 from the existing Gateway-server audit repaired without adding or removing cases. The fixture keeps both CPUs and advances valid counters so NaN handling, not topology change, determines the result. Boat baseline and candidate 24/24; health siblings 20/20. A finite-delta substitution passed the original row but made the corrected row fail with fabricated utilization 0.5. Production bytes restored; targeted format, lint and type checks passed.
 
 Send previews / `9b057ba98c12`: C1/2 renderer replays, −19 test lines / two cases. Title-only presentation and media-alias deduplication remain covered by the renderer suite; send and idle-lifecycle cases retain the exact rendered batch. Boat original 16/16 + renderer 6/6, candidate 14/14 + renderer 6/6. Both original replays and the renderer keepers caught their respective title/alias faults; production bytes were restored. Independent preservation review passed. Broad scan results belong to the PR; no production change or runtime savings claimed.
@@ -35,7 +37,7 @@ OpenClaw ID callback / `3981634bf658`: F1 assertion input repair, no case or lin
 
 Further source-only review / `c4c10bae3232`, non-additive: OpenClaw ID 67 suites, 359 declarations / 453 expanded cases (R356/450, F1/1, D2/2). Pending qualification: token-startup case and a four-line shared assertion consolidation. Conditional native rows are not all registered together.
 
-WebSocket 34 suites / `c4c10bae3232`: 198 declarations / 353 expanded cases, all R; six support modules have consumers. Gateway server 28 suites: 218 declarations / 355 cases (R216/353, F2/2). Repair the NaN CPU fixture's topology and make queued account validation depend on fresh config. Source-only, non-additive; no deletion or runtime credit.
+WebSocket 34 suites / `c4c10bae3232`: 198 declarations / 353 expanded cases, all R; six support modules have consumers. Gateway server 28 suites: 218 declarations / 355 cases (R216/353, F2/2). Both fixture repairs are recorded above. Source-only, non-additive; no deletion or runtime credit.
 
 Fixture reference survey / `c4c10bae3232`: 58 top-level files checked for references. All four exact-name misses have live consumers through a worker descriptor, a `.js` import, or release-based filenames. Retain them; the survey is not a completed value audit of all 58 fixtures.
 
