@@ -23,6 +23,7 @@ import {
   cardRunId,
   cardSessionKey,
   closeRunningAttempts,
+  hasFinishedWorkboardLaunchClaim,
   retryBudgetExhausted,
 } from "./store-card-helpers.js";
 import {
@@ -130,7 +131,8 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       ) {
         throw new Error("card workspace authority changed before claim.");
       }
-      const existingClaim = guarded.metadata?.claim;
+      const existingClaim =
+        rework && hasFinishedWorkboardLaunchClaim(guarded) ? undefined : guarded.metadata?.claim;
       const activeClaim =
         existingClaim &&
         (isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now }) ||

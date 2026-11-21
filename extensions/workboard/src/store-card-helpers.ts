@@ -44,6 +44,29 @@ export function cardRunId(card: WorkboardCard): string | undefined {
   return card.runId ?? card.execution?.runId;
 }
 
+/** A reviewer can replace the claim of the settled launch, including on an older saved card. */
+export function hasFinishedWorkboardLaunchClaim(card: WorkboardCard): boolean {
+  const claim = card.metadata?.claim;
+  const launch = card.metadata?.automation?.launch;
+  const runId = cardRunId(card);
+  const sessionKey = cardSessionKey(card);
+  return (
+    card.status === "review" &&
+    card.execution?.status === "review" &&
+    claim !== undefined &&
+    launch?.phase === "accepted" &&
+    claim.claimedAt <= launch.acceptedAt &&
+    runId === (launch.acceptedRunId ?? launch.provisionalRunId) &&
+    sessionKey === launch.acceptedSessionKey &&
+    card.metadata?.attempts?.some(
+      (attempt) =>
+        attempt.status === "succeeded" &&
+        attempt.runId === runId &&
+        attempt.sessionKey === sessionKey,
+    ) === true
+  );
+}
+
 function executionAttemptStatus(execution: WorkboardExecution): WorkboardAttemptStatus {
   if (execution.status === "running") {
     return "running";

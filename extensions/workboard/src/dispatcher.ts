@@ -22,7 +22,7 @@ import {
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
-import { cardBoardId } from "./store-card-helpers.js";
+import { cardBoardId, hasFinishedWorkboardLaunchClaim } from "./store-card-helpers.js";
 import {
   workboardBoardOwnerSlotLimit,
   workboardCardConsumesOwnerSlot,
@@ -161,6 +161,14 @@ async function runWorkboardDispatch(
   const cards = await params.store.list();
   const candidates = directCard ? [directCard] : await params.store.list({ boardId });
   const ownerOverride = params.options?.ownerId?.trim() || undefined;
+  const replacesClaimOn =
+    rework && directCard && hasFinishedWorkboardLaunchClaim(directCard) ? directCard.id : undefined;
+  const startOwner = (card: WorkboardCard) =>
+    ownerOverride ||
+    workboardCardSlotOwner(
+      card.id === replacesClaimOn ? { status: card.status, agentId: card.agentId } : card,
+      now,
+    );
   const { boards } = await params.store.listBoards();
   const boardsById = new Map(boards.map((board) => [board.id, board]));
   const ownerSlotLimit = (card: WorkboardCard) =>
@@ -179,7 +187,8 @@ async function runWorkboardDispatch(
       return { cards: [] };
     }
     for (const card of cards) {
-      if (!workboardCardConsumesOwnerSlot(card, now)) {
+      // The store's owner-slot transaction excludes the card being claimed.
+      if (card.id === replacesClaimOn || !workboardCardConsumesOwnerSlot(card, now)) {
         continue;
       }
       const owner = workboardCardSlotOwner(card);
@@ -190,7 +199,7 @@ async function runWorkboardDispatch(
     const selectedOwners = new Set<string>();
     const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
     for (const card of ordered) {
-      const owner = ownerOverride || workboardCardSlotOwner(card, now);
+      const owner = startOwner(card);
       const invalidRework = rework
         ? card.updatedAt !== rework.expectedUpdatedAt
           ? "Card changed. Review the latest values and retry."
@@ -200,7 +209,7 @@ async function runWorkboardDispatch(
         : undefined;
       const rejection = card.metadata?.archivedAt
         ? "Card is archived; restore it before starting."
-        : cardHasActiveClaim(card, now)
+        : card.id !== replacesClaimOn && cardHasActiveClaim(card, now)
           ? `Card is already claimed by ${card.metadata?.claim?.ownerId ?? "another worker"}.`
           : mode === "scheduled" && card.status !== "ready"
             ? ""
@@ -237,7 +246,7 @@ async function runWorkboardDispatch(
     startFailures.push(selection.rejection);
   }
   for (const card of selection.cards) {
-    const ownerId = ownerOverride || workboardCardSlotOwner(card, now);
+    const ownerId = startOwner(card);
     if (started.length >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
