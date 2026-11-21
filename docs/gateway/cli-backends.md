@@ -254,8 +254,8 @@ a project's `.claude/agents/` are not loaded.
   native call has no such check. `before_tool_call` sees these calls as
   `web_search`.
 - Each native call still passes `before_tool_call`. OpenClaw's exec policy and
-  approvals do not apply to Claude's own tools: they follow Claude Code's own
-  permission controls.
+  approvals do not apply to Claude's own tools: a call that is available to the
+  run and passes `before_tool_call` is allowed without an approval prompt.
 - Descendants see the managed turn's tool list: the selected orchestration
   tools plus OpenClaw's policy-filtered tools, never Claude-native file or
   shell tools. Their OpenClaw tool calls pass the same grant and hooks as the

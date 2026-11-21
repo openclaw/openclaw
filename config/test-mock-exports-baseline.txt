@@ -1230,7 +1230,6 @@
 ["src/agents/cli-runner/bundle-mcp-codex.user-config.test.ts","../auth-profiles/oauth.js","b758ddc1c33a2615ea3b34b36df56bec42bdde9c0fc7874208e2fad2fbd06b63",1]
 ["src/agents/cli-runner/bundle-mcp-codex.user-config.test.ts","../mcp-oauth.js","011db17350f54aa76f9ece13a7be0fbe6c3f23cc05d41b80db58e97f03302aa6",1]
 ["src/agents/cli-runner/bundle-mcp.user-config.test.ts","../mcp-oauth.js","cfd6315b3dd740d32a1adcfb0f2852da1af5c8b6764ffc6b1feed1374f46ea62",1]
-["src/agents/cli-runner/cli-native-tool-approval.test.ts","../tools/gateway.js","88f5c83ec236b816d42dcc9f38161e4f25a10f9a557acb8c851434c71f0ef6e0",1]
 ["src/agents/cli-runner/cli-run-settlement.test.ts","../../plugins/hook-runner-global.js","6b5a19ce9e585d99556fecb13058666cfd46f7403113ad3143063149ac461c4c",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../config/config-env-vars.js","b55309b8bb3c6058c00deea8281c41cd43156faa97c8e896b99f1b344cd230c5",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../config/sessions/paths.js","d46ec3b805d8914f370684680d972ba202a56540b061da6d12e82cf1b39b55a3",1]
