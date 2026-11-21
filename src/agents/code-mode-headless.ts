@@ -68,7 +68,7 @@ export function createHeadlessDeadlineScope(
   return {
     deadline,
     signal: controller.signal,
-    wait: async <T>(promise: Promise<T>): Promise<T> => {
+    wait: async <T>(operation: Promise<T> | (() => Promise<T>)): Promise<T> => {
       const remainingMs = Math.ceil(deadline - performance.now());
       if (remainingMs <= 0) {
         throw timeoutError();
@@ -76,7 +76,7 @@ export function createHeadlessDeadlineScope(
       if (controller.signal.aborted) {
         throw headlessAbortError(controller.signal);
       }
-      return await racePromiseWithAbortSignal(promise, controller.signal, headlessAbortError);
+      return await racePromiseWithAbortSignal(operation, controller.signal, headlessAbortError);
     },
     cleanup: () => {
       controller.abort(new CodeModeHeadlessAbortError());
