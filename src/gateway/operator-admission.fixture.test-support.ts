@@ -40,6 +40,10 @@ import {
   setOpenClawIdTunnelPrincipalResolver,
 } from "./openclaw-id/tunnel-principal.js";
 import {
+  preparePluginAccessGrant,
+  restorePluginAccessGrantOwner,
+} from "./operator-admission.access.test-support.js";
+import {
   ADMIN,
   ADMIN_USER,
   ORIGIN,
@@ -72,9 +76,12 @@ async function prepareNativeSend(fixture: AdmissionFixture, c: AdmissionCase) {
   c.profileId = profile.id;
   await setCanonicalUserProfileRole(profile.id, "operator");
   const mixed = c.scenario === "mixed-owner-group";
-  if (mixed) {
+  if (mixed || c.scenario === "owner-revoked-before-start") {
     const next = structuredClone(fixture.config);
-    next.commands = { ...next.commands, ownerAllowFrom: ["discord:323456789012345678"] };
+    next.commands = {
+      ...next.commands,
+      ownerAllowFrom: [`discord:${mixed ? "323456789012345678" : "123456789012345678"}`],
+    };
     await fixture.publish(next, c.signal);
   } else {
     await changeCanonicalUserChannelIdentity("link", profile.id, {
@@ -290,6 +297,10 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
       "empty-after-role",
       "owner-unavailable",
       "pairing-unavailable",
+      "plugin-resume-mismatch",
+      "plugin-authorize-denied",
+      "plugin-authorize-allowed",
+      "plugin-owner-unavailable",
     ].includes(c.scenario)
   ) {
     await revokeAdmissionSource(fixture, c);
@@ -327,7 +338,14 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
       context.sharedGatewaySessionGenerationState = generationState;
     }
   }
-  if (["owner-unavailable", "pairing-unavailable", "generation-unavailable"].includes(c.scenario)) {
+  if (
+    [
+      "owner-unavailable",
+      "pairing-unavailable",
+      "generation-unavailable",
+      "plugin-owner-unavailable",
+    ].includes(c.scenario)
+  ) {
     assert(deferred, "An unavailable owner must defer, not refuse or consume accepted work");
     const retained = (await readSessionQueuedInputPage(c.target)).rows.find(
       (row) => row.input_id === stored.input_id,
@@ -342,6 +360,9 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
       assert(c.claw);
       const authority = c.claw.authority;
       setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
+    }
+    if (c.scenario === "plugin-owner-unavailable") {
+      restorePluginAccessGrantOwner(c);
     }
     await c.wait(deferred.resume());
   } else {
@@ -377,6 +398,9 @@ export async function runCase(
     if (row.credential === "channel") {
       nativeSend = await prepareNativeSend(fixture, c);
     } else {
+      if (row.credential === "plugin-grant") {
+        preparePluginAccessGrant(fixture, c);
+      }
       operator = await prepareAdmissionOperator(fixture, c);
       c.profileId = (
         await operator.request<{ profile: { id: string } }>("users.self", {})
@@ -463,6 +487,12 @@ export async function runCase(
     if (scenario === "mixed-owner-group") {
       expect(c.queuedOwners).toEqual([false, true]);
     }
+    if (scenario === "owner-revoked-before-start") {
+      expect(c.queuedOwners).toEqual([true]);
+      const next = structuredClone(fixture.config);
+      next.commands = { ...next.commands, ownerAllowFrom: [] };
+      await fixture.publish(next, c.signal);
+    }
     if (scenario === "live-ocid-grant") {
       const next = structuredClone(fixture.config);
       assert(next.gateway?.auth?.identityScopes);
@@ -516,6 +546,8 @@ export async function runCase(
         "device-token-revoked",
         "device-role-unapproved",
         "owner-disabled",
+        "plugin-resume-mismatch",
+        "plugin-authorize-denied",
       ].includes(scenario)
     ) {
       if (!restartSentinel) {
@@ -549,6 +581,7 @@ export async function runCase(
         }
       }
       if (
+        row.credential === "plugin-grant" ||
         [
           "narrowed-grant",
           "widened-grant",
@@ -571,7 +604,7 @@ export async function runCase(
         }
       }
       await fixture.finishQueuedRun(() => revokeAdmissionSource(fixture, c));
-      if (scenario === "mixed-owner-group") {
+      if (scenario === "mixed-owner-group" || scenario === "owner-revoked-before-start") {
         expect(c.ownerToolChecks).toBeGreaterThan(0);
       }
     }

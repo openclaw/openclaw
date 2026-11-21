@@ -378,6 +378,10 @@ it.each([
         }),
       });
     const turn = await admitted(prepare(queued));
+    expect(turn.queued.run).toMatchObject({
+      senderIsOwner: allowed,
+      traceAuthorized: allowed,
+    });
     const effect = vi.fn();
     const assertOwner = captureCommandOwnerAssertion(turn.queued.run);
     if (allowed) {

@@ -37,6 +37,10 @@ import {
   setOpenClawIdTunnelPrincipalResolver,
 } from "./openclaw-id/tunnel-principal.js";
 import {
+  expectPluginAccessGrant,
+  revokePluginAccessGrant,
+} from "./operator-admission.access.test-support.js";
+import {
   ADMIN,
   ADMIN_USER,
   ORIGIN,
@@ -83,6 +87,16 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
   const enqueued = vi.spyOn(queueLifecycle, "markFollowupRunEnqueued").mockImplementation((run) => {
     const accepted = enqueue(run);
     const c = fixture.current;
+    if (
+      accepted &&
+      c?.scenario === "owner-revoked-before-start" &&
+      run.prompt.includes(c.queuedText)
+    ) {
+      c.original ??= run;
+      c.queuedOwners.push(run.run.senderIsOwner === true);
+      c.enqueued.resolve();
+      return accepted;
+    }
     if (accepted && c?.scenario === "mixed-owner-group" && run.prompt.includes(c.queuedText)) {
       c.original ??= run;
       c.queuedOwners.push(run.run.senderIsOwner === true);
@@ -99,6 +113,9 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         return accepted;
       }
       assert(source, "Accepted input must carry real authority");
+      if (c.row.credential === "plugin-grant") {
+        expectPluginAccessGrant(c, source);
+      }
       if (
         ["narrowed-token", "narrowed-ingress", "narrowed-grant", "narrowed-role"].includes(
           c.scenario,
@@ -116,13 +133,15 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
           expect(snapshot.authPolicy.authMethod).toBe(
             c.row.credential === "fallback"
               ? "password"
-              : c.row.credential === "proxy-device" || c.row.credential.startsWith("ocid-")
+              : c.row.credential === "proxy-device" ||
+                  c.row.credential === "plugin-grant" ||
+                  c.row.credential.startsWith("ocid-")
                 ? "trusted-proxy"
                 : c.row.credential === "tailscale-device"
                   ? "tailscale"
                   : c.row.credential,
           );
-          if (c.row.credential === "trusted-proxy") {
+          if (c.row.credential === "trusted-proxy" || c.row.credential === "plugin-grant") {
             expect(snapshot.device).toBeUndefined();
           }
           if (c.row.credential === "tailscale") {
@@ -241,6 +260,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         c?.original &&
         (c.row.credential === "live-grant" ||
           c.row.credential === "live-role" ||
+          c.row.credential === "plugin-grant" ||
           [
             "narrowed-grant",
             "narrowed-token",
@@ -256,10 +276,13 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         const authority = readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext);
         assert(authority, "Recovered tools must receive their admitted operator authority");
         c.observedRunScopes.push([...authority.scopes]);
+        if (c.row.credential === "plugin-grant") {
+          expectPluginAccessGrant(c, authority, true);
+        }
       }
       const result = await prepareTools(params);
       if (
-        c?.scenario === "mixed-owner-group" &&
+        (c?.scenario === "mixed-owner-group" || c?.scenario === "owner-revoked-before-start") &&
         c.original &&
         params.attempt.sessionKey === c.sessionKey
       ) {
@@ -402,7 +425,7 @@ export async function prepareAdmissionOperator(
     fixture.bindings.push(binding);
     return binding;
   }
-  const device = credential !== "trusted-proxy";
+  const device = credential !== "trusted-proxy" && credential !== "plugin-grant";
   // Identity-only approvals must disappear when the identity grant narrows.
   const deviceScopes =
     credential === "tailscale-device" || c.scenario === "live-ocid-grant" ? WRITER : initialScopes;
@@ -443,7 +466,11 @@ export async function prepareAdmissionOperator(
     options.password = resolveGatewayAuthForConfig({ config: fixture.config }).password;
     assert(options.password);
   }
-  if (credential === "trusted-proxy" || credential === "proxy-device") {
+  if (
+    credential === "trusted-proxy" ||
+    credential === "proxy-device" ||
+    credential === "plugin-grant"
+  ) {
     options.edgeAuthHeaders = proxyHeaders(PROXY_USER);
   }
   if (credential === "tailscale" || credential === "tailscale-device") {
@@ -471,6 +498,10 @@ export async function prepareAdmissionOperator(
 
 export async function revokeAdmissionSource(fixture: AdmissionFixture, c: AdmissionCase) {
   const next = structuredClone(fixture.config);
+  if (c.row.credential === "plugin-grant") {
+    revokePluginAccessGrant(c);
+    return;
+  }
   if (c.scenario === "narrowed-token") {
     assert(c.row.credential === "device-token");
     const before = await pairingStore.loadPairedDevicePairingStoreRecordReadOnly(

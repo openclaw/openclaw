@@ -35,6 +35,7 @@ type Kind =
   | `tailscale-device:${Ingress}`
   | "ocid-owner"
   | "ocid-member"
+  | "plugin-grant"
   | Exclude<keyof typeof sourceIngresses, Ingress>
   | LiveAdmissionKind
   | Exclude<QueuedOperatorRecoverySource["kind"], "gateway" | "unavailable">;
@@ -59,6 +60,7 @@ const rows: Record<Kind, Row> = {
   "ocid-member": { credential: "ocid-member", ingress: "control-ui" },
   principal: { credential: "principal", ingress: "principal" },
   channel: { credential: "channel", ingress: "channel" },
+  "plugin-grant": { credential: "plugin-grant", ingress: "internal" },
   "http-bearer": { credential: "http-bearer", ingress: "live" },
   "http-ocid": { credential: "http-ocid", ingress: "live" },
   "openai-compatible": { credential: "openai-compatible", ingress: "live" },
@@ -83,6 +85,7 @@ const rows: Record<Kind, Row> = {
 const modeFor = (row: Row): Mode =>
   [
     "trusted-proxy",
+    "plugin-grant",
     "proxy-device",
     "fallback",
     "live-device",
@@ -121,6 +124,10 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["trusted-proxy:control-ui", "goal-agent-excluded"],
       ["live-proxy", "secondary-email-removed"],
       ["live-proxy", "profile-deleted"],
+      ["plugin-grant", "plugin-resume-mismatch"],
+      ["plugin-grant", "plugin-authorize-denied"],
+      ["plugin-grant", "plugin-authorize-allowed"],
+      ["plugin-grant", "plugin-owner-unavailable"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
       await runCase(fixture, rows[kind], scenario, signal);
     });
@@ -141,6 +148,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["tailscale-device:internal", "narrowed-grant"],
       ["tailscale-device:internal", "widened-grant"],
       ["channel", "mixed-owner-group"],
+      ["channel", "owner-revoked-before-start"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
       await runCase(fixture, rows[kind], scenario, signal);
     });

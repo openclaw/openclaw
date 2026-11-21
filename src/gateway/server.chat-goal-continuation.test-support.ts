@@ -289,7 +289,7 @@ export function registerGoalAutomaticContinuationCases(
     );
   });
 
-  it("stops an owner's Goal successor before execution once ownership is revoked", async () => {
+  it("downgrades an owner's Goal successor once ownership is revoked", async () => {
     let restore = withOwnerPolicy();
     const owners: Array<boolean | undefined> = [];
     runEmbeddedAgent.mockImplementation(async (params) => {
@@ -297,21 +297,27 @@ export function registerGoalAutomaticContinuationCases(
       if (owners.length === 1) {
         await completeRequesterExec("456");
       } else if (owners.length === 3) {
-        // Revoked after the first successor ran; the next one must not execute.
+        // The next successor re-admits as a nonowner instead of losing the Goal turn.
         restore();
         restore = withOwnerPolicy(true);
+      } else if (owners.length === 4) {
+        expect(params.prompt).toContain("Advance");
+        await setGoalStatus("complete");
       }
       return result(params.sessionId);
     });
     try {
-      await start("Continue while the owner remains configured");
+      await start("Continue after the configured owner is removed");
       await expectDrained();
     } finally {
       restore();
     }
-    expect(owners.slice(1)).toEqual([true, true]);
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
+    expect(owners.slice(1)).toEqual([true, true, false]);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(4);
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({
+      status: "complete",
+      continuationTurns: 2,
+    });
   });
 
   it("lets an admitted owner Goal successor's tool effect finish after ownership is revoked", async () => {

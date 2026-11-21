@@ -21,7 +21,6 @@ import {
   bindCommandOwnerAuthority,
   captureCommandOwnerAssertion,
   getCommandOwnerAuthority,
-  CommandOwnerRevokedError,
 } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
@@ -273,9 +272,6 @@ export async function prepareReplyCommandOwnerAuthority(params: {
     );
     params.assertCurrent();
     const senderIsOwner = owner.isCurrent(config);
-    if (run.senderIsOwner && !senderIsOwner) {
-      throw new CommandOwnerRevokedError("Channel operator authority changed; send a new request.");
-    }
     run.senderIsOwner = senderIsOwner;
     run.traceAuthorized = senderIsOwner;
     bindCommandOwnerAuthority(run, {

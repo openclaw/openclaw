@@ -62,6 +62,7 @@ type Credential =
   | "ocid-owner"
   | "ocid-member"
   | "principal"
+  | "plugin-grant"
   | "channel";
 type SavedRow = {
   credential: Credential;
@@ -96,4 +97,9 @@ export type Scenario =
   | "mixed-owner-group"
   | "secondary-email-removed"
   | "profile-deleted"
+  | "owner-revoked-before-start"
+  | "plugin-resume-mismatch"
+  | "plugin-authorize-denied"
+  | "plugin-authorize-allowed"
+  | "plugin-owner-unavailable"
   | "owner-unavailable";
