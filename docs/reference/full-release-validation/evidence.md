@@ -133,6 +133,13 @@ The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
 setup failures remain blocking; aggregate causes are also checked exactly.
 
+Plain-output native extension batches in CI retain separate invocation streams and emit a
+completion receipt only after every planned invocation and its descendants settle.
+An ordinary test failure does not skip later planned batches. Historical logs
+without that framing remain incomplete; never synthesize receipts or infer missing
+signatures from a later replay. Blank lines between a native failure header and
+its error are accepted, but unrelated errors and inconsistent counts still block.
+
 A Q change limited to the grant ledger does not change workload identity. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be
 reused after authentication and reevaluation under the new Q grants. Preserve

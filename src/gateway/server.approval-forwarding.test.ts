@@ -29,6 +29,26 @@ installGatewayTestHooks({ scope: "suite" });
 
 type Delivery = Pick<ChannelOutboundContext, "to" | "text" | "accountId">;
 
+async function verifyApprovalDeliveryWithCleanup(
+  verify: () => Promise<void>,
+  cleanup: () => Promise<void>,
+) {
+  try {
+    await verify();
+  } catch (error) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      // A failing deny/drain must not replace the original acceptance or delivery failure.
+      throw new AggregateError([error, cleanupError], "Approval verification and cleanup failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
+  }
+  await cleanup();
+}
+
 async function checkApprovalForwarding() {
   const forwardingRuntime = await import("../infra/exec-approval-forwarder.runtime.js");
   using forwardingSends = vi.spyOn(forwardingRuntime, "sendDurableMessageBatchCore");
@@ -145,26 +165,29 @@ async function checkApprovalForwarding() {
       expect(response.ok).toBe(true);
       const { id, status } = expectDefined(response.payload, "pending approval response");
       const prompts = () => deliveries.filter((delivery) => delivery.text.includes(title));
-      try {
-        expect(status).toBe("accepted");
-        if (forwarded) {
-          await vi.waitFor(() => expect(prompts()).not.toHaveLength(0), { timeout: 5_000 });
-          // Destination-history writes can change access while cleanup resolves the approval.
-          await withTestTimeout(
-            Promise.all(forwardingSends.mock.results.map(({ value }) => value)),
-            5_000,
-            "approval delivery did not settle",
-          );
-        }
-      } finally {
-        const resolved = await rpcReq(ws, "plugin.approval.resolve", {
-          id,
-          decision: "deny",
-        });
-        expect(resolved.ok, JSON.stringify({ title, resolved })).toBe(true);
-        const drained = await waitForGatewayActiveWork(5_000);
-        expect(drained.drained, JSON.stringify({ title, drained })).toBe(true);
-      }
+      await verifyApprovalDeliveryWithCleanup(
+        async () => {
+          expect(status).toBe("accepted");
+          if (forwarded) {
+            await vi.waitFor(() => expect(prompts()).not.toHaveLength(0), { timeout: 5_000 });
+            // Destination-history writes can change access while cleanup resolves the approval.
+            await withTestTimeout(
+              Promise.all(forwardingSends.mock.results.map(({ value }) => value)),
+              5_000,
+              "approval delivery did not settle",
+            );
+          }
+        },
+        async () => {
+          const resolved = await rpcReq(ws, "plugin.approval.resolve", {
+            id,
+            decision: "deny",
+          });
+          expect(resolved.ok, JSON.stringify({ title, resolved })).toBe(true);
+          const drained = await waitForGatewayActiveWork(5_000);
+          expect(drained.drained, JSON.stringify({ title, drained })).toBe(true);
+        },
+      );
       expect(prompts()).toHaveLength(forwarded ? 1 : 0);
       if (forwarded) {
         expect(prompts()[0]).toMatchObject({
@@ -211,6 +234,38 @@ async function checkApprovalForwarding() {
     resetTestPluginRegistry();
   }
 }
+
+it.each(["acceptance", "delivery"])(
+  "preserves %s failure and negative cleanup response in approval diagnostics",
+  async (phase) => {
+    const originalFailure = new Error(
+      phase === "acceptance" ? "expected accepted status" : "expected delivered prompt",
+    );
+    const cleanupFailure = new Error(
+      JSON.stringify({ ok: false, error: { code: "APPROVAL_NOT_FOUND" } }),
+    );
+    const cleanup = vi.fn(async () => {
+      throw cleanupFailure;
+    });
+    await expect(
+      verifyApprovalDeliveryWithCleanup(async () => {
+        throw originalFailure;
+      }, cleanup),
+    ).rejects.toMatchObject({ cause: cleanupFailure, errors: [originalFailure, cleanupFailure] });
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("preserves a sole verification or cleanup failure in approval diagnostics", async () => {
+  const failure = new Error("approval diagnostic failure");
+  const pass = async () => {};
+  const fail = async () => {
+    throw failure;
+  };
+  await expect(verifyApprovalDeliveryWithCleanup(fail, pass)).rejects.toBe(failure);
+  await expect(verifyApprovalDeliveryWithCleanup(pass, fail)).rejects.toBe(failure);
+  await expect(verifyApprovalDeliveryWithCleanup(pass, pass)).resolves.toBeUndefined();
+});
 
 it("uses the owning native runtime and destination account for approval forwarding", () =>
   withEnvAsync(

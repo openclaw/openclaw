@@ -152,6 +152,7 @@ export async function prepareSkillLibraryNodeProcess(
       stateDir: node.stateDir,
       tmpDir: workerTmpDir,
       logFile,
+      logs: () => logs,
       start,
       stop,
     };

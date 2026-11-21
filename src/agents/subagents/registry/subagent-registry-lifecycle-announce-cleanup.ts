@@ -566,25 +566,23 @@ export const startSubagentAnnounceCleanupFlow = (
     const deadline = new AbortController();
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let controllerInput: Awaited<ReturnType<typeof reserveSubagentCompletionControllerSource>>;
-    const now = Date.now();
     const expiryMs =
       entry.expectsCompletionMessage === true
         ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
         : ANNOUNCE_EXPIRY_MS;
-    const remainingMs = resolveAnnounceDeliveryDeadline(entry, now, expiryMs) - now;
-    const abortDelivery = () => {
+    const expireDelivery = () => {
+      const now = Date.now();
+      const remainingMs = resolveAnnounceDeliveryDeadline(entry, now, expiryMs) - now;
+      if (remainingMs > 0) {
+        deadlineTimer = setTimeout(expireDelivery, remainingMs);
+        deadlineTimer.unref();
+        return;
+      }
       const reason = new Error("subagent announce delivery expired");
       materializeErrorStack(reason);
       deadline.abort(reason);
     };
-    // Accepted handoffs can wait behind a busy parent without spending their
-    // execution timeout, but the lifecycle's delivery window still bounds that wait.
-    if (remainingMs <= 0) {
-      abortDelivery();
-    } else {
-      deadlineTimer = setTimeout(abortDelivery, remainingMs);
-      deadlineTimer.unref();
-    }
+    expireDelivery();
     try {
       if (entry.expectsCompletionMessage === true && !requesterOwnsCompletion()) {
         controllerInput = await reserveSubagentCompletionControllerSource(entry);
