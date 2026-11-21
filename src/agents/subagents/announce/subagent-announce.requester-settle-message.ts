@@ -83,8 +83,8 @@ export function buildRequesterSettleWakeMessage(params: {
   // Name pending siblings by short identifiers only; their task text stays out of the prompt.
   const pendingNames = pending
     .slice(0, PENDING_ROSTER_MAX)
-    .map((child) =>
-      truncateUtf16Safe(child.label?.trim() || child.taskName?.trim() || child.runId, 80),
+    .map((member) =>
+      truncateUtf16Safe(member.label?.trim() || member.taskName?.trim() || member.runId, 80),
     )
     .concat(
       pending.length > PENDING_ROSTER_MAX ? [`${pending.length - PENDING_ROSTER_MAX} more`] : [],
