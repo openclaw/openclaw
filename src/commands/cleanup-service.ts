@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { isNixMode } from "../config/config.js";
+import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -61,4 +62,37 @@ export async function stopGatewayForCleanup(
     }
   }
   return stopped;
+}
+
+/** Remove an installed node host service so uninstall cannot leave it relaunching. */
+export async function stopNodeServiceForCleanup(runtime: RuntimeEnv): Promise<boolean> {
+  if (isNixMode) {
+    return false;
+  }
+  const service = resolveNodeService();
+  const reportFailure = (label: string, error: unknown) => {
+    runtime.error(
+      `${label}: ${formatErrorMessage(error)}. Run ${formatCliCommand("openclaw node uninstall")}, then retry.`,
+    );
+  };
+  try {
+    if (await service.isAbsent?.({ env: process.env })) {
+      return true;
+    }
+    let stopped = true;
+    if (await service.isLoaded({ env: process.env })) {
+      try {
+        await service.stop({ env: process.env, stdout: process.stdout });
+      } catch (err) {
+        stopped = false;
+        reportFailure("Node service stop failed", err);
+      }
+    }
+    // Removing the registration still prevents relaunch when stopping failed.
+    await service.uninstall({ env: process.env, stdout: process.stdout });
+    return stopped;
+  } catch (err) {
+    reportFailure("Node service cleanup failed", err);
+    return false;
+  }
 }

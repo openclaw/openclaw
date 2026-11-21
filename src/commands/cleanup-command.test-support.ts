@@ -17,6 +17,13 @@ const gatewayServiceState = vi.hoisted(() => ({
   uninstall: vi.fn(),
 }));
 export const gatewayService = gatewayServiceState;
+const nodeServiceState = vi.hoisted(() => ({
+  isLoaded: vi.fn(),
+  isAbsent: vi.fn(),
+  stop: vi.fn(),
+  uninstall: vi.fn(),
+}));
+export const nodeService = nodeServiceState;
 const cleanupConfigState = vi.hoisted(() => ({ isNixMode: false }));
 
 vi.mock("../config/config.js", () => ({
@@ -28,6 +35,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => gatewayService,
+}));
+
+vi.mock("../daemon/node-service.js", () => ({
+  resolveNodeService: () => nodeService,
 }));
 
 vi.mock("./cleanup-plan.js", () => ({
@@ -68,6 +79,10 @@ export function resetCleanupCommandMocks() {
   gatewayService.isAbsent.mockReset().mockResolvedValue(false);
   gatewayService.stop.mockReset().mockResolvedValue(undefined);
   gatewayService.uninstall.mockReset().mockResolvedValue(undefined);
+  nodeService.isLoaded.mockReset().mockResolvedValue(true);
+  nodeService.isAbsent.mockReset().mockResolvedValue(false);
+  nodeService.stop.mockReset().mockResolvedValue(undefined);
+  nodeService.uninstall.mockReset().mockResolvedValue(undefined);
   cleanupConfigState.isNixMode = false;
 }
 
