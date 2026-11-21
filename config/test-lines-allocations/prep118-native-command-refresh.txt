@@ -1,0 +1,4 @@
+38
+# Source 626527a745ad5418a4966280a9848ba5baf182c9; release adaptation cd9b97d82c15189f5d488a87b3bc528d432bb9f1.
+# src/gateway/server-plugin-reload.recovery.test.ts: +38 literal LF bytes; all original controls retained.
+# Additive accounting companion only; no credit for unselected sources or baseline change.
