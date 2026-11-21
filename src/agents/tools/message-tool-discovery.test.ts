@@ -95,6 +95,10 @@ it.each([
   [{ currentChannelProvider: "telegram", currentChannelId: "channel:agent:main:main" }, false],
   [{ currentChannelProvider: "telegram", currentMessagingTarget: "123" }, true],
   [{ currentChannelProvider: "webchat", agentSessionKey: "agent:main:telegram:direct:123" }, true],
+  [
+    { currentChannelProvider: "webchat", agentSessionKey: "agent:main:telegram:direct:heartbeat" },
+    false,
+  ],
 ] as const)("reports source routing for %o", (context, expected) => {
   expect(hasMessageToolSourceConversation(context)).toBe(expected);
 });
