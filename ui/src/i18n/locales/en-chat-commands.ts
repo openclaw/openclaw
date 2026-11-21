@@ -7,7 +7,6 @@ const catalog = {
     commands: {
       arguments: "Command arguments",
       menu: "Slash commands",
-      optionCount: "{count} options",
       agentsDescription: "List available agents",
       usageDescription: "Show token and context usage for this session",
       clearDescription: "Clear this conversation",
