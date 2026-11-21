@@ -13,7 +13,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -255,51 +255,77 @@ async function main() {
     assert(Object.values(receipt.oracle).every((value) => /^[a-f0-9]{64}$/.test(value)));
   }
   const modules: Record<string, BuiltExport> = {};
+  const exportNames = {
+    selected: "loadCronJobsStoreWithConfigJobsReadOnlyByKey",
+    inventory: "inspectCronJobsReadOnly",
+    history: "readCronRunHistoryRecords",
+    candidates: "readCronRunHistoryCandidates",
+    projection: "cronRunRecordToRunLogEntry",
+    close: "closeOpenClawStateDatabaseAsync",
+    drain: "drainGlobalSingletonLifecycleState",
+    closeNative: "closeDefaultRetainedNativeWorkerSource",
+    captureNative: "captureRetainedNativeWorkerSource",
+    lifecycle: "getTrackedWorkerLifecycleSnapshot",
+    role: "installDatabaseProcessRole",
+    save: "saveCronJobsStoreWithRevisionByKey",
+    record: "recordCronRun",
+  };
+  const counts = new Map<string, number>();
   // Measured children consume prepared metadata: reading bundles here would
   // leave arm-dependent allocation garbage in the RSS observation window.
-  function resolve(prefix: string, name: string): BuiltExport {
-    if (receipt) {
-      const entry = receipt.modules[name];
-      assert(entry, `prepared compiled export required: ${name}`);
-      assert.match(entry.file, /^[A-Za-z0-9_-]+\.mjs$/);
-      assert(entry.file.startsWith(`${prefix}-`));
-      assert.match(entry.alias, /^[A-Za-z_$][A-Za-z0-9_$]*$/);
-      assert.match(entry.sha256, /^[a-f0-9]{64}$/);
-      return (modules[name] = entry);
-    }
-    const matches: BuiltExport[] = [];
+  if (!receipt) {
+    const required = new Set(Object.values(exportNames));
     for (const file of readdirSync(dist)
-      .filter((entry) => entry.startsWith(`${prefix}-`) && entry.endsWith(".mjs"))
+      .filter((entry) => /^[A-Za-z0-9_-]+\.mjs$/.test(entry))
       .toSorted(lexical)) {
-      const source = readFileSync(path.join(dist, file), "utf8");
+      const filePath = path.join(dist, file);
+      const stat = lstatSync(filePath);
+      assert(stat.isFile() && !stat.isSymbolicLink());
+      const source = readFileSync(filePath, "utf8");
       for (const block of source.matchAll(/export\s*\{([^}]+)\};/g)) {
         for (const part of block[1]!.split(",").map((entry) => entry.trim())) {
-          if (part === name || part.startsWith(`${name} as `)) {
-            matches.push({
-              file,
-              alias: part.split(/\s+as\s+/)[1] ?? name,
-              sha256: sha256(source),
-            });
+          const match = /^([A-Za-z_$][A-Za-z0-9_$]*)(?:\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*))?$/.exec(
+            part,
+          );
+          const name = match?.[1];
+          // Chunk names can change and forwarding barrels repeat exports.
+          // Select the unique chunk that declares and exports the actual function.
+          if (
+            name &&
+            required.has(name) &&
+            new RegExp(`\\bfunction\\s+${name}\\s*\\(`).test(source)
+          ) {
+            counts.set(name, (counts.get(name) ?? 0) + 1);
+            modules[name] = { file, alias: match?.[2] ?? name, sha256: sha256(source) };
           }
         }
       }
     }
-    assert.equal(matches.length, 1, `unique compiled export required: ${name}`);
-    return (modules[name] = matches[0]!);
   }
-  const selected = resolve("read-only", "loadCronJobsStoreWithConfigJobsReadOnlyByKey");
-  const inventory = resolve("read-only", "inspectCronJobsReadOnly");
-  const history = resolve("read-only", "readCronRunHistoryRecords");
-  const candidates = resolve("read-only", "readCronRunHistoryCandidates");
-  const projection = resolve("run-history-detail", "cronRunRecordToRunLogEntry");
-  const close = resolve("openclaw-state-db-cache", "closeOpenClawStateDatabaseAsync");
-  const drain = resolve("global-singleton", "drainGlobalSingletonLifecycleState");
-  const closeNative = resolve("worker-native-lifecycle", "closeDefaultRetainedNativeWorkerSource");
-  const captureNative = resolve("worker-native-lifecycle", "captureRetainedNativeWorkerSource");
-  const lifecycle = resolve("worker-cpu", "getTrackedWorkerLifecycleSnapshot");
-  const role = resolve("admission-scope", "installDatabaseProcessRole");
-  const save = resolve("store", "saveCronJobsStoreWithRevisionByKey");
-  const record = resolve("run-history", "recordCronRun");
+  function resolve(name: string): BuiltExport {
+    if (!receipt) {
+      assert.equal(counts.get(name), 1, `unique compiled function export required: ${name}`);
+    }
+    const entry = receipt ? receipt.modules[name] : modules[name];
+    assert(entry, `prepared compiled export required: ${name}`);
+    assert.match(entry.file, /^[A-Za-z0-9_-]+\.mjs$/);
+    assert.match(entry.alias, /^[A-Za-z_$][A-Za-z0-9_$]*$/);
+    assert.match(entry.sha256, /^[a-f0-9]{64}$/);
+    return (modules[name] = entry);
+  }
+  const selected = resolve(exportNames.selected);
+  const inventory = resolve(exportNames.inventory);
+  const history = resolve(exportNames.history);
+  const candidates = resolve(exportNames.candidates);
+  const projection = resolve(exportNames.projection);
+  const close = resolve(exportNames.close);
+  const drain = resolve(exportNames.drain);
+  const closeNative = resolve(exportNames.closeNative);
+  const captureNative = resolve(exportNames.captureNative);
+  const lifecycle = resolve(exportNames.lifecycle);
+  const role = resolve(exportNames.role);
+  const save = resolve(exportNames.save);
+  const record = resolve(exportNames.record);
   const workerEntry = "dist/cron/store/read-only.worker.js";
   const workerPath = path.join(buildRoot, workerEntry);
   if (receipt) {
