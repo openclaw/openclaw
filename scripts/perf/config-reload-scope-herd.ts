@@ -17,6 +17,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { SessionRowChange } from "../../src/sessions/session-row-changes.js";
 import { modelCatalogEventInvalidation } from "../../ui/src/lib/model-catalog-cache.ts";
@@ -47,6 +48,7 @@ const replaced = [
   "src/config/runtime-session-changes.ts",
   "src/config/resolution-facts.ts",
   "src/config/read-dependencies.ts",
+  "src/state/user-channel-identity-operations.ts",
 ].map((file) =>
   registerPerfOwnerReplacement(
     new URL(`../../${file}`, import.meta.url).href,
@@ -168,6 +170,7 @@ const clients: InstanceType<typeof GatewayClient>[] = [];
 let active = false;
 const sessionKeys = new Map<InstanceType<typeof GatewayClient>, string>();
 let configEvents = 0;
+let sessionEvents = 0;
 let modelInvalidations = 0;
 const scopes: SessionRowChange["scope"][] = [];
 const counts: Record<string, number> = {};
@@ -243,7 +246,14 @@ try {
             }),
           );
         }
-        if (isConversationConfigChange(event)) {
+        if (event.event === "sessions.changed") {
+          sessionEvents++;
+        }
+        if (
+          isConversationConfigChange(event) ||
+          (event.event === "sessions.changed" &&
+            asNullableRecord(event.payload)?.reason === "profile-identity")
+        ) {
           for (const method of [
             "session.members.listEvidence",
             "sessions.describe",
@@ -260,6 +270,7 @@ try {
     clients.push(client);
     client.start();
     await ready.promise;
+    await client.request("sessions.subscribe", {});
   }
   const roster = await clients[0]!.request<{ sessions: Array<{ key: string }> }>("sessions.list", {
     agentId: "main",
@@ -324,7 +335,7 @@ try {
     const revision = await clients[0]!.request<{ hash: string }>("config.get", {});
     Object.keys(counts).forEach((method) => delete counts[method]);
     automatic.length = probeMs.length = scopes.length = errors.length = 0;
-    configEvents = modelInvalidations = 0;
+    configEvents = sessionEvents = modelInvalidations = 0;
     if (values.allocations) {
       await inspector.post("HeapProfiler.startSampling", samplingOptions);
     }
@@ -384,6 +395,7 @@ try {
       retainedRuntime,
       modelInvalidations,
       configEvents,
+      sessionEvents,
       scopes: [...scopes],
       refetches: { ...counts },
       modelsProbeMs: [...probeMs],
