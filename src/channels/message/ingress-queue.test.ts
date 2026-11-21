@@ -308,10 +308,8 @@ describe("channel ingress queue", () => {
         record: { payload: { text: "second" } },
       });
 
-      if (!first.resubmit) {
-        return;
-      }
-      await expect(first.resubmit("same-id", { resubmittedAt: 30 })).resolves.toMatchObject({
+      const resubmit = expectDefined(first.resubmit?.bind(first), "resubmit");
+      await expect(resubmit("same-id", { resubmittedAt: 30 })).resolves.toMatchObject({
         kind: "resubmitted",
         record: { attempts: 0, laneKey: "channel:same-lane", payload: { text: "first" } },
       });

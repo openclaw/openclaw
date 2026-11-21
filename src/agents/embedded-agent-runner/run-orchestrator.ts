@@ -88,6 +88,7 @@ import {
 } from "./run/model-admission.js";
 import {
   bindRunToPreparedModelRuntime,
+  initializeReadOnlyRunModelCatalog,
   resolvePreparedRuntimeWorkspaces,
 } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -366,9 +367,14 @@ async function runEmbeddedAgentForSession(
             });
           preparedRuntimeResource = preparedModelRuntimeLease;
           startupStages.mark("prepared-runtime");
-          const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
           let preparedLeaseActive = true;
           try {
+            const preparedModelRuntimeOwnerSnapshot = await initializeReadOnlyRunModelCatalog(
+              params,
+              preparedModelRuntimeLease.snapshot,
+              requestedRuntimeSelection,
+              laneController.abortSignal,
+            );
             throwIfAborted();
             if (
               params.pluginGeneration &&
@@ -387,12 +393,7 @@ async function runEmbeddedAgentForSession(
             });
             params = rebound.runParams;
             const workspaceResolution = rebound.workspaceResolution;
-            const projects = await prepareAgentPromptProjects({
-              config: params.config,
-              workspaceDir: workspaceResolution.workspaceDir,
-              cwd: params.cwd,
-              sessionId: params.sessionId,
-            });
+            const projects = await prepareAgentPromptProjects(params);
             const preparedModelRuntime = Object.freeze({
               ...preparedModelRuntimeOwnerSnapshot,
               ...projects,

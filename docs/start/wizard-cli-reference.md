@@ -148,6 +148,10 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - [iMessage](/channels/imessage): `imsg` CLI path + Messages DB access; use an SSH wrapper when the Gateway runs off-Mac
     - Other bundled or separately installed channel plugins can add their own
       onboarding steps. See the complete [channel catalog](/channels).
+    - New or changed SecretRef-supported channel credentials entered directly
+      (including with `--secret-input-mode plaintext`) are saved in the
+      [shared secret store](/gateway/secrets/secret-store-and-egress), and
+      `openclaw.json` keeps a `store` SecretRef, as with `openclaw channels add`.
     - DM security: default is pairing. First DM sends a code; approve via
       `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>

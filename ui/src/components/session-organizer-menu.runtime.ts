@@ -210,6 +210,15 @@ export async function renameSessionGroupFromMenu(
   });
 }
 
+export function archiveSessionGroupFromMenu(
+  organizer: SessionOrganizer,
+  group: string,
+): Promise<void> {
+  return organizer.runOperation((operations, scope) =>
+    operations.archiveSessionGroupWithUndo(organizer.deps, group, scope),
+  );
+}
+
 export function deleteSessionGroupFromMenu(
   organizer: SessionOrganizer,
   group: string,

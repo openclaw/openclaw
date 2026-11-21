@@ -405,8 +405,8 @@ tasks record their store and can use automatic continuation.
 
 `timeoutSeconds` limits only the reply wait after acceptance, not the receiver's
 execution budget. The default reply wait is 30 seconds; `timeoutSeconds: 0` skips it.
-A separate fixed 30-second admission ceiling covers target lookup, preparation,
-admission, and transcript acknowledgment for every send. The sending tool declares
+A separate fixed 30-second admission ceiling covers target lookup, preparation and
+admission for every send. The sending tool declares
 an upper deadline of its start time plus the admission ceiling plus the reply wait
 to the turn watchdog. An admission timeout can follow accepted input; inspect the
 target before retrying.
@@ -430,15 +430,11 @@ An inline reply has `delivery.status: "skipped"` and starts no additional reques
 Neither field is a target-completion receipt.
 Separately admitted turns wait for the active reply and delivery to finish. They keep their order behind other agent commands; cancellation or the
 receiver's execution deadline can withdraw a waiting turn before it runs.
-Sends accepted by an active turn wait for transcript persistence within the fixed
-30-second admission ceiling before acknowledging. A timeout without confirmed
-persistence returns a visible timeout; it never acknowledges
-volatile input or replays input that might already have been consumed.
-A persisted steer is part of the target's history; acknowledgment does not mean
-that the model has finished processing it. A backend without durable steering
-support uses a queued turn with startup delivery recovery instead, reported as
-`targetDisposition: "queued"`. Successful steering produces no separate
-completion turn. `mode: "followup"` always starts a separately admitted turn with its own reply;
+A send accepted by an active turn returns `targetDisposition: "steered"` as soon as
+that run accepts it. From then on the receiving run owns the message: it commits it at
+its next steering boundary, or withdraws it if the run is cancelled, fails, or the
+Gateway restarts before that boundary. Acknowledgment does not mean the model has
+processed the message. Successful steering produces no separate completion turn. `mode: "followup"` always starts a separately admitted turn with its own reply;
 it waits behind active work instead of joining that execution.
 
 If a retry with the same request ID finds that the original admission is still pending, the

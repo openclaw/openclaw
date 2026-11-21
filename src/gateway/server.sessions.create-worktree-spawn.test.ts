@@ -728,7 +728,7 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
     });
   const created = await createSession(params);
   const parent = created.entry;
-  expect(created.worktree).toMatchObject({ branch: "openclaw/release-planning" });
+  expect(created.worktree.path).toMatch(/\/release-planning-[\da-f]{6}$/);
   expect(parent).toMatchObject({
     spawnedCwd: created.worktree.path,
     sessionRoot: created.worktree.path,

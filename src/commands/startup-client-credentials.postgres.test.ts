@@ -7,6 +7,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import { readDaemonRuntimePinMigrationReceipt } from "../daemon/runtime-pin-store.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
@@ -219,6 +220,40 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     fs.copyFileSync(anchor, `${anchor}.replacement`);
     fs.renameSync(`${anchor}.replacement`, anchor);
   }
+
+  it("prepares native runtime pins without the PostgreSQL secret when credentials are ready", async () => {
+    const fixture = await bootstrap();
+    const key = "OPENCLAW_TEST_NATIVE_CREDENTIALS_DSN";
+    const f = { ...fixture, env: { ...fixture.env, [key]: undefined } };
+    fs.writeFileSync(
+      f.env.OPENCLAW_CONFIG_PATH,
+      JSON.stringify({
+        database: {
+          families: { state: { engine: "postgres" } },
+          postgres: {
+            connection: { source: "env", provider: "default", id: key },
+            schemaPrefix: "credential_rebind",
+          },
+        },
+      }),
+    );
+
+    const args = ["--client-credentials", "--fix", "--non-interactive"];
+    const ready = await doctor(f, args);
+    expect(ready.code, ready.stderr || ready.stdout).toBe(0);
+    expect(readDaemonRuntimePinMigrationReceipt(f.env)).toMatchObject({
+      source_state: "none/unshipped",
+      phase: "complete",
+    });
+    expect(loadDeviceIdentityIfPresent({ env: f.env })).toEqual(f.identity);
+
+    replaceAnchor(f.anchor);
+    const recovery = await inspectRepair(f);
+    expect(recovery.code, recovery.stderr || recovery.stdout).toBe(2);
+    expect(JSON.parse(recovery.stdout).error.message).toContain(
+      "Configure a resolvable PostgreSQL DSN",
+    );
+  }, 300_000);
 
   it("repairs with --fix --yes, seals legacy imports, and survives a later anchor replacement", async () => {
     const prepared = await bootstrap();

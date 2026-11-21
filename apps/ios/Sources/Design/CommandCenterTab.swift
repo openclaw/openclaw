@@ -568,10 +568,11 @@ struct CommandCenterTab: View {
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
-        if let label = session.label?.trimmedNonEmpty {
+        // web `resolveSessionDisplayName`: a key copied into a name field is not a name.
+        if let label = session.label?.trimmedNonEmpty, label != session.key {
             return label
         }
-        if let displayName = session.displayName?.trimmedNonEmpty {
+        if let displayName = session.displayName?.trimmedNonEmpty, displayName != session.key {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
         if let autoLabel = session.autoLabel?.trimmedNonEmpty {

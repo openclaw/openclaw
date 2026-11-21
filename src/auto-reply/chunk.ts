@@ -12,7 +12,7 @@ import {
 } from "../../packages/markdown-core/src/fences.js";
 import { scanParenAwareBreakpoints } from "../../packages/markdown-core/src/text-breakpoints.js";
 import type { ChannelId } from "../channels/plugins/types.core.js";
-import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
+import { resolveChannelStreamingChunkMode } from "../channels/streaming-config-readers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";

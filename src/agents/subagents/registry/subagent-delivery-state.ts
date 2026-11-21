@@ -236,13 +236,20 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
+/** Captured private findings stay internal unless their admitted wake owes a visible final. */
+export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
+    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+  );
+}
+
 /** A committed private result can settle delivery when there is no uncertain send to resolve. */
 export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
     entry.delivery?.disposition !== "ambiguous" &&
     hasConsumedRequesterInput(entry) &&
-    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+    hasPrivateRequesterInput(entry)
   );
 }
 
@@ -253,6 +260,7 @@ const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]
   "requester_preparation_changed",
   "requester_state_conflict",
   "requester_transcript_conflict",
+  "visible_reply_missing",
 ]);
 
 /**
