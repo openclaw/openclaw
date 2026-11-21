@@ -593,6 +593,15 @@ describe("approved OpenClaw ID account menu", () => {
     expect(keys.labels).toContain("Move to new keys");
     // Unlinking signs with the Gateway key this computer cannot use.
     expect(keys.labels).not.toContain("Unlink from OpenClaw ID");
+    // A refused endpoint key leaves the Gateway key usable, so Unlink stays.
+    const endpointRefused = menu(
+      status({
+        link: linked,
+        status: { state: "keys_refused", key: "endpoint", reason: "key_mismatch" },
+      }),
+    );
+    expect(endpointRefused.text).toContain("Remote access is off");
+    expect(endpointRefused.labels).toContain("Unlink from OpenClaw ID");
     const superseded = menu(status({ link: linked }), {
       state: "failed",
       code: "binding_superseded",

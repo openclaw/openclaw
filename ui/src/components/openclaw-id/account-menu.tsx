@@ -189,11 +189,12 @@ function keyAttentionEntries(
 }
 
 // Unlinking signs with this computer's Gateway key over direct loopback; it needs no OpenClaw ID
-// sign-in, so it stays reachable when the account session expired. Never offered over the tunnel.
+// sign-in, so it stays reachable when the account session expired, and when only the endpoint key
+// is refused. Hidden when the Gateway key is refused. Never offered over the tunnel.
 function unlinkEntries(status: OpenClawIdStatusResult): MenuEntry[] {
-  return status.channel === "local_operator" &&
-    status.link.linked &&
-    status.status.state !== "keys_refused"
+  const gatewayKeyRefused =
+    status.status.state === "keys_refused" && status.status.key !== "endpoint";
+  return status.channel === "local_operator" && status.link.linked && !gatewayKeyRefused
     ? [renderSidebarMenuAction(UNLINK, t("openclawId.unlinkFromOpenClawId"), "circleX")]
     : [];
 }
