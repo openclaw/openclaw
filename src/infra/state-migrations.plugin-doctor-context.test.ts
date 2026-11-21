@@ -25,6 +25,7 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "./deferred-plugin-migrations.js";
+import * as querySync from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { EngineConnection } from "./sql-connection.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
@@ -132,6 +133,33 @@ it(
     expect((await reader.listPending()).map((row) => row.id)).toEqual(["pending"]);
     expect(await reader.listClaims()).toEqual([]);
     expect(outcome).toMatchObject({ message: expect.stringContaining("repair owner expired") });
+  }),
+);
+
+it(
+  "paginates Doctor keys without a NUL cursor in SQL bindings",
+  inDoctorState(async ({ env }) => {
+    const context = doctorContext(env);
+    const namespace = "doctor-portable-pagination";
+    const store = context.openPluginStateKeyedStore({ namespace, maxEntries: 10 });
+    for (const key of ["binding:a", "binding:a0", "binding:b", "other"]) {
+      await store.register(key, { key });
+    }
+    const queries = vi.spyOn(querySync, "executeSqliteQuerySync");
+    const read = (after?: string, limit = 10) =>
+      context.readPluginStateEntriesInKeyRange!(namespace, { prefix: "binding:", after, limit });
+    expect(read(undefined, 1).map((entry) => entry.key)).toEqual(["binding:a"]);
+    expect(read("binding:a").map((entry) => entry.key)).toEqual(["binding:a0", "binding:b"]);
+    expect(read("binding:b")).toEqual([]);
+    const ranges = queries.mock.calls
+      .map(([, query]) => query.compile())
+      .filter((query) => query.sql.includes('order by "entry_key"'));
+    expect(ranges).toHaveLength(3);
+    for (const query of ranges) {
+      expect(
+        query.parameters.some((value) => typeof value === "string" && value.includes("\0")),
+      ).toBe(false);
+    }
   }),
 );
 
