@@ -1,4 +1,5 @@
 import { afterEach, assert, expect, vi } from "vitest";
+import { formatErrorMessage } from "../infra/errors.js";
 import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
@@ -17,6 +18,7 @@ import {
   resetPluginStateStoreForTests,
   type OpenKeyedStoreOptions,
 } from "./plugin-state-store.js";
+import { capturePluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
 
 const it = stateTest("plugin-state-native-binding");
 const cleanups: (() => void)[] = [];
@@ -35,6 +37,25 @@ async function prepareGuard<T>(store: ReturnType<typeof openStore<T>>, key = "se
   assert(guard, "Expected a prepared binding reader");
   cleanups.push(() => guard.release());
   return guard;
+}
+
+function formattedReadDenial(store: ReturnType<typeof openStore<string>>) {
+  const binding = capturePluginStateNativeBindingStore(store);
+  assert(binding);
+  let failure: unknown;
+  try {
+    binding.assertReadable();
+  } catch (error) {
+    failure = error;
+  }
+  assert(failure instanceof Error);
+  const text = formatErrorMessage(failure);
+  const stateDir = binding.options.env?.OPENCLAW_STATE_DIR;
+  assert(stateDir);
+  expect(text).not.toContain(stateDir);
+  expect(text).not.toMatch(/guard-test|bindings|private-binding-value-canary/);
+  expect(text).toContain("Do not replay the write while its outcome is uncertain.");
+  return text;
 }
 
 afterEach(async () => {
@@ -58,6 +79,9 @@ it.for(["reject-new", "evict-oldest"] as const)(
     // A real SQLite writer lock prevents the sibling write from settling.
     const writing = store.register("b-\ud800", "replacement");
     try {
+      const denial = formattedReadDenial(store);
+      expect(denial).toContain("reason=overlapping-publication-pending");
+      expect(denial).toContain("Wait for the pending publication to settle before continuing.");
       expect(() => b.read()).toThrow("authority is unavailable");
       await expect(preparePluginStateRead(store, "b-\ufffd")).rejects.toThrow(
         "authority is unavailable",
@@ -127,7 +151,9 @@ it("denies queued writes until postimage publication", async ({ state: { env } }
           current = guard.read();
         } catch (error) {
           // A queue hold can outlive the individual worker admission.
-          expect(error).toMatchObject({ message: "Plugin state authority is unavailable" });
+          expect(error).toMatchObject({
+            message: expect.stringContaining("reason=overlapping-publication-pending"),
+          });
           return;
         }
         expect(current).toBe("replacement");
@@ -156,11 +182,14 @@ it("restores authority after unknown publications only from re-read committed st
     }
   });
   try {
-    await store.register("session", "uncertain");
+    await store.register("session", "private-binding-value-canary");
   } finally {
     stopFault();
   }
   expect(() => guard.read()).toThrow("unavailable");
+  const denial = formattedReadDenial(store);
+  expect(denial).toContain("reason=identity-unavailable-after-unknown");
+  expect(denial).toContain("Wait for committed-state confirmation before continuing.");
   await store.register("session", "later");
   expect(await store.lookup("session")).toBe("later");
   // A guard pinned before the indeterminate outcome never trusts its old row again.
