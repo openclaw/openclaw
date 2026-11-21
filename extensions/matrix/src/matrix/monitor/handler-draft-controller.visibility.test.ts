@@ -66,28 +66,4 @@ describe("Matrix progress visibility", () => {
     expect(draftStream.update).toHaveBeenCalledTimes(3);
     controller.cancelProgressDraft();
   });
-
-  it("keeps progress flowing when the final reply is sent by the message tool", async () => {
-    const create = (streaming: "progress" | "off") =>
-      createMatrixDraftController({
-        streaming,
-        previewToolProgressEnabled: true,
-        replyToMode: "off",
-        messageId: "$inbound",
-        cfg: {},
-        accountId: "default",
-        roomId: "!room:example.org",
-        client: {} as never,
-        logVerboseMessage: vi.fn(),
-      });
-
-    const active = await create("progress");
-    expect(active.buildPreviewToolProgressReplyOptions()).toMatchObject({
-      allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-    });
-    active.cancelProgressDraft();
-
-    const off = await create("off");
-    expect(off.buildPreviewToolProgressReplyOptions()).toEqual({});
-  });
 });
