@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -85,6 +86,56 @@ describe("explicit Gateway lock recovery", () => {
       }
     },
   );
+
+  // The trust check needs a POSIX user id; Windows keeps its own legacy admission path.
+  it.skipIf(process.getuid === undefined).each([
+    { layout: "system temporary directory", shared: false, regular: true },
+    { layout: "state tmp directory", shared: true, regular: true },
+    { layout: "system temporary directory as a non-regular path", shared: false, regular: false },
+    { layout: "world-writable temporary directory", shared: false, regular: true, unsafe: true },
+  ])("recovers the historical config lock in the $layout once", async (test) => {
+    const { env, paths, payload, lockPaths } = fixture();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const tmpDir = test.shared
+      ? path.dirname(path.dirname(paths.configLockPath))
+      : path.join(env.OPENCLAW_STATE_DIR ?? "", "legacy-tmp");
+    vi.spyOn(os, "tmpdir").mockReturnValue(tmpDir);
+    // Built from the documented layout, not the production resolver, so a shared mistake fails.
+    const uid = process.getuid?.();
+    const legacyPath = path.join(
+      tmpDir,
+      uid === undefined ? "openclaw" : `openclaw-${uid}`,
+      path.basename(paths.configLockPath),
+    );
+    expect(legacyPath === paths.configLockPath).toBe(test.shared);
+    if (test.regular) {
+      fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+      fs.writeFileSync(
+        legacyPath,
+        JSON.stringify({ ...payload, pid: 2_147_483_647, processNamespace: undefined }),
+      );
+    } else {
+      fs.mkdirSync(legacyPath, { recursive: true });
+    }
+    if (test.unsafe) {
+      // Another local user could replace the lock directory through this parent.
+      fs.chmodSync(tmpDir, 0o777);
+    }
+    const listed = test.regular && !test.unsafe ? 1 : 0;
+    const inspection = await inspectGatewayLockRecovery({ env });
+    expect(inspection.holders.filter((holder) => holder.startsWith(legacyPath))).toHaveLength(
+      listed,
+    );
+    // A record that cannot be trusted is named, so a Doctor refusal on it is never a dead end.
+    expect((inspection.notes ?? []).filter((note) => note.includes(legacyPath))).toHaveLength(
+      1 - listed,
+    );
+    await expect(
+      recoverGatewayLock({ confirmation: inspection.confirmation }),
+    ).resolves.toMatchObject({ recovered: true, removed: test.shared ? 3 : 3 + listed });
+    expect(lockPaths.some((pathname) => fs.existsSync(pathname))).toBe(false);
+    expect(fs.existsSync(legacyPath)).toBe(listed === 0);
+  });
 
   it.each(["replacement", "heartbeat", "payload"])(
     "refuses an owner %s after inspection",

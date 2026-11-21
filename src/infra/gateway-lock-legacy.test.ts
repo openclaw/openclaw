@@ -59,6 +59,9 @@ describe.each(platforms)("legacy $platform maintenance", ({ platform, provable }
     } else {
       await expect(admission).rejects.toThrow("live or unverified owner");
       await expect(admission).rejects.toThrow("remove that file as the Gateway service account");
+      if (platform === "linux") {
+        await expect(admission).rejects.toThrow("run `openclaw gateway recover-lock`");
+      }
     }
     expect(fs.readFileSync(configLockPath, "utf8")).toBe(record);
   });
