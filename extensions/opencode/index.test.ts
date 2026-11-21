@@ -318,6 +318,7 @@ describe("opencode provider plugin", () => {
     const ownScope = await catalog({
       providerIds: ["opencode"],
       resolveProviderApiKey,
+      resolveProviderAuth: noAuth,
     });
     expect(ownScope).toMatchObject({ provider: { apiKey: NON_ENV_SECRETREF_MARKER } });
     expect(resolveProviderApiKey).toHaveBeenCalledOnce();
@@ -401,6 +402,37 @@ describe("opencode provider plugin", () => {
     expect(resolveProviderApiKey.mock.calls).toEqual(
       fixture.authProvider === "opencode" ? [["opencode"]] : [["opencode"], ["opencode-go"]],
     );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers the signed-in workspace's models for a browser sign-in", async () => {
+    const { catalog } = await registerFixture();
+    const fetchMock = blockFetch();
+    const liveCatalog = vi
+      .spyOn(await import("./provider-catalog.js"), "buildOpencodeZenLiveProviderConfig")
+      .mockImplementation(async (params = {}) => ({
+        baseUrl: "https://opencode.ai/zen/v1",
+        apiKey: params.apiKey,
+        models: [],
+      }));
+    const resolveProviderApiKey = vi.fn(() => ({ apiKey: undefined }));
+    const resolveProviderAuth = vi.fn((_provider?: string, options?: { oauthMarker?: string }) => ({
+      apiKey: options?.oauthMarker,
+      discoveryApiKey: "console-access",
+      mode: "oauth" as const,
+      source: "profile" as const,
+      profileId: "opencode:default",
+    }));
+
+    await catalog({ resolveProviderApiKey, resolveProviderAuth });
+
+    const marker = resolveProviderAuth.mock.results[0]?.value.apiKey;
+    expect(marker).toEqual(expect.stringContaining("opencode"));
+    expect(liveCatalog).toHaveBeenCalledExactlyOnceWith({
+      apiKey: marker,
+      discoveryApiKey: "console-access",
+    });
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
