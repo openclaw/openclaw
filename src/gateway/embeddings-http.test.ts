@@ -314,7 +314,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
     expect(res.status).toBe(200);
     const json = (await res.json()) as { data?: Array<{ embedding?: string }> };
-    expect(typeof json.data?.[0]?.embedding).toBe("string");
+    expect(json.data?.[0]?.embedding).toBe("zczMPc3MTD4=");
     expect(createProvider).toHaveBeenCalled();
     expect(createProvider.mock.lastCall?.[0]).toMatchObject({
       model: expect.any(String),
