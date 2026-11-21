@@ -305,6 +305,20 @@ export const SessionsCreateResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Discover one steerable physical backend under the same write policy as active steering. */
+export const SessionsSteerTargetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+export const SessionsSteerTargetResultSchema = closedObject({
+  target: Type.Union([
+    closedObject({ sessionId: NonEmptyString, runId: NonEmptyString }),
+    Type.Null(),
+  ]),
+});
+export type SessionsSteerTargetParams = Static<typeof SessionsSteerTargetParamsSchema>;
+export type SessionsSteerTargetResult = Static<typeof SessionsSteerTargetResultSchema>;
+
 /** Literal human input for one exact running backend; never starts a turn. */
 export const SessionsSteerActiveParamsSchema = closedObject({
   sessionKey: NonEmptyString,

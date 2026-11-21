@@ -54,10 +54,7 @@ import { refreshChatCommands } from "./chat-session-commands.ts";
 import { readChatModelCatalogState } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import {
-  openSessionWorkspaceFile,
-  openSessionWorkspaceManagedArtifact,
-} from "./components/chat-session-workspace.ts";
+import { sessionWorkspaceFileLinkProps } from "./components/chat-session-workspace.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
@@ -575,9 +572,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
-      onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
+      ...sessionWorkspaceFileLinkProps(state, selectedSession, composerControls?.permissionPicker),
       onFindWorkspaceFile: state.connected && !catalog ? onFindWorkspaceFile : undefined,
-      onOpenManagedArtifact: (href) => openSessionWorkspaceManagedArtifact(state, href),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,

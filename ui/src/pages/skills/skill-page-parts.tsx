@@ -1,45 +1,44 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
+import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { MiddleTruncated, splitTail } from "../plugins/middle-truncated.tsx";
+import type { SkillsProps } from "./view-types.ts";
 
-/** A skill's own mark: its image, else its emoji, else the default skill icon. */
-export function SkillTile(props: {
-  emoji?: string;
-  imageUrl?: string;
-  class?: JSX.HTMLAttributes<HTMLElement>["class"];
-}) {
+/** A section of the reading column, labelled like the plugin page's README. */
+export function SkillPageSection(props: { title: JSX.Element; children: JSX.Element }) {
   return (
-    <span
-      class={[
-        "skill-tile",
-        props.class,
-        { "skill-tile--default": !props.imageUrl && !props.emoji },
-      ]}
-      aria-hidden="true"
-    >
-      <Show
-        when={props.imageUrl}
-        fallback={
-          <Show when={props.emoji} fallback={<Icon name="bookOpenText" />}>
-            {props.emoji}
-          </Show>
-        }
-      >
-        {(url) => <img src={url()} alt="" loading="lazy" />}
-      </Show>
-    </span>
+    <section class="plugin-catalog-detail__readme-section skill-page__section">
+      <h2 class="settings-section__heading oc-settings-section-title">{props.title}</h2>
+      {props.children}
+    </section>
   );
 }
 
-/** A section of the reading column: a small muted label over its content. */
-export function SkillPageSection(props: { title: JSX.Element; children: JSX.Element }) {
+/** An installed skill's switch, the same wherever the skill's page shows it. */
+export function SkillEnabledSwitch(props: { skill: SkillStatusEntry; view: SkillsProps }) {
+  const saving = () => props.view.toggleSavingSkillKey === props.skill.skillKey;
+  const locked = () =>
+    props.view.saving || props.view.loading || props.view.state.skillOperation !== null;
   return (
-    <section class="skill-page__section">
-      <h3 class="skill-page__label">{props.title}</h3>
-      {props.children}
-    </section>
+    <label class="plugin-catalog-detail__enabled">
+      <span aria-hidden="true">
+        {t(props.skill.disabled ? "skillsPage.disabled" : "skillsPage.enabled")}
+      </span>
+      <SettingsToggle
+        checked={!props.skill.disabled}
+        saving={saving()}
+        disabled={
+          !props.view.canUpdate ||
+          (props.view.toggleDisabled ?? props.view.loading) ||
+          (!saving() && locked())
+        }
+        ariaLabel={props.skill.name}
+        onChange={() => props.view.onToggle(props.skill.skillKey, props.skill.disabled)}
+      />
+    </label>
   );
 }
 

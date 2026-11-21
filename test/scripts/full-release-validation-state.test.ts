@@ -66,6 +66,44 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function runSyntheticWaiverState(source: string, fixture: Record<string, unknown>) {
+  const policyPath = join(tempDirs.make("frv-synthetic-waiver-"), "waivers.json");
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      schema: "openclaw.release-validation-waivers/v1",
+      waivers: [
+        {
+          targetVersion: "2099.1.1",
+          targetSha: "c".repeat(40),
+          childRole: "normalCi",
+          jobName: "synthetic-lane",
+          reason: "Synthetic state policy fixture",
+          aggregates: [
+            {
+              jobName: "openclaw/ci-gate",
+              stepName: "Verify selected CI lanes",
+              causes: ["synthetic-lane finished with failure (selected=true)"],
+              exactCauses: true,
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_RELEASE_WAIVERS_PATH: policyPath,
+      STATE_FIXTURE: JSON.stringify(fixture),
+    },
+    timeout: 10_000,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
 function runPlanSubprocess(overrides: Record<string, unknown>, env: Record<string, string> = {}) {
   const root = tempDirs.make("frv-candidate-plan-");
   const output = join(root, "full-release-execution-plan.json");
@@ -1452,62 +1490,56 @@ describe("release decision policy", () => {
     expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
   });
 
-  it("binds Decision and Drain policy to the plan target and authenticated aggregate attempt", async () => {
-    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
-    const targetVersion = "2026.11.4";
+  it("binds Decision and Drain policy to the plan target and authenticated aggregate attempt", () => {
     const planned = child("normalCi");
-    const leaf = {
-      id: 50,
-      name: "macos-swift (tests)",
-      status: "completed",
-      conclusion: "failure",
-    };
-    const gate = {
-      id: 51,
-      name: "openclaw/ci-gate",
-      status: "completed",
-      conclusion: "failure",
-      steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
-    };
-    const fetched: number[] = [];
-    const options = {
-      targetSha,
-      targetVersion,
-      readRun: async () =>
-        githubRun(planned, {
+    const result = runSyntheticWaiverState(
+      `
+      import { readChild, classifyReleaseSnapshot } from "./scripts/full-release-validation-state.mjs";
+      const { planned, run } = JSON.parse(process.env.STATE_FIXTURE);
+      const targetSha = "c".repeat(40);
+      const targetVersion = "2099.1.1";
+      const fetched = [];
+      const options = {
+        targetSha, targetVersion,
+        readRun: async () => run,
+        readAttemptJobs: async (_id, attempt) => attempt === 1 ? [
+          { id: 50, name: "synthetic-lane", status: "completed", conclusion: "failure" },
+          { id: 51, name: "openclaw/ci-gate", status: "completed", conclusion: "failure",
+            steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }] },
+        ] : [{ name: "receipt", status: "completed", conclusion: "success" }],
+        readJobLog: (id) => { fetched.push(id); return "##[error]synthetic-lane finished with failure (selected=true)"; },
+      };
+      const observed = await readChild(planned, undefined, undefined, options);
+      const invalid = await readChild(planned, undefined, undefined, { ...options, readJobLog: () => "##[error]unknown" });
+      console.log(JSON.stringify({
+        observed, fetched,
+        state: classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha }).state,
+        otherState: classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha: "b".repeat(40) }).state,
+        invalidState: classifyReleaseSnapshot({ children: [invalid], targetVersion, targetSha }).state,
+      }));
+    `,
+      {
+        planned,
+        run: githubRun(planned, {
           conclusion: "failure",
           run_attempt: 2,
           triggering_actor: { login: "release-operator" },
         }),
-      readAttemptJobs: async (_id: string, attempt: number) =>
-        attempt === 1
-          ? [leaf, gate]
-          : [{ name: "receipt", status: "completed", conclusion: "success" }],
-      readJobLog: (id: number) => {
-        fetched.push(id);
-        return "2026-11-15T04:00:00.0000000Z ##[error]macos-swift finished with failure (selected=true)";
       },
-    };
-    const observed = await readChild(planned, undefined, undefined, options);
-    expect(observed.errors).toEqual([]);
-    expect(fetched).toEqual([51]);
-    expect(observed.conclusion).toBe("failure");
-    expect(observed.jobs).toContainEqual(
-      expect.objectContaining({ name: gate.name, acceptedRunAttempt: 1, conclusion: "failure" }),
     );
-    expect(classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha }).state).toBe(
-      "passed",
+    expect(result.observed.errors).toEqual([]);
+    expect(result.fetched).toEqual([51]);
+    expect(result.observed.conclusion).toBe("failure");
+    expect(result.observed.jobs).toContainEqual(
+      expect.objectContaining({
+        name: "openclaw/ci-gate",
+        acceptedRunAttempt: 1,
+        conclusion: "failure",
+      }),
     );
-    expect(
-      classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha: TARGET_SHA }).state,
-    ).toBe("blocked_complete");
-    const invalid = await readChild(planned, undefined, undefined, {
-      ...options,
-      readJobLog: () => "##[error]unknown",
-    });
-    expect(classifyReleaseSnapshot({ children: [invalid], targetVersion, targetSha }).state).toBe(
-      "orchestration_error",
-    );
+    expect(result.state).toBe("passed");
+    expect(result.otherState).toBe("blocked_complete");
+    expect(result.invalidState).toBe("orchestration_error");
   });
 
   it("accepts a targeted runtime child rerun with retained sibling evidence", async () => {
@@ -1978,29 +2010,38 @@ describe("release state artifacts", () => {
   });
 
   it("recomputes candidate-bound waivers when validating sealed Decision and Drain", () => {
-    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+    const targetSha = "c".repeat(40);
     const sealedPlan = executionPlan(
       { rerunGroup: "ci" },
-      { expected: { targetSha }, targetVersion: "2026.11.4" },
+      { expected: { targetSha }, targetVersion: "2099.1.1" },
     );
-    const failed = {
-      conclusion: "failure",
-      jobs: [{ name: "macos-swift (tests)", status: "completed", conclusion: "failure" }],
-    };
-    const decision = collectorArtifact("decision", 2, sealedPlan, failed);
-    const drain = collectorArtifact("drain", 2, sealedPlan, failed);
-    const expected = { ...stateExpected(), targetSha };
-    expect(verifyReleaseStateArtifacts(sealedPlan, decision, drain, expected).drain.state).toBe(
-      "passed",
+    const result = runSyntheticWaiverState(
+      `
+      import { buildReleaseStateArtifact, classifyReleaseSnapshot, verifyReleaseStateArtifacts } from "./scripts/full-release-validation-state.mjs";
+      import { releaseExecutionPlanSha256 } from "./scripts/full-release-validation-policy.mjs";
+      const { sealedPlan, baseChild, expected } = JSON.parse(process.env.STATE_FIXTURE);
+      const children = [{ ...baseChild, ...sealedPlan.children.find(c => c.key === "normalCi"),
+        conclusion: "failure", status: "completed",
+        jobs: [{ name: "synthetic-lane", status: "completed", conclusion: "failure" }],
+      }];
+      const decisionState = classifyReleaseSnapshot({ children, targetSha: sealedPlan.targetSha, targetVersion: sealedPlan.targetVersion, releaseProfile: "stable", workflowRef: "release-ci/tooling" });
+      const artifact = mode => buildReleaseStateArtifact({ children, decision: decisionState, executionPlan: sealedPlan, expected: { ...expected, parentRunAttempt: 2 }, mode, releaseProfile: "stable", rerunGroup: "ci", cancellation: {} });
+      const decision = artifact("decision");
+      const drain = artifact("drain");
+      const state = verifyReleaseStateArtifacts(sealedPlan, decision, drain, expected).drain.state;
+      let missingWaiverError;
+      try { verifyReleaseStateArtifacts(sealedPlan, { ...decision, waivers: [] }, drain, expected); } catch (error) { missingWaiverError = error.message; }
+      const otherPlan = { ...sealedPlan, targetSha: "b".repeat(40) };
+      otherPlan.sha256 = releaseExecutionPlanSha256(otherPlan);
+      let mismatched = false;
+      try { verifyReleaseStateArtifacts(otherPlan, decision, drain, { ...expected, targetSha: otherPlan.targetSha }); } catch { mismatched = true; }
+      console.log(JSON.stringify({ state, missingWaiverError, mismatched }));
+    `,
+      { sealedPlan, baseChild: child("normalCi"), expected: { ...stateExpected(), targetSha } },
     );
-    expect(() =>
-      verifyReleaseStateArtifacts(sealedPlan, { ...decision, waivers: [] }, drain, expected),
-    ).toThrow("waivers differ");
-    const otherPlan = { ...sealedPlan, targetSha: TARGET_SHA };
-    otherPlan.sha256 = releaseExecutionPlanSha256(otherPlan);
-    expect(() =>
-      verifyReleaseStateArtifacts(otherPlan, decision, drain, stateExpected()),
-    ).toThrow();
+    expect(result.state).toBe("passed");
+    expect(result.missingWaiverError).toContain("waivers differ");
+    expect(result.mismatched).toBe(true);
   });
 
   it("uses one policy for decision, drain, and final verification", () => {
