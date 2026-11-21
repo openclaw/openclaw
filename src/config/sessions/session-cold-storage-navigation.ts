@@ -7,6 +7,7 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { iterateSessionColdRecords } from "./session-cold-storage-chunks.js";
+import type { SessionColdRecord } from "./session-cold-storage-codec.js";
 import { writeSessionColdRecordsInTransaction } from "./session-cold-storage-records.js";
 import { deleteSessionTranscriptFtsRowsInTransaction } from "./session-transcript-fts.js";
 import {
@@ -98,20 +99,17 @@ export function retainSessionColdNavigationInTransaction(
   return { rows: rows.length, afterSeq: lastSeq };
 }
 
-/** Doctor commits each verified archive independently; rollback leaves it eligible for retry. */
+/** Commit each verified archive independently; rollback leaves it eligible for retry. */
 export function backfillSessionColdNavigationInTransaction(
   database: ColdDatabase,
   archive: Omit<SessionColdArchive, "archive_blob">,
+  records: () => Iterable<SessionColdRecord> = () =>
+    iterateSessionColdRecords(database.db, database.path, archive),
 ): void {
   if (!database.db.isTransaction) {
     throw new Error("Cold navigation migration requires its owner's transaction");
   }
-  writeSessionColdRecordsInTransaction(
-    database,
-    archive.session_id,
-    iterateSessionColdRecords(database.db, database.path, archive),
-    "navigation",
-  );
+  writeSessionColdRecordsInTransaction(database, archive.session_id, records(), "navigation");
   if (sessionTranscriptIndexNeedsReconcile(database.db, archive.session_id)) {
     // Older archives can lack a qualified index. Only that repair needs the canonical bodies.
     const db = getNodeSqliteKysely<DB>(database.db);
@@ -129,7 +127,7 @@ export function backfillSessionColdNavigationInTransaction(
           )
           .where("navigation_json", "is not", null),
     );
-    for (const record of iterateSessionColdRecords(database.db, database.path, archive)) {
+    for (const record of records()) {
       if (record.kind === "event") {
         hydrate(record.row);
       }

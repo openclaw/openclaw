@@ -3,6 +3,7 @@ import type { SessionTranscriptWorkerInput } from "./session-transcript-worker.t
 const historyReadKinds = [
   "transcript-facts-discover",
   "transcript-facts-probe",
+  "cold-navigation-prepare",
   "agent-tool-usage",
   "agent-tool-usage-import",
   "trajectory-events",

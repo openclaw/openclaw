@@ -55,7 +55,7 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
 type ReadAdmission = <T>(
-  dispatch: (signal: AbortSignal | undefined, remainingMs: number) => Promise<T>,
+  dispatch: (signal: AbortSignal | undefined, remainingMs: number | undefined) => Promise<T>,
 ) => Promise<T>;
 
 const log = createSubsystemLogger("sessions/history-worker");
@@ -180,8 +180,13 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
-      { timeoutMs = 60_000, pointRead }: SessionHistoryWorkerRequestOptions = {},
+      requestOptions: SessionHistoryWorkerRequestOptions = {},
     ) => {
+      const { timeoutMs = 60_000, pointRead } = requestOptions;
+      const callerLifetime = requestOptions.lifetime === "caller";
+      if (callerLifetime && !signal) {
+        throw new Error("Caller-owned session maintenance requires a cancellation signal");
+      }
       let retirement: Promise<void> | undefined;
       const preserveSourceArtifacts = isArtifactPreservingStateRead("agent", database.path);
       let inspectionIdentity: DatabaseFileIdentity | undefined;
@@ -207,8 +212,11 @@ export function retainSessionHistoryWorkerDatabase(
       if (creationClaim) {
         reserveAgentCreationClaimAdmission(database, readOptions, () => owned.retire());
       }
-      const deadline = performance.now() + readRequest.timeoutMs;
+      const deadline = callerLifetime ? undefined : performance.now() + readRequest.timeoutMs;
       const remainingTime = () => {
+        if (deadline === undefined) {
+          return undefined;
+        }
         const remaining = deadline - performance.now();
         if (remaining <= 0) {
           throw new WorkerTaskError("worker task timed out", "timeout");
@@ -243,11 +251,14 @@ export function retainSessionHistoryWorkerDatabase(
                 new WorkerTaskError("Session history database read was revoked", "unavailable"),
               );
             readRequest.aborters.add(abort);
-            const timer = setTimeout(
-              () => controller.abort(new WorkerTaskError("worker task timed out", "timeout")),
-              Math.max(1, deadline - performance.now()),
-            );
-            timer.unref?.();
+            const timer =
+              deadline === undefined
+                ? undefined
+                : setTimeout(
+                    () => controller.abort(new WorkerTaskError("worker task timed out", "timeout")),
+                    Math.max(1, deadline - performance.now()),
+                  );
+            timer?.unref?.();
             try {
               return await runWithAgentDatabaseReadAdmissionTurn(
                 [readOptions.path],

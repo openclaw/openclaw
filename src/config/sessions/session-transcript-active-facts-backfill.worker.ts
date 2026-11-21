@@ -6,13 +6,18 @@ import {
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import type { PreparedSessionColdNavigation } from "./session-cold-navigation-preparation.js";
+import { pendingSessionColdNavigationQuery } from "./session-cold-storage-state.js";
 import { transcriptDependencyFactsProjectableSql } from "./session-transcript-active-facts.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -25,8 +30,13 @@ export type TranscriptActiveFactsBackfillSession = {
   sessionId: string;
   activeEventCount: number;
   updatedAt: number;
+  coldNavigation?: true;
 };
-export type TranscriptActiveFactsBackfillCursor = { sessionId: string; afterPosition: number };
+export type TranscriptActiveFactsBackfillCursor = {
+  sessionId: string;
+  afterPosition: number;
+  coldNavigation?: true;
+};
 export type TranscriptActiveFactsBackfillBatch = {
   afterPosition: number;
   done: boolean;
@@ -37,6 +47,7 @@ export type TranscriptActiveFactsBackfillBatch = {
   rowsVisited: number;
   bytesRead: number;
   elapsedMs: number;
+  warning?: string;
 };
 
 export type TranscriptActiveFactsBackfillProbe = {
@@ -60,7 +71,7 @@ const MAX_PROBE_ROWS = 8_192;
 export function discoverTranscriptActiveFactsBackfillSessions(
   database: EngineConnection,
 ): TranscriptActiveFactsBackfillSession[] {
-  return executeSqliteQuerySync(
+  const active = executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<DB>(database)
       .selectFrom("session_transcript_index_state as state")
@@ -95,6 +106,27 @@ export function discoverTranscriptActiveFactsBackfillSessions(
       .orderBy("state.updated_at", "desc")
       .orderBy("state.session_id"),
   ).rows;
+  // Current archives already retain navigation. Old archives use Doctor's
+  // durable pending predicate; discovery never scans their payloads.
+  const cold = executeSqliteQuerySync(
+    database,
+    pendingSessionColdNavigationQuery(database)
+      .select([
+        "archive.session_id as sessionId",
+        "archive.event_count as activeEventCount",
+        "archive.archived_at as updatedAt",
+      ])
+      .orderBy("archive.session_id"),
+  ).rows;
+  return [
+    ...active,
+    ...cold.map(({ sessionId, activeEventCount, updatedAt }) => ({
+      sessionId,
+      activeEventCount,
+      updatedAt,
+      coldNavigation: true as const,
+    })),
+  ];
 }
 
 /**
@@ -280,17 +312,53 @@ export function backfillTranscriptActiveFactsBatchInTransaction(
 }
 
 export type TranscriptActiveFactsBackfillOperations = {
-  batch: { input: TranscriptActiveFactsBackfillCursor; output: TranscriptActiveFactsBackfillBatch };
+  batch: {
+    input: TranscriptActiveFactsBackfillCursor & {
+      preparedColdNavigation?: PreparedSessionColdNavigation;
+    };
+    output: TranscriptActiveFactsBackfillBatch;
+  };
 };
 
 export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorkerDatabaseContext) {
   const database = context.database;
+  let openColdNavigation:
+    | typeof import("./session-cold-navigation-preparation.js").openPreparedSessionColdNavigation
+    | undefined;
+  let coldNavigation:
+    | ReturnType<
+        typeof import("./session-cold-navigation-preparation.js").openPreparedSessionColdNavigation
+      >
+    | undefined;
   return bindSqliteWorkerDatabase<TranscriptActiveFactsBackfillOperations>(database, {
+    async prepare(command) {
+      if (command.input.preparedColdNavigation) {
+        const { openPreparedSessionColdNavigation } =
+          await import("./session-cold-navigation-preparation.js");
+        openColdNavigation = openPreparedSessionColdNavigation;
+      }
+    },
+    close() {
+      coldNavigation?.close();
+      coldNavigation = undefined;
+      return undefined;
+    },
     execute(command: SqliteWorkerCommand<TranscriptActiveFactsBackfillOperations>) {
       // PostgreSQL needs a separately measured source-row locking protocol; its
       // ordinary writers continue filling facts through the existing owner.
       if (isPostgresSqlConnection(database)) {
         throw new Error("Transcript facts background backfill currently supports SQLite only");
+      }
+      if (command.input.preparedColdNavigation) {
+        if (!openColdNavigation) {
+          throw new Error("Cold navigation publisher was not loaded");
+        }
+        // Async prepare only loads code. Native handles borrow this execution's live admission.
+        coldNavigation = openColdNavigation(
+          database,
+          context.databasePath,
+          command.input.preparedColdNavigation,
+        );
       }
       context.admit("transaction");
       context.admit("commit");
@@ -302,6 +370,31 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
             database,
             () => {
               entered = true;
+              if (command.input.coldNavigation) {
+                const prepared = command.input.preparedColdNavigation;
+                if (!coldNavigation || !prepared) {
+                  throw new Error("Cold navigation backfill was not prepared");
+                }
+                const archive = prepared.archive;
+                // Decode, native projection and any old-index repair already ran
+                // in the read worker. Only atomic publication reserves this writer.
+                const published = withSqliteDatabaseWriteScope(
+                  database,
+                  [sqliteSessionIdWriteScope(archive.session_id)],
+                  () => coldNavigation!.publish(),
+                );
+                return {
+                  afterPosition: -1,
+                  done: true,
+                  unavailable: !published,
+                  busy: false,
+                  rowsFilled: published ? archive.event_count : 0,
+                  rowsSkipped: 0,
+                  rowsVisited: published ? archive.event_count : 0,
+                  bytesRead: published ? archive.raw_bytes : 0,
+                  elapsedMs: performance.now() - started,
+                };
+              }
               return backfillTranscriptActiveFactsBatchInTransaction(database, command.input);
             },
             {

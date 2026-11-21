@@ -17,6 +17,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
 import {
+  coldNavigationLane,
   historyLane,
   sessionStoreLane,
   transcriptSearchLane,
@@ -302,6 +303,40 @@ it("keeps cold reads progressing while history searches await the same writer", 
   }
 });
 
+it("keeps whole-archive preparation on its cancellable caller lifetime, not the foreground deadline", async () => {
+  const request = input();
+  const controller = new AbortController();
+  const dispatched = createDeferredCore<Parameters<typeof observed.run>[1]>();
+  const reply = createDeferredCore<unknown>();
+  observed.run.mockImplementation((_input, options) => {
+    dispatched.resolve(options);
+    return reply.promise;
+  });
+  const reading = withSessionHistoryWorkerDatabase(
+    request.database,
+    (owner) =>
+      owner.prepareColdNavigation(
+        { env: {}, sessionId: "synthetic", directory: "/synthetic/preparation" },
+        controller.signal,
+      ),
+    coldNavigationLane,
+  );
+  try {
+    const options = await dispatched.promise;
+    // The real runtime hands this budget to the pool; the pool owns timer/cancellation tests.
+    expect(options.timeoutMs).toBeUndefined();
+    expect(options.signal).toBe(controller.signal);
+    controller.abort();
+    expect(options.signal?.aborted).toBe(true);
+  } finally {
+    reply.resolve({
+      ok: true,
+      value: { kind: "cold-navigation-prepare", result: { kind: "unavailable" } },
+    });
+    await Promise.allSettled([reading]);
+  }
+});
+
 it("hands admitted read deadlines to the worker pool", async () => {
   observed.preparedDatabase = false;
   const request = input();
@@ -342,7 +377,7 @@ it("hands admitted read deadlines to the worker pool", async () => {
 it("dedupes independent lane prewarms while idle readers retire and regrow", async () => {
   const request = input();
   const warm = [historyLane, transcriptSearchLane];
-  const background = [sessionStoreLane];
+  const background = [sessionStoreLane, coldNavigationLane];
   const lanes = [...warm, ...background];
   const prewarm = (lane: (typeof lanes)[number]) =>
     prewarmSessionHistoryWorker(request.database, lane);
@@ -361,9 +396,9 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
       Promise.all(preparing),
       "Prewarms settled before every independent lane dispatched",
     );
-    expect(observed.run).toHaveBeenCalledTimes(3);
+    expect(observed.run).toHaveBeenCalledTimes(4);
     expect(observed.run.mock.calls[0]?.[0]).toMatchObject({ kind: "prewarm" });
-    expect(lanes.map((lane) => lane.pending)).toEqual([1, 1, 1]);
+    expect(lanes.map((lane) => lane.pending)).toEqual([1, 1, 1, 1]);
     replies[0]!.resolve(prewarmed);
     const completedLane = await Promise.race(
       preparing.map((preparation, index) => preparation.then(() => index)),
@@ -373,17 +408,17 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
     );
     replies.forEach((reply) => reply.resolve(prewarmed));
     await Promise.all(preparing);
-    expect(lanes.map((lane) => lane.pending)).toEqual([0, 0, 0]);
+    expect(lanes.map((lane) => lane.pending)).toEqual([0, 0, 0, 0]);
     expect(observed.unregister).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(89_999);
     await Promise.all(lanes.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(3);
+    expect(observed.run).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(1);
     expect(lanes.filter((lane) => !isSessionHistoryWorkerCold(lane))).toEqual(warm);
-    expect(observed.rotate).toHaveBeenCalledTimes(1);
+    expect(observed.rotate).toHaveBeenCalledTimes(2);
     await Promise.all(warm.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(3);
+    expect(observed.run).toHaveBeenCalledTimes(4);
 
     observed.run.mockResolvedValue(absent);
     for (const lane of background) {
@@ -392,7 +427,7 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
     }
     await vi.advanceTimersByTimeAsync(209_999);
     await Promise.all(warm.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(4);
+    expect(observed.run).toHaveBeenCalledTimes(6);
     expect(lanes.filter((lane) => !isSessionHistoryWorkerCold(lane))).toEqual(warm);
     await vi.advanceTimersByTimeAsync(1);
     expect(lanes.every((lane) => isSessionHistoryWorkerCold(lane))).toBe(true);
@@ -400,7 +435,7 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
 
     observed.run.mockResolvedValue(prewarmed);
     await Promise.all(lanes.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(7);
+    expect(observed.run).toHaveBeenCalledTimes(10);
     expect(lanes.every((lane) => !isSessionHistoryWorkerCold(lane))).toBe(true);
   } finally {
     replies.forEach((reply) => reply.resolve(prewarmed));

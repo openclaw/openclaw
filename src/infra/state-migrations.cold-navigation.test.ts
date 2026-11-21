@@ -149,6 +149,50 @@ it("stops between complete archives after ten minutes and resumes the pending ar
   });
 });
 
+it.each(["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"])(
+  "leaves reconstructible navigation pending during %s, then standalone Doctor resumes it",
+  async (phase) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      const pathname = path.join(state.agentDir(), "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      {
+        using database = new DatabaseSync(pathname);
+        seedAgentV38Schema(database);
+        database.exec(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) " +
+            "VALUES ('agent:main:retained', 'pending', '{\"sessionId\":\"pending\",\"updatedAt\":1}', 1)",
+        );
+        seedArchive(database, "pending");
+        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          ensureOpenClawAgentSchema(database, "main", pathname);
+        });
+      }
+      const result = await migrateSessionColdNavigation({ env: { ...state.env, [phase]: "1" } });
+      expect(result.warningDisposition).toBe("recoverable");
+      expect(result.warnings).toContainEqual(expect.stringContaining("pending 1"));
+      {
+        using database = new DatabaseSync(pathname, { readOnly: true });
+        expect(database.prepare("SELECT count(*) AS count FROM transcript_events").get()).toEqual({
+          count: 0,
+        });
+      }
+      expect(
+        fs
+          .readdirSync(path.dirname(pathname))
+          .filter((name) => name.startsWith("openclaw-cold-navigation-recovery-")),
+      ).toEqual([]);
+      const resumed = await migrateSessionColdNavigation({ env: state.env });
+      expect(resumed.warnings).toEqual([]);
+      using database = new DatabaseSync(pathname, { readOnly: true });
+      expect(database.prepare("SELECT count(*) AS count FROM transcript_events").get()).toEqual({
+        count: 1,
+      });
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    });
+  },
+);
+
 it("resumes a backed-up pre-change archive migration after interruption without restoring payloads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     openOpenClawStateDatabase({ env: state.env });

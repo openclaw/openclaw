@@ -195,6 +195,7 @@ vi.mock("./disk-budget-runtime.js", () => ({
 }));
 
 import {
+  coldNavigationLane,
   historyLane,
   sessionStoreLane,
   rotateDatabaseWorkers,
@@ -231,7 +232,9 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all([historyLane, sessionStoreLane].map((lane) => rotateDatabaseWorkers(lane)));
+  await Promise.all(
+    [historyLane, sessionStoreLane, coldNavigationLane].map((lane) => rotateDatabaseWorkers(lane)),
+  );
 });
 afterAll(() => {
   vi.useRealTimers();

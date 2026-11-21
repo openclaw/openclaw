@@ -24,6 +24,22 @@ import { readSessionActorTransactionState } from "./session-actor-transaction.js
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
+/** No navigation rows is the existing durable pending marker; archives stay independently restorable. */
+export function pendingSessionColdNavigationQuery(database: EngineConnection) {
+  return getNodeSqliteKysely<DB>(database)
+    .selectFrom("session_transcript_cold_archives as archive")
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("transcript_events as event")
+            .select("event.seq")
+            .whereRef("event.session_id", "=", "archive.session_id"),
+        ),
+      ),
+    );
+}
+
 type SessionColdFact = {
   cold: boolean;
   revision?: SqliteReadScopeRevision;

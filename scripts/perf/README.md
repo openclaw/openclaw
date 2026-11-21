@@ -109,6 +109,91 @@ selects a free Gateway port, and removes its synthetic files afterward. Set
 unsafe ancestors. Results include operation counts, medians, p95, spread, source
 identity, and host load. These phase timings do not measure total update downtime.
 
+### Installed cold-navigation foreground workload
+
+Use the existing update entrypoint with qualified canonical package tarballs from
+the matching base and candidate. This measures real installed Gateway HTTP and
+WebSocket traffic, **not** total update or native-service downtime. Those fields
+are explicitly null. The separate maintained published-driver native-handoff
+workflow owns that gate; never relabel a manual restart gap as service downtime.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/update-doctor-generation-measure.ts \
+  cold cold-navigation-runtime plan .openclaw/tmp/cold-runtime-input.json
+```
+
+Input JSON (replace placeholders; hashes are lowercase SHA-256):
+
+```json
+{
+  "version": 1,
+  "outputRoot": ".openclaw/tmp/cold-runtime-results",
+  "pairs": 5,
+  "nodeVersion": "v24.22.1",
+  "nodeSha256": "<hash of invoking Node executable>",
+  "fixtureProducerSha256": "<hash of scripts/perf/update-doctor-generation-measure.ts>",
+  "baseline": {
+    "tarball": ".openclaw/tmp/base.tgz",
+    "sha256": "<package hash>",
+    "sourceCommit": "<full matching-base commit>",
+    "sourceSnapshotSha256": "<qualified snapshot hash>",
+    "qualificationReceipt": "<canonical build/integrity receipt>"
+  },
+  "candidate": {
+    "tarball": ".openclaw/tmp/candidate.tgz",
+    "sha256": "<package hash>",
+    "sourceCommit": "<full candidate runtime commit>",
+    "sourceSnapshotSha256": "<qualified snapshot hash>",
+    "qualificationReceipt": "<canonical build/integrity receipt>"
+  },
+  "controlledHost": {
+    "reservation": "<exclusive quiet-host reservation reference>",
+    "maxLoadPerCpu": 0.25,
+    "maxIoFullAvg10Percent": 1
+  }
+}
+```
+
+Plan is read-only: it verifies package/Node/fixture-producer bytes, matching schema
+versions, five-pair minimum, and a nonexistent direct child of `.openclaw/tmp`.
+It does not attest declared source/build provenance or reserve a host. A schema-42
+package cannot control a schema-43 fixture. Both artifacts need prior functional
+qualification. Review the emitted plan before changing only `plan` to `run`.
+The example host limits are not permission to widen a failed product timeout or
+accept a latency regression.
+
+Run installs each arm once through ordinary npm policy into an empty prefix and
+cache. Builds/installs do not overlap measurement. Each serial A/B cell gets a
+fresh maintained fixture: three cold archives of 4096 events (~150.9 MB raw) and
+an independent hot session. Baseline standalone Doctor completes first; candidate
+readiness must precede backfill. After one warmup write, two `chat.inject` loops
+and one `chat.history` loop run for 60 seconds, waiting 50 ms after each response.
+RPC timeout remains 10 seconds. OS page cache is not flushed; this is not a cold
+OS-cache comparison.
+
+Results retain every RPC ID, method class, start/end/epoch time, pending counts
+at both request boundaries, and error. Warmup is separately recorded and its
+latency is compared; it cannot count as measured traffic coverage. A candidate
+cell must have successful measured writes and history reads while cold work is
+still pending at both boundaries, followed by completion. Otherwise it is
+inconclusive, not a pass. This brackets the pending-work window, not exact writer
+lock ownership. Completion/transition clocks start at Gateway launch, not after
+warmup. HTTP request intervals bound readiness-observation uncertainty. All
+traffic and a separately labeled >=3-second slice remain visible. SQL checks
+observe zero-or-full archive publication, eventual completion, retained archive
+bytes and foreign keys. Raw host/cgroup/IO pressure counters are sampled during
+traffic. Cells report counts and median/p95/p99/max; summaries show distributions
+across cells. Host-limit violation, errors, incomplete work or >=20% adverse
+paired latency movement stops the run and retains receipts, without retries.
+A completed run is evidence to assess, **not** automatic acceptance.
+
+Managed processes are joined before removing only owned state/caches and installed
+prefixes. Logs/results remain; uncertain native extinction retains all inputs.
+`TMPDIR`, `TMP`, and `TEMP` stay inherited. Before running, qualify scratch storage
+and capacity under the host artifact policy; do not move/exclude files to bypass
+failed workspace synchronization. Plan smoke tests do not install, boot or prove
+runtime timings.
+
 ## Plugin policy reads
 
 `plugin-policy-read-measure.mjs` measures warm Codex config resolution and registered

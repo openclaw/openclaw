@@ -40,6 +40,17 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "cold-navigation-prepare": {
+      const { prepareSessionColdNavigation } =
+        await import("./session-cold-navigation-preparation.js");
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.env },
+        (database) => prepareSessionColdNavigation(database, request.sessionId, request.directory),
+        () => ({ kind: "unavailable" as const }),
+        { snapshot: true },
+      );
+      return () => ({ kind: request.kind, result: read() });
+    }
     case "transcript-facts-discover": {
       const [{ discoverTranscriptActiveFactsBackfillSessions }, { isPostgresSqlConnection }] =
         await Promise.all([
