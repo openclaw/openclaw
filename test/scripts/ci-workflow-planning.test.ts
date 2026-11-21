@@ -10580,6 +10580,70 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it.each(["2026.9.1", "2026.9.33"])(
+    "omits candidate-source mobile validation for Gateway release %s",
+    (packageVersion) => {
+      const options = {
+        bundledPlanner: true,
+        historicalCompatibility: true,
+        scopeEnv: {
+          OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+          OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS: "true",
+        },
+      };
+      const native = runCiManifestFixture({ ...options, packageVersion });
+      const gateway = runCiManifestFixture({
+        ...options,
+        packageVersion,
+        scopeEnv: {
+          ...options.scopeEnv,
+          OPENCLAW_CI_DISPATCH_ID: "full-release-validation-1-1-ci",
+        },
+      });
+      expect(native.status, native.output).toBe(0);
+      expect(gateway.status, gateway.output).toBe(0);
+      expect(native.outputs.run_ios_build).toBe("true");
+      expect(native.outputs.run_android_job).toBe("true");
+      expect(gateway.outputs).toEqual({
+        ...native.outputs,
+        skip_mobile_validation: "true",
+        run_ios_build: "false",
+        run_ios_voice_cleanup_tests: "false",
+        run_ios_lifecycle_tests: "false",
+        ios_simulator_selection: JSON.stringify({
+          mode: "not-selected",
+          voice: { selected: false, reasons: ["iOS job not selected"] },
+          lifecycle: { selected: false, reasons: ["iOS job not selected"] },
+        }),
+        run_android: "false",
+        run_android_job: "false",
+        run_android_access_native: "false",
+        run_android_screenshots: "false",
+        android_matrix: JSON.stringify({ include: [] }),
+      });
+      const context = { preflightOutputs: gateway.outputs };
+      for (const job of [
+        "ios-build",
+        "android",
+        "ios-release-e2e",
+        "android-release-e2e",
+        "ios-screenshot-capture",
+        "ios-screenshot-evidence",
+        "android-screenshots",
+      ]) {
+        const condition = readCiWorkflow().jobs[job].if;
+        expect(
+          evaluateWorkflow(
+            condition.startsWith("${{") ? condition : `\${{ ${condition} }}`,
+            context,
+          ),
+          job,
+        ).toBe(false);
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each([
     { label: "base branch correction", context: "branch", direct: "a", accepted: true },
     { label: "base tag correction", context: "tag", direct: "a", accepted: true },
@@ -15341,6 +15405,11 @@ describe("ci workflow guards", () => {
       expected: { "ios-build": true, "ios-screenshot-capture": false },
     },
     {
+      label: "Gateway qualification excludes mobile screenshots",
+      context: { preflightOutputs: { skip_mobile_validation: "true" } },
+      expected: { "ios-screenshot-capture": false, "android-screenshots": false },
+    },
+    {
       label: "ordinary manual screenshot override",
       context: { preflightOutputs: { run_ios_screenshots: "false" } },
       expected: { "ios-screenshot-capture": true },
@@ -15430,6 +15499,34 @@ describe("ci workflow guards", () => {
       }
     }
   });
+
+  it.skipIf(process.platform === "win32").each(["full", "npm-stable", "npm-beta"])(
+    "excludes candidate-source mobile builds from %s Gateway release dispatch",
+    (scope) => {
+      const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
+      const step = requiredWorkflowStep(workflow.jobs.normal_ci.steps, "Dispatch CI");
+      const branch = step.run.split('case "$CHILD_WORKFLOW_KIND" in')[1].split(";;")[0];
+      const result = runWorkflowCommand(
+        "/bin/bash",
+        ["-eu", "-c", 'dispatch_child() { printf "%s\\n" "$@"; }; case ci in' + branch + ";; esac"],
+        {
+          env: {
+            TARGET_REF: "release/2026.9.1",
+            TARGET_SHA: "a".repeat(40),
+            CI_RELEASE_SCOPE: scope,
+            GITHUB_RUN_ID: "1",
+            GITHUB_RUN_ATTEMPT: "1",
+            GITHUB_STEP_SUMMARY: "/dev/null",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("include_mobile=");
+      expect(result.stdout).toContain("dispatch_id=full-release-validation-1-1-ci");
+      expect(result.stdout).not.toContain("include_android=");
+      expect(result.stdout).toContain("release_scope=" + scope);
+    },
+  );
 
   it("keeps minimum-Node qualification in full manual CI", () => {
     const workflow = readCiWorkflow();
