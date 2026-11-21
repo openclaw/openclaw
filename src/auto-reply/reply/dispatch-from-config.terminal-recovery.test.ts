@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { setVerbose } from "../../global-state.js";
@@ -16,6 +17,7 @@ import { testing as controllerTesting } from "../../sessions/session-controller.
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -153,6 +155,32 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       text: `⚠️ Context compaction succeeded, but the later model request still failed. ${formatBillingErrorMessage().replace(/^⚠️\s*/u, "")}`,
       isError: true,
     });
+  });
+
+  it("delivers request affordability guidance once without another run", async () => {
+    const rawError = `402 ${JSON.stringify({ error: { message: "This request requires more credits, or fewer max_tokens. You requested up to 217003 tokens, but can only afford 134896. To increase, visit https://openrouter.ai/settings/credits", code: 402 }, request: "PRIVATE_CANARY" })}`;
+    const replyResolver = vi.fn<ReplyResolver>(
+      async (sessionCtx) =>
+        buildKnownAgentRunFailureReplyPayload({
+          err: new FailoverError("Provider billing failure", {
+            reason: "billing",
+            provider: "openrouter",
+            model: "fixture/model",
+            rawError,
+          }),
+          sessionCtx,
+          resolvedVerboseLevel: "off",
+        }) ?? undefined,
+    );
+    const params = createVisibleDispatchParams(replyResolver);
+    await dispatchReplyFromConfig(params);
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(params.dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
+      text: "⚠️ This request exceeds the available credit or spending allowance. Reduce the maximum output tokens (`max_tokens`), or check your account balance and key spending limit before trying again.",
+      isError: true,
+    });
+    expect(params.dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(params.dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
   it.each([

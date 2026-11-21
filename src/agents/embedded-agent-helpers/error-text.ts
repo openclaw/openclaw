@@ -176,7 +176,12 @@ export function formatAssistantErrorText(
     return runtimeCopy;
   }
   if (failoverReason === "billing") {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+    return formatBillingErrorMessage(
+      opts?.provider,
+      opts?.model ?? msg.model,
+      opts?.authMode,
+      msg.errorBody ?? raw,
+    );
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
