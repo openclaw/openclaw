@@ -8,7 +8,11 @@ import type {
   SqliteSchemaRow,
   SqliteTableListRow,
 } from "../../src/infra/sqlite-schema-catalog-types.ts";
-import { normalizeSchemaSql, quoteSqliteIdentifier } from "../../src/infra/sqlite-schema-sql.ts";
+import {
+  foldSqliteIdentifierCase,
+  normalizeSchemaSql,
+  quoteSqliteIdentifier,
+} from "../../src/infra/sqlite-schema-sql.ts";
 
 /** Build-time only: record the native catalog, including expression text and hidden columns. */
 export function readSqliteSchemaCatalog(db: DatabaseSync): SqliteSchemaCatalog {
@@ -58,7 +62,11 @@ export function readSqliteSchemaCatalog(db: DatabaseSync): SqliteSchemaCatalog {
             }))
             .toSorted((left, right) => left.name.localeCompare(right.name)),
           triggers: objects
-            .filter((row) => row.type === "trigger" && row.tbl_name === table.name)
+            .filter(
+              (row) =>
+                row.type === "trigger" &&
+                foldSqliteIdentifierCase(row.tbl_name) === foldSqliteIdentifierCase(table.name),
+            )
             .map(normalized),
         };
       }),
@@ -71,7 +79,11 @@ export function readSqliteSchemaCatalog(db: DatabaseSync): SqliteSchemaCatalog {
           .prepare(`PRAGMA main.table_xinfo(${quoteSqliteIdentifier(view.name)})`)
           .all() as SqliteColumnCatalog[],
         triggers: objects
-          .filter((row) => row.type === "trigger" && row.tbl_name === view.name)
+          .filter(
+            (row) =>
+              row.type === "trigger" &&
+              foldSqliteIdentifierCase(row.tbl_name) === foldSqliteIdentifierCase(view.name),
+          )
           .map(normalized),
       })),
   };
