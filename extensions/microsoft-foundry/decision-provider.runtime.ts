@@ -7,8 +7,7 @@ import {
   type ProviderDecisionOutcomeV2,
   type ProviderFailureReason,
 } from "openclaw/plugin-sdk/decisions";
-import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { evaluateDecisionHttp } from "openclaw/plugin-sdk/decisions-http-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FoundryDecisionRoute } from "./decision-provider.js";
 
@@ -105,10 +104,6 @@ export async function evaluateFoundryDecision(
   matchesLiveRoute: () => boolean,
   model: string,
 ): Promise<ProviderDecisionOutcomeV2> {
-  const apiKey = context.auth.apiKey;
-  if (context.auth.mode !== "api-key" || !apiKey) {
-    return unavailable("credentials-unavailable");
-  }
   if (context.reasoning !== undefined && context.reasoning !== "auto") {
     return unavailable("unsupported-input");
   }
@@ -116,70 +111,22 @@ export async function evaluateFoundryDecision(
   if (body === undefined) {
     return unavailable("unsupported-input");
   }
-  const signal = context.signal;
-  const assertAdmitted = () => {
-    signal.throwIfAborted();
-    if (
-      performance.now() >= context.deadlineMonotonicMs ||
-      !context.isAdmissible() ||
-      !matchesLiveRoute()
-    ) {
-      throw new Error("Foundry Decision request is no longer admitted.");
-    }
-  };
-  const headers = {
-    "api-key": apiKey,
-    accept: "application/json",
-    "content-type": "application/json",
-  };
-  try {
-    assertAdmitted();
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `https://${route.host}/providers/microsoft/v1/systemone`,
-      requireHttps: true,
-      policy: { hostnameAllowlist: [route.host] },
-      maxRedirects: 0,
-      capture: false,
-      signal,
-      beforeRequest: assertAdmitted,
-      init: { method: "POST", headers, body },
-    });
-    try {
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          return unavailable("authentication");
-        }
-        if (response.status === 429) {
-          return unavailable("rate-limited");
-        }
-        return unavailable(
-          [400, 413, 415, 422].includes(response.status) ? "unsupported-input" : "transport",
-        );
-      }
-      let payload: Record<string, unknown>;
-      try {
-        payload = await readProviderJsonObjectResponse(response, "Foundry Decision", {
-          maxBytes: MAX_BYTES,
-          signal,
-          requestHeaders: headers,
-        });
-      } catch {
-        signal.throwIfAborted();
-        return unavailable("invalid-response");
-      }
-      assertAdmitted();
-      if (JSON.stringify(payload).includes(apiKey)) {
-        return unavailable("invalid-response");
-      }
-      const result = decodeResult(batch, payload, model);
+  return evaluateDecisionHttp(context, {
+    provider: context.model.provider,
+    // Transport options may change how we connect, never where we send this resource's key.
+    baseUrl: `https://${route.host}/providers/microsoft/v1`,
+    endpointPath: "systemone",
+    body,
+    authHeaders: (apiKey) => ({ "api-key": apiKey }),
+    isBoundResourceCurrent: matchesLiveRoute,
+    capture: false,
+    maxResponseBytes: MAX_BYTES,
+    statusReason: (status) => (status === 415 ? "unsupported-input" : undefined),
+    decode: (payload): ProviderDecisionOutcomeV2 => {
+      const result = isRecord(payload) ? decodeResult(batch, payload, model) : undefined;
       return validateDecisionResultV2(batch, result, context.model.inference?.decision)
         ? { status: "ok", result }
         : unavailable("invalid-response");
-    } finally {
-      await release();
-    }
-  } catch {
-    signal.throwIfAborted();
-    return unavailable("transport");
-  }
+    },
+  });
 }
