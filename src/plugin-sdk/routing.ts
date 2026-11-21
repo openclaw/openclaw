@@ -27,6 +27,10 @@ export {
   resolveThreadSessionKeys,
   sanitizeAgentId,
 } from "../routing/session-key.js";
+export {
+  deriveSessionChatTypeFromKey,
+  type SessionKeyChatType,
+} from "../sessions/session-chat-type-shared.js";
 export { resolveAccountEntry } from "../routing/account-lookup.js";
 export { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
 export {
