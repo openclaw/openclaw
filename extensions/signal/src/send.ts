@@ -246,15 +246,12 @@ export async function sendMessageSignal(
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
   let result: SignalSendRpcResult | undefined;
+  const requestParams = quote ? { ...params, ...quote.params } : params;
   try {
-    result = await signalRpcRequest<SignalSendRpcResult>(
-      "send",
-      quote ? { ...params, ...quote.params } : params,
-      sendOpts,
-    );
+    result = await signalRpcRequest<SignalSendRpcResult>("send", requestParams, sendOpts);
     nativeReplyStatus = quote ? "sent" : undefined;
   } catch (error) {
-    if (!quote || !isSignalQuoteMetadataRejection(error)) {
+    if (!quote || !isSignalQuoteMetadataRejection(error, requestParams)) {
       throw error;
     }
     result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);

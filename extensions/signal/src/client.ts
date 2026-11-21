@@ -15,11 +15,12 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
+import { SignalRpcError } from "./rpc-error.js";
 import { assertSignalSocketEndpoint } from "./socket-path.js";
 
 export type { SignalRpcOptions } from "./client-types.js";
 
-type SignalRpcError = {
+type SignalRpcErrorResponse = {
   code?: number;
   message?: string;
   data?: unknown;
@@ -28,7 +29,7 @@ type SignalRpcError = {
 type SignalRpcResponse<T> = {
   jsonrpc?: string;
   result?: T;
-  error?: SignalRpcError;
+  error?: SignalRpcErrorResponse;
   id?: string | number | null;
 };
 
@@ -278,7 +279,7 @@ async function* messages(socket: net.Socket, maxBytes = MAX_FRAME_BYTES) {
   }
 }
 
-function result(message: RpcMessage): unknown {
+function result(message: RpcMessage, params?: Record<string, unknown>): unknown {
   if (message.jsonrpc !== "2.0" || (!Object.hasOwn(message, "result") && !message.error)) {
     throw new Error("Signal UNIX RPC returned invalid response envelope");
   }
@@ -289,11 +290,11 @@ function result(message: RpcMessage): unknown {
     // which can carry PII. The safe message keeps the send-path fallback classifier working.
     if (
       typeof error.message === "string" &&
-      isSignalQuoteMetadataRejection(`Signal RPC ${code}: ${error.message}`)
+      isSignalQuoteMetadataRejection(`Signal RPC ${code}: ${error.message}`, params)
     ) {
-      throw new Error(`Signal RPC ${code}: quote metadata rejected (redacted)`);
+      throw new SignalRpcError(error, "quote metadata rejected (redacted)");
     }
-    throw new Error(`Signal RPC ${code}: remote error`);
+    throw new SignalRpcError(error, "remote error");
   }
   return message.result;
 }
@@ -316,7 +317,7 @@ async function signalUnixRpcRequest<T>(
     for await (const message of messages(connection.socket, maxBytes)) {
       if (message.id === id) {
         // SAFETY: The generic caller owns the method's result type after JSON-RPC envelope validation.
-        return result(message) as T;
+        return result(message, params) as T;
       }
     }
     throw new Error("Signal UNIX RPC closed before response");
@@ -361,9 +362,7 @@ export async function signalRpcRequest<T = unknown>(
   }
   const parsed = parseSignalRpcResponse<T>(text, res.status);
   if (parsed.error) {
-    const code = parsed.error.code ?? "unknown";
-    const msg = parsed.error.message ?? "Signal RPC error";
-    throw new Error(`Signal RPC ${code}: ${msg}`);
+    throw new SignalRpcError(parsed.error);
   }
   return parsed.result as T;
 }
