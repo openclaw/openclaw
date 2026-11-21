@@ -1038,59 +1038,27 @@
   gap: 4px;
 }
 
-/* Transparent run/card hosts still participate in sibling selection. Apply the
-   block gap to the visible box while keeping expanded children compact. */
-:is(.chat-group-messages, .chat-agent-run-body)
+/* Transparent card hosts participate in sibling selection; put the gap on
+   the visible card. Milestones stay separate from the compact tool blocks. */
+:is(.chat-group-messages, .chat-agent-run-body) {
   > :is(
     .chat-activity-group,
     .chat-tool-msg-collapse,
     .chat-bubble--tool-shell,
     openclaw-chat-tool-card
-  )
-  + .chat-activity-group,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + .chat-tool-msg-collapse,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + .chat-bubble--tool-shell,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + openclaw-chat-tool-card
-  > .chat-tool-msg-collapse {
-  margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
-}
+  ) {
+    + :is(.chat-activity-group, .chat-tool-msg-collapse, .chat-bubble--tool-shell),
+    + openclaw-chat-tool-card > .chat-tool-msg-collapse {
+      margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
+    }
+  }
 
-/* Agent milestones stay outside the tool rollup and get a distinct block gap. */
-:is(.chat-group-messages, .chat-agent-run-body)
   > :is(.chat-activity-group, .chat-bubble--tool-shell, openclaw-chat-tool-card)
-  + .chat-tool-msg-collapse--lifecycle,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > .chat-tool-msg-collapse--lifecycle
-  + .chat-activity-group,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > .chat-tool-msg-collapse--lifecycle
-  + .chat-bubble--tool-shell,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > .chat-tool-msg-collapse--lifecycle
-  + openclaw-chat-tool-card
-  > .chat-tool-msg-collapse {
-  margin-block-start: calc(2 * var(--chat-run-block-gap) - var(--chat-message-gap));
+    + .chat-tool-msg-collapse--lifecycle,
+  > .chat-tool-msg-collapse--lifecycle + :is(.chat-activity-group, .chat-bubble--tool-shell),
+  > .chat-tool-msg-collapse--lifecycle + openclaw-chat-tool-card > .chat-tool-msg-collapse {
+    margin-block-start: calc(2 * var(--chat-run-block-gap) - var(--chat-message-gap));
+  }
 }
 
 @keyframes chat-work-settle-in {

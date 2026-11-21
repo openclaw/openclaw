@@ -66,7 +66,6 @@ export function describeToolGroup(
   const summary = summarizeAgentActivity(all, options);
   const groups = new Map<string, AgentActivityItem[]>(
     [
-      "readChanges",
       "reads",
       "changes",
       "commands",
@@ -115,14 +114,11 @@ export function describeToolGroup(
   const fileChanges = groups.get("changes")!;
   const hasFileWork = fileReads.length > 0 || fileChanges.length > 0;
   // Combine the same kind of work only when both verbs describe the recorded state.
-  if (fileReads.length && fileChanges.length && phaseOf(fileReads) === phaseOf(fileChanges)) {
-    groups.set("readChanges", [...fileReads, ...fileChanges]);
-    groups.set("reads", []);
-    groups.set("changes", []);
-  }
+  const combineFiles =
+    fileReads.length > 0 && fileChanges.length > 0 && phaseOf(fileReads) === phaseOf(fileChanges);
   const meaningfulWork = [...groups].some(([kind, actions]) => kind !== "other" && actions.length);
   const label = [...groups]
-    .filter(([, actions]) => actions.length > 0)
+    .filter(([kind, actions]) => actions.length > 0 && !(combineFiles && kind === "changes"))
     .filter(([kind, actions]) => {
       // Completed discovery supports file work; active, uncertain and write operations
       // retain their own labels. Every operation remains in the expanded group.
@@ -180,7 +176,8 @@ export function describeToolGroup(
             ? "Summary"
             : "Pending"
           : phaseOf(actions);
-      return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);
+      const labelKind = combineFiles && kind === "reads" ? "readChanges" : kind;
+      return t(`chat.toolCards.activity.${labelKind}${phase}${continuation}`);
     })
     .join(", ");
   // Attempt outcomes remain on their rows. They do not establish the result
