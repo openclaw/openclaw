@@ -42,6 +42,7 @@ const MemoryGetSchema = {
     path: { type: "string" },
     from: { type: "integer", minimum: 1 },
     lines: { type: "integer", minimum: 1 },
+    heading: { type: "string", minLength: 1 },
     corpus: { type: "string", enum: ["memory", "wiki", "all"] },
   },
   required: ["path"],
@@ -122,7 +123,7 @@ export const MEMORY_GET_TOOL_CONTRACT = {
   name: "memory_get",
   parameters: MemoryGetSchema,
   describe: ({ files }: MemorySourceContract) =>
-    `Safe exact excerpt read from ${files}. Session transcript paths are unsupported; use the available session-history workflow for session hits. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
+    `Safe exact excerpt read from ${files}. Optional \`heading\` selects a unique ATX (# through ######) heading by exact text, without the # markers; includes child sections and stops before the next same-or-higher-level heading. Heading reads support only the memory corpus; keep heading when continuing with absolute \`from\` line numbers. Missing or duplicate headings return an error; omit heading to read by line instead. Session transcript paths are unsupported; use the available session-history workflow for session hits. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
 } as const;
 
 export type MemoryToolContract = (
