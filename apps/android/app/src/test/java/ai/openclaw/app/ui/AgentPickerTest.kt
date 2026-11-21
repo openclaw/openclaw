@@ -7,9 +7,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -43,9 +49,42 @@ class AgentPickerTest {
     }
 
     composeRule.onNodeWithText("missing").assertIsDisplayed().performClick()
-    composeRule.onNodeWithText("Main").assertIsDisplayed().performClick()
+    composeRule
+      .onNodeWithText("Main")
+      .assertIsDisplayed()
+      .assertIsNotSelected()
+      .performClick()
 
     assertEquals("main", selectedAgentId)
+  }
+
+  @Test
+  fun menuExposesCurrentSelectionAfterSwitchingAgents() {
+    val selectedAgentId = mutableStateOf("main")
+    val agents =
+      listOf(
+        GatewayAgentSummary(id = "main", name = "Main", emoji = null, kind = null),
+        GatewayAgentSummary(id = "work", name = "Work", emoji = null, kind = null),
+      )
+    composeRule.setContent {
+      ClawDesignTheme {
+        AgentPicker(
+          state = AgentPickerState(agents = agents, selectedAgentId = selectedAgentId.value),
+          onSelectAgent = { selectedAgentId.value = it },
+        )
+      }
+    }
+
+    composeRule.onNodeWithText("Main").performClick()
+    composeRule.onNode(hasText("Main") and hasAnyAncestor(isPopup())).assertIsSelected()
+    composeRule.onNodeWithText("Work").assertIsNotSelected().performClick()
+    composeRule.onNode(isPopup()).assertDoesNotExist()
+    assertEquals("work", selectedAgentId.value)
+
+    composeRule.onNodeWithText("Work").performClick()
+    composeRule.onNode(hasText("Work") and hasAnyAncestor(isPopup())).assertIsSelected()
+    composeRule.onNodeWithText("Main").assertIsNotSelected().performClick()
+    assertEquals("main", selectedAgentId.value)
   }
 
   @Test

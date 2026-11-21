@@ -36,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,7 +66,10 @@ internal fun ChatSourcePreviews(
           shape = RoundedCornerShape(10.dp),
           color = ClawTheme.colors.surfaceRaised,
           border = BorderStroke(1.dp, if (selectedUrl == source.url) ClawTheme.colors.textMuted else ClawTheme.colors.border),
-          modifier = Modifier.width(184.dp),
+          modifier =
+            Modifier
+              .width(184.dp)
+              .semantics { this.selected = selectedUrl == source.url },
         ) {
           Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(source.title, style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold), color = ClawTheme.colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
