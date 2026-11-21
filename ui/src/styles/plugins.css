@@ -308,27 +308,6 @@
   contain-intrinsic-block-size: auto 280px;
 }
 
-/* Skill previews have at most four rows. Lay them out immediately so the next
-   section never paints below a provisional 280px shelf. */
-.skill-discovery .plugin-catalog-section--expandable {
-  content-visibility: visible;
-}
-
-/* The registry controls the number of chips. Adding them must not push installed
-   skills down; use the same single-row navigation as narrow catalogs. */
-.skill-discovery .plugin-catalog-chips {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-}
-
-.skill-discovery .plugin-catalog-chip {
-  flex: none;
-}
-
-.skill-discovery .plugin-catalog-chip--skeleton {
-  height: auto;
-}
-
 .plugin-catalog-section__header {
   display: flex;
   align-items: center;

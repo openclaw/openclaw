@@ -371,8 +371,10 @@ export function SkillDiscovery(props: SkillsProps) {
           {props.state.clawhubInstallMessage!.text}
         </InlineAlert>
       )}
-      <CatalogDiscoveryChips label={t("skillsPage.categories")}>
+      {/* The registry sets the number of chips; one row keeps installed skills in place. */}
+      <CatalogDiscoveryChips label={t("skillsPage.categories")} singleRow>
         <CatalogDiscoveryChip
+          fixed
           icon={<Icon name="layoutGrid" />}
           active={scope() === "all" && !category()}
           onClick={() => selectBuiltin("all")}
@@ -381,6 +383,7 @@ export function SkillDiscovery(props: SkillsProps) {
         </CatalogDiscoveryChip>
         <Show when={hasInstalled()}>
           <CatalogDiscoveryChip
+            fixed
             icon={<Icon name="bookOpenText" />}
             active={scope() === "installed"}
             onClick={() => selectBuiltin("installed")}
@@ -400,12 +403,19 @@ export function SkillDiscovery(props: SkillsProps) {
         </Show>
         <Show
           when={props.readCategories()}
-          fallback={<span class="skeleton plugin-catalog-chip--skeleton" aria-hidden="true" />}
+          fallback={
+            <span
+              class="skeleton plugin-catalog-chip--skeleton"
+              style={{ height: "auto" }}
+              aria-hidden="true"
+            />
+          }
         >
           {(directory) => (
             <For each={directory().categories} keyed={(item) => item.slug}>
               {(item) => (
                 <CatalogDiscoveryChip
+                  fixed
                   ref={(button) => categoryChips.set(item().slug, button)}
                   icon={registryCategoryIcon(item().icon)}
                   active={category()?.slug === item().slug}
@@ -453,6 +463,8 @@ export function SkillDiscovery(props: SkillsProps) {
                 id={"category-" + section().category.slug}
                 title={section().category.label}
                 viewAllLabel={t("skillsPage.viewAll")}
+                // Previews have at most four rows; the next section must not paint below a provisional shelf.
+                eager
                 onViewAll={() => {
                   // The shelf button leaves the DOM; keep keyboard navigation on its matching chip.
                   const next = section().category;
