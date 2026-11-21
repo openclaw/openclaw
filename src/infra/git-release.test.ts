@@ -127,6 +127,33 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
         },
       );
+      it.each([true, false])(
+        "keeps observing until the original deadline after SIGUSR2 gets ESRCH (successor arrives: %s)",
+        async (successorArrives) => {
+          vi.useFakeTimers();
+          const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
+          const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+            throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+          });
+          const finished = vi.fn();
+          void waitForGitReleaseSuccessor(options).then(finished);
+          await vi.advanceTimersByTimeAsync(35_000);
+          // A still-visible lease cannot justify retrying or acknowledging an undelivered signal.
+          owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "another-request" });
+          await vi.advanceTimersByTimeAsync(54_000);
+          expect(finished).not.toHaveBeenCalled();
+          if (successorArrives) {
+            owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 });
+          }
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(finished).toHaveBeenCalledExactlyOnceWith(
+            successorArrives
+              ? { status: "changed" }
+              : { status: "unverified", incumbentPid: incumbent.pid },
+          );
+          expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+        },
+      );
       it("does not signal or spend the deferral budget when external restarts are disabled", async () => {
         vi.useFakeTimers();
         const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);

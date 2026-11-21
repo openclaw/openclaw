@@ -813,6 +813,63 @@ it.each([
   }
 });
 
+it.each([
+  "ready successor",
+  "lease for another listener",
+  "expired lease",
+  "already listening",
+  "missing candidate build",
+  "mixed listeners",
+] as const)(
+  "verifies a late Git plugin restart only for the new serving owner: %s",
+  async (state) => {
+    const { service, incumbent, successor, onVerified, verify, trial } = await gitReleaseRestart();
+    result.postUpdate = {
+      plugins: createPostCorePluginUpdateResult({ status: "ok", changed: true }),
+    };
+    if (state === "missing candidate build") {
+      result.after = { version: candidate.version };
+    }
+    using now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    restart.readGatewayOwnerLease.mockReturnValue(incumbent);
+    // An older resident has no deferral receipt. Its listener changes after the lease
+    // wait gave up, just as the ordinary verifier begins inspecting the service.
+    vi.mocked(service.readRuntime).mockImplementation(async () => {
+      now.mockReturnValue(10_100);
+      restart.readGatewayOwnerLease.mockReturnValue({
+        ...successor,
+        expired: state === "expired lease",
+        pid: state === "lease for another listener" ? 8100 : successor.pid,
+        listeningAt: state === "already listening" ? 9_000 : 10_050,
+      });
+      return { status: "running", pid: 9000 };
+    });
+    restart.inspectPortUsage.mockImplementation(async (port) =>
+      restart.portUsage(
+        [
+          { pid: successor.pid, ppid: 9000 },
+          ...(state === "mixed listeners" ? [{ pid: incumbent.pid, ppid: 9000 }] : []),
+        ],
+        { port },
+      ),
+    );
+    restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+    const verified = state === "ready successor";
+    expect(await verify()).toBe(verified ? "ok" : "readiness-pending");
+    expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
+    expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+    expect(vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1]).toMatchObject({
+      readyz: true,
+      settled: verified,
+    });
+    if (verified) {
+      await expect(fs.access(trial)).rejects.toThrow();
+    } else {
+      await fs.access(trial);
+    }
+  },
+);
+
 it.each(["stopped after handoff", "stopped without successor", "unknown service"])(
   "recovers a switched Git release only after confirmed stop: %s",
   async (scenario) => {

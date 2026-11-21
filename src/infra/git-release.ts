@@ -4,7 +4,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { sleep } from "../utils/sleep.js";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
-import { ignoreMissingPath } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
@@ -445,8 +445,13 @@ export async function waitForGitReleaseSuccessor(params: {
       previousReceipt = current.externalRestartReceipt;
       try {
         process.kill(incumbent.pid, "SIGUSR2");
-      } catch {
-        return unverified;
+      } catch (error) {
+        if (!hasErrnoCode(error, "ESRCH")) {
+          return unverified;
+        }
+        // The incumbent exited after the lease read. Observe replacement without retrying.
+        maySignal = false;
+        continue;
       }
       sentAt = now;
     } else if (

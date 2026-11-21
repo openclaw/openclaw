@@ -205,6 +205,7 @@ export async function maybeRestartService(
   }
   let activation = {
     ...params,
+    allowGitReleaseRestartSignal: params.gitReleaseRestartMode === "signal",
     signal: run?.deadline?.signal,
     // A default update step must not truncate a Windows service's cold-start budget.
     timeoutMs:
@@ -464,16 +465,19 @@ export async function maybeRestartService(
   // A native restart from inside its service job (update.run) would end this updater.
   if (
     preserveDefinition &&
+    activation.gitReleaseRestartMode !== "native" &&
     activation.result.mode === "git" &&
     readPackageReleaseSlotSync(activation.result.root ?? "")
   ) {
     recordPhase("restarting");
+    const waitStartedAtMs = Date.now();
     const handoff = await waitForGitReleaseSuccessor(activation);
     assertCurrent();
     const outcome = await verifyRestartedGateway(expectedVersion, expectedGatewayBuildId, {
       requireRunningService: true,
       recoverHealth: handoff.status === "no-incumbent",
-      unverifiedGitHandoff: handoff.status === "unverified" ? handoff : undefined,
+      unverifiedGitHandoff:
+        handoff.status === "unverified" ? { ...handoff, waitStartedAtMs } : undefined,
     });
     if (outcome) {
       return outcome;

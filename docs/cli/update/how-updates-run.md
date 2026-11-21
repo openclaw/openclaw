@@ -1605,7 +1605,9 @@ that deferral and process replacement before verifying. A signal alone does not 
 the wait. Older Gateways without this receipt keep the original bounded wait; an
 explicit overall update timeout still applies. Only serving-build and readiness checks
 confirm the update. This behavior requires the updated updater and, for the extended
-wait, a running Gateway that records acceptance.
+wait, a running Gateway that records acceptance. If restart signals are disabled, an updater in an
+independent terminal can still use the native restart of its verified, owned service.
+A managed handoff never selects that route to restart a running incumbent.
 
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that

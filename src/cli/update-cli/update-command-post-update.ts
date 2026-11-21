@@ -555,7 +555,7 @@ async function finishSettledUpdate(
               params.opts.restart === false && currentServiceStop()?.running === true,
             result: resultWithPostUpdate,
             opts: params.opts,
-            allowGitReleaseRestartSignal: restartContext.allowGitReleaseRestartSignal,
+            gitReleaseRestartMode: restartContext.gitReleaseRestartMode,
             refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
             definitionRecovery,
             serviceUpdateVerdict: restartContext.serviceUpdateVerdict,

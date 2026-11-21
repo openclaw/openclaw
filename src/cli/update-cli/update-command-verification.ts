@@ -5,6 +5,7 @@ import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import type { SystemdServiceStartRefusal } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { settleGitReleaseTrial } from "../../infra/git-release.js";
 import {
   normalizeUpdateFailureFacts,
@@ -32,6 +33,7 @@ import {
   renderRestartDiagnostics,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
+import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   createPluginUpdateWarning,
@@ -205,13 +207,66 @@ function updateGatewayHealthFacts(
   };
 }
 
+function verifiedLateGitSuccessor(
+  params: UpdateGatewayReadinessParams,
+  health: GatewayRestartSnapshot,
+  incumbentPid: number | undefined,
+  waitStartedAtMs: number,
+): boolean {
+  const { runtime, portUsage } = health;
+  if (
+    !incumbentPid ||
+    !params.expectedVersion ||
+    health.gatewayVersion !== params.expectedVersion ||
+    !params.expectedBuildId ||
+    health.gatewayBuildId !== params.expectedBuildId ||
+    runtime.status !== "running" ||
+    runtime.pid === undefined ||
+    portUsage.status !== "busy" ||
+    !allListenersOwnedByRuntimePid(portUsage.listeners, runtime.pid)
+  ) {
+    return false;
+  }
+  // A service PID may be a wrapper. The freshly bound Gateway owner itself must
+  // be the listener we probed, not merely a different PID in the same service.
+  const listenerPid = portUsage.listeners[0]?.pid;
+  if (
+    !listenerPid ||
+    listenerPid === incumbentPid ||
+    !portUsage.listeners.every((listener) => listener.pid === listenerPid)
+  ) {
+    return false;
+  }
+  try {
+    const owner = readGatewayOwnerLease({
+      env: params.serviceEnv,
+      port: params.gatewayPort,
+      current: true,
+    });
+    return Boolean(
+      owner?.owner &&
+      owner.state === "live" &&
+      !owner.expired &&
+      owner.pid === listenerPid &&
+      owner.listeningAt !== undefined &&
+      owner.listeningAt > waitStartedAtMs &&
+      owner.listeningAt <= Date.now(),
+    );
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return false; // An unavailable current lease cannot corroborate turnover.
+  }
+}
+
 /** Verify core activation while preserving plugin failures as separate notices. */
 export async function verifyUpdatedGateway(
   params: UpdateGatewayReadinessParams & {
     result: UpdateRunResult;
     opts: UpdateCommandOptions;
     onVerified?: (verifiedAtMs: number) => void;
-    unverifiedGitHandoff?: { incumbentPid?: number };
+    unverifiedGitHandoff?: { incumbentPid?: number; waitStartedAtMs?: number };
     purpose?: "recovery" | "package-replacement";
   },
 ): Promise<{
@@ -270,7 +325,13 @@ export async function verifyUpdatedGateway(
   const handoffPending =
     health.healthy &&
     params.unverifiedGitHandoff &&
-    (!distinctCore || params.result.postUpdate?.plugins?.changed);
+    (!distinctCore || params.result.postUpdate?.plugins?.changed) &&
+    !verifiedLateGitSuccessor(
+      params,
+      health,
+      params.unverifiedGitHandoff.incumbentPid,
+      params.unverifiedGitHandoff.waitStartedAtMs ?? startedAtMs,
+    );
   const observed = updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady);
   if (handoffPending) {
     observed.settled = false; // Preserve the actual PID, build, and endpoint observations.
