@@ -10,6 +10,9 @@ type JsonSpan = Omit<BalancedJsonFragment, "json">;
 type BalancedJsonOptions = {
   openers?: readonly JsonOpeningDelimiter[];
   skipQuotedOpeners?: boolean;
+};
+
+type BalancedJsonFragmentOptions = BalancedJsonOptions & {
   /** A line-start record can supersede an unmatched opener in preceding prose. */
   recoverAtLineStart?: boolean;
   /** Admit JSON syntax, optionally binding a same-coordinate discovery view to its original text. */
@@ -32,9 +35,24 @@ type JsonContainer = {
   valid: boolean;
 };
 
+type QuoteState = { quoted: boolean; escaped: boolean };
+
+/** Only container-owned strings become invalid at a literal newline; prose keeps its quote. */
+function advanceQuotedText(state: QuoteState, char: string | undefined, recover: boolean): boolean {
+  if (recover && (char === "\n" || char === "\r")) {
+    state.quoted = false;
+    state.escaped = false;
+    return true;
+  }
+  if (state.escaped) state.escaped = false;
+  else if (char === "\\") state.escaped = true;
+  else if (char === '"') state.quoted = false;
+  return false;
+}
+
 function extractStrictJsonFragments(
   raw: string,
-  opts: BalancedJsonOptions,
+  opts: BalancedJsonFragmentOptions,
 ): BalancedJsonFragment[] {
   const source = typeof opts.strictJson === "object" ? opts.strictJson.source : raw;
   if (source.length !== raw.length) {
@@ -61,8 +79,7 @@ function extractStrictJsonFragments(
   const stack: JsonContainer[] = [];
   const activeOpeners: Record<JsonOpeningDelimiter, number> = { "{": 0, "[": 0 };
   let selectedDepth = 0;
-  let inString = false;
-  let escaped = false;
+  const quote: QuoteState = { quoted: false, escaped: false };
   let lineStart = true;
   let opaqueIndex = 0;
   let spanEnd = -1;
@@ -80,7 +97,7 @@ function extractStrictJsonFragments(
       // Decide at entry: a span inside a string cannot become framing after
       // that string closes, including in the caller's masked discovery view.
       spanEnd = entering.endIndex;
-      spanOpaque = !inString;
+      spanOpaque = !quote.quoted;
       opaqueIndex++;
     }
     const char = source[index];
@@ -96,25 +113,15 @@ function extractStrictJsonFragments(
     const discovery = inSpan ? char : raw[index];
     // Except for declared framing, original text owns structure and strings.
     // Hidden discovery quotes must not turn string interiors into child records.
-    if (inString) {
-      if (opts.recoverAtLineStart && (char === "\n" || char === "\r")) {
-        const parent = stack.at(-1);
-        if (parent) {
-          parent.invalid = true;
-        }
-        inString = false;
-        escaped = false;
-      } else if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
+    if (quote.quoted) {
+      const parent = stack.at(-1);
+      if (advanceQuotedText(quote, char, !!opts.recoverAtLineStart && parent !== undefined)) {
+        parent!.invalid = true;
       }
       continue;
     }
     if (char === '"') {
-      inString = true;
+      quote.quoted = true;
     } else if (char === "{" || char === "[") {
       const selected = discovery === char && openers.includes(char);
       const node: JsonContainer = {
@@ -217,49 +224,21 @@ function extractBalancedJsonAt(
   raw: string,
   opts: BalancedJsonOptions,
   offset: number,
-  recovered: JsonSpan[] = [],
 ): BalancedJsonFragment | null {
   const openers = opts.openers ?? (["{", "["] as const);
   let start = offset;
-  let lineStart =
-    offset === 0 ||
-    raw[offset - 1] === "\n" ||
-    (opts.recoverAtLineStart === true && raw[offset - 1] === "\r");
-  if (!opts.skipQuotedOpeners && !opts.recoverAtLineStart) {
+  if (!opts.skipQuotedOpeners) {
     while (start < raw.length && !isJsonOpeningDelimiter(raw[start], openers)) {
-      const char = raw[start];
-      lineStart = char === "\n" || (lineStart && (char === " " || char === "\t" || char === "\r"));
       start += 1;
     }
   }
   const stack: JsonOpeningDelimiter[] = [];
-  // Existing delimiter-only callers need no per-opener recovery objects.
-  const recovery:
-    | {
-        start: number;
-        lineStart: boolean;
-        recovered: number;
-        epoch: number;
-      }[]
-    | undefined = opts.recoverAtLineStart ? [] : undefined;
   let inString = false;
   let escaped = false;
-  let epoch = 0;
   for (let index = start; index < raw.length; index += 1) {
     const char = raw[index];
-    const atLineStart = lineStart;
-    lineStart =
-      char === "\n" ||
-      (opts.recoverAtLineStart === true && char === "\r") ||
-      (lineStart && (char === " " || char === "\t" || char === "\r"));
     if (inString) {
-      if (opts.recoverAtLineStart && (char === "\n" || char === "\r")) {
-        // Literal line breaks cannot belong to a JSON string. Keep completed
-        // child candidates, but never let this invalid parent supersede them.
-        inString = false;
-        escaped = false;
-        epoch += 1;
-      } else if (escaped) {
+      if (escaped) {
         escaped = false;
       } else if (char === "\\") {
         escaped = true;
@@ -273,7 +252,53 @@ function extractBalancedJsonAt(
         start = index;
       }
       stack.push(char);
-      recovery?.push({
+    } else if (stack.length > 0 && char === (stack.at(-1) === "{" ? "}" : "]")) {
+      stack.pop();
+      if (stack.length === 0) {
+        return { json: raw.slice(start, index + 1), startIndex: start, endIndex: index };
+      }
+    }
+  }
+  return null;
+}
+
+function extractRecoverableJsonAt(
+  raw: string,
+  opts: BalancedJsonOptions,
+  offset: number,
+  recovered: JsonSpan[],
+  owners: JsonOpeningDelimiter[],
+): BalancedJsonFragment | null {
+  const openers = opts.openers ?? (["{", "["] as const);
+  let start = offset;
+  let lineStart = offset === 0 || raw[offset - 1] === "\n" || raw[offset - 1] === "\r";
+  const stack: JsonOpeningDelimiter[] = [];
+  const recovery: { start: number; lineStart: boolean; recovered: number; epoch: number }[] = [];
+  const quote: QuoteState = { quoted: false, escaped: false };
+  let epoch = 0;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    const atLineStart = lineStart;
+    lineStart =
+      char === "\n" ||
+      char === "\r" ||
+      (lineStart && (char === " " || char === "\t" || char === "\r"));
+    if (quote.quoted) {
+      if (advanceQuotedText(quote, char, owners.length > 0)) epoch += 1;
+      continue;
+    }
+    // Preserve original ownership through filtered containers and across returned
+    // fragments; output selection must not decide whether a quote is prose.
+    if (char === "{" || char === "[") owners.push(char);
+    else if (char === (owners.at(-1) === "{" ? "}" : "]")) owners.pop();
+    if (char === '"') {
+      quote.quoted = true;
+    } else if (isJsonOpeningDelimiter(char, openers)) {
+      if (stack.length === 0) {
+        start = index;
+      }
+      stack.push(char);
+      recovery.push({
         start: index,
         lineStart: atLineStart,
         recovered: recovered.length,
@@ -281,7 +306,7 @@ function extractBalancedJsonAt(
       });
     } else if (stack.length > 0 && char === (stack.at(-1) === "{" ? "}" : "]")) {
       stack.pop();
-      const closed = recovery?.pop();
+      const closed = recovery.pop();
       if (closed && closed.epoch !== epoch) {
         continue;
       }
@@ -305,33 +330,26 @@ export function extractBalancedJsonPrefix(
   raw: string,
   opts: BalancedJsonOptions = {},
 ): BalancedJsonFragment | null {
-  if (opts.strictJson) {
-    return extractStrictJsonFragments(raw, opts)[0] ?? null;
-  }
-  const recovered: JsonSpan[] = [];
-  const root = extractBalancedJsonAt(raw, opts, 0, recovered);
-  const first = recovered[0];
-  return first ? { ...first, json: raw.slice(first.startIndex, first.endIndex + 1) } : root;
+  return extractBalancedJsonAt(raw, opts, 0);
 }
 
-/** Extracts every balanced JSON object/array fragment from arbitrary text. */
+/** Extracts every balanced JSON object/array fragment; recovery is opt-in here only. */
 export function extractBalancedJsonFragments(
   raw: string,
-  opts: BalancedJsonOptions = {},
+  opts: BalancedJsonFragmentOptions = {},
 ): BalancedJsonFragment[] {
-  if (opts.strictJson) {
-    return extractStrictJsonFragments(raw, opts);
-  }
+  if (opts.strictJson) return extractStrictJsonFragments(raw, opts);
   const fragments: BalancedJsonFragment[] = [];
+  const owners: JsonOpeningDelimiter[] = [];
   for (let offset = 0; offset < raw.length;) {
     const recovered: JsonSpan[] = [];
-    const fragment = extractBalancedJsonAt(raw, opts, offset, recovered);
+    const fragment = opts.recoverAtLineStart
+      ? extractRecoverableJsonAt(raw, opts, offset, recovered, owners)
+      : extractBalancedJsonAt(raw, opts, offset);
     for (const span of recovered) {
       fragments.push({ ...span, json: raw.slice(span.startIndex, span.endIndex + 1) });
     }
-    if (!fragment) {
-      break;
-    }
+    if (!fragment) break;
     fragments.push(fragment);
     offset = fragment.endIndex + 1;
   }

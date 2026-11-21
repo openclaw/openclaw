@@ -56,7 +56,6 @@ describe("balanced JSON extraction", () => {
     expect(extractBalancedJsonFragments(raw, strictRecovery)).toEqual(
       fragmentsAt(raw, [first, second, next]),
     );
-    expect(extractBalancedJsonPrefix(raw, strictRecovery)).toEqual(fragmentsAt(raw, [first])[0]);
     expect(extractBalancedJsonFragments(raw, { recoverAtLineStart: true })).toEqual(
       fragmentsAt(raw, [wrapper, next]),
     );
@@ -144,7 +143,6 @@ describe("balanced JSON extraction", () => {
         },
       };
       expect(extractBalancedJsonFragments(discovery, options)).toEqual(fragmentsAt(source, [json]));
-      expect(extractBalancedJsonPrefix(discovery, options)).toEqual(fragmentsAt(source, [json])[0]);
       expect(
         extractBalancedJsonFragments(discovery, {
           ...strictRecovery,
@@ -165,7 +163,6 @@ describe("balanced JSON extraction", () => {
         const discovery = prefix.replace(/[\r\n]/g, " ").replace("\t  ", "xxx") + child;
         for (const view of [source, discovery]) {
           expect(extractBalancedJsonFragments(view, options)).toEqual(fragmentsAt(source, [child]));
-          expect(extractBalancedJsonPrefix(view, options)).toEqual(fragmentsAt(source, [child])[0]);
         }
         expect(extractBalancedJsonFragments(discovery.replace('{"ok"', ' "ok"'), options)).toEqual(
           [],
@@ -179,7 +176,6 @@ describe("balanced JSON extraction", () => {
           inline.replace("prose", "\n    "),
         ]) {
           expect(extractBalancedJsonFragments(view, options)).toEqual([]);
-          expect(extractBalancedJsonPrefix(view, options)).toBeNull();
         }
       }
     },
@@ -195,7 +191,6 @@ describe("balanced JSON extraction", () => {
         for (const view of [source, source.replace("[", " ")]) {
           const options = { ...strictRecovery, strictJson: { source } };
           expect(extractBalancedJsonFragments(view, options)).toEqual(fragmentsAt(source, [next]));
-          expect(extractBalancedJsonPrefix(view, options)).toEqual(fragmentsAt(source, [next])[0]);
           expect(extractBalancedJsonFragments(view, { ...options, openers: ["{"] })).toEqual(
             fragmentsAt(source, [inline, next]),
           );
@@ -254,9 +249,6 @@ describe("balanced JSON extraction", () => {
       ]) {
         expect(extractBalancedJsonFragments(discovery, options)).toEqual(
           fragmentsAt(source, [child]),
-        );
-        expect(extractBalancedJsonPrefix(discovery, options)).toEqual(
-          fragmentsAt(source, [child])[0],
         );
       }
     },
@@ -377,7 +369,6 @@ describe("balanced JSON extraction", () => {
   ])("rejects invalid opaque span geometry instead of repairing it: %j", (...opaqueSpans) => {
     const options = { strictJson: { source: "{}", opaqueSpans } };
     expect(() => extractBalancedJsonFragments("{}", options)).toThrow(RangeError);
-    expect(() => extractBalancedJsonPrefix("{}", options)).toThrow(RangeError);
   });
 
   it("retains original numeric lexemes, duplicate keys, and escaped strings in admitted records", () => {
@@ -428,10 +419,9 @@ describe("balanced JSON extraction", () => {
         })),
       );
       expect(extractBalancedJsonPrefix(raw)).toBeNull();
-      expect(extractBalancedJsonPrefix(raw, { recoverAtLineStart: true })?.json).toBe(json);
       expect(
-        extractBalancedJsonPrefix(`${prefix}\n{"incomplete":`, { recoverAtLineStart: true }),
-      ).toBeNull();
+        extractBalancedJsonFragments(`${prefix}\n{"incomplete":`, { recoverAtLineStart: true }),
+      ).toEqual([]);
     },
   );
 
@@ -462,10 +452,11 @@ describe("balanced JSON extraction", () => {
           endIndex: raw.indexOf(json) + json.length - 1,
         })),
       );
-      expect(extractBalancedJsonPrefix(raw, { recoverAtLineStart: true })?.json).toBe(first);
       expect(extractBalancedJsonFragments(raw)).toEqual([]);
       const valid = '[\n "quoted \\"value\\"",\n {"nested": [1, 2]}\n]';
-      expect(extractBalancedJsonPrefix(valid, { recoverAtLineStart: true })?.json).toBe(valid);
+      expect(extractBalancedJsonFragments(valid, { recoverAtLineStart: true })[0]?.json).toBe(
+        valid,
+      );
     },
   );
 
@@ -474,11 +465,49 @@ describe("balanced JSON extraction", () => {
     const second = '{"next":2}';
     const raw = `banner "example [0]"\n${first}\n"escaped \\"quote\\" and {fake}" ${second}`;
     for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
-      expect(extractBalancedJsonPrefix(raw, options)).toEqual(fragmentsAt(raw, [first])[0]);
       expect(extractBalancedJsonFragments(raw, options)).toEqual(fragmentsAt(raw, [first, second]));
     }
     expect(extractBalancedJsonPrefix(raw)?.json).toBe("[0]");
   });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "keeps multiline prose quotes distinct from container-owned invalid strings (%j)",
+    (newline) => {
+      const actual = '{"actual":1}';
+      for (const closed of [false, true]) {
+        const source = `banner "example begins${newline}still inside [0] end${closed ? '"' : ""}${newline}${actual}`;
+        for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+          expect(extractBalancedJsonFragments(source, options)).toEqual(
+            fragmentsAt(source, closed ? [actual] : []),
+          );
+        }
+      }
+      // Original arrays own quotes even when only object output is requested,
+      // including after an earlier fragment has already been returned.
+      const first = '{"first":1}';
+      const source = `[${first}, "unfinished${newline}${actual}`;
+      for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+        expect(extractBalancedJsonFragments(source, { ...options, openers: ["{"] })).toEqual(
+          fragmentsAt(source, [first, actual]),
+        );
+      }
+      const prose = `[banner "one${newline}\u009dtitle end"${newline}${actual}\u0007`;
+      const start = prose.indexOf("\u009d");
+      const options = {
+        ...strictRecovery,
+        strictJson: {
+          source: prose,
+          opaqueSpans: [
+            { startIndex: 0, endIndex: 0 },
+            { startIndex: start, endIndex: prose.length - 1 },
+          ],
+        },
+      };
+      for (const view of [prose, " " + prose.slice(1, start) + " ".repeat(prose.length - start)]) {
+        expect(extractBalancedJsonFragments(view, options)).toEqual(fragmentsAt(prose, [actual]));
+      }
+    },
+  );
 
   it.each(["\n", "\r\n", "\r"])(
     "uses the same recovery boundary for completed records and invalid strings (%j)",
@@ -501,9 +530,9 @@ describe("balanced JSON extraction", () => {
     "keeps a valid multiline root with nested line-start containers after %j",
     (prefix) => {
       const json = '[\n{\n"ok": true\n}\n]';
-      expect(extractBalancedJsonPrefix(prefix + json, { recoverAtLineStart: true })?.json).toBe(
-        json,
-      );
+      expect(
+        extractBalancedJsonFragments(prefix + json, { recoverAtLineStart: true })[0]?.json,
+      ).toBe(json);
     },
   );
 

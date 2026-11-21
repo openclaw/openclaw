@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  ANSI_OSC_INTRODUCER_PATTERN,
   AnsiSequenceStripper,
   iterateAnsiSegments,
-  matchAnsiOscAt,
   scanAnsiCsiAt,
   scanAnsiOscAt,
 } from "./ansi-sequences.js";
@@ -35,7 +35,6 @@ describe("terminal ansi helpers", () => {
           for (let index = 0; index < input.length; index++) {
             complete.lastIndex = index;
             const expected = complete.exec(input)?.[0];
-            expect(matchAnsiOscAt(input, index)).toBe(expected);
             expect(scanAnsiOscAt(input, index)?.value).toBe(expected);
           }
         }
@@ -86,6 +85,68 @@ describe("terminal ansi helpers", () => {
     expect(scanAnsiOscAt(complete, 0)?.value).toBe(complete);
     expect(scanAnsiCsiAt(unfinished, first!.bodyEnd)?.value).toBe("\u001b[31m");
     expect(scanAnsiOscAt(unfinished, 0)).toEqual(first);
+  });
+
+  it("bounds OSC search work in the real strip and segment consumers", () => {
+    const repeated = "\u009d".repeat(16_384);
+    const input = repeated + "\u001b[31m" + "tail";
+    const plain = repeated + "tail";
+    const consumers = [
+      () => stripAnsi(input),
+      () => stripAnsiSequences(input),
+      () => stripAnsiForStreamChunk(input, { compatibilityGrammar: true }),
+      () =>
+        [...iterateAnsiSegments(input)]
+          .filter((part) => part.kind === "text")
+          .map((part) => part.value)
+          .join(""),
+    ];
+    for (const consume of consumers) {
+      const exec = RegExp.prototype.exec;
+      let work = 0;
+      const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+        this: RegExp,
+        text: string,
+      ) {
+        const start = this.lastIndex;
+        const match = Reflect.apply(exec, this, [text]);
+        if (this.sticky && this.source.startsWith(ANSI_OSC_INTRODUCER_PATTERN)) {
+          // Complete/body matches expose their scanned extent. A failed
+          // compatibility search at a real opener examines the remaining input.
+          work +=
+            match?.[0].length ??
+            (text[start] === "\u009d" || text.startsWith("\u001b]", start)
+              ? text.length - start
+              : 0);
+        }
+        return match;
+      });
+      let result: string;
+      try {
+        result = consume();
+      } finally {
+        spy.mockRestore();
+      }
+      expect(result).toBe(plain);
+      expect(work).toBeLessThanOrEqual(input.length * 2);
+    }
+  });
+
+  it("keeps compatibility OSC crossing strict frontiers and invocation state separate", () => {
+    const input = "A\u001b]title\u001b[31mname\u0007B";
+    expect(stripAnsi(input)).toBe("A\u001b]titlename\u0007B");
+    expect(stripAnsiSequences(input)).toBe("AB");
+    expect(stripAnsiSequences("\u009d".repeat(128) + "\u001b]unterminated")).toBe(
+      "\u009d".repeat(128) + "nterminated",
+    );
+    expect(stripAnsiSequences(input)).toBe("AB");
+    const segments = iterateAnsiSegments("\u009d\u009d\u001b[31mtail");
+    expect(segments.next().value).toEqual({ kind: "text", value: "\u009d\u009d" });
+    expect([...iterateAnsiSegments("\u001b]title\u0007safe")].at(-1)).toEqual({
+      kind: "text",
+      value: "safe",
+    });
+    expect([...segments].at(-1)).toEqual({ kind: "text", value: "tail" });
   });
 
   it.each([
