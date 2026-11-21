@@ -4,9 +4,9 @@ const QUIET_ZONE = 4;
 const SUBMODULES = 3;
 const PIXEL_SCALE = 3;
 
-// Broad pincer and open notch stay recognizable through the QR module centers.
+// Broad palm and rounded jaws stay recognizable through the QR module centers.
 const CLAW_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M28 91 9 72 22 59C14 49 14 33 22 22C32 8 48 7 60 11L42 33 56 47 80 23C88 34 91 48 83 61C76 73 62 77 49 72Z"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M39 94 33 79C19 72 12 60 11 45C10 29 21 16 37 12C27 23 25 33 31 42C36 49 44 51 49 46C57 38 54 24 47 8C66 7 83 19 87 39C91 58 81 73 66 80L61 94Z"/></svg>';
 
 type PublicShareQr = { halftone: string };
 

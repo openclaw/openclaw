@@ -1,12 +1,21 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi, type Mock } from "vitest";
-import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import { expect, it, vi, type Mock, type MockInstance } from "vitest";
+import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
+import { createCreateGoalTool } from "../agents/tools/goal-tools.js";
+import { getRuntimeConfig } from "../config/config.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { RespondFn } from "./server-methods/types.js";
-import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
+import { prepareGatewayReplyRuntimeForTest, writeSessionStore } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
@@ -189,4 +198,117 @@ export function goalAgentResult(sessionId: string, text: string) {
       },
     },
   };
+}
+
+export function registerGoalChatSpawnCases(fixture: {
+  scope: () => GoalChatScope;
+  setSessionKey: (key: string) => void;
+  runEmbeddedAgent: MockInstance<typeof executeEmbeddedAgent>;
+  rpc: (
+    method: "chat.send" | "sessions.goal.update",
+    params: Record<string, unknown>,
+  ) => Promise<Mock<RespondFn>>;
+}) {
+  const { scope, runEmbeddedAgent, rpc } = fixture;
+  const userMessages = () => readGoalChatUserMessages(scope());
+  const expectDrained = async () =>
+    expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
+  it("resumes an agent-created Goal in a visible spawned task without losing its lineage", async () => {
+    const sessionKey = "agent:main:dashboard:spawned-goal-task";
+    fixture.setSessionKey(sessionKey);
+    const { sessionId } = scope();
+    const lineage = {
+      createdVia: "spawn" as const,
+      spawnedBy: "agent:main:main",
+      spawnDepth: 1,
+    };
+    await writeSessionStore({
+      entries: { [sessionKey]: { sessionId, updatedAt: Date.now(), ...lineage } },
+    });
+    const objective = "Finish the memory regression investigation";
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      await createCreateGoalTool({
+        agentSessionKey: sessionKey,
+        runId: params.runId,
+        config: getRuntimeConfig(),
+      }).execute("create-task-goal", { objective });
+      await patchSessionEntryCore(scope(), (entry) => ({
+        goal: entry.goal && { ...entry.goal, status: "paused" },
+      }));
+      return goalAgentResult(params.sessionId, "Investigation paused.");
+    });
+    const started = await rpc("chat.send", {
+      sessionKey,
+      sessionId,
+      message: objective,
+      idempotencyKey: randomUUID(),
+    });
+    expect(started.mock.calls[0]?.[0]).toBe(true);
+    await expectDrained();
+    const goal = loadSessionEntry(scope())?.goal;
+    expect(goal).toMatchObject({ objective, status: "paused" });
+    const request = {
+      sessionKey,
+      sessionId,
+      goalId: goal?.id,
+      action: "resume",
+      operationId: randomUUID(),
+      issuedAtMs: Date.now(),
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      expect(loadSessionEntry(scope())?.goal).toMatchObject({ id: goal?.id, status: "active" });
+      await patchSessionEntryCore(scope(), (entry) => ({
+        goal: entry.goal && { ...entry.goal, status: "complete", completedAt: Date.now() },
+      }));
+      return goalAgentResult(params.sessionId, "Investigation complete.");
+    });
+    const resumed = await rpc("sessions.goal.update", request);
+    expect(resumed.mock.calls[0]?.[2]).toBeUndefined();
+    expect(resumed.mock.calls[0]?.[1]).toMatchObject({
+      status: "started",
+      runId: request.operationId,
+      goalId: goal?.id,
+    });
+    await expectDrained();
+    expect(loadSessionEntry(scope())).toMatchObject({
+      ...lineage,
+      goal: { id: goal?.id, createdAt: goal?.createdAt, objective, status: "complete" },
+    });
+    const replay = await rpc("sessions.goal.update", request);
+    expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: request.operationId });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(userMessages()).toHaveLength(2);
+  });
+
+  it.each([
+    { key: "agent:main:subagent:hidden-goal", entry: { createdVia: "spawn" } },
+    { key: "agent:main:dashboard:leaf-goal", entry: { createdVia: "spawn", subagentRole: "leaf" } },
+    { key: "agent:main:dashboard:unclassified-child", entry: { createdVia: "operator" } },
+  ] as const)("rejects direct Goal input in $key", async ({ key, entry }) => {
+    const { sessionId } = scope();
+    const sessionKey = key;
+    fixture.setSessionKey(sessionKey);
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnDepth: 1,
+          ...entry,
+        },
+      },
+    });
+    const response = await rpc(
+      "chat.send",
+      createGoalChatStartRequest(scope(), "Do not start an unsupported Goal", randomUUID()),
+    );
+    expect(response.mock.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "goal-invalid" },
+    });
+    expect(loadSessionEntry(scope())?.goal).toBeUndefined();
+    expect(userMessages()).toEqual([]);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
 }

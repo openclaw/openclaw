@@ -132,6 +132,7 @@ export function insertOperatorApprovalInDatabase(params: {
           kind: input.kind,
           status: "pending",
           presentation_json: presentationJson,
+          requested_by_profile_id: normalizeNullableString(input.requester?.profileId),
           requested_by_device_id: normalizeNullableString(input.requester?.deviceId),
           requested_by_client_id: normalizeNullableString(input.requester?.clientId),
           requested_by_device_token_auth: input.requester?.deviceTokenAuth === true ? 1 : 0,

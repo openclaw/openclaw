@@ -98,6 +98,7 @@ shell-completion metadata.
 - `image edit` and `image describe-many` require at least one `--file`; `embedding create` requires at least one `--text`. Repeat the flag for multiple inputs. Omitting it is a usage error, not an empty successful result, and no inference request is sent.
 - Use `model run --thinking <level>` for a one-shot thinking/reasoning override: `off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
+- For `audio transcribe` and `video describe`, `--model` sends the file only to that model; if it fails, the error is returned and no configured `tools.media.models` entry is tried.
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
@@ -207,7 +208,7 @@ Notes:
   ```bash
   openclaw infer image providers --json
   openclaw infer image generate \
-    --model google/gemini-3.1-flash-image \
+    --model google/gemini-nano-banana-2.1 \
     --prompt "Minimal flat test image: one blue square on a white background, no text." \
     --output ./openclaw-infer-image-smoke.png \
     --json
@@ -240,9 +241,9 @@ late transcript output.
 The same cancellation behavior applies to `infer video describe`: interruption
 stops the pending provider request and suppresses late description output.
 
-For audio transcription and video description on POSIX systems, `--file` follows
-directory symlinks before resolving `..`, matching filesystem path resolution.
-Final-file symlinks remain subject to the existing media-directory checks.
+On POSIX systems, `--file` and `--output` paths follow directory symlinks
+before resolving `..`, matching filesystem path resolution. Final-file symlinks
+remain subject to the existing media-directory checks.
 
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved

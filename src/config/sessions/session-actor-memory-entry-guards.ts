@@ -1,10 +1,7 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { CLI_HISTORY_CHANGED_BEFORE_PREPARATION } from "./cli-history-boundary.js";
 import { assertConversationAuthority } from "./conversation-authority.js";
 import { selectSessionActorMemoryConversations } from "./session-actor-memory-conversation.js";
 import type { SessionActorMemoryEntryWrites } from "./session-actor-memory-entry-contract.js";
-import { selectSessionActorMemoryAdmittedWindow } from "./session-actor-memory-history-context.js";
 import { createSessionActorMemoryHistoryNavigation } from "./session-actor-memory-history-navigation.js";
 import { resolveSessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
@@ -32,14 +29,6 @@ export function validateSessionActorMemoryEntryGuards(
     if (validation.refusedSource) {
       throw new Error("Session source changed before entry mutation");
     }
-  }
-  const cli = guards.cliHistory;
-  if (cli) {
-    const window = resolveSessionActorMemoryWindow(context.state, cli.sessionId);
-    if (!window || !isDeepStrictEqual(window.hot.transcript.watermark, cli.watermark)) {
-      throw new Error(CLI_HISTORY_CHANGED_BEFORE_PREPARATION);
-    }
-    selectSessionActorMemoryAdmittedWindow(window, context, cli.admission);
   }
   const predicate = guards.shouldCommitIf;
   if (!predicate) {

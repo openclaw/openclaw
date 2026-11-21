@@ -5,14 +5,19 @@ export const PG16_GATEWAY_SMOKE_RESERVATION_SECONDS = 150;
 const DATABASE_ENGINE_TARGET = "src/infra/database-engine";
 // These directory and non-suffix suites also require the PostgreSQL runner.
 const additionalPostgresConformanceTargets = [
+  "extensions/clickclack/src/discussions/service-open.agent-storage.test.ts",
   "extensions/workboard",
   "extensions/logbook/src/postgres-store.test.ts",
   "extensions/team-reports/src/postgres-store.test.ts",
   "src/infra/postgres-sync",
   DATABASE_ENGINE_TARGET,
+  "src/state/openclaw-state-lease-heartbeat.test.ts",
   "src/infra/exec-approvals-native.test.ts",
   "src/infra/client-credential-update.test.ts",
   "src/infra/update-managed-service-handoff-engine.test.ts",
+  "src/channels/message/ingress-monitor.scheduling.test.ts",
+  "src/gateway/github-publication-runtime.test.ts",
+  "src/plugin-state/plugin-state-worker.test.ts",
 ] as const;
 
 /** Filesystem discovery owns suffix suites; explicit targets cover the remaining contracts. */

@@ -11,10 +11,12 @@ import {
   parsePersistedExecApprovals,
   resolveExecApprovalsDisplayPath,
   tryParsePersistedExecApprovals,
-  stripExecApprovalsSocketCredentials,
-  stripExecApprovalsRawSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
+import {
+  stripExecApprovalsRawSocketCredentials,
+  stripExecApprovalsSocketCredentials,
+} from "./exec-approvals-core.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,

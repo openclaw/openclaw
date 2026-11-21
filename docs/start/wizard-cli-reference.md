@@ -148,6 +148,10 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - [iMessage](/channels/imessage): `imsg` CLI path + Messages DB access; use an SSH wrapper when the Gateway runs off-Mac
     - Other bundled or separately installed channel plugins can add their own
       onboarding steps. See the complete [channel catalog](/channels).
+    - New or changed SecretRef-supported channel credentials entered directly
+      (including with `--secret-input-mode plaintext`) are saved in the
+      [shared secret store](/gateway/secrets/secret-store-and-egress), and
+      `openclaw.json` keeps a `store` SecretRef, as with `openclaw channels add`.
     - DM security: default is pairing. First DM sends a code; approve via
       `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
@@ -527,6 +531,13 @@ in [CLI automation](/start/wizard-cli-automation).
 - `wizard.status`
 
 Clients (macOS app and Control UI) can render steps without re-implementing onboarding logic.
+
+Guided channel setup (`wizard.start` with `flow: "channels"`) closes its input
+when the starting client disconnects, including when the first reply was lost.
+Pending writes and cleanup must finish before another setup can begin; there is
+no additional idle-expiry wait. Completed changes are retained. Reconnect and
+start channel setup again to continue. Full onboarding (`flow: "setup"`) remains
+reconnectable through its existing session ID.
 
 When setup admission is busy, `wizard.start` and the model setup start/activation
 methods return `UNAVAILABLE` with `details.code: "SETUP_ADMISSION_BUSY"`. This

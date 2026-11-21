@@ -83,9 +83,13 @@ export function matchesRuntimeSourceConfigValueFact(
 
 export function hashModelConfig(config: OpenClawConfig, sourceConfig: OpenClawConfig): string {
   const project = (value: OpenClawConfig) => {
-    const { ui: _ui, meta, ...rest } = value;
+    const { ui: _ui, browser, meta, ...rest } = value;
+    const { profiles: _profiles, ...browserConfig } = browser ?? {};
     const { lastTouchedVersion: _lastTouchedVersion, ...modelMeta } = meta ?? {};
-    return { config: { ...rest, meta: modelMeta }, facts: serializeConfigResolutionFacts(value) };
+    return {
+      config: { ...rest, browser: browserConfig, meta: modelMeta },
+      facts: serializeConfigResolutionFacts(value),
+    };
   };
   return sha256Base64Url(
     stableConfigStringify({ runtime: project(config), source: project(sourceConfig) }),

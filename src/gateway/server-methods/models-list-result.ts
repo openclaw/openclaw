@@ -674,9 +674,8 @@ export async function prepareModelsListResult({
           return () => {
             const evaluation = evaluateNative(entry, host);
             evaluations.set(key, evaluation);
-            const routeManaged = evaluation.routeResolution !== null;
             const syntheticLocal =
-              !routeManaged &&
+              evaluation.routeResolution === null &&
               normalizeProviderId(entry.provider) !== "openai" &&
               evaluation.availability === undefined &&
               evaluation.evidence === "synthetic";

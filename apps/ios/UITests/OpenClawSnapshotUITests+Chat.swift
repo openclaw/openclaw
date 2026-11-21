@@ -395,7 +395,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
 
         // Keep repeated typing and reader positioning on the real editor with deterministic history.
-        // The final multiline turn extends below the viewport so the anchored-reply jump is observable.
+        // With the keyboard closed, keep the question and start of its answer in view.
         let anchoredPrompt = String(
             repeating: "Reader context keeps the question anchored as the reply arrives.\n",
             count: 9) + "Keep this reply anchored."
@@ -419,24 +419,79 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
 
         let jumpToLatest = app.buttons["Jump to latest reply"]
+        let questionAndReplyStartVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let viewport = transcript.frame
+                return submitted.exists && response.exists &&
+                    submitted.frame.minY >= viewport.minY && submitted.frame.minY < viewport.midY &&
+                    response.frame.minY >= viewport.minY && response.frame.minY < viewport.maxY
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [questionAndReplyStartVisible], timeout: 5), .completed)
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "reader-reply-anchored")
-        jumpToLatest.tap()
-        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        let finalReply = app.staticTexts.matching(NSPredicate(
-            format: "label CONTAINS %@ AND label CONTAINS %@",
-            "I can help with",
-            "Keep this reply anchored.")).firstMatch
-        XCTAssertTrue(finalReply.exists)
-        self.assertElementHasRenderedContent(finalReply, named: "reader reply after jumping to latest")
-        self.attachScreenshot(named: "reader-jumped-to-latest")
+        let finalReply = response
+        self.assertElementHasRenderedContent(submitted, named: "anchored question with keyboard closed")
+        self.assertElementHasRenderedContent(finalReply, named: "start of anchored reply")
+        self.attachScreenshot(named: "keyboard-closed-question-and-reply-start")
 
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
         self.attachScreenshot(named: "reader-manual-departure")
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(finalReply.exists)
+        let replyVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                finalReply.exists && finalReply.frame.intersects(transcript.frame)
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [replyVisible], timeout: 5), .completed)
+        self.assertElementHasRenderedContent(finalReply, named: "reply after explicit Jump")
+        self.attachScreenshot(named: "reader-returned-to-latest")
+
+        self.assertStatusBarScroll(in: app, transcript: transcript, reply: finalReply, jumpToLatest: jumpToLatest)
+    }
+
+    private func assertStatusBarScroll(
+        in app: XCUIApplication, transcript: XCUIElement, reply finalReply: XCUIElement, jumpToLatest: XCUIElement)
+    {
+        // Target the actual system clock AX element without activating SpringBoard.
+        XCTAssertEqual(app.state, .runningForeground)
+        self.attachScreenshot(named: "reader-before-system-clock")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let clock = springboard.statusBars.staticTexts.firstMatch
+        XCTAssertTrue(clock.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.state, .runningForeground)
+        clock.tap()
+        guard app.state == .runningForeground else {
+            XCTFail("Status-bar input left the app; this is not native-navigation evidence")
+            return
+        }
+        self.attachScreenshot(named: "reader-after-status-bar-input")
+        let readerDepartedLatest = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                app.state == .runningForeground &&
+                    (!finalReply.exists || !finalReply.frame.intersects(transcript.frame))
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [readerDepartedLatest], timeout: 5), .completed)
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        self.assertElementHasRenderedContent(transcript, named: "transcript after status bar scroll")
+        self.attachScreenshot(named: "reader-status-bar-navigation")
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
+        self.assertLatestReplyVisible(finalReply, in: transcript)
+        self.attachScreenshot(named: "reader-latest-after-clock-jump")
+    }
+
+    private func assertLatestReplyVisible(_ reply: XCUIElement, in transcript: XCUIElement) {
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                reply.exists && !reply.frame.isEmpty && reply.frame.intersects(transcript.frame)
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
+        self.assertElementHasRenderedContent(reply, named: "latest reply after Jump")
     }
 
     func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
@@ -490,13 +545,15 @@ extension OpenClawSnapshotUITests {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for (command, expectedStatus) in [
-            ("printf ready", "Outcome unknown"),
-            ("printf missing", "No result"),
-            ("printf complete", "Finished"),
+        // A command row names what ran: "Ran" once it finished, "Run" while its outcome is unknown
+        // (web chat-tool-card-row.solid.tsx:128-139).
+        for (command, expectedStatus, verb) in [
+            ("printf ready", "Outcome unknown", "Run"),
+            ("printf missing", "No result", "Run"),
+            ("printf complete", "Finished", "Ran"),
         ] {
             let row = app.descendants(matching: .any).matching(NSPredicate(
-                format: "label CONTAINS %@ AND value CONTAINS %@", "Exec", command)).firstMatch
+                format: "label == %@ AND value CONTAINS %@", verb, command)).firstMatch
             XCTAssertTrue(row.waitForExistence(timeout: 5), "Missing tool row: \(command)")
             XCTAssertTrue(
                 (row.value as? String)?.hasPrefix(expectedStatus) == true,
@@ -509,7 +566,7 @@ extension OpenClawSnapshotUITests {
             try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
             let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: " ").lowercased()
-            XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
+            XCTAssertTrue(text.contains(verb.lowercased()), "Rendered command verb was not recognized: \(text)")
             XCTAssertEqual(
                 text.contains("outcome unknown"),
                 command == "printf ready",
@@ -529,6 +586,116 @@ extension OpenClawSnapshotUITests {
         }
         self.attachScreenshot(named: "step-labels-expanded")
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
+    }
+
+    func testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority() throws {
+        self.executionTimeAllowance = 60
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-step-labels-fixture", "--openclaw-nested-tools-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["Local readiness checked."].waitForExistence(timeout: 8))
+        let transcript = try self.chatTranscript(in: app)
+        let details = app.buttons["Tool details"].firstMatch
+        for _ in 0..<8 where !details.isHittable {
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "Tool details").count, 1)
+        XCTAssertTrue(details.isHittable)
+        let quiet = app.buttons["chat-tool-activity-fixture-nested-success"]
+        XCTAssertFalse(quiet.exists, "An explicit empty canonical descriptor must start under Tool details")
+        self.attachScreenshot(named: "nested-custom-quiet-collapsed")
+        details.tap()
+        let originalQuietWait = quiet.waitForExistence(timeout: 5)
+        XCTAssertTrue(originalQuietWait)
+        guard originalQuietWait else { return }
+        for (callID, title, status, text) in [
+            ("fixture-nested-success", "Knowledge Status", "Finished", "Sanitized nested success output"),
+            ("fixture-nested-failed", "Read", "Failed", "Recorded nested output"),
+        ] {
+            let rows = app.buttons.matching(identifier: "chat-tool-activity-" + callID)
+            let row = rows.firstMatch
+            for _ in 0..<4 where !row.isHittable {
+                transcript.swipeDown()
+            }
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            XCTAssertEqual(rows.count, 1, "A custom carrier must not duplicate its result row")
+            XCTAssertTrue(row.isHittable)
+            XCTAssertEqual(row.label, title)
+            XCTAssertTrue((row.value as? String)?.hasPrefix(status) == true)
+            self.assertElementHasRenderedContent(row, named: callID + " collapsed control")
+            let output = app.staticTexts[text]
+            XCTAssertFalse(output.exists, "The result must start collapsed, not merely be present in metadata")
+            row.tap()
+            XCTAssertTrue(output.waitForExistence(timeout: 5))
+            XCTAssertEqual(output.label, text)
+            self.assertElementHasRenderedContent(output, named: callID + " expanded output")
+            self.attachScreenshot(named: "nested-custom-" + callID + "-expanded")
+            row.tap()
+            XCTAssertTrue(output.waitForNonExistence(timeout: 5))
+        }
+        for _ in 0..<4 where !details.isHittable {
+            transcript.swipeUp()
+        }
+        XCTAssertTrue(details.isHittable)
+        details.tap()
+        XCTAssertTrue(quiet.waitForNonExistence(timeout: 5), "Quiet output must return under its disclosure")
+        let originalPendingRows = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND value == %@", "Knowledge Status", "Working, Original pending control"))
+        let pending = originalPendingRows.firstMatch
+        for _ in 0..<4 where !pending.isHittable {
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(pending.waitForExistence(timeout: 5))
+        XCTAssertEqual(originalPendingRows.count, 1)
+        XCTAssertEqual(pending.label, "Knowledge Status")
+        XCTAssertEqual(pending.value as? String, "Working, Original pending control")
+        XCTAssertTrue(pending.isHittable)
+        XCTAssertNotEqual(pending.elementType, .button)
+        XCTAssertFalse(app.buttons["chat-tool-activity-fixture-nested-pending"].exists)
+        self.assertElementHasRenderedContent(pending, named: "canonical nested start without result")
+        self.attachScreenshot(named: "nested-custom-quiet-recollapsed-and-pending")
+
+        // Keep the old output expanded while the same raw carrier changes authority. A stale
+        // terminal receipt must disappear, not survive under the old disclosure state.
+        for _ in 0..<4 where !details.isHittable {
+            transcript.swipeUp()
+        }
+        XCTAssertTrue(details.isHittable)
+        details.tap()
+        XCTAssertTrue(quiet.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-fixture-nested-success").count, 1)
+        quiet.tap()
+        let oldOutput = app.staticTexts["Sanitized nested success output"]
+        XCTAssertTrue(oldOutput.waitForExistence(timeout: 5))
+        XCTAssertEqual(oldOutput.label, "Sanitized nested success output")
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("Transition the nested success fixture to pending")
+        let send = app.buttons["chat-send-message"]
+        self.waitForEnabled(send)
+        send.tap()
+        let targetRows = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND value == %@", "Knowledge Status", "Working"))
+        let target = targetRows.firstMatch
+        for _ in 0..<8 where !target.isHittable {
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(target.waitForExistence(timeout: 5))
+        XCTAssertEqual(targetRows.count, 1, "The original pending control cannot satisfy this target")
+        XCTAssertEqual(target.label, "Knowledge Status")
+        XCTAssertEqual(target.value as? String, "Working")
+        XCTAssertNotEqual(target.elementType, .button)
+        XCTAssertTrue(quiet.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(oldOutput.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-fixture-nested-success").count, 0)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Sanitized nested success output").count, 0)
+        XCTAssertEqual(originalPendingRows.count, 1, "Keep the independent original pending receipt")
+        XCTAssertFalse(app.buttons["chat-tool-activity-fixture-nested-pending"].exists)
+        self.assertElementHasRenderedContent(target, named: "same nested target now canonically pending")
+        self.attachScreenshot(named: "nested-custom-expanded-result-replaced-by-pending")
     }
 
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {
@@ -565,6 +732,43 @@ extension OpenClawSnapshotUITests {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
         self.assertElementHasRenderedContent(latest, named: "final reply after collapsing work again")
         self.attachScreenshot(named: "completed-work-collapsed-again")
+    }
+
+    func testIPadTranscriptStaysInsideComposerColumn() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "iPad reading-column proof only")
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for (orientation, name) in [
+            (UIDeviceOrientation.portrait, "portrait"),
+            (UIDeviceOrientation.landscapeLeft, "landscape"),
+        ] {
+            XCUIDevice.shared.orientation = orientation
+            self.launchApp(
+                for: Self.chatScreenshotTarget,
+                additionalArguments: ["--openclaw-long-chat-fixture"])
+            let app = try XCTUnwrap(self.app)
+            let composer = app.otherElements["chat-composer-surface"]
+            XCTAssertTrue(composer.waitForExistence(timeout: 8))
+            let transcript = try self.chatTranscript(in: app)
+            let assistant = app.otherElements["chat-assistant-message-body"].firstMatch
+            XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+            // Check the assistant container, not a short text leaf that fits even in a full-width row.
+            XCTAssertGreaterThanOrEqual(assistant.frame.minX, composer.frame.minX - 24)
+            XCTAssertLessThanOrEqual(assistant.frame.maxX, composer.frame.maxX + 24)
+            self.assertElementHasRenderedContent(assistant, named: "iPad assistant column \(name)")
+            self.attachScreenshot(named: "ipad-assistant-column-\(name)")
+            let user = app.staticTexts["Prepare a detailed project review."]
+            for _ in 0..<4 where !user.exists || !user.frame.intersects(transcript.frame) {
+                transcript.swipeDown()
+            }
+            XCTAssertTrue(user.exists)
+            guard user.exists else { return }
+            XCTAssertTrue(user.frame.intersects(transcript.frame))
+            XCTAssertGreaterThanOrEqual(user.frame.minX, composer.frame.minX - 24)
+            XCTAssertLessThanOrEqual(user.frame.maxX, composer.frame.maxX + 24)
+            XCTAssertGreaterThanOrEqual(user.frame.maxX, composer.frame.maxX - 48)
+            self.assertElementHasRenderedContent(user, named: "iPad user column \(name)")
+            self.attachScreenshot(named: "ipad-user-column-\(name)")
+        }
     }
 
     func testExistingSessionRestoresLatestOutput() throws {
@@ -607,6 +811,15 @@ extension OpenClawSnapshotUITests {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
         let first = app.staticTexts["OPENCLAW_SWITCH_B_FIRST"]
         XCTAssertFalse(first.exists && first.isHittable)
+        let transcript = app.collectionViews.firstMatch
+        XCTAssertTrue(transcript.waitForExistence(timeout: 3))
+        transcript.swipeDown()
+        transcript.swipeDown()
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 3))
+        jump.tap()
+        self.assertLatestReplyVisible(latest, in: transcript)
+        self.attachScreenshot(named: "chat-switch-jump-latest")
     }
 
     func testTaskListLongPressOffersRefreshDismissAndClear() throws {

@@ -5,7 +5,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import * as controllerInputs from "./subagent-controller-inputs.js";
+import * as expiredDelivery from "./subagent-registry-suspended-delivery.js";
 import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
@@ -20,6 +20,33 @@ afterEach(() => {
   resetGatewayWorkAdmission();
   vi.useRealTimers();
 });
+
+it.each(["failed", "suspended", "retryable"] as const)(
+  "applies session-run retention after six minutes (%s)",
+  async (deliveryStatus) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const settledAt = Date.now() - 6 * 60_000;
+      const entry = createArchivedSubagentSweeperRun({
+        spawnMode: "session",
+        cleanup: "keep",
+        archiveAtMs: undefined,
+        cleanupCompletedAt: settledAt,
+        delivery:
+          deliveryStatus === "suspended"
+            ? { status: "suspended", suspendedAt: settledAt, suspendedReason: "permanent_failure" }
+            : {
+                status: "failed",
+                ...(deliveryStatus === "retryable" ? { disposition: "retryable" as const } : {}),
+                lastError: "completion agent did not produce a visible reply",
+              },
+      });
+      const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
+      await sweeper.sweepOnce();
+      expect(runs.has(entry.runId)).toBe(deliveryStatus !== "failed");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  },
+);
 
 it("lets I/O run during a retained backlog and skips owners replaced between batches", async () => {
   vi.useRealTimers();
@@ -41,7 +68,7 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
     // Expire the processing budget independently of host speed; keep real event-loop turns.
     let clockNow = performance.now();
     const clock = vi.spyOn(performance, "now").mockImplementation(() => (clockNow += 5));
-    const settle = vi.spyOn(controllerInputs, "settleSubagentCompletionReservation");
+    const settle = vi.spyOn(expiredDelivery, "settleSubagentCompletionReservation");
     const sweep = sweeper.runTick();
     const io = new Promise<void>((resolve) => {
       setImmediate(() => {

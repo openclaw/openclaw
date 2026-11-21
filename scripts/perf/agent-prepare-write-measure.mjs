@@ -87,7 +87,8 @@ Object.assign(entry, {
   sourceWorkerName: "backend",
   sourceExtension: ".mjs",
 });
-const { acquireGatewayStateOwner } = await import("../../src/infra/gateway-state-owner.ts");
+const { acquireGatewayStateOwner, captureGatewayStateOwnerAsync } =
+  await import("../../src/infra/gateway-state-owner.ts");
 const { readGatewayLockProcessNamespace } = await import("../../src/infra/gateway-lock-payload.ts");
 const { readDatabasePathIdentitySync } = await import("../../src/infra/sqlite-worker-identity.ts");
 const { createSqliteWorkerOperationAdmission } =
@@ -246,6 +247,7 @@ try {
     closeOpenClawAgentDatabaseByPath(database.path);
   } else {
     const context = captureOpenClawStateWorkerContext({ env });
+    const processOwner = await captureGatewayStateOwnerAsync(context.admission);
     const generation = (agentId) => {
       const pathname = paths.get(agentId);
       const identity = readDatabasePathIdentitySync(pathname);
@@ -253,6 +255,7 @@ try {
         agentId,
         pathname,
         context,
+        processOwner,
         new AgentDatabaseExecutionLifetime().state,
         () => context.admission.assertCurrent(),
         () => context.admission.assertCurrent(),

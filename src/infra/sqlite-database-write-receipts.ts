@@ -18,6 +18,7 @@ import {
 } from "./sqlite-database-admission-record.js";
 import { isPreparingSqliteNativeMutation } from "./sqlite-native-observer.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseWriteScopes"), () => ({
   writeScopes: new WeakMap<DatabaseSync, readonly string[]>(),
@@ -36,7 +37,11 @@ export function sqliteSessionIdWriteScope(sessionId: string): { sessionId: strin
 /** Scoped revisions borrow physical admission and publication from their existing owner. */
 export function createSqliteDatabaseWriteReceipts(owner: {
   admission(this: void, database: DatabaseSync): Admission | undefined;
-  pathAdmission(this: void, location: string): Admission | undefined;
+  pathAdmission(
+    this: void,
+    location: string,
+    preparedIdentity?: DatabasePathIdentity,
+  ): Admission | undefined;
   retain(this: void, record: Admission): void;
   release(this: void, record: Admission): void;
   writeListeners: WeakMap<Admission, Set<() => void>>;
@@ -172,10 +177,21 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     return false;
   }
 
+  let scopeStates: SharedArrayBuffer | undefined;
+  let scopeStateOffset = 0;
+
   function createScopeRevision(): ScopedWriteRevision {
+    if (!scopeStates || scopeStateOffset === scopeStates.byteLength) {
+      // Small chunks reduce worker clone handles while bounding sparse retention.
+      // Never reuse a slot: a retired scope can still have views in another worker.
+      scopeStates = new SharedArrayBuffer(16 * 3 * Int32Array.BYTES_PER_ELEMENT);
+      scopeStateOffset = 0;
+    }
+    const scopeState = new Int32Array(scopeStates, scopeStateOffset, 3);
+    scopeStateOffset += scopeState.byteLength;
     return {
       identity: randomUUID(),
-      state: new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT)),
+      state: scopeState,
     };
   }
 
@@ -464,9 +480,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   function readSqliteDatabaseScopedWriteTokenForPath(
     location: string,
     scope: string | readonly SqliteDatabaseWriteScope[],
+    preparedIdentity?: DatabasePathIdentity,
   ): string | undefined {
     const keys = normalizedWriteScopes(scope);
-    const record = owner.pathAdmission(location);
+    const record = owner.pathAdmission(location, preparedIdentity);
     if (!record || isRetired(record)) {
       return undefined;
     }

@@ -12,6 +12,7 @@ function projectionConfig({
   update: _update,
   telemetry: _telemetry,
   plugins: _plugins,
+  browser,
   channels,
   ui,
   gateway,
@@ -19,6 +20,7 @@ function projectionConfig({
   ...config
 }: OpenClawConfig) {
   const { prefs: _prefs, ...uiConfig } = ui ?? {};
+  const { profiles: _profiles, ...browserConfig } = browser ?? {};
   const { auth, ...gatewayConfig } = gateway ?? {};
   const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
   const { realtime, ...talkConfig } = talk ?? {};
@@ -28,6 +30,7 @@ function projectionConfig({
   // inputs, including activation that can admit bundled plugin capabilities.
   return {
     ...config,
+    browser: browserConfig,
     channels: {
       activation: resolveChannelConfigActivationFacts({ channels }),
       models: collectConfiguredModelRefs({ channels }),

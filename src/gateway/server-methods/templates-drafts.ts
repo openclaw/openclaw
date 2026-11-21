@@ -65,7 +65,7 @@ async function personalPublisher(options: ClawHubFetchOptions) {
     ...connection,
     path: "/api/v1/whoami",
   });
-  const publisher = result.user?.handle;
+  const publisher = result.user?.handle?.trim().toLowerCase();
   if (!publisher || !/^[a-z0-9][a-z0-9._-]*$/.test(publisher)) {
     throw new TemplateProjectError(
       "clawhub_identity_required",
@@ -236,6 +236,7 @@ async function reviewTemplateDraft(
     items: snapshot.items,
     files: snapshot.files,
     scope: snapshot.scope,
+    ...(snapshot.iconUrl ? { iconUrl: snapshot.iconUrl } : {}),
     ...(publicationState ? { publicationState } : {}),
   };
 }

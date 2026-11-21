@@ -10,6 +10,8 @@ import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js"
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { isToolResultError } from "../agents/tool-result-error.js";
+import type { ToolSearchCatalogToolExecutor } from "../agents/tool-search.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
@@ -364,5 +366,28 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
     }
     await client.emitTerminal(boundLiveEvent(terminalLiveEvent));
   };
-  return { handleSessionEvent, enqueueRunFailure, emitTerminal };
+  // Catalog calls bypass AgentSession's direct-tool stream. Forward identities only;
+  // the watchdog does not need another copy of tool arguments or results.
+  const executeTool: ToolSearchCatalogToolExecutor = async (call) => {
+    const tool = { toolName: call.toolName, toolCallId: call.toolCallId };
+    handleSessionEvent({ type: "tool_execution_start", ...tool, args: null });
+    let isError = true;
+    try {
+      const result = await call.acceptResultBeforeProjection(
+        await call.tool.execute(
+          call.toolCallId,
+          call.input,
+          call.signal,
+          call.onUpdate,
+          // SAFETY: Worker catalogs contain four-argument host tools, without an extension context.
+          undefined as never,
+        ),
+      );
+      isError = isToolResultError(result);
+      return result;
+    } finally {
+      handleSessionEvent({ type: "tool_execution_end", ...tool, isError, result: null });
+    }
+  };
+  return { handleSessionEvent, executeTool, enqueueRunFailure, emitTerminal };
 }

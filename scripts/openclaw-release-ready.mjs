@@ -405,13 +405,6 @@ function authenticateReadyNpm({
       .update(readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)))
       .digest("hex"),
     evidenceClient,
-    isTrustedMainAncestor: (sha) => {
-      const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
-      return (
-        ["ahead", "identical"].includes(comparison.status) &&
-        comparison.merge_base_commit?.sha === sha
-      );
-    },
   });
 }
 
@@ -730,13 +723,6 @@ async function main() {
           readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)),
         )
         .digest("hex"),
-      isTrustedMainAncestor: (sha) => {
-        const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
-        return (
-          ["ahead", "identical"].includes(comparison.status) &&
-          comparison.merge_base_commit?.sha === sha
-        );
-      },
     });
     const npmArtifact = adoption.artifact;
     const request = {

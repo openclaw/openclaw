@@ -236,7 +236,6 @@ export async function executeWorkerTurn(
     });
     const { browser, computer, preparedComputer } = desktop;
     const {
-      authProfileStoreSource,
       capabilityProfile,
       policy: toolPolicy,
       exec,
@@ -352,7 +351,6 @@ export async function executeWorkerTurn(
                 const prepared = await createOpenClawCodingToolsInternalAsync(
                   {
                     ...turn,
-                    authProfileStoreSource,
                     agentId: placement.agentId,
                     conversationCapabilityProfile: capabilityProfile,
                     preparedModelRuntime: preparedRuntime.snapshot,
@@ -462,7 +460,7 @@ export async function executeWorkerTurn(
       };
       const promptContext = await runPrepared(() => prepareWorkerTurnPrompt(promptPreparation));
       using mcpQuestions = new DisposableStack();
-      const { allowedToolNames, issueLaunchAuthority } = await prepareWorkerLaunchTools({
+      const { allowedToolNames, issueAuthority, bindAuthority } = await prepareWorkerLaunchTools({
         ...turnOwner,
         surface,
         localMcpNodeId,
@@ -522,6 +520,7 @@ export async function executeWorkerTurn(
           isAuthorized,
           userMessageAlreadyPersisted,
           baseLeafId,
+          modelPromptProjection: promptContext.modelPromptProjection,
         });
         return baseLeafId;
       };
@@ -548,7 +547,7 @@ export async function executeWorkerTurn(
         );
         throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
       }
-      const toolAuthority = issueLaunchAuthority();
+      const toolAuthority = issueAuthority();
       githubGrant = await bindWorkerGitHubTurn({
         operatorAuthority: readAdmittedRunOperatorAuthority(admittedRunContext),
         session: placement,
@@ -664,7 +663,7 @@ export async function executeWorkerTurn(
       let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
       try {
         processResult = await tunnel.launchTurn({
-          assertCurrent: githubGrant?.assertCurrent ?? assertActive,
+          assertCurrent: bindAuthority(githubGrant?.assertCurrent ?? assertActive),
           plan: launchPlan.plan,
           turnClaim: params.turnClaim,
           timeoutMs: turn.timeoutMs,

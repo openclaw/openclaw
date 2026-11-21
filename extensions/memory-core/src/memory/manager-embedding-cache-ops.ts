@@ -10,11 +10,11 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import type { MemoryEmbeddingCacheRetireFence } from "./manager-embedding-cache-retire.js";
+import { buildMemoryEmbeddingBatches } from "./manager-embedding-policy.js";
 import {
   collectMemoryCachedEmbeddings,
   isValidMemoryEmbedding,
-} from "./manager-embedding-cache.js";
-import { buildMemoryEmbeddingBatches } from "./manager-embedding-policy.js";
+} from "./manager-embedding-vectors.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheMutation,
@@ -134,13 +134,14 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         published.set(chunk.hash, [ref]);
       }
     }
-    // The read worker decodes each vector into 8 bytes per dimension under a bounded heap,
-    // so a rebuild reads whole hashes in pages instead of every published vector at once.
+    // Reserve 16 bytes per coordinate for the binary64 value and serialized array
+    // overhead: Bun encodes these arrays more widely than V8. Keep rebuild reads
+    // paged within the same budget instead of materializing every vector at once.
     const pageHashes = Math.max(
       1,
       Math.floor(
         CACHE_READ_PAGE_BYTES /
-          (8 *
+          (16 *
             (generation.embeddingDimensions ?? meta?.vectorDims ?? CACHE_READ_DEFAULT_DIMENSIONS)),
       ),
     );

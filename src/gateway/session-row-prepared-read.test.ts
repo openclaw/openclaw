@@ -277,7 +277,7 @@ it("dispatches broad lists while an agent remains in startup preparation", async
 });
 
 it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)(
-  "settles startup discovery after %s before dispatch",
+  "settles an admitted startup discovery across %s before dispatch",
   async (outcome) => {
     await withPendingStartupInspection(
       async ({ authorize, context, client, databasePath, complete }) => {
@@ -329,9 +329,16 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             expect(prepare).toHaveBeenCalledTimes(2);
             complete();
           }
-          await expect(reading).resolves.toMatchObject(
-            outcome === "revoked" ? { error: { code: "FORBIDDEN" } } : { error: null },
-          );
+          await expect(reading).resolves.toMatchObject({ error: null });
+          if (outcome === "revoked") {
+            const discoveries = prepare.mock.calls.length;
+            await expect(authorize("sessions.list", { agentId: "healthy" })).resolves.toMatchObject(
+              {
+                error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+              },
+            );
+            expect(prepare).toHaveBeenCalledTimes(discoveries);
+          }
         }
         expect(discoverySignal?.aborted).toBe(true);
       },
@@ -340,7 +347,7 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
 );
 
 it.each(["current", "revoked"] as const)(
-  "bounds startup reads with %s authority without cancelling preparation or granting writes",
+  "bounds admitted startup reads across %s authority changes without granting writes",
   async (authority) => {
     await withPendingStartupInspection(async ({ authorize, client, complete, admission }) => {
       const read = authorize();
@@ -349,17 +356,18 @@ it.each(["current", "revoked"] as const)(
         client.connect.scopes = [];
       }
       await vi.advanceTimersByTimeAsync(20_000);
-      await expect(read).resolves.toMatchObject(
-        authority === "revoked"
-          ? { error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } } }
-          : {
-              error: {
-                code: "UNAVAILABLE",
-                retryable: true,
-                details: { code: "agent-database-inspection-pending" },
-              },
-            },
-      );
+      await expect(read).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { code: "agent-database-inspection-pending" },
+        },
+      });
+      if (authority === "revoked") {
+        await expect(authorize()).resolves.toMatchObject({
+          error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+        });
+      }
       expect(admission.signal.aborted).toBe(false);
       expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
       complete();

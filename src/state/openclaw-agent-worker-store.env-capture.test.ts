@@ -56,8 +56,10 @@ vi.mock("../infra/sqlite-worker-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-worker-identity.js")>()),
   assertExistingDatabaseIdentity() {},
 }));
-vi.mock("./openclaw-agent-execution.js", () => ({
-  captureOpenClawAgentDatabaseExecution: boundary.capture,
+vi.mock("./openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-execution.js")>()),
+  captureOpenClawAgentDatabaseExecutionAsync: async (options: OpenClawAgentDatabaseOptions) =>
+    boundary.capture(options),
 }));
 vi.mock("./openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({

@@ -37,6 +37,7 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { captureEnvironmentKey } from "../shared/environment-key.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
@@ -138,13 +139,11 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
         ) {
           throw new Error("Requester session changed during delivery");
         }
-        return {
+        return chatRef({
           agentId: record.agentId,
           storePath: record.storeTarget.storePath,
           sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-          lifecycleRevision: record.entry.lifecycleRevision ?? null,
-        };
+        });
       },
     );
     requestParams = bindInProcessSessionDeliveryGeneration(params, generation);

@@ -334,14 +334,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       await updateAdmitCommand(opts.context);
     });
 
-  setCommandJsonMode(update.command("rehearse", { hidden: true }), "output", () => true)
-    .description("Internal candidate-owned rehearsal protocol")
-    .requiredOption("--request <path>", "Absolute path to the private rehearsal request")
-    .action(async (opts: { request: string }) => {
-      const { updateRehearseCommand } = await import("./update-cli/update-command-rehearse.js");
-      await updateRehearseCommand(opts.request);
-    });
-
   setCommandJsonMode(update.command("preflight", { hidden: true }), "output", () => true)
     .description("Internal isolated candidate readiness protocol")
     .option("--json", "Output the readiness receipt as JSON", true)
@@ -429,7 +421,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
 
   update
     .command("migration-plan", { hidden: true })
-    .description("Plan Doctor-owned state migrations against an isolated snapshot")
+    .description(
+      "Diagnostic only: list Doctor-owned state migrations for an isolated snapshot (always refused; never authorizes update repair)",
+    )
     .requiredOption("--snapshot-home <path>", "Copied environment home")
     .requiredOption("--snapshot-config <path>", "Copied OpenClaw config")
     .requiredOption("--snapshot-state <path>", "Copied OpenClaw state directory")

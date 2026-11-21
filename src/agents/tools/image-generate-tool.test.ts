@@ -29,7 +29,6 @@ import { configWithDefaults } from "./media-config.test-support.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
-  withHeldCronMediaGenerationResult,
   withHeldMediaGenerationResult,
 } from "./media-generation-lifecycle.test-support.js";
 
@@ -64,6 +63,7 @@ let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let mediaGenerationToolProviders: typeof import("./media-generation-tool-providers.js");
 let mediaGenerationRegistry: typeof import("../../media-generation/registry.js");
 let imageOps: typeof import("../../media/media-services.js");
+let imageHeaderMetadata: typeof import("../../media/image-header-metadata.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
@@ -440,6 +440,7 @@ describe("createImageGenerateTool", () => {
     mediaGenerationToolProviders = await import("./media-generation-tool-providers.js");
     mediaGenerationRegistry = await import("../../media-generation/registry.js");
     imageOps = await import("../../media/media-services.js");
+    imageHeaderMetadata = await import("../../media/image-header-metadata.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
@@ -715,7 +716,7 @@ describe("createImageGenerateTool", () => {
     expect(cap).toBe(maxBytes);
     expect(fileName).toBe("cat.jpg");
     expect(saved?.byteLength).toBeLessThanOrEqual(maxBytes);
-    expect(imageOps.readImageMetadataFromHeader(saved as Buffer)).toEqual({
+    expect(imageHeaderMetadata.readImageMetadataFromHeader(saved as Buffer)).toEqual({
       width: 1024,
       height: 1024,
     });
@@ -755,15 +756,12 @@ describe("createImageGenerateTool", () => {
     });
     const terminalError = new Error("image persistence failed");
     const lateSavedMedia = savedMedia("late.png", 4);
-    let resolveLateSave!: (saved: typeof lateSavedMedia) => void;
-    const lateSave = new Promise<typeof lateSavedMedia>((resolve) => {
-      resolveLateSave = resolve;
-    });
+    const lateSave = createDeferred<typeof lateSavedMedia>();
     const immediatelySavedMedia = savedMedia("saved.png", 5);
     const saveMediaBuffer = vi
       .spyOn(mediaStore, "saveMediaBuffer")
       .mockRejectedValueOnce(terminalError)
-      .mockImplementationOnce(() => lateSave)
+      .mockImplementationOnce(() => lateSave.promise)
       .mockResolvedValueOnce(immediatelySavedMedia);
     const deleteMediaBuffer = vi
       .spyOn(mediaStore, "deleteMediaBuffer")
@@ -777,7 +775,7 @@ describe("createImageGenerateTool", () => {
     await Promise.resolve();
     expect(executionSettled()).toBe(false);
 
-    resolveLateSave(lateSavedMedia);
+    lateSave.resolve(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);
     expect(deleteMediaBuffer).toHaveBeenCalledTimes(2);
     expect(deleteMediaBuffer).toHaveBeenCalledWith("late.png", "tool-image-generation");
@@ -1025,54 +1023,6 @@ describe("createImageGenerateTool", () => {
     expect(acquireProviders).toHaveBeenCalledOnce();
     expect(taskRuntimeMocks.createOperation).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
-  });
-
-  it("starts run-scoped cron image generation as a tracked async task", async () => {
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
-      sessionId: "run-123",
-      updatedAt: 1,
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "running",
-      },
-    });
-    const generateImage = mockGeneratedImage({
-      images: [imageAsset("png-out", "cron.png")],
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("generated-cron.png", 7));
-    taskRuntimeMocks.createOperation.mockReturnValue({
-      taskId: "task-cron-image",
-    });
-    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
-      agentDir: "/tmp/agent",
-      agentSessionKey: "agent:main:cron:daily-media:run:run-123",
-      requesterOrigin: {
-        channel: "slack",
-        to: "channel:C123",
-      },
-    });
-
-    await withHeldCronMediaGenerationResult(generateImage, taskRuntimeMocks, async (complete) => {
-      const result = await tool.execute("call-cron-inline", {
-        prompt: "Daily proof image",
-        model: "openai/gpt-image-1",
-      });
-
-      expect(taskRuntimeMocks.completeOperation).not.toHaveBeenCalled();
-      expect(resultText(result)).toContain("Background task started for image generation");
-      expect(resultDetails(result).async).toBe(true);
-      expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
-      expect(taskRuntimeMocks.createOperation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: expect.stringMatching(/^tool:image_generate:/),
-          requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-        }),
-      );
-      await complete();
-      expect(generateImage).toHaveBeenCalledOnce();
-    });
   });
 
   it("starts a distinct image request while another image task is active", async () => {

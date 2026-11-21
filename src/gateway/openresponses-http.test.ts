@@ -216,7 +216,7 @@ const STREAM_FAILURE_CASES = [
         rawError: "Invalid top_p: expected a value less than or equal to 1.",
       }),
     tools: [],
-    expectedCode: "invalid_request_error",
+    expectedCode: "decimal_above_max_value",
     expectedMessage: "Invalid top_p",
   },
   {

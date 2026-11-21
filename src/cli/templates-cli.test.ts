@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Command } from "commander";
-import { create as createTar } from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -257,6 +255,17 @@ describe("templates cli", () => {
     },
   );
 
+  it("strips terminal controls from invalid registry manifest diagnostics", async () => {
+    const registry = await registryFixture("manifest");
+    await add([], registry.name);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    const message = String(mocks.runtime.error.mock.calls[0]?.[0]);
+    expect(message).toContain("Downloaded Template package manifest is invalid");
+    expect(message).toContain("evil");
+    expect(message).not.toMatch(/[\u202e\u009b]/u);
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+  });
+
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
 
@@ -485,7 +494,7 @@ describe("templates cli", () => {
 // Wire fixtures keep the real registry client, trust gate, downloader, extractor,
 // manifest reader, and Add planner; only HTTP responses and the final mutation are controlled.
 async function registryFixture(
-  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency",
+  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency" | "manifest",
 ) {
   const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
   const manifestPath = join(root, "CLAW.md");
@@ -494,69 +503,13 @@ async function registryFixture(
     manifest.skills = [];
     manifest.plugins = [];
   }
+  if (failure === "manifest") {
+    manifest["evil\u202ekey\u009b31m"] = true;
+  }
   await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
-  const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");
-  await createTar({ gzip: true, file: archive, cwd: dirname(root) }, [root.split("/").at(-1)!]);
-  const bytes = await readFile(archive);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const npmIntegrity = "sha512-" + createHash("sha512").update(bytes).digest("base64");
-  const name = "@acme/demo-agent";
-  const pkg = {
-    name,
-    family: "template",
-    displayName: "Demo",
-    channel: "community",
-    isOfficial: false,
-    updatedAt: 1,
-    latestVersion: failure === "version" ? "latest" : "1.2.3",
-  };
-  const artifact = {
-    kind: "npm-pack",
-    sha256: failure === "digest" ? "0".repeat(64) : sha256,
-    npmIntegrity,
-  };
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const route = decodeURIComponent(url.pathname);
-    if (route.endsWith("/artifact/download")) {
-      return new Response(bytes, { headers: { "X-ClawHub-Artifact-Sha256": sha256 } });
-    }
-    if (route.endsWith("/artifact")) {
-      return Response.json({ package: pkg, version: "1.2.3", artifact });
-    }
-    if (route.endsWith("/security")) {
-      return Response.json({
-        package: pkg,
-        release: {
-          version: "1.2.3",
-          artifactKind: "npm-pack",
-          artifactSha256: artifact.sha256,
-          npmIntegrity,
-        },
-        overview: "Synthetic security review.",
-        securityAuditUrl: "https://clawhub.ai/acme/templates/demo-agent/security-audit",
-        verdict: failure === "trust" ? "suspicious" : "benign",
-        trust: {
-          scanStatus: "clean",
-          moderationState: "approved",
-          blockedFromDownload: false,
-          reasons: [],
-          pending: false,
-          stale: false,
-        },
-      });
-    }
-    if (route === "/api/v1/packages/" + name) {
-      return Response.json({
-        package: {
-          ...pkg,
-          ...(failure === "family" ? { family: "plugin" } : {}),
-          ...(failure === "name" ? { name: "@acme/other" } : {}),
-        },
-        owner: { handle: "acme" },
-      });
-    }
-    throw new Error("Unexpected registry request: " + route);
-  });
-  return { name, integrity: "sha256:" + sha256 };
+  return await cliTestHelpers.mockRegistryPackage(
+    tempDirs,
+    root,
+    failure === "dependency" || failure === "manifest" ? undefined : failure,
+  );
 }

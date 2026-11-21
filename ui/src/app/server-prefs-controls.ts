@@ -24,7 +24,7 @@ import {
 import {
   PENDING_KEY,
   parseStoredPrefs,
-  readRetainedLocalKeys,
+  readRetainedLocalPrefs,
   readStorage,
 } from "./server-prefs-storage.ts";
 import { serverUiPrefsOutbox as outbox } from "./server-prefs.ts";
@@ -58,7 +58,7 @@ export function resolveServerUiPrefWriteStatus(
   if (pending && Object.hasOwn(pending, key)) {
     return { status: "pending" };
   }
-  if (readRetainedLocalKeys(effectiveScope).has(key)) {
+  if (readRetainedLocalPrefs(effectiveScope).has(key)) {
     return { status: "error", error: t("quickSettings.personal.deviceOnly") };
   }
   return { status: "saved" };
@@ -165,7 +165,7 @@ export function retryServerUiPrefWrite(
     (retryValue !== null && !prefValuesEqual(retryValue, value)) ||
     (!hasPending &&
       !(failure?.retained && prefValuesEqual(failure.value, retryValue)) &&
-      !readRetainedLocalKeys(effectiveScope).has(key))
+      !readRetainedLocalPrefs(effectiveScope).has(key))
   ) {
     // A sibling cancellation or newer edit is not permission to resurrect old intent.
     return false;

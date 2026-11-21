@@ -192,7 +192,7 @@ for (let i = 0; i < batch; i++) {
   }
 }
 db.exec("COMMIT");
-const owner = prepareSessionCostUsageRefreshLock(agentId);
+const owner = await prepareSessionCostUsageRefreshLock(agentId);
 try {
   assert(await owner.acquire());
   console.log(

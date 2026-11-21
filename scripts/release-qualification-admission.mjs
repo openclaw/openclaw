@@ -21,6 +21,7 @@ import {
 } from "./lib/qualification-admission-baselines.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
+  readReleaseValidationWaivers,
   releaseQualificationExemptions,
   validateQualificationExemptions,
 } from "./lib/release-validation-waivers.mjs";
@@ -217,7 +218,7 @@ export function validateQualificationAdmissionRequest(request) {
     request.kind === REQUEST_KIND &&
       request.repository === REPOSITORY &&
       SHA.test(request.candidateSha) &&
-      request.qualificationSha === request.candidateSha &&
+      SHA.test(request.qualificationSha) &&
       request.reviewed === true &&
       typeof request.requestId === "string" &&
       /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(request.requestId) &&
@@ -226,7 +227,7 @@ export function validateQualificationAdmissionRequest(request) {
         "^release-ci/" + request.qualificationSha.slice(0, 12) + "-[1-9][0-9]*$",
         "u",
       ).test(request.transportRef),
-    "Qualification request must attest the exact reviewed C=Q tuple and transport",
+    "Qualification request must attest the exact reviewed C/Q tuple and transport",
   );
   const inputs = semanticQualificationInputs(request.inputs);
   requireValue(
@@ -234,6 +235,15 @@ export function validateQualificationAdmissionRequest(request) {
       inputs.expected_sha === request.candidateSha &&
       isDeepStrictEqual(inputs, request.inputs),
     "Qualification request inputs are not complete canonical C inputs",
+  );
+  const envelope = JSON.parse(inputs.trusted_workflow_json);
+  requireValue(
+    isDeepStrictEqual(envelope.trustedWorkflow, {
+      ref: request.transportRef,
+      fullRef: "refs/heads/" + request.transportRef,
+      sha: request.qualificationSha,
+    }),
+    "Qualification request workflow envelope differs from frozen Q",
   );
   canonical(request);
   return request;
@@ -570,6 +580,9 @@ export function produceQualificationAdmission({
     initial.run.display_title === "Qualification Admission " + request.requestId,
     "Admission request differs from its workflow dispatch title",
   );
+  // P authenticates the operator-selected immutable Q, including off-main tooling.
+  // Read Q only from the canonical repository; the dispatch owner separately binds
+  // its exact release-ci transport before execution. This grants no publication authority.
   const workflow = readSource(
     request.repository,
     request.qualificationSha,
@@ -589,17 +602,16 @@ export function produceQualificationAdmission({
   );
   const baselinePolicy = qualificationBaselinePolicy(
     request,
-    readSource(request.repository, request.qualificationSha, "package.json", runGh),
-    readSource(
-      request.repository,
-      request.qualificationSha,
-      QUALIFICATION_BASELINE_POLICY_PATH,
-      runGh,
-    ),
+    readSource(request.repository, request.candidateSha, "package.json", runGh),
+    readSource(request.repository, request.candidateSha, QUALIFICATION_BASELINE_POLICY_PATH, runGh),
+  );
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    readSource(request.repository, request.qualificationSha, sourcePath, runGh).toString("utf8"),
   );
   const exemptions = releaseQualificationExemptions(
     baselinePolicy.candidateVersion,
     coverage.profile,
+    waiverPolicy,
   );
   if (exemptions.length) {
     requireValue(
@@ -663,13 +675,6 @@ function validateReceipt(receipt) {
   producerIdentity(receipt.producer);
   validateQualificationBaselinePolicy(receipt.request, receipt.baselinePolicy);
   const coverage = validateQualificationCoverage(receipt.coverage);
-  if (coverage.exemptions !== undefined) {
-    validateQualificationExemptions(
-      coverage.exemptions,
-      receipt.baselinePolicy.candidateVersion,
-      coverage.profile,
-    );
-  }
   requireValue(
     receipt.inputsDigest === digest(canonical(receipt.request.inputs)) &&
       DIGEST.test(receipt.workflowSourceDigest) &&
@@ -853,8 +858,8 @@ function readQualificationAdmission(
   verifySupportingEvidence,
 ) {
   requireValue(
-    repository === REPOSITORY && SHA.test(candidateSha) && candidateSha === qualificationSha,
-    "Qualification admission requires the canonical C=Q identity",
+    repository === REPOSITORY && SHA.test(candidateSha) && SHA.test(qualificationSha),
+    "Qualification admission requires canonical C/Q identities",
   );
   const producer = admissionDescriptorProducer(descriptor, repository);
   const { artifactId, artifactDigest, artifactSizeBytes } = descriptor;
@@ -901,6 +906,15 @@ function readQualificationAdmission(
       request.transportRef === workflowRef &&
       (inputs === undefined || qualificationInputsMatch(request.inputs, inputs)),
     "Qualification evidence differs from the authenticated operator request",
+  );
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    readSource(repository, qualificationSha, sourcePath, runGh).toString("utf8"),
+  );
+  validateQualificationExemptions(
+    receipt.coverage.exemptions ?? [],
+    receipt.baselinePolicy.candidateVersion,
+    receipt.coverage.profile,
+    waiverPolicy,
   );
   const finalMetadata = api(repository, "actions/artifacts/" + artifactId, runGh);
   const final = verifyProducer(producer, runGh, true);

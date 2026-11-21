@@ -6,7 +6,6 @@ import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-i
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -466,10 +465,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     turnSourceTo: requestContext.currentChannelId,
                     turnSourceAccountId: requestContext.accountId,
                     turnSourceThreadId: requestContext.currentThreadTs,
-                    loopDetection: resolveToolLoopDetectionConfig({
-                      cfg,
-                      agentId: scopedTools.agentId,
-                    }),
                   },
                   signal,
                   authorizeToolCall,

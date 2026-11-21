@@ -8,6 +8,7 @@ import type { PluginCache } from "./plugin-cache.types.js";
 import {
   nativeAdmissionStateFor,
   queuePluginNativeAdmissionPublication,
+  releaseReplacedNamespaces,
   retainNativePath,
   snapshotOwners,
   startNativeAdmissionPublication,
@@ -17,6 +18,7 @@ import {
   capturePluginNativeDirectoryAliases,
   capturePluginNativeNamespace,
   finishPluginNativeNamespace,
+  nativeMemberForSource,
   pluginNativeNamespaceDirectory,
   pluginNativeNamespaceBoundary,
   pluginNativeNamespaceIsCurrent,
@@ -50,29 +52,6 @@ import {
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 type NativeReceipt = { signature: string; sourceDigest: string };
-// Membership and source paths stay fixed; admission only updates identities and digests.
-const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
-
-function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: string) {
-  const relative = path.relative(namespace.sourceDirectory, source);
-  // A file alias can be visited before its real pathname. The binary's real parent owns
-  // its companions; choosing the first alias would change native relative lookup again.
-  if (namespace.members[relative]?.source === source) {
-    return relative;
-  }
-  let members = nativeSourceMembers.get(namespace);
-  if (!members) {
-    members = new Map<string, string>();
-    for (const [key, { source: memberSource }] of Object.entries(namespace.members)) {
-      if (!members.has(memberSource)) {
-        members.set(memberSource, key);
-      }
-    }
-    nativeSourceMembers.set(namespace, members);
-  }
-  return members.get(source);
-}
-
 export type PluginNativeRecovery = {
   receipt: NativeReceipt;
   references: Map<string, PluginNativeArtifactFact>;
@@ -258,8 +237,11 @@ export function createPluginNativeAdmission(
   let hostRoot: string | undefined;
   let finalReceipt: NativeReceipt | undefined;
   const namespaces = () => [...new Set(selected.values())];
+  // A newer receipt can prune the shared map while this admission's generation is still live.
+  const owned = new Map<string, PluginNativeNamespaceFact>(recovery?.namespaces);
+  const namespaceById = (id: string) => owned.get(id) ?? state.namespaces.get(id);
   for (const [alias, id] of recovery?.directories ?? []) {
-    const namespace = state.namespaces.get(id);
+    const namespace = namespaceById(id);
     if (namespace) {
       selected.set(alias, namespace);
     }
@@ -273,7 +255,7 @@ export function createPluginNativeAdmission(
     if (file) {
       return {
         path: file.capturedPath,
-        boundary: pluginNativeNamespaceBoundary(state.namespaces.get(file.namespace)!),
+        boundary: pluginNativeNamespaceBoundary(namespaceById(file.namespace)!),
       };
     }
     if (!recovery) {
@@ -381,6 +363,7 @@ export function createPluginNativeAdmission(
       }
     }
     state.namespaces.set(root.directory, fact);
+    owned.set(root.directory, fact);
     return fact;
   };
   const publish = () => {
@@ -393,14 +376,20 @@ export function createPluginNativeAdmission(
       retainNativePath(state, path.join(fact.namespace, "content"));
     }
     const used = new Set([...files.values()].map((fact) => fact.namespace));
+    // A newer receipt may have pruned a namespace this admission still publishes.
+    for (const id of used) {
+      state.namespaces.set(id, namespaceById(id)!);
+    }
     const next = structuredClone({
       ...finalReceipt,
       nativeArtifacts: Object.fromEntries(files),
-      nativeNamespaces: Object.fromEntries([...used].map((id) => [id, state.namespaces.get(id)!])),
+      nativeNamespaces: Object.fromEntries([...used].map((id) => [id, namespaceById(id)!])),
     });
-    const unchanged = isDeepStrictEqual(state.receipts.get(key), next);
+    const replaced = state.receipts.get(key);
+    const unchanged = isDeepStrictEqual(replaced, next);
     if (!unchanged) {
       state.receipts.set(key, next);
+      releaseReplacedNamespaces(state, replaced);
     }
     if (!owner || !publishAdmission) {
       return;
@@ -422,7 +411,7 @@ export function createPluginNativeAdmission(
     );
   };
   const refreshReference = (fact: PluginNativeArtifactFact, input: string, target: string) => {
-    const namespace = state.namespaces.get(fact.namespace)!;
+    const namespace = namespaceById(fact.namespace)!;
     const relative = pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath);
     const member = namespace.members[relative]!;
     const linked = {
@@ -449,7 +438,7 @@ export function createPluginNativeAdmission(
         continue;
       }
       const fact = files.get(targets.get(target)!)!;
-      assertReference(target, fact, state.namespaces.get(fact.namespace)!, hostRoot);
+      assertReference(target, fact, namespaceById(fact.namespace)!, hostRoot);
     }
   };
   const linkHost = (selectedHost: string): void => {
@@ -536,7 +525,7 @@ export function createPluginNativeAdmission(
       return createNativeRecovery(
         receipt,
         references,
-        new Map([...used].map((id) => [id, structuredClone(state.namespaces.get(id)!)])),
+        new Map([...used].map((id) => [id, structuredClone(namespaceById(id)!)])),
         capturePluginNativeDirectoryAliases(selected, packageRoots),
         [...state.roots].filter((root) => used.has(root.directory)),
       );
@@ -590,7 +579,7 @@ export function createPluginNativeAdmission(
       }
       const found = namespaceFor(resolvedSource);
       let namespace = recovered
-        ? state.namespaces.get(recovered.namespace)
+        ? namespaceById(recovered.namespace)
         : (namespaces().find(
             (candidate) => nativeMemberForSource(candidate, resolvedSource) !== undefined,
           ) ?? found?.[1]);
@@ -641,6 +630,7 @@ export function createPluginNativeAdmission(
       } else if (recovered) {
         alias = [...selected].find(([, candidate]) => candidate === namespace)?.[0] ?? alias;
       }
+      owned.set(namespace.capturedRoot, namespace);
       const relative = recovered
         ? pluginNativeNamespaceMemberRelativePath(namespace, recovered.capturedPath)
         : (nativeMemberForSource(namespace, resolvedSource) ??

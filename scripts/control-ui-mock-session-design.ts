@@ -1672,6 +1672,7 @@ export function createSessionDesignScenario(
             cacheReadCost: 0,
             cacheWriteCost: 0,
             missingCostEntries: 1,
+            cacheUnmeasuredInput: 0,
           },
           aggregates: {
             messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },

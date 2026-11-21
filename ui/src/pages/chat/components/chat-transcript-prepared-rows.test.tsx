@@ -646,7 +646,8 @@ it.each([
   { direction: "down", initialOffset: 0, destination: 60 },
   { direction: "up", initialOffset: 24_000, destination: 180.25 },
 ])(
-  "paints the $direction forecast outside active flow before measurement",
+  // An unmeasured row's estimated slot is not where it lands; painting it there shows text that moves.
+  "prepares the $direction forecast outside active flow, unpainted until measured",
   async ({ direction, initialOffset, destination }) => {
     const view = await transcriptFixture(initialOffset, true);
     const before = transcriptRows(view.container);
@@ -662,7 +663,7 @@ it.each([
       expect(row.hasAttribute("inert")).toBe(true);
       expect(row.getAttribute("aria-hidden")).toBe("true");
       expect(row.style.position).toBe("absolute");
-      expect(row.style.opacity).not.toBe("0");
+      expect(row.style.opacity).toBe("0");
       expect(row.style.display).not.toBe("none");
       if (direction === "up") {
         expect(Number(row.dataset.index)).toBeLessThan(Math.min(...active));

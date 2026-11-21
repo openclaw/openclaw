@@ -24,17 +24,18 @@ import {
   prepareGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
 } from "./github-publication-source.js";
+import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal-schema.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   OpenClawIdPrincipalChangedError,
-  openClawIdRecoveryPrincipalSchema,
-  openclawIdTunnelRolePolicy,
+  openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
   GatewayOperatorAccessDeniedError,
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -191,20 +192,30 @@ function prepareRequesterPolicy(
     }
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
+    // Records with neither a principal nor a source cannot distinguish member and
+    // other sign-ins. Linked profiles must request those publications again.
+    if (
+      !snapshot.authenticationSource &&
+      !snapshot.openclawIdPrincipal &&
+      profile?.hasOpenClawIdIdentity
+    ) {
+      throw new GitHubPublicationRequesterUnavailableError();
+    }
     const principal = snapshot.openclawIdPrincipal;
     if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new GitHubPublicationRequesterUnavailableError();
     }
-    const role =
-      openclawIdTunnelRolePolicy(principal) ??
-      (profile
+    const role = openclawIdSubjectRolePolicy(principal, () =>
+      profile
         ? resolveOperatorRolePolicyForAssignment(
             profile.profileId,
             profile.assignedRole,
             config,
             profile.githubLogin ?? null,
+            operatorRoleSubject(profile),
           )
-        : undefined);
+        : undefined,
+    );
     if (
       !roleScopesAllow({
         role: "operator",
@@ -389,11 +400,13 @@ export async function prepareGitHubPublicationRequesterV2(
       }
     }
     const principal =
-      source?.authority.openclawIdPrincipal?.kind === "member"
+      source?.authority.openclawIdPrincipal?.kind === "member" ||
+      source?.authority.openclawIdPrincipal?.kind === "owner"
         ? openClawIdRecoveryPrincipalSchema.parse(source.authority.openclawIdPrincipal)
         : undefined;
     const snapshot: GitHubPublicationRequesterSnapshot = Object.freeze({
       version: 1,
+      authenticationSource: principal?.kind === "member" ? "openclaw-id-member" : "non-member",
       actor: Object.freeze(
         source
           ? { kind: "operator" as const, profileId: source.authority.profileId }

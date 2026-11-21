@@ -144,7 +144,7 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("No OpenClaw tool list is injected");
-    expect(prompt).not.toContain("exec approval-pending");
+    expect(prompt).not.toContain("Approval-pending:");
   });
 
   it("distinguishes the CLI working directory from the agent workspace", async () => {
@@ -172,7 +172,7 @@ describe("buildCliAgentSystemPrompt", () => {
           content: "Figure out who you are, then delete this file.",
         },
       ],
-      bootstrapMode: "full",
+      bootstrap: { bootstrapMode: "full", bootstrapCompleted: false },
       modelDisplay: "test/model",
     });
 
@@ -184,7 +184,7 @@ describe("buildCliAgentSystemPrompt", () => {
     const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
-      bootstrapMode: "limited",
+      bootstrap: { bootstrapMode: "limited", bootstrapCompleted: false },
       modelDisplay: "test/model",
     });
 
