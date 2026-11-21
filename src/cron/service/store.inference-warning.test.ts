@@ -24,8 +24,13 @@ const cfg: OpenClawConfig = {
     defaults: {
       systemAgent: { agentId: "main" },
       model,
-      models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
-      modelPolicy: { allow: ["anthropic/*", "remote/model", "profile-key/model"] },
+      models: {
+        "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+        "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+      },
+      modelPolicy: {
+        allow: ["anthropic/*", "remote/model", "profile-key/model", "openai/gpt-5.4"],
+      },
     },
   },
   models: {
@@ -90,6 +95,10 @@ it("inspects stored CLI and selected configured-key sources once without rewriti
           profileId: "profile-key:stored",
           credential: { type: "api_key", provider: "profile-key", key: "synthetic-stored-key" },
         },
+        {
+          profileId: "openai:stored",
+          credential: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
+        },
       ],
     });
     const jobs = [
@@ -97,6 +106,8 @@ it("inspects stored CLI and selected configured-key sources once without rewriti
       job("native", `${model}@anthropic:claude-cli`),
       job("key", "remote/model"),
       job("profile-key", "profile-key/model"),
+      // Codex runs host-managed stored accounts; the scheduled account guard refuses it unbound.
+      job("codex", "openai/gpt-5.4"),
     ];
     for (const id of ["pinned-key", "locked-native"]) {
       await replaceSessionEntry(
@@ -135,6 +146,7 @@ it("inspects stored CLI and selected configured-key sources once without rewriti
           { jobId: "profile-key", name: "profile-key" },
           expect.stringContaining("openclaw doctor --fix"),
         ],
+        [{ jobId: "codex", name: "codex" }, expect.stringContaining("openclaw doctor --fix")],
       ]);
       expect((await loadCronJobsStore(storePath)).jobs).toEqual(jobs);
     } finally {

@@ -310,6 +310,9 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         expect(result.error).toContain(
           "openclaw automations edit <jobId> --model openai/gpt-4o@claude-cli:personal",
         );
+        // Retrying cannot record the account, so the scheduler pauses the job at once.
+        expect(result.errorClassification).toEqual({ kind: "permanent" });
+        expect(result.failureNotificationDetail).toEqual({ kind: "inference-account-unrecorded" });
         expect(h.runCliAgentMock).not.toHaveBeenCalled();
       } else {
         expect(result.status, result.error).toBe("ok");

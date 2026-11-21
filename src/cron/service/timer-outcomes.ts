@@ -1,6 +1,7 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
+import { isCronConfigurationRefusal } from "../configuration-refusal.js";
 import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
@@ -285,6 +286,7 @@ export function applyJobResult(
         job,
         reason: "consecutive-failures",
         consecutiveErrors: job.state.consecutiveErrors ?? 0,
+        failureNotificationDetail: result.failureNotificationDetail,
         deferredNotifications: opts.deferredNotifications,
       });
     }
@@ -294,8 +296,8 @@ export function applyJobResult(
         reason: "consecutive-failures",
         atMs: result.endedAt,
         consecutiveErrors: job.state.consecutiveErrors ?? 0,
-        terminalOneShot: true,
         failureNotificationDetail: result.failureNotificationDetail,
+        terminalOneShot: true,
         // Disabling the job is new information even when a prior alert was suppressed.
         notify: failureNotification !== "queued" && !opts.replay,
         deferredNotifications: opts.deferredNotifications,
@@ -341,7 +343,9 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      (isPluginCommandCronJob(job) || job.operatorSource)
+      (isPluginCommandCronJob(job) || job.operatorSource) &&
+      // A setup refusal pauses below, where the operator is told how to fix it.
+      !isCronConfigurationRefusal(result.failureNotificationDetail)
     ) {
       // A retired plugin or unusable continuation source cannot recover through retries.
       job.enabled = false;
@@ -443,6 +447,7 @@ export function applyJobResult(
       maybeAutoDisableCronJobAfterRunFailure({
         job,
         atMs: result.endedAt,
+        failureNotificationDetail: result.failureNotificationDetail,
         deferredNotifications: opts.deferredNotifications,
         // The failure route owns the terminal notice when one resolves; the
         // in-app notice is queued at finish only when no route can carry it.
