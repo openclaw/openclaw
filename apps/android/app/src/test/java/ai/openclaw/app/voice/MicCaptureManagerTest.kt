@@ -421,6 +421,53 @@ class MicCaptureManagerTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun reconnectKeepsCapturePausedUntilAllSpeechFinishes() =
+    runTest {
+      val firstCreate = CompletableDeferred<String>()
+      val resumedCreate = CompletableDeferred<String>()
+      var createCalls = 0
+      val manager =
+        createManager(
+          scope = this,
+          createTranscriptionSession = {
+            createCalls += 1
+            if (createCalls == 1) firstCreate.await() else resumedCreate.await()
+          },
+        )
+      try {
+        manager.onGatewayConnectionChanged(true)
+        manager.setMicEnabled(true)
+        runCurrent()
+        assertEquals(1, createCalls)
+
+        manager.pauseForTts()
+        manager.pauseForTts()
+        manager.onGatewayConnectionChanged(false)
+        firstCreate.cancel(CancellationException("connection closed"))
+        runCurrent()
+        manager.onGatewayConnectionChanged(true)
+        runCurrent()
+
+        assertEquals("Reconnect must not capture speaker output", 1, createCalls)
+        assertTrue(manager.micEnabled.value)
+        assertFalse(manager.isListening.value)
+        manager.resumeAfterTts()
+        runCurrent()
+        assertEquals("A nested speech pause still owns capture suppression", 1, createCalls)
+
+        manager.resumeAfterTts()
+        runCurrent()
+        assertEquals("Capture resumes after the final speech pause", 2, createCalls)
+      } finally {
+        manager.cancelMicCapture()
+        firstCreate.cancel()
+        resumedCreate.cancel()
+        runCurrent()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun ttsPauseWaitsForTheActualCaptureFinallyBeforePlayingSpeech() =
     runTest {
       val manager = createManager(scope = this)
