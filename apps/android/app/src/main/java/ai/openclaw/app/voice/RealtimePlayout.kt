@@ -25,6 +25,8 @@ internal class RealtimePlayout(
   scope: CoroutineScope,
   dispatcher: CoroutineDispatcher,
   private val sampleRate: Int,
+  // Speech is never auto-ducked, so the owner lowers it itself while another app holds focus.
+  private val ducked: () -> Boolean = { false },
 ) {
   class Session(
     val onState: (Boolean, Any?) -> Unit,
@@ -80,6 +82,7 @@ internal class RealtimePlayout(
       if (it is Command.Clear) it.completion.cancel()
     })
   private var track: AudioTrack? = null
+  private var gain = 1f
   private var owner: Session? = null
   private var statusOwner: Any? = null
   private var writtenFrames = 0L
@@ -101,6 +104,7 @@ internal class RealtimePlayout(
     private const val MAX_QUEUED_REFRESHES = 32
     private const val RELAY_FRAME_BYTES = 24_000 * 2 * 20 / 1000
     const val MAX_QUEUED_MEDIA = ((MAX_QUEUED_BYTES + RELAY_FRAME_BYTES - 1) / RELAY_FRAME_BYTES * 2).toInt()
+    const val DUCKED_GAIN = 0.2f
   }
 
   init {
@@ -268,6 +272,7 @@ internal class RealtimePlayout(
           // Streaming defaults to a full buffer; a short final reply might never start.
           it.setStartThresholdInFrames(1)
         }
+    applyGain(output)
     // A timestamp from before an empty buffer cannot predict newly submitted audio after an idle gap.
     if (output.playbackHeadPosition.toLong().and(0xffff_ffffL) >= writtenFrames) timestampOriginNs = System.nanoTime()
     isPlaying = true
@@ -294,9 +299,19 @@ internal class RealtimePlayout(
     command.session.onState(true, statusOwner)
   }
 
+  // Writes and periodic polls both apply it, so buffered speech is ducked even when no new audio arrives.
+  private fun applyGain(output: AudioTrack) {
+    val next = if (ducked()) DUCKED_GAIN else 1f
+    if (next != gain) {
+      output.setVolume(next)
+      gain = next
+    }
+  }
+
   private fun poll(periodic: Boolean = false) {
     val session = owner ?: return
     val output = track ?: return
+    applyGain(output)
     val headPosition = output.playbackHeadPosition.toLong().and(0xffff_ffffL)
     // Android timestamps are clock anchors, not completion counters; a drained server anchor can stop advancing.
     // False queries leave the object unchanged, so retain a known future commitment across temporary loss.
@@ -354,6 +369,7 @@ internal class RealtimePlayout(
       }
     } finally {
       track = null
+      gain = 1f
       owner = null
       writtenFrames = 0
       approximateEndMs = 0
