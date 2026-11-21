@@ -70,6 +70,10 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
+Each ready member wakes the requester without waiting for siblings that are still
+working; those siblings keep the same generation and wake it again later. A
+followup caller that awaits one reply, and a Goal return, continue on the
+partition that leaves no member pending; earlier partitions are ordinary settle turns.
 
 Background commands belong to the session that started them, not to a run. A
 yield awaits every wake-armed command that is still running in the session,

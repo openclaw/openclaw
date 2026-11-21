@@ -15,7 +15,6 @@ import type { FollowupRequesterAuthority } from "./completion/session-followup-c
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   sameRequesterSettleBatch,
-  isRequesterYieldCohortMember,
   resolveCurrentRequesterSettleBatch,
 } from "./registry/subagent-requester-settle-identity.js";
 import {
@@ -165,13 +164,17 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   ) {
     return false;
   }
-  const batchRunIds = authority.batch.map((entry) => entry.runId).toSorted();
-  return batch.every(
-    (entry) =>
+  // Earlier partitions leave the authority; its remaining members keep their frozen cohort.
+  return batch.every((entry) => {
+    const wake = entry.requesterSettleWake;
+    return (
       state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
       (authority.rearmGeneration === undefined ||
-        isRequesterYieldCohortMember(entry, batchRunIds, authority.rearmGeneration)),
-  );
+        (wake?.requesterYieldBatch === true &&
+          wake.rearmGeneration === authority.rearmGeneration &&
+          batch.every((member) => wake.batchRunIds?.includes(member.runId))))
+    );
+  });
 }
 
 export type PreparedRequesterCronAuthority = {
@@ -406,6 +409,15 @@ export function revokeRequesterCronAuthorityBatch(
         entry.requesterSettleWake?.rearmGeneration === rearmGeneration &&
         isCurrent(authority)
       ) {
+        continue;
+      }
+      // A partition settled ahead of its siblings leaves; the last partition keeps the authority.
+      const remaining = authority.batch.filter(
+        (member) => !batch.some((settled) => isSameSubagentRunOwner(settled, member)),
+      );
+      if (remaining.length > 0 && !authority.runScopeBound) {
+        authority.batch = remaining;
+        state.byEntry.delete(getSubagentRunRuntimeKey(entry));
         continue;
       }
       discard(authority);

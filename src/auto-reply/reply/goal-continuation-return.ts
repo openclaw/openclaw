@@ -352,6 +352,14 @@ export async function finishGoalContinuationSettlement(
 ): Promise<void> {
   const owner = findGoalReturn(entries);
   if (!owner) {
+    // A partition settled ahead of its siblings leaves the cohort; the last one resumes the Goal.
+    for (const key of entries.map(getSubagentRunRuntimeKey)) {
+      const member = cohortReturns.get(key);
+      if (member?.cohort) {
+        member.cohort = { ...member.cohort, keys: member.cohort.keys.filter((k) => k !== key) };
+        cohortReturns.delete(key);
+      }
+    }
     return;
   }
   try {
