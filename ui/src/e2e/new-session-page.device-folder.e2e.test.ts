@@ -224,8 +224,8 @@ suite.define(() => {
         deviceFolder: { deviceId: "paired-runner", path: "/Users/dev/src" },
       });
     }));
-  it("offers device browsing only to admins", () =>
-    suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+  it("shows writers a mobile path field instead of admin-only browsing", () =>
+    suite.withPage({ viewport: { width: 390, height: 844 }, hasTouch: true }, async ({ page }) => {
       await setup(page, {
         operatorScopes: ["operator.read", "operator.write"],
         methodResponses: {
@@ -239,6 +239,23 @@ suite.define(() => {
       const folderChoice = page.locator('[data-value="device-folder"]');
       await folderChoice.waitFor();
       expect(await folderChoice.locator(".new-session-page__submenu-chevron").count()).toBe(0);
+      await folderChoice.click();
+      const path = page.getByRole("textbox", { name: "Absolute path on device" });
+      await path.fill("/srv/field-notes");
+      const offsets = await path.evaluate((field) => {
+        const style = getComputedStyle(field);
+        const textStart =
+          field.getBoundingClientRect().left +
+          Number.parseFloat(style.borderLeftWidth) +
+          Number.parseFloat(style.paddingLeft);
+        return Array.from(field.parentElement!.querySelectorAll(":scope > span"), (copy) => {
+          const text = document.createRange();
+          text.selectNodeContents(copy);
+          return Math.abs(text.getBoundingClientRect().left - textStart);
+        });
+      });
+      expect(offsets).toHaveLength(2);
+      expect(Math.max(...offsets)).toBeLessThanOrEqual(1);
     }));
   it("restores a pending device-folder create without changing its device or path", () =>
     suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {

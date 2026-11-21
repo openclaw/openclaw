@@ -631,6 +631,7 @@ span.new-session-page__select {
 }
 
 .new-session-page__menu-field {
+  --new-session-field-padding-inline: 6px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -647,7 +648,7 @@ span.new-session-page__select {
 .new-session-page__menu-field input {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 4px var(--new-session-field-padding-inline);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: transparent;
@@ -2133,6 +2134,11 @@ span.new-session-page__select {
 
   .new-session-page__context-tray .new-session-page__workspace {
     display: contents;
+  }
+
+  /* The stacked label and hint follow the path text, not the input's border. */
+  .new-session-page__context-tray .new-session-page__device-folder > span {
+    padding-inline-start: calc(var(--new-session-field-padding-inline) + 1px);
   }
 
   .new-session-page__context-tray span.new-session-page__select {
