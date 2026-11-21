@@ -932,6 +932,8 @@ describe("maybeRestartService", () => {
           : path.join(checkout, "dist", "index.js");
       const managedService = createMockGatewayService({
         isLoaded: async () => true,
+        // Linux admits ownership only with an observed systemd manager.
+        readRuntime: async () => ({ status: "stopped", systemd: { managerUid: 1001 } }),
         readCommand: async () => ({
           programArguments: ["/usr/bin/node", entry, "gateway"],
           environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
