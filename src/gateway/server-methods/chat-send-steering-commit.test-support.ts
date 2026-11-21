@@ -354,7 +354,9 @@ export function registerChatSteeringCommitCases(
               expect.objectContaining({
                 runId,
                 state: "error",
-                errorMessage: expect.stringContaining("Selected account changed"),
+                errorMessage: expect.stringContaining(
+                  "Authenticated profile verification is unavailable",
+                ),
               }),
               expect.anything(),
             );

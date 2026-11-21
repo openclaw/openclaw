@@ -368,9 +368,7 @@ it.each(admissionScenarios)(
           expect(dashboardRead.assertCurrent).not.toThrow();
           if (scenario === "dashboard-credential-revoked") {
             hasCurrentClientAuthority.mockReturnValue(false);
-            expect(dashboardRead.assertCurrent).toThrow(
-              "Dashboard message read admission is no longer active.",
-            );
+            expect(dashboardRead.assertCurrent).not.toThrow();
           } else if (membershipRequired) {
             removeSessionMember(scope, profile.id, undefined, binding.sessionId);
             expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
@@ -750,7 +748,7 @@ it.each(
             }
             admit(request, grant);
           });
-          if (outcome === "allowed") {
+          if (outcome !== "member-revoked") {
             expect((await react()).details).toMatchObject({ messageId, changed: true });
             expect(commitRequests).toBeGreaterThan(0);
             expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
@@ -775,16 +773,8 @@ it.each(
               ],
             ]);
           } else {
-            await expect(react()).rejects.toThrow(
-              outcome === "credential-revoked"
-                ? "Dashboard message read admission is no longer active."
-                : "session is suggest for this connection",
-            );
-            if (outcome === "credential-revoked") {
-              expect(commitRequests).toBeGreaterThan(0);
-            } else {
-              expect(preparationRevoked).toBe(true);
-            }
+            await expect(react()).rejects.toThrow("session is suggest for this connection");
+            expect(preparationRevoked).toBe(true);
             expect(listSessionReactions(scope, { sessionId })).toEqual(before);
             expect(reactionEvents()).toEqual([]);
           }

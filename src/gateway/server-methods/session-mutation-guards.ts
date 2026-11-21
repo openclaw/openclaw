@@ -137,6 +137,9 @@ export function readGatewayRequestMutationAuthority(
     assertPreparationCurrent: () => assertRequestTransportCurrent(captured),
     assertCurrent: assertLifetimeCurrent,
     assertLifetimeCurrent,
+    ...(sessionMutationCommitGuard
+      ? { assertAdmittedInputCurrent: sessionMutationCommitGuard }
+      : {}),
   };
   bindRequestMutationAuthority(options, authority);
   return authority;
@@ -187,7 +190,6 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     return options;
   }
   const source = readGatewayRequestMutationAuthority(options);
-  const captured = captureRequestMutationOptions(options);
   bindRequestMutationAuthority(options, {
     ...source,
     questionCallerRead,
@@ -197,12 +199,7 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     },
     ...(assertSourceCurrent
       ? {
-          assertAdmittedInputCurrent: () => {
-            assertRequestAuthorityCurrent({
-              ...captured,
-              sessionMutationCommitGuard: assertSourceCurrent,
-            });
-          },
+          assertAdmittedInputCurrent: assertSourceCurrent,
         }
       : {}),
   });

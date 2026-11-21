@@ -359,8 +359,11 @@ export async function dispatchGatewayMethodInProcessRaw(
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
   return await withInProcessGatewayDispatch(method, params, options, async (resolved) => {
+    const assertExplicitCommitCurrent = captureExternalSessionCommitGuard(
+      options?.sessionMutationCommitGuard,
+    );
     const assertExplicitRequestCurrent = composeSessionSourceAssertion(
-      [captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard)],
+      [assertExplicitCommitCurrent],
       (assertSource) => {
         throwIfGatewayDispatchAborted(method, options?.signal);
         if (resolved.hasCurrentClientAuthority?.() === false) {
@@ -418,7 +421,10 @@ export async function dispatchGatewayMethodInProcessRaw(
         ? {
             assertCreatedInputSourceCurrent: composeSessionSourceAssertion([
               assertCreatedInputSourceCurrent,
-              assertExplicitRequestCurrent,
+              assertExplicitCommitCurrent,
+              options?.signal
+                ? () => throwIfGatewayDispatchAborted(method, options.signal)
+                : undefined,
             ]),
           }
         : {}),

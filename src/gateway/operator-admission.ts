@@ -302,7 +302,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         ? live.gatewayAccessGrant
         : facts.kind === "recorded"
           ? facts.snapshot.gatewayAccessGrant
-          : undefined;
+          : null;
     if (facts.kind === "channel") {
       if (
         !channel ||

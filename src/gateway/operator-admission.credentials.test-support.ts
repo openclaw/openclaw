@@ -169,9 +169,10 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       } catch (error) {
         const c = fixture.current;
         if (
-          c?.row.credential === "principal" &&
+          c &&
+          ["principal", "channel"].includes(c.row.credential) &&
           c.scenario === "before-start" &&
-          run !== c.original &&
+          (c.row.credential === "channel" || run !== c.original) &&
           run.prompt.includes(c.queuedText)
         ) {
           c.finalAdmissionError = error;
@@ -635,6 +636,9 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
           "tunnel",
         ),
       ).toMatchObject({ ok: true });
+      assert(c.peerKey);
+      expect(c.claw.authority.currentPeer(c.peerKey)).toBeUndefined();
+      setOpenClawIdTunnelPrincipalLookup(c.claw.authority.currentPeer.bind(c.claw.authority));
       return;
     case "principal":
       c.consentCurrent = false;

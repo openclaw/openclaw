@@ -560,9 +560,7 @@ export async function runCase(
       await revokeAdmissionSource(fixture, c);
       c.releasePrepared.resolve();
       await c.wait(c.finalAdmissionSettled.promise);
-      if (row.credential === "principal") {
-        expect(c.finalAdmissionError).toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
-      }
+      expect(c.finalAdmissionError).toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
     }
     if (
       [
@@ -585,20 +583,27 @@ export async function runCase(
         // The durable attempt settled before restoring fallback auth for the observer.
         fallbackEnv.restore();
       }
-      const observer = await fixture.admin(signal);
-      const history = await observer.request<History>("chat.history", {
-        sessionKey: c.sessionKey,
-      });
-      const refused = history.pendingInputs.items.find((input) =>
-        c.queuedRunId
-          ? input.runId === c.queuedRunId
-          : JSON.stringify(input.message).includes(c.queuedText),
-      );
-      expect(refused).toMatchObject({
-        state: "cancelled",
-        endCause: ["principal", "channel"].includes(row.credential) ? "policy-refused" : "revoked",
-      });
-      expect(JSON.stringify(refused?.message)).toContain(c.queuedText);
+      if (row.credential === "channel") {
+        // Native input has in-memory custody, not the browser's durable pending row.
+        assert(c.original?.controllerInput);
+        await c.wait(c.original.controllerInput.settlement.promise);
+        expect(c.original.controllerInput.custody.completed).toBe(true);
+      } else {
+        const observer = await fixture.admin(signal);
+        const history = await observer.request<History>("chat.history", {
+          sessionKey: c.sessionKey,
+        });
+        const refused = history.pendingInputs.items.find((input) =>
+          c.queuedRunId
+            ? input.runId === c.queuedRunId
+            : JSON.stringify(input.message).includes(c.queuedText),
+        );
+        expect(refused).toMatchObject({
+          state: "cancelled",
+          endCause: row.credential === "principal" ? "policy-refused" : "revoked",
+        });
+        expect(JSON.stringify(refused?.message)).toContain(c.queuedText);
+      }
       expect(c.queuedCalls).toBe(0);
     } else {
       await c.wait(c.recoveredReached.promise);

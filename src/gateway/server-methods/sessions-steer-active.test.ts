@@ -256,7 +256,7 @@ it("joins concurrent duplicates and never retries an unconfirmed native acceptan
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 it.each(["replacement", "completed", "scope-revoked"])(
-  "does not deliver after %s during approval",
+  "retains the admitted permission but fences target %s during approval",
   async (change) => {
     await using f = await createFixture({ preserveContent: true });
     human(f);
@@ -281,10 +281,17 @@ it.each(["replacement", "completed", "scope-revoked"])(
       }
     });
     const response = await send(f);
-    expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "accepted" });
+    if (change === "scope-revoked") {
+      expect(response.mock.calls[0]?.[1]).toMatchObject({ status: "accepted" });
+      expect((await send(f, { idempotencyKey: "after-revocation" })).mock.calls[0]?.[0]).toBe(
+        false,
+      );
+    } else {
+      expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "accepted" });
+    }
     expect(f.readTranscript()).toEqual(f.activeTranscript);
     expect(f.beforeApprove).toHaveBeenCalled();
-    expect(original).not.toHaveBeenCalled();
+    expect(original).toHaveBeenCalledTimes(change === "scope-revoked" ? 1 : 0);
     expect(replacement).not.toHaveBeenCalled();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   },

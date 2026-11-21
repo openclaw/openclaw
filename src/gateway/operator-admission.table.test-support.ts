@@ -132,7 +132,7 @@ export class AdmissionFixture {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     const create = vi.isMockFunction(kernelModule.createGatewayKernel)
-      ? kernelModule.createGatewayKernel.getMockImplementation()
+      ? vi.mocked(kernelModule.createGatewayKernel).getMockImplementation()
       : kernelModule.createGatewayKernel;
     assert(create);
     const capture = vi
@@ -253,8 +253,8 @@ export class AdmissionFixture {
       expect(await admin.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
         aborted: true,
       });
-      expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
       c.releaseRecovered.resolve();
+      expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
     } else {
       if (c.scenario === "after-start") {
         await revoke();

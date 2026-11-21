@@ -13,6 +13,7 @@ import {
 import * as cronRun from "../cron/run-admission.js";
 import type { CronStandingGrantAuthority } from "../cron/standing-grant-authority.types.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { removePairedDevice } from "../infra/device-pairing.js";
 import { createAgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
@@ -55,7 +56,7 @@ export async function runCronAdmissionCase(
   let jobRemoved = false;
   let creatorRunId: string | undefined;
   let creatorTool: AnyAgentTool | undefined;
-  const requesterOwners: boolean[] = [];
+  let occurrence: { runId: string; sessionKey: string } | undefined;
   const previousToolPreparation = vi.isMockFunction(attemptTools.prepareEmbeddedAttemptToolBase)
     ? vi.mocked(attemptTools.prepareEmbeddedAttemptToolBase).getMockImplementation()
     : undefined;
@@ -64,13 +65,20 @@ export async function runCronAdmissionCase(
     .spyOn(attemptTools, "prepareEmbeddedAttemptToolBase")
     .mockImplementation(async (params) => {
       const tools = await prepareTools(params);
-      if (kind === "cron-operator-source" && params.attempt.sessionKey === c.sessionKey) {
+      const isOccurrence = Boolean(job && params.attempt.prompt.includes(c.queuedText));
+      if (isOccurrence) {
+        assert(params.attempt.sessionKey);
+        occurrence = { runId: params.attempt.runId, sessionKey: params.attempt.sessionKey };
+      }
+      if (
+        kind === "cron-operator-source" &&
+        (isOccurrence || (!job && params.attempt.sessionKey === c.sessionKey))
+      ) {
         const authority = readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext);
         assert(authority, "The real creator and scheduled tool runs must carry operator authority");
         expect([...authority.scopes].toSorted()).toEqual([...WRITER].toSorted());
-        if (job) {
+        if (isOccurrence) {
           expect(params.attempt.runId).not.toBe(creatorRunId);
-          requesterOwners.push(authority.requesterOwner === true);
           expect(authority.requesterOwner).toBe(true);
         } else {
           const tool = tools.toolsRaw.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME);
@@ -107,6 +115,16 @@ export async function runCronAdmissionCase(
       standingAuthority = admitted.standingGrantAuthority;
     }
     return admitted;
+  });
+  const unsubscribe = onAgentEvent((event) => {
+    if (event.runId !== occurrence?.runId || event.stream !== "lifecycle") {
+      return;
+    }
+    if (event.data.phase === "end" || event.data.phase === "error") {
+      c.terminal(event.runId).resolve(
+        event.data.aborted ? "aborted" : event.data.phase === "error" ? "error" : "final",
+      );
+    }
   });
   try {
     const definition = {
@@ -255,15 +273,17 @@ export async function runCronAdmissionCase(
         "Cron occurrence settled before reaching the provider",
       ),
     );
-    assert(c.latestRunId);
-    const running = c.latestRunId;
+    assert(occurrence, "The scheduled occurrence must prepare its real tools");
+    const running = occurrence.runId;
     if (kind === "cron-standing-grant") {
       assert(standingAuthority, "A real scheduled occurrence must own its receipt capability");
       const authority = standingAuthority;
       expect(() => authority.assertCurrent()).not.toThrow();
     }
     if (scenario === "stop") {
-      expect(await admin.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
+      expect(
+        await admin.request("chat.abort", { sessionKey: occurrence.sessionKey }),
+      ).toMatchObject({
         aborted: true,
       });
       expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
@@ -305,10 +325,6 @@ export async function runCronAdmissionCase(
         expect(history.entries[0]).toMatchObject({ status: "ok" });
       }
     }
-    if (kind === "cron-operator-source") {
-      expect(requesterOwners.length).toBeGreaterThan(0);
-      expect(requesterOwners.every(Boolean)).toBe(true);
-    }
     expect(fixture.providerErrors).toEqual([]);
   } finally {
     c.releaseFirst.resolve();
@@ -321,6 +337,7 @@ export async function runCronAdmissionCase(
           await admin.request("cron.remove", { id: job.id });
         }
       } finally {
+        unsubscribe();
         creatorObserver.mockRestore();
         runObserver.mockRestore();
         if (previousToolPreparation) {

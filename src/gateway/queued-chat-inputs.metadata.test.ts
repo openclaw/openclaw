@@ -429,7 +429,7 @@ it.each(["original route", "writer"] as const)(
       fastModeAutoOnSecondsOverride: 7,
       timeoutOverrideMs: 90_000,
     });
-    expect(dispatched[0]?.replyOptions?.operatorAuthority?.scopes).toEqual([
+    expect(dispatched[0]?.replyOptions?.operatorAuthority?.scopes.toSorted()).toEqual([
       "operator.admin",
       "operator.read",
       "operator.write",

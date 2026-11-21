@@ -1,6 +1,7 @@
 // Real transport -> accepted queue custody -> saved-source admission. No authority is manufactured.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
+import "./operator-role-member-subject.cases.js";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import type { LiveAdmissionKind, Mode, Row } from "./operator-admission.contracts.test-support.js";
 import { createFixture, runCase } from "./operator-admission.fixture.test-support.js";

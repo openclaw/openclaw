@@ -250,14 +250,14 @@ it("terminalizes a native command account merge during fresh transcript approval
   expect.soft(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
     ok: false,
     payload: { runId, status: "error" },
-    error: { message: expect.stringContaining("Selected account changed") },
+    error: { message: expect.stringContaining("Message injection authority is no longer current") },
   });
   expect.soft(fixture.context.broadcast).toHaveBeenCalledWith(
     "chat",
     expect.objectContaining({
       runId,
       state: "error",
-      errorMessage: expect.stringContaining("Selected account changed"),
+      errorMessage: expect.stringContaining("Message injection authority is no longer current"),
     }),
     expect.anything(),
   );

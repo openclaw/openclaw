@@ -898,7 +898,7 @@ src/gateway/server-methods/chat-send-admission-errors.ts	1
 src/gateway/server-methods/chat-send-admission.ts	6
 src/gateway/server-methods/chat-send-agent-dispatch.ts	4
 src/gateway/server-methods/chat-send-commentary-media.ts	5
-src/gateway/server-methods/chat-send-dashboard-authority.ts	2
+src/gateway/server-methods/chat-send-dashboard-authority.ts	1
 src/gateway/server-methods/chat-send-delivery-authority.ts	1
 src/gateway/server-methods/chat-send-dispatch-errors.ts	1
 src/gateway/server-methods/chat-send-goal-admission.ts	5
