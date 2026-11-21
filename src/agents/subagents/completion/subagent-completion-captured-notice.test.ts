@@ -65,9 +65,10 @@ it.each(["permanent_failure", "expiry"] as const)(
       databaseOptions: { database: db.value },
     });
     const notice = await readNotice();
-    expect(notice.customType).toBe(
-      suspendedReason === "expiry" ? "subagent-delivery-delayed" : "subagent-delivery-failed",
-    );
+    expect(notice).toMatchObject({
+      customType:
+        suspendedReason === "expiry" ? "subagent-delivery-delayed" : "subagent-delivery-failed",
+    });
     expect(notice.text).toContain("Completed successfully.");
     expect(notice.text).toContain("Operator access was revoked; start a new user turn.");
     expect(notice.text).toContain("answer-000");
