@@ -69,7 +69,11 @@ export type GatewayWsMessageHandlerParams = {
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
   /** Fixed at startup and advertised to admins, because flags can differ from config. */
-  gatewayExposure?: { bindHost: string; tailscaleMode: "off" | "serve" | "funnel" };
+  gatewayExposure?: {
+    bindHost: string;
+    tailscaleMode: "off" | "serve" | "funnel";
+    tailscaleExposure?: import("../../server-tailscale.js").GatewayTailscaleExposure;
+  };
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;

@@ -69,6 +69,10 @@ const enPreferences = {
         unknown: "Unknown",
       },
       networkAccess: "Network access",
+      tailscaleExposure: {
+        inactive: "Requested Tailscale access is not active.",
+        externalFunnel: "External Funnel",
+      },
       networkAccessValue: {
         unknown: "Unknown",
         default: "Default",

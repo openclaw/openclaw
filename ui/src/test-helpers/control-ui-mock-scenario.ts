@@ -160,6 +160,7 @@ export type NormalizedControlUiMockGatewayScenario = Required<
     assistantAvatarStatus: "data" | "local" | "none";
     operatorRolePolicy: ReturnType<typeof normalizeControlUiMockAuth>["operatorRolePolicy"];
     controlUiPluginHello: ControlUiPluginHello;
+    securitySnapshot: ReturnType<typeof normalizeControlUiMockAuth>["securitySnapshot"];
     /** Running-Gateway identity in hello; unset commit and build time are omitted. */
     serverRelease: { version: string; commit?: string; builtAt?: string };
   };

@@ -1,0 +1,3 @@
+# PR #192341: authenticated startup/snapshot and Security browser regressions
+# cover requested versus observed Serve/Funnel exposure; no shared baseline raise.
+208

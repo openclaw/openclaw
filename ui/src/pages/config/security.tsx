@@ -93,9 +93,25 @@ function GatewayAccessSection(props: SecurityViewProps) {
   const gatewayAuthLabel = () =>
     knownValueLabel(GATEWAY_AUTH_VALUES, "gatewayAuthValue", props.security.gatewayAuth);
   const networkAccessLabel = () =>
-    t(`quickSettings.security.networkAccessValue.${props.security.networkAccess.kind}`);
+    props.security.tailscaleExposure?.status === "preserved"
+      ? t("quickSettings.security.tailscaleExposure.externalFunnel")
+      : t(`quickSettings.security.networkAccessValue.${props.security.networkAccess.kind}`);
   const networkStatus = () =>
-    networkAccessStatus(props.security.networkAccess, props.security.gatewayAuth);
+    props.security.tailscaleExposure &&
+    ["failed", "recovering", "preserved"].includes(props.security.tailscaleExposure.status)
+      ? "warn"
+      : networkAccessStatus(props.security.networkAccess, props.security.gatewayAuth);
+  const exposureDetail = () => {
+    const exposure = props.security.tailscaleExposure;
+    if (!exposure || exposure.requestedMode === exposure.activeMode) {
+      return networkAccessDetail(props.security.networkAccess);
+    }
+    if (exposure.status === "preserved" && exposure.reason) {
+      return exposure.reason;
+    }
+    const summary = t("quickSettings.security.tailscaleExposure.inactive");
+    return exposure.reason ? `${summary} ${exposure.reason}` : summary;
+  };
   return (
     <SettingsSection title={t("quickSettings.security.accessTitle")}>
       <SettingsNavRow
@@ -114,7 +130,7 @@ function GatewayAccessSection(props: SecurityViewProps) {
       />
       <SettingsNavRow
         title={t("quickSettings.security.networkAccess")}
-        description={networkAccessDetail(props.security.networkAccess)}
+        description={exposureDetail()}
         control={
           networkStatus() ? (
             <SettingsStatus kind={networkStatus() ?? "muted"} label={networkAccessLabel()} />
@@ -291,6 +307,7 @@ export function SecurityPage(props: {
         connectedHost: gatewayUrlHost(props.gatewayUrl),
         bindHost: props.context.gateway.snapshot.hello?.snapshot?.bindHost,
         tailscaleMode: props.context.gateway.snapshot.hello?.snapshot?.tailscaleMode,
+        tailscaleExposure: props.context.gateway.snapshot.hello?.snapshot?.tailscaleExposure,
         execApprovalDefaults: execApprovalDefaults(),
       })}
       configBusy={props.configBusy}

@@ -12,6 +12,25 @@ function snapshotWithPresence(presence: Record<string, unknown>) {
 }
 
 describe("SnapshotSchema", () => {
+  it("carries requested and effective Tailscale exposure separately", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      tailscaleMode: "off",
+      tailscaleExposure: {
+        requestedMode: "serve",
+        activeMode: "off",
+        status: "failed",
+        reason: "Serve is disabled.",
+      },
+    };
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+    expect(
+      Value.Check(SnapshotSchema, {
+        ...snapshot,
+        tailscaleExposure: { ...snapshot.tailscaleExposure, activeMode: "unknown" },
+      }),
+    ).toBe(false);
+  });
   it("keeps the running Gateway's exposure optional for older Gateways", () => {
     const snapshot = snapshotWithPresence({ ts: 1 });
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);

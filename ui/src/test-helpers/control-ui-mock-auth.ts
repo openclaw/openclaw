@@ -4,6 +4,7 @@ export type ControlUiMockAuth = {
   deviceToken?: string | null;
   authMethod?: HelloOk["auth"]["method"];
   authMode?: HelloOk["snapshot"]["authMode"] | null;
+  gatewayExposure?: Pick<HelloOk["snapshot"], "bindHost" | "tailscaleMode" | "tailscaleExposure">;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   /** Handshake presentation fact from the authenticated role ceiling, not device scopes. */
@@ -23,6 +24,11 @@ export function normalizeControlUiMockAuth(scenario: ControlUiMockAuth) {
       scenario.deviceToken === null ? null : scenario.deviceToken?.trim() || "e2e-device-token",
     authMethod: scenario.authMethod ?? "token",
     authMode: scenario.authMode ?? null,
+    gatewayExposure: scenario.gatewayExposure ?? {},
+    securitySnapshot: {
+      ...(scenario.authMode ? { authMode: scenario.authMode } : {}),
+      ...scenario.gatewayExposure,
+    },
     omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
     operatorSessionCap: scenario.operatorSessionCap ?? null,
     profileActivityViewerId: scenario.profileActivityViewerId,

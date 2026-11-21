@@ -1,3 +1,4 @@
+import type { Snapshot } from "@openclaw/gateway-protocol";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -12,6 +13,8 @@ import {
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
+
+export type GatewayTailscaleExposure = NonNullable<Snapshot["tailscaleExposure"]>;
 
 const RECLAIM_BACKOFF: BackoffPolicy = {
   initialMs: 1_000,
@@ -28,11 +31,23 @@ export async function startGatewayTailscaleExposure(params: {
   controlUiBasePath?: string;
   logTailscale: { info: (msg: string) => void; warn: (msg: string) => void };
   signal?: AbortSignal;
+  exposure?: GatewayTailscaleExposure;
 }): Promise<(() => Promise<void>) | null> {
+  const report = (
+    activeMode: GatewayTailscaleExposure["activeMode"],
+    status: GatewayTailscaleExposure["status"],
+    reason?: string,
+  ) => {
+    if (params.exposure) {
+      Object.assign(params.exposure, { activeMode, status, reason });
+    }
+  };
+  report("off", params.tailscaleMode === "off" ? "off" : "starting");
   if (params.tailscaleMode === "off") {
     return null;
   }
   if (!params.backend) {
+    report("off", "failed", "Managed Tailscale ingress failed to start.");
     throw new Error("Managed Tailscale ingress failed to start");
   }
   const backendTarget = params.backend.port;
@@ -48,6 +63,11 @@ export async function startGatewayTailscaleExposure(params: {
       throw error;
     }
     if (preservedFunnel) {
+      report(
+        "funnel",
+        "preserved",
+        "An external Funnel is still active. Only plugin-authenticated webhooks accept it; Gateway-authenticated routes reject it.",
+      );
       params.logTailscale.warn(
         `external Tailscale Funnel for port ${params.port} remains active only for plugin-authenticated webhook routes; Gateway-authenticated routes reject its unattributable ingress. ` +
           "First configure a durable gateway password (gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD) and set gateway.auth.mode=password, " +
@@ -100,6 +120,7 @@ export async function startGatewayTailscaleExposure(params: {
           ? `${effectiveMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`
           : `${effectiveMode} enabled`,
       );
+      report(effectiveMode, "active");
       return { claim, clearPublishedOrigin };
     } catch (err) {
       clearPublishedOrigin?.();
@@ -121,7 +142,13 @@ export async function startGatewayTailscaleExposure(params: {
   try {
     route = await claimRoute(params.signal);
   } catch (err) {
+    report("off", "failed", "Tailscale activation failed. Check the Gateway logs and restart.");
     if (params.tailscaleMode === "serve" && err instanceof TailscaleServeDisabledError) {
+      report(
+        "off",
+        "failed",
+        "Tailscale Serve is disabled on this tailnet. Enable Serve and restart the Gateway.",
+      );
       params.logTailscale.warn(
         "Tailscale Serve is not enabled on this tailnet. The authenticated local Gateway remains available on loopback; remote access is unavailable. Restore the intended tailnet Serve policy and restart the Gateway.",
       );
@@ -140,6 +167,7 @@ export async function startGatewayTailscaleExposure(params: {
       const reason = await racePromiseWithAbortSignal(route.claim.exited, recoverySignal);
       recoverySignal.throwIfAborted();
       route.clearPublishedOrigin?.();
+      report("off", "recovering", "The managed Tailscale route exited. Retrying activation.");
       params.logTailscale.warn(
         `${effectiveMode} route claim exited (${reason}); recovering managed Tailscale ingress`,
       );
@@ -170,6 +198,7 @@ export async function startGatewayTailscaleExposure(params: {
       recoveryFailure = error;
     }
     if (!recoverySignal.aborted || recoveryFailure) {
+      report("off", "failed", "Tailscale recovery stopped. Check the Gateway logs and restart.");
       params.logTailscale.warn(`${effectiveMode} recovery stopped: ${formatErrorMessage(error)}`);
     }
   });
@@ -179,6 +208,7 @@ export async function startGatewayTailscaleExposure(params: {
     await recovery;
     route.clearPublishedOrigin?.();
     await route.claim.stop();
+    report("off", "off");
     if (recoveryFailure) {
       throw recoveryFailure;
     }

@@ -1485,7 +1485,7 @@ function installControlUiMockGateway(
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },
           snapshot: {
-            ...(scenario.authMode ? { authMode: scenario.authMode } : {}),
+            ...scenario.securitySnapshot,
             suspension: { phase: scenario.gatewaySuspensionPhase },
             ...presence.snapshot(params),
             ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),
