@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { constants } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { loadInventorySources, type inventory } from "../database-worker-inventory.mjs";
+import { runManagedCommand } from "./managed-child-process.mts";
 import {
   reportNativeTypeScriptPhase,
   type NativeTypeScriptObserver,
@@ -19,14 +19,14 @@ export class InventoryProcessError extends Error {
   }
 }
 
-/** A snapshot owns its V8/compiler graphs until this synchronous child has exited. */
-export function inventoryInSubprocess(
+/** Join one snapshot's V8/compiler processes before starting the next snapshot. */
+export async function inventoryInSubprocess(
   root: string,
   ref = "",
   staged = false,
   sources: ReadonlyMap<string, string> = loadInventorySources(root, ref, staged),
   observer?: NativeTypeScriptObserver,
-): ReturnType<typeof inventory> {
+): Promise<ReturnType<typeof inventory>> {
   // Preserve the caller's explicit heap cap, not its test preloads or debuggers.
   const heapArgs = process.execArgv.filter(
     (arg, index, args) =>
@@ -34,9 +34,12 @@ export function inventoryInSubprocess(
       arg === "--max-old-space-size" ||
       args[index - 1] === "--max-old-space-size",
   );
-  const child = spawnSync(
-    process.versions.bun ? "node" : process.execPath,
-    [
+  const output: Buffer[] = [];
+  const diagnostics: string[] = [];
+  let transportError: Error | undefined;
+  const exitCode = await runManagedCommand({
+    bin: process.versions.bun ? "node" : process.execPath,
+    args: [
       ...heapArgs,
       "--import",
       path.join(toolingRoot, "scripts/tsx.mjs"),
@@ -44,44 +47,49 @@ export function inventoryInSubprocess(
       "--json",
       "--snapshot",
     ],
-    {
-      cwd: toolingRoot,
-      input: JSON.stringify({
-        root,
-        ref,
-        staged,
-        sources: [...sources],
-        trace: observer !== undefined,
-      }),
-      encoding: "utf8",
-      maxBuffer: 256 * 1024 * 1024,
-    },
-  );
-  const diagnostics: string[] = [];
-  for (const line of (child.stderr ?? "").split(/\r?\n/u)) {
-    if (line.startsWith(tracePrefix)) {
-      const event: { phase: string; facts?: Record<string, string | number> } = JSON.parse(
-        line.slice(tracePrefix.length),
+    cwd: toolingRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+    requireProcessTreeExit: process.platform !== "win32",
+    onReady(child) {
+      child.stdout!.on("data", (chunk: Buffer) => output.push(chunk));
+      createInterface({ input: child.stderr!, crlfDelay: Infinity }).on("line", (line) => {
+        if (!line.startsWith(tracePrefix)) {
+          if (line) {
+            diagnostics.push(line);
+          }
+          return;
+        }
+        try {
+          const event: { phase: string; facts?: Record<string, string | number> } = JSON.parse(
+            line.slice(tracePrefix.length),
+          );
+          reportNativeTypeScriptPhase(observer, event.phase, event.facts);
+        } catch (error) {
+          transportError ??= error instanceof Error ? error : new Error(String(error));
+        }
+      });
+      child.stdin!.on("error", (error) => {
+        transportError ??= error;
+      });
+      child.stdin!.end(
+        JSON.stringify({ root, ref, staged, sources: [...sources], trace: observer !== undefined }),
       );
-      reportNativeTypeScriptPhase(observer, event.phase, event.facts);
-    } else if (line) {
-      diagnostics.push(line);
-    }
-  }
-  if (child.error || child.status !== 0) {
-    const exitCode = child.status ?? (child.signal ? 128 + constants.signals[child.signal] : 1);
-    throw (
-      child.error ??
-      new InventoryProcessError(
-        diagnostics.join("\n") ||
-          `SQLite snapshot inventory failed (${child.signal ?? child.status}).`,
-        exitCode,
-      )
+    },
+  });
+  if (exitCode !== 0) {
+    throw new InventoryProcessError(
+      diagnostics.join("\n") || `SQLite snapshot inventory failed (${exitCode}).`,
+      exitCode,
     );
+  }
+  if (transportError) {
+    throw transportError;
   }
   if (diagnostics.length > 0) {
     console.error(diagnostics.join("\n"));
   }
-  const result: { files: ReturnType<typeof inventory> } = JSON.parse(child.stdout);
+  const result: { files: ReturnType<typeof inventory> } = JSON.parse(
+    Buffer.concat(output).toString("utf8"),
+  );
   return result.files;
 }

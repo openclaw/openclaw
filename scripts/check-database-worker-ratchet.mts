@@ -17,7 +17,7 @@ import {
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-export function main(
+export async function main(
   root = process.cwd(),
   argv = process.argv.slice(2),
   observer?: NativeTypeScriptObserver,
@@ -57,14 +57,14 @@ export function main(
       new Map(rows.filter((row) => row.tier === tier).map((row) => [row.file, row.calls.length]));
     const sources = loadInventorySources(root, "", args.staged);
     reportNativeTypeScriptPhase(trace, "head.sources", { files: sources.size });
-    const head = inventoryInSubprocess(
+    const head = await inventoryInSubprocess(
       root,
       "",
       args.staged,
       sources,
       trace && ((phase, facts) => trace(`head.${phase}`, facts)),
     );
-    const baseline = baseInventory(root, base, { sources, rows: head }, trace);
+    const baseline = await baseInventory(root, base, { sources, rows: head }, trace);
     const before = counts(baseline);
     const after = counts(head);
     const total = (files: ReadonlyMap<string, number>) =>
@@ -110,7 +110,7 @@ export function main(
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  process.exitCode = main(process.cwd(), process.argv.slice(2), (phase, facts) => {
+  process.exitCode = await main(process.cwd(), process.argv.slice(2), (phase, facts) => {
     console.log("[database-worker-phase] " + JSON.stringify({ phase, ...facts }));
   });
 }

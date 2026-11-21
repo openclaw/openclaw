@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { type inventory, loadInventorySources } from "../database-worker-inventory.mjs";
 import {
-  acquireBuildArtifactLock,
+  acquireBuildArtifactLockAsync,
   finalizeBuildStepCache,
   hashInputFiles,
   resolveBuildStepCacheState,
@@ -46,12 +46,12 @@ function analyzerSignature() {
 const loadedAnalyzerSignature = analyzerSignature();
 
 /** The fresh head validates credential writers even when both source snapshots match. */
-export function baseInventory(
+export async function baseInventory(
   root: string,
   ref: string,
   current?: { sources: ReadonlyMap<string, string>; rows: ReturnType<typeof inventory> },
   observer?: NativeTypeScriptObserver,
-): ReturnType<typeof inventory> {
+): Promise<ReturnType<typeof inventory>> {
   const trace: NativeTypeScriptObserver | undefined =
     observer && ((phase, facts) => reportNativeTypeScriptPhase(observer, `base.${phase}`, facts));
   const git = (revision: string) =>
@@ -85,7 +85,7 @@ export function baseInventory(
   };
   const params = { rootDir: root, inputSignature: () => signature };
   // Serialize this checkout's output file across lookup, generation and publication.
-  const lock = acquireBuildArtifactLock(path.join(root, output));
+  const lock = await acquireBuildArtifactLockAsync(path.join(root, output));
   try {
     const state = resolveBuildStepCacheState(step, params);
     reportNativeTypeScriptPhase(trace, "lookup");
@@ -107,7 +107,7 @@ export function baseInventory(
     reportNativeTypeScriptPhase(trace, "equality");
     const rows = identical
       ? current.rows
-      : inventoryInSubprocess(root, commit, false, sources, trace);
+      : await inventoryInSubprocess(root, commit, false, sources, trace);
     reportNativeTypeScriptPhase(trace, "reuse", { outcome: identical ? "identical" : "analyzed" });
     if (identical) {
       console.log("SQLite worker snapshots identical: reusing fresh current-tree analysis.");
@@ -120,7 +120,7 @@ export function baseInventory(
     reportNativeTypeScriptPhase(trace, "publish");
     return rows;
   } finally {
-    lock.release();
+    await lock.release();
     reportNativeTypeScriptPhase(trace, "release");
   }
 }
