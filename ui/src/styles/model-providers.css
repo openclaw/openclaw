@@ -74,6 +74,27 @@
   font-weight: 500;
 }
 
+.model-providers__account-title,
+.model-providers__rename-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-providers__rename-form input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.model-providers__plan-badge {
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-1);
+  background: var(--bg-hover);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
 .model-providers__profile-actions,
 .model-providers__profile-order {
   display: flex;
