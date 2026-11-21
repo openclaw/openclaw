@@ -468,6 +468,13 @@ those databases. Changes to untouched captured databases still block automatic
 restoration. Both the installed updater and candidate Doctor must contain this
 repair; a fixed candidate cannot repair an older updater's missing attribution.
 
+If the parent ledger generation cannot be read before Doctor, the updater records
+the cause, disables automatic database restoration, and continues to Doctor. A
+later clean Doctor receipt cannot remove that refusal. Failed native database
+close, uncertain child cleanup, and lost requester authority still stop the
+operation. This repair must be present in the installed updater; downloading a
+new candidate cannot change an updater that is already running.
+
 Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
 the candidate contains the legacy database-generation adapter. Under maintenance
 custody, candidate Doctor verifies the older updater's entire physical database

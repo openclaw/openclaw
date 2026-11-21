@@ -1,0 +1,5 @@
+# A failed parent ledger generation read withdraws automatic restoration instead of
+# failing the update. A real state database whose WAL index is still being built
+# shows Doctor admission proceeding and restoration staying disabled; fence and
+# uncertain-cleanup errors still propagate.
+120
