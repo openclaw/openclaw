@@ -459,6 +459,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   retireObligations: retireKilledSubagentObligations,
   getRunsForChildSession: getSubagentRunsForChildSession,
   getRunsForCollectorGroup: getSubagentRunsForCollectorGroup,
+  info: (message) => log.info(message),
   warn,
 });
 
