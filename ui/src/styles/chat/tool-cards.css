@@ -1076,6 +1076,23 @@
   margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
 }
 
+/* Agent milestones stay outside the tool rollup and get a distinct block gap. */
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(.chat-activity-group, .chat-bubble--tool-shell, openclaw-chat-tool-card)
+  + .chat-tool-msg-collapse--lifecycle,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > .chat-tool-msg-collapse--lifecycle
+  + .chat-activity-group,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > .chat-tool-msg-collapse--lifecycle
+  + .chat-bubble--tool-shell,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > .chat-tool-msg-collapse--lifecycle
+  + openclaw-chat-tool-card
+  > .chat-tool-msg-collapse {
+  margin-block-start: calc(3 * var(--chat-run-block-gap) - var(--chat-message-gap));
+}
+
 @keyframes chat-work-settle-in {
   from {
     opacity: 0;
