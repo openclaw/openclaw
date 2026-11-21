@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { ensureOpenClawAgentSchema } from "../state/openclaw-agent-db-schema.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
@@ -126,4 +127,33 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     restoreGitBackupDirectory({ sourcePath: outputPath, targetPath: refusedTarget }),
   ).rejects.toThrow(/incomplete input/iu);
   await expect(fs.stat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("disables trusted schema on the staging connection before applying schema", async () => {
+  createGlobalDatabase(sourcePath);
+  await dump({ role: "global" });
+
+  let trustedSchemaAtFirstTable: unknown;
+  const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+  const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const database = openDatabase(...args);
+    if (path.basename(path.dirname(args[0])).startsWith(".git-backup-restore-")) {
+      const exec = database.exec.bind(database);
+      vi.spyOn(database, "exec").mockImplementation((sql) => {
+        if (trustedSchemaAtFirstTable === undefined && /^CREATE\s+TABLE\b/iu.test(sql)) {
+          trustedSchemaAtFirstTable = database
+            .prepare("PRAGMA trusted_schema")
+            .get()?.trusted_schema;
+        }
+        exec(sql);
+      });
+    }
+    return database;
+  });
+  try {
+    await restore({ role: "global" });
+    expect(trustedSchemaAtFirstTable).toBe(0);
+  } finally {
+    open.mockRestore();
+  }
 });
