@@ -30,12 +30,12 @@ lines=1000
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -t|--target)   target="${2-}"; shift 2 ;;
-    -p|--pattern)  pattern="${2-}"; shift 2 ;;
+    -t|--target)   target="${2?Missing value for $1 (see --help)}"; shift 2 ;;
+    -p|--pattern)  pattern="${2?Missing value for $1 (see --help)}"; shift 2 ;;
     -F|--fixed)    grep_flag="-F"; shift ;;
-    -T|--timeout)  timeout="${2-}"; shift 2 ;;
-    -i|--interval) interval="${2-}"; shift 2 ;;
-    -l|--lines)    lines="${2-}"; shift 2 ;;
+    -T|--timeout)  timeout="${2?Missing value for $1 (see --help)}"; shift 2 ;;
+    -i|--interval) interval="${2?Missing value for $1 (see --help)}"; shift 2 ;;
+    -l|--lines)    lines="${2?Missing value for $1 (see --help)}"; shift 2 ;;
     -h|--help)     usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
