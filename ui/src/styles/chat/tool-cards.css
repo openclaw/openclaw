@@ -1044,23 +1044,30 @@
 
 /* Transparent card hosts participate in sibling selection; put the gap on
    the visible card. Milestones stay separate from the compact tool blocks. */
-:is(.chat-group-messages, .chat-agent-run-body) {
+.chat-group-messages,
+.chat-agent-run-body {
   > :is(
     .chat-activity-group,
     .chat-tool-msg-collapse,
     .chat-bubble--tool-shell,
     openclaw-chat-tool-card
   ) {
-    + :is(.chat-activity-group, .chat-tool-msg-collapse, .chat-bubble--tool-shell),
+    + .chat-activity-group,
+    + .chat-tool-msg-collapse,
+    + .chat-bubble--tool-shell,
     + openclaw-chat-tool-card > .chat-tool-msg-collapse {
       margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
     }
   }
 
   > :is(.chat-activity-group, .chat-bubble--tool-shell, openclaw-chat-tool-card)
-    + :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion),
+    + .chat-tool-msg-collapse--lifecycle,
+  > :is(.chat-activity-group, .chat-bubble--tool-shell, openclaw-chat-tool-card)
+    + .chat-tool-msg-collapse--completion,
   > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
-    + :is(.chat-activity-group, .chat-bubble--tool-shell),
+    + .chat-activity-group,
+  > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
+    + .chat-bubble--tool-shell,
   > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
     + openclaw-chat-tool-card
     > .chat-tool-msg-collapse {
