@@ -38,12 +38,31 @@ export function openInstalledRecoveryEvidence(file) {
 export function writeInstalledRecoveryEvidence(file, value) {
   const temporary = `${file}.tmp`;
   const fd = openInstalledRecoveryEvidence(temporary);
+  let owned;
   try {
-    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
-  } finally {
-    fs.closeSync(fd);
+    let failure;
+    try {
+      owned = fs.fstatSync(fd);
+      fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      fs.closeSync(fd);
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure) throw failure;
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try {
+      const current = fs.lstatSync(temporary);
+      if (owned && current.dev === owned.dev && current.ino === owned.ino) fs.unlinkSync(temporary);
+    } catch {
+      // Cleanup never replaces the write failure or removes another writer's file.
+    }
+    throw error;
   }
-  fs.renameSync(temporary, file);
 }
 
 export function startInstalledRecoveryRun(artifacts, cut = "") {

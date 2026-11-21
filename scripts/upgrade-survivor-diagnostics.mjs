@@ -4,25 +4,41 @@ import { writeSync } from "node:fs";
 import {
   publishDiagnostics,
   publishInstalledRecoveryDiagnostics,
+  publishInstalledTerminalDiagnostics,
 } from "./e2e/lib/upgrade-survivor/diagnostics.mjs";
 
 try {
-  const [mode, artifactRoot, destination, outcome = "failed", cut, timedOut, packageSha256] =
-    process.argv.slice(2);
-  if (mode !== "publish" && mode !== "installed-recovery") {
+  const [
+    mode,
+    artifactRoot,
+    destination,
+    outcome = "failed",
+    cut,
+    timedOut,
+    packageSha256,
+    signal,
+  ] = process.argv.slice(2);
+  if (!["publish", "installed-recovery", "installed-terminal"].includes(mode)) {
     throw new Error();
   }
   // The wrapper registers this harness's scripts/tsx.mjs before loading source.
   const { redactSensitiveText } = await import("../src/logging/redact.ts");
   const failure =
-    mode === "installed-recovery"
-      ? publishInstalledRecoveryDiagnostics(artifactRoot, destination, redactSensitiveText, {
-          cut,
+    mode === "installed-terminal"
+      ? await publishInstalledTerminalDiagnostics(artifactRoot, destination, redactSensitiveText, {
           exitStatus: Number(outcome),
           timedOut: timedOut === "true",
           packageSha256,
+          signal: signal || null,
         })
-      : publishDiagnostics(artifactRoot, destination, redactSensitiveText, outcome);
+      : mode === "installed-recovery"
+        ? publishInstalledRecoveryDiagnostics(artifactRoot, destination, redactSensitiveText, {
+            cut,
+            exitStatus: Number(outcome),
+            timedOut: timedOut === "true",
+            packageSha256,
+          })
+        : publishDiagnostics(artifactRoot, destination, redactSensitiveText, outcome);
   // Use the host scheduler pipe, which is not forwarded into the container.
   // Wrapper cleanup and bounded log tails cannot clip this published receipt.
   if (failure && process.env.OPENCLAW_DOCKER_FAILURE_METADATA_FD === "3") {
