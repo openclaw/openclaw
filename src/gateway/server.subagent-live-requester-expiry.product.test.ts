@@ -25,13 +25,15 @@ const realHoldMs = Number(process.env.OPENCLAW_TEST_REQUESTER_HOLD_MS ?? 0);
 
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
-it.each(["ends", "yields"] as const)(
+it.each(["ends", "yields", "yields after cleanup"] as const)(
   "retains an expired child behind a live requester until it %s",
   { timeout: realHoldMs + 120_000 },
   async (ending) => {
     const release = createDeferred();
+    const releaseChild = createDeferred();
     const held = createDeferred();
-    let spawned = false;
+    const cleanedCohort = ending === "yields after cleanup";
+    let spawned = 0;
     let completionCalls = 0;
     let completionPrompt = "";
     const model = await startOpenAiResponsesModelServer({
@@ -53,10 +55,10 @@ it.each(["ends", "yields"] as const)(
             completionCalls++;
             completionPrompt = body;
             reply(`Received child result: ${childAnswer}`);
-          } else if (!spawned) {
-            spawned = true;
+          } else if (spawned < (cleanedCohort ? 3 : 1)) {
+            spawned++;
             writeToolCall(response, "sessions_spawn", {
-              task: childTask,
+              task: `${childTask} Child ${spawned}.`,
               context: "isolated",
               completionTarget: "parent",
               cleanup: "keep",
@@ -64,13 +66,16 @@ it.each(["ends", "yields"] as const)(
           } else {
             held.resolve();
             await release.promise;
-            if (ending === "yields") {
+            if (ending !== "ends") {
               writeToolCall(response, "sessions_yield", {});
             } else {
               reply("Requester work finished.");
             }
           }
           return;
+        }
+        if (cleanedCohort && body.includes(`${childTask} Child 3.`)) {
+          await releaseChild.promise;
         }
         reply(body.includes(childTask) ? childAnswer : "NO_REPLY");
       },
@@ -97,6 +102,70 @@ it.each(["ends", "yields"] as const)(
         deliver: false,
       });
       await held.promise;
+      const cohort = () =>
+        [...subagentRuns.values()].filter((run) => run.requesterTurnRunId === parent.runId);
+      if (cleanedCohort) {
+        await vi.waitUntil(
+          () => cohort().filter((run) => run.execution.status === "terminal").length === 2,
+          { timeout: 15_000 },
+        );
+        const cleaned = cohort().filter((run) => run.execution.status === "terminal");
+        for (const run of cleaned) {
+          await gateway.client.request("agent.wait", { runId: run.runId, timeoutMs: 30_000 });
+          await vi.waitUntil(() => !hasLiveAgentRunContext(run.runId), { timeout: 10_000 });
+        }
+        // Replay settled delivery metadata, then let normal retention clean it up.
+        // Current expiry itself is separately proven to retain live waits.
+        await mutateSubagentRuns(
+          cleaned.map((run) => run.runId),
+          (rows) => ({
+            value: undefined,
+            postimages: new Map(
+              cleaned.map((run, index) => [
+                run.runId,
+                {
+                  ...rows.get(run.runId)!,
+                  spawnMode: "session" as const,
+                  archiveAtMs: undefined,
+                  cleanupCompletedAt: Date.now() - 6 * 60_000,
+                  delivery:
+                    index === 0
+                      ? { status: "delivered" as const }
+                      : { status: "discarded" as const, discardReason: "expired" as const },
+                },
+              ]),
+            ),
+          }),
+        );
+        await testing.sweepOnceForTests();
+        expect(cleaned.some((run) => subagentRuns.has(run.runId))).toBe(false);
+        const running = cohort()[0]!;
+        expect(running.execution.status).toBe("running");
+        release.resolve();
+        await vi.waitUntil(
+          () => subagentRuns.get(running.runId)?.requesterSettleWake?.requesterYieldBatch === true,
+          { timeout: 15_000 },
+        );
+        expect(subagentRuns.get(running.runId)?.requesterSettleWake?.batchRunIds).toEqual([
+          running.runId,
+        ]);
+        releaseChild.resolve();
+        await vi.waitUntil(
+          () => subagentRuns.get(running.runId)?.delivery?.status === "delivered",
+          { timeout: 30_000 },
+        );
+        await testing.sweepOnceForTests();
+        const history = await gateway.client.request<{ messages: Array<{ customType?: string }> }>(
+          "chat.history",
+          { sessionKey: "main", limit: 100 },
+        );
+        expect(
+          history.messages.some((message) => message.customType === "run-failed-before-reply"),
+        ).toBe(false);
+        expect(completionCalls).toBe(1);
+        expect(completionPrompt).toContain(childAnswer);
+        return;
+      }
       const child = () =>
         [...subagentRuns.values()].find((run) => run.requesterTurnRunId === parent.runId);
       await vi.waitUntil(
@@ -167,6 +236,7 @@ it.each(["ends", "yields"] as const)(
       console.log(JSON.stringify({ stage: "delivered-once", ending, runId, realHoldMs }));
     } finally {
       release.resolve();
+      releaseChild.resolve();
       await disconnectGatewayClient(gateway.client);
       await gateway.server.close({ reason: "live requester expiry proof complete" });
       await model.close();

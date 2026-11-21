@@ -337,7 +337,7 @@ describe("persisted subagent requester wakes", () => {
       expect(settled).toHaveLength(delivered ? 1 : 2);
       expect(settled[0]).toEqual(notices[0]);
       if (!delivered) {
-        expect(settled[1]).toMatchObject({ customType: "run-failed-before-reply", display: true });
+        expect(settled[1]).toMatchObject({ customType: "subagent-delivery-failed", display: true });
       }
     },
   );
@@ -393,7 +393,7 @@ describe("persisted subagent requester wakes", () => {
       );
       expect(notices).toHaveLength(1);
       expect(notices[0]).toMatchObject({
-        customType: "run-failed-before-reply",
+        customType: "subagent-delivery-failed",
         display: true,
       });
     },

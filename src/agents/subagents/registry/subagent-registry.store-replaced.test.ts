@@ -104,7 +104,7 @@ it.each(["delivered", "failed", "error-failed"] as const)(
         ? delayed
         : [
             ...delayed,
-            expect.objectContaining({ customType: "run-failed-before-reply", display: true }),
+            expect.objectContaining({ customType: "subagent-delivery-failed", display: true }),
           ],
     );
     expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.disposition).toBe(

@@ -182,7 +182,7 @@ describe("requester settle retry lifetime", () => {
         expect(events).toContainEqual(
           expect.objectContaining({
             type: "custom_message",
-            customType: "run-failed-before-reply",
+            customType: "subagent-delivery-failed",
             details: expect.objectContaining({ error: "requester turn failed" }),
           }),
         );
