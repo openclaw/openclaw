@@ -303,7 +303,10 @@ it("bounds configured-row indexing through hydrated implicit OpenAI picker reads
       }
       expect(runtimeRows).toHaveLength(17);
       expect(sourceRows[0]?.reasoning).toBeUndefined();
-      expect(runtimeRows[0]).toMatchObject({ reasoning: false, input: ["text"] });
+      expect(runtimeRows[0]).toMatchObject({ input: ["text"] });
+      // Omission is preserved, not synthesized into `reasoning: false`, so
+      // discovery can supply the model's capabilities (#203150).
+      expect(runtimeRows[0]?.reasoning).toBeUndefined();
       expect(cfg.models?.providers?.openai?.api).toBeUndefined();
       expect(runtimeRows.every((row) => row.api === undefined && !row.agentRuntime)).toBe(true);
       const entries = buildConfiguredModelCatalog({ cfg, manifestPlugins: metadata }).filter(

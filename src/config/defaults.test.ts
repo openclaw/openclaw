@@ -489,7 +489,39 @@ describe("applyModelDefaults catalog seeding", () => {
       "custom",
     );
     expect(model.input).toEqual(["text"]);
-    expect(model.reasoning).toBe(false);
+    // Omission is preserved, not synthesized into `reasoning: false`: downstream
+    // treats an authored false as an opt-out, so a synthesized false would hide
+    // capabilities discovery reports for this model (#203150).
+    expect(model.reasoning).toBeUndefined();
+  });
+
+  it("preserves omitted reasoning for manifest-absent models so discovery can supply it (#203150)", () => {
+    const sparse = materializedModel(
+      // SAFETY: mirrors a real operator config entry that pins only contextTokens.
+      withModels(
+        [{ id: "gpt-6.2-sol", name: "GPT-6.2 Sol", contextTokens: 500_000 } as never],
+        "openai",
+      ),
+      catalogRegistry,
+    );
+    // No manifest row covers gpt-6.2-sol: the omission must survive
+    // materialization instead of being synthesized into `reasoning: false`,
+    // which downstream reads as an authored opt-out and hides the native
+    // thinking efforts discovery reports for this model.
+    expect(sparse.reasoning).toBeUndefined();
+    expect(sparse.contextTokens).toBe(500_000);
+
+    const explicitFalse = materializedModel(
+      withModels([{ id: "gpt-6.2-sol", reasoning: false } as never], "openai"),
+      catalogRegistry,
+    );
+    expect(explicitFalse.reasoning).toBe(false);
+
+    const explicitTrue = materializedModel(
+      withModels([{ id: "gpt-6.2-sol", reasoning: true } as never], "openai"),
+      catalogRegistry,
+    );
+    expect(explicitTrue.reasoning).toBe(true);
   });
 });
 
