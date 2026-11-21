@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { escapeRegExp } from "../shared/regexp.js";
 export {
@@ -343,7 +343,7 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const warningBlock = includeWarning ? `${EXTERNAL_CONTENT_WARNING}\n\n` : "";
   const markerId = randomBytes(8).toString("hex");
 
-  return [
+  const wrapped = [
     warningBlock,
     `<<<${EXTERNAL_CONTENT_START_NAME} id="${markerId}">>>`,
     metadata,
@@ -351,6 +351,135 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
     sanitized,
     `<<<${EXTERNAL_CONTENT_END_NAME} id="${markerId}">>>`,
   ].join("\n");
+  if (FOLDABLE_SOURCES.has(source)) {
+    rememberIssuedEnvelope(markerId, wrapped, includeWarning, sanitized.length);
+  }
+  return wrapped;
+}
+
+// Web tools return wrapped fields that Code Mode and Tool Search wrap again.
+// Remember a digest of each envelope this process issued for them, so the
+// outer wrap can fold exact copies. Anything else, including well-formed
+// envelopes with unknown ids or changed bytes, is still sanitized; so are
+// envelopes from before a restart or evicted from this bounded set.
+const FOLDABLE_SOURCES = new Set<ExternalContentSource>(["web_fetch", "web_search"]);
+const MAX_ISSUED_ENVELOPES = 4096;
+const MAX_FOLD_CANDIDATES = 64;
+type IssuedEnvelope = { digest: string; length: number; bodyLength: number; warning: boolean };
+const issuedEnvelopes = new Map<string, IssuedEnvelope>();
+
+function digestEnvelope(value: string): string {
+  // UTF-16 code units, so lone surrogates are not collapsed to U+FFFD first.
+  return createHash("sha256").update(value, "utf16le").digest("hex");
+}
+
+function rememberIssuedEnvelope(id: string, wrapped: string, warning: boolean, bodyLength: number) {
+  // The digest covers the start marker through the end marker.
+  const envelope = wrapped.slice(wrapped.indexOf("<<<"));
+  issuedEnvelopes.set(id, {
+    digest: digestEnvelope(envelope),
+    length: envelope.length,
+    bodyLength,
+    warning,
+  });
+  if (issuedEnvelopes.size > MAX_ISSUED_ENVELOPES) {
+    const oldest = issuedEnvelopes.keys().next();
+    if (!oldest.done) {
+      issuedEnvelopes.delete(oldest.value);
+    }
+  }
+}
+
+// JSON string-body encoding, applied once per nesting level.
+function encodeLevels(value: string, depth: number): string {
+  let encoded = value;
+  for (let level = 0; level < depth; level += 1) {
+    encoded = JSON.stringify(encoded).slice(1, -1);
+  }
+  return encoded;
+}
+
+function decodeLevels(value: string, depth: number): string | undefined {
+  let decoded = value;
+  try {
+    for (let level = 0; level < depth; level += 1) {
+      const parsed: unknown = JSON.parse(`"${decoded}"`);
+      if (typeof parsed !== "string") {
+        return undefined;
+      }
+      decoded = parsed;
+    }
+  } catch {
+    return undefined;
+  }
+  return decoded;
+}
+
+// Escaped quotes before the id give the JSON nesting depth: 0, 1, 3 or 7
+// backslashes for raw text and one to three levels of JSON encoding.
+const ISSUED_START_PATTERN = new RegExp(
+  String.raw`<<<${EXTERNAL_CONTENT_START_NAME} id=(\\{0,7})"([a-f0-9]{16})\1">>>`,
+  "g",
+);
+const DEPTH_BY_QUOTE_ESCAPES = new Map([
+  [0, 0],
+  [1, 1],
+  [3, 2],
+  [7, 3],
+]);
+
+/**
+ * Fold envelopes this process issued for web tool fields back into their
+ * content, raw or JSON-encoded up to three levels, so a single outer wrap
+ * replaces them instead of [[MARKER_SANITIZED]] text. Only byte-exact copies
+ * of issued envelopes fold. Callers must wrap the result: the outer wrap
+ * still sanitizes everything that remains. Only the first maxScanChars fold.
+ */
+export function foldIssuedExternalContent(text: string, maxScanChars = text.length): string {
+  if (
+    issuedEnvelopes.size === 0 ||
+    maxScanChars <= 0 ||
+    !text.includes(EXTERNAL_CONTENT_START_NAME)
+  ) {
+    return text;
+  }
+  const head = text.length > maxScanChars ? text.slice(0, maxScanChars) : text;
+  const pattern = new RegExp(ISSUED_START_PATTERN);
+  let output = "";
+  let cursor = 0;
+  let candidates = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(head)) !== null && candidates < MAX_FOLD_CANDIDATES) {
+    const depth = DEPTH_BY_QUOTE_ESCAPES.get(match[1]!.length);
+    const issued = issuedEnvelopes.get(match[2]!);
+    if (depth === undefined || !issued) {
+      continue;
+    }
+    candidates += 1;
+    const endMarker = encodeLevels(`<<<${EXTERNAL_CONTENT_END_NAME} id="${match[2]}">>>`, depth);
+    const endIndex = head.indexOf(endMarker, match.index);
+    if (endIndex === -1) {
+      continue;
+    }
+    const end = endIndex + endMarker.length;
+    const envelope = decodeLevels(head.slice(match.index, end), depth);
+    if (envelope?.length !== issued.length || digestEnvelope(envelope) !== issued.digest) {
+      continue;
+    }
+    const prefix = encodeLevels(issued.warning ? `${EXTERNAL_CONTENT_WARNING}\n\n\n` : "\n", depth);
+    const prefixStart = match.index - prefix.length;
+    const start =
+      prefixStart >= cursor && head.startsWith(prefix, prefixStart) ? prefixStart : match.index;
+    const bodyEnd = envelope.lastIndexOf("\n<<<");
+    const body = envelope.slice(bodyEnd - issued.bodyLength, bodyEnd);
+    output += head.slice(cursor, start) + encodeLevels(body, depth);
+    cursor = end;
+    pattern.lastIndex = end;
+  }
+  if (cursor === 0) {
+    return text;
+  }
+  return output + text.slice(cursor);
 }
 
 export function buildSafeExternalPrompt(params: {
