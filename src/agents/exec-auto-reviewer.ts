@@ -150,21 +150,29 @@ function buildReviewerUserPrompt(input: ModelAutoReviewInput, serializedInput: s
 }
 
 function textLooksLikeReviewerDirective(value: string): boolean {
-  const normalized = value
-    .normalize("NFKC")
-    .toLowerCase()
+  const folded = value.normalize("NFKC").toLowerCase();
+  const normalized = folded
     .replace(/[\p{Cc}\p{Cf}\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  // Flags and paths contain words without instructing the reviewer: keep their
+  // punctuation so check-ignore and reviewer-decision.md remain single words.
+  const prose = folded
+    .replace(/[\p{Cc}\p{Cf}\p{P}\p{S}]/gu, (character) =>
+      "-/\\._".includes(character) ? character : " ",
+    )
+    .replace(/\.+(?=\s|$)/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
   const tokens = new Set(normalized.split(" "));
   return (
-    /\b(ignore|disregard|override)\b.{0,80}\b(instruction|system|developer|prompt|policy)\b/u.test(
-      normalized,
+    /(?:^|\s)(ignore|disregard|override)(?=\s|$).{0,80}\b(instruction|system|developer|prompt|policy)\b/u.test(
+      prose,
     ) ||
     /\b(return|respond|output|say|print)\b.{0,80}\bdecision\b.{0,80}\b(allow|allow-once)\b/u.test(
       normalized,
     ) ||
-    /\b(exec\s+)?reviewer\b.{0,80}\b(decision|allow|risk|rationale)\b/u.test(normalized) ||
+    /(?:^|\s)(exec\s+)?reviewer(?=\s|$).{0,80}\b(decision|allow|risk|rationale)\b/u.test(prose) ||
     (tokens.has("decision") && tokens.has("allow") && tokens.has("risk") && tokens.has("low")) ||
     /\buntrusted (?:exec|widget) request json end\b/u.test(normalized)
   );
