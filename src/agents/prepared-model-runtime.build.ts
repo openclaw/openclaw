@@ -110,6 +110,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
   retirementSignal: AbortSignal;
+  buildRetirementSignal?: AbortSignal;
   isBuildCurrent?: () => boolean;
   onBeforeAuthCapture?: () => void;
   inspectRegistry?: boolean;
@@ -285,19 +286,17 @@ async function buildSnapshotBatch(
           // Otherwise file creation can retire the credentials this build just captured.
           // Discovery stays asynchronous; read-only admission must not borrow write permission.
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+            const preparationSignal = candidate.buildRetirementSignal ?? signal;
             try {
               await prepareOpenClawAgentDatabaseExecution(
                 { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
                 () => assertBuildCurrent(input),
-                candidate.retirementSignal,
+                preparationSignal,
               );
             } catch (error) {
               // Database admission can return the retired generation's raw abort reason.
               // Recover the owning publication's supersession before startup joins it.
-              if (
-                candidate.retirementSignal.aborted &&
-                error === candidate.retirementSignal.reason
-              ) {
+              if (preparationSignal?.aborted && error === preparationSignal.reason) {
                 assertBuildCurrent(input);
               }
               throw error;

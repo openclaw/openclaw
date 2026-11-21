@@ -4,6 +4,7 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import * as agentDatabase from "../state/openclaw-agent-execution.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -74,3 +75,32 @@ it.each(["retirement", "unrelated"] as const)(
     }
   },
 );
+
+it("finishes a config rebuild when auth changes during database preparation", async () => {
+  const { mocks, state } = fixture;
+  const agentId = "default";
+  const agentDir = state.agentDir(agentId);
+  mocks.configuredAgentIds = [agentId];
+  await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" });
+
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  using _preparation = vi
+    .spyOn(agentDatabase, "prepareOpenClawAgentDatabaseExecution")
+    .mockImplementationOnce(async (_options, _assertCurrent, signal) => {
+      entered.resolve();
+      await racePromiseWithAbortSignal(release.promise, signal, (aborted) => aborted.reason);
+    });
+  const config = { plugins: {} };
+  const rebuild = refreshPreparedModelRuntimeSnapshots(config, { catalogMode: "static" });
+  try {
+    await awaitGateBeforeSettlement(entered.promise, rebuild, "Rebuild skipped database prep");
+    mocks.mutationListener!({ agentDir, affectsInheritedStores: false, profileSetChanged: true });
+    release.resolve();
+    await rebuild;
+    expect(getPreparedModelRuntimeSnapshot({ config, agentId, agentDir })?.isCurrent()).toBe(true);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([rebuild]);
+  }
+});

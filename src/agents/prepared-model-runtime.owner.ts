@@ -488,6 +488,7 @@ function createPreparedModelRuntimePublicationCandidate(
     isOwnerRegistered,
   );
   const isCurrent = () => (isPublicationCurrent?.() ?? true) && isGenerationCurrent();
+  const retirementSignal = capturePreparedModelRuntimeGeneration(owner);
   return {
     catalogMode: owner.catalogMode,
     input,
@@ -498,7 +499,9 @@ function createPreparedModelRuntimePublicationCandidate(
     inspectRegistry:
       owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
     isGenerationCurrent,
-    retirementSignal: capturePreparedModelRuntimeGeneration(owner),
+    retirementSignal,
+    // A config rebuild keeps preparing while it adopts a retired owner's auth change.
+    buildRetirementSignal: isBuildCurrent ? undefined : retirementSignal,
     isBuildCurrent: isBuildCurrent ?? isCurrent,
     onBeforeAuthCapture: () => {
       if (owner.generation === generation) {
