@@ -202,7 +202,7 @@ it("renders a Windows PATH launcher for the running CLI", () =>
   }));
 
 it.skipIf(process.platform === "win32")(
-  "binds native Git past forwarding shims and refuses nested wrapper invocations",
+  "binds native Git past forwarding shims without rediscovering them",
   () =>
     withTempDir("agent-git-recursion-", async (root) => {
       const fixture = await createSourceCliFixture(root);
@@ -239,7 +239,61 @@ git "$@"
         ["-c", `alias.reenter=!${quoteCliArg(shim)} --version`, "reenter"],
         { env, encoding: "utf8" },
       );
-      expect(nested.status, nested.stderr).toBe(98);
-      expect(nested.stderr).toContain("recursive agent Git wrapper invocation refused");
+      expect(nested.status, nested.stderr).toBe(0);
+      expect(nested.stdout).toMatch(/^git version /);
+      const forwarded = spawnSync(path.join(userBin, "git"), ["--version"], {
+        env,
+        encoding: "utf8",
+      });
+      expect(forwarded.status, forwarded.stderr).toBe(0);
+      expect(forwarded.stdout).toMatch(/^git version /);
+      expect(await fs.readFile(trace, "utf8")).toBe("x");
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "survives native Git replacement and recovers a missing prepared path without re-preparation",
+  () =>
+    withTempDir("agent-git-upgrade-", async (root) => {
+      const fixture = await createSourceCliFixture(root);
+      const stateDir = path.join(root, "state");
+      const stableBin = path.join(root, "stable '$` bin");
+      const replacementBin = path.join(root, "replacement");
+      const versions = [path.join(root, "git-v1"), path.join(root, "git-v2")];
+      await fs.mkdir(stableBin);
+      await fs.mkdir(replacementBin);
+      const nativeGit = path.join(
+        spawnSync("git", ["--exec-path"], { encoding: "utf8" }).stdout.trim(),
+        "git",
+      );
+      for (const version of versions) {
+        await fs.copyFile(nativeGit, version);
+        await fs.chmod(version, 0o755);
+      }
+      const target = path.join(stableBin, "git");
+      await fs.symlink(versions[0]!, target);
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: `${stableBin}:/usr/bin:/bin` }, () =>
+        withSourceCliParent(fixture, prepareGatewayAgentCliShim),
+      );
+      const shim = path.join(stateDir, "tmp", "agent-git", "git");
+      const env = { ...process.env, PATH: `${path.dirname(shim)}:${stableBin}:${replacementBin}` };
+      const version = () => {
+        const result = spawnSync(shim, ["--version"], { env, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toMatch(/^git version /);
+      };
+      version();
+      await fs.unlink(target);
+      await fs.symlink(versions[1]!, target);
+      await fs.unlink(versions[0]!);
+      version();
+      await fs.unlink(target);
+      // A forwarding fixture must not become the recovery target; remain bounded on base.
+      await fs.writeFile(target, "#!/bin/sh\nexit 87\n", { mode: 0o755 });
+      await fs.symlink(versions[1]!, path.join(replacementBin, "git"));
+      // Move the bound path away so recovery validates the remaining PATH entries.
+      await fs.rename(stableBin, `${stableBin}-retired`);
+      env.PATH = `${path.dirname(shim)}:${stableBin}-retired:${replacementBin}`;
+      version();
     }),
 );

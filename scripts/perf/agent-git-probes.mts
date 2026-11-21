@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { AGENT_GIT_SHIM, RESOLVE_AGENT_GIT } from "../../src/infra/agent-git-shim.ts";
+import { buildAgentGitShimInstallCommand } from "../../src/infra/agent-git-shim.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -70,9 +70,6 @@ if (values["aa-only"] && values["ab-only"]) {
 const root = mkdtempSync(path.join(values["scratch-parent"], "agent-git-probes-"));
 const env: NodeJS.ProcessEnv = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
-  OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
-    encoding: "utf8",
-  }).stdout.trim(),
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: os.platform() === "win32" ? "NUL" : "/dev/null",
   GIT_TERMINAL_PROMPT: "0",
@@ -128,7 +125,13 @@ try {
       : `Synthetic fixture: ${files} files, ${commits} history commits; ${root}`,
   );
   mkdirSync(bin);
-  writeFileSync(path.join(bin, "git"), AGENT_GIT_SHIM, { mode: 0o755 });
+  const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(bin)], {
+    env,
+    encoding: "utf8",
+  });
+  if (installed.status !== 0) {
+    throw new Error(installed.stderr);
+  }
   if (sharedShallow || historyBlobs) {
     mkdirSync(baselineBin);
     writeFileSync(path.join(baselineBin, "git"), readFileSync(baselineShimPath), { mode: 0o755 });
@@ -512,7 +515,9 @@ try {
           sharedShallow || historyBlobs
             ? createHash("sha256").update(readFileSync(baselineShimPath)).digest("hex")
             : undefined,
-        shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
+        shimSha256: createHash("sha256")
+          .update(readFileSync(path.join(bin, "git")))
+          .digest("hex"),
         platform: process.platform,
         cpuScope:
           process.platform === "darwin"

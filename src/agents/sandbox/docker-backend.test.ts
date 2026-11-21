@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildAgentGitShimInstallCommand } from "../../infra/agent-git-shim.js";
 import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
@@ -508,13 +509,24 @@ it.skipIf(process.platform === "win32").each(["docker", "podman"] as const)(
 );
 
 it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
-  "prepends the mounted Git shim after shell startup (requested PATH=%s)",
+  "prepares native Git from the mounted launcher before shell startup (requested PATH=%s)",
   async (requestedPath) => {
     provision();
     const cfg = resolveSandboxConfigForAgent();
     cfg.docker.workdir = tempDirs.make("sandbox-shell-workspace-");
+    const hostBin = tempDirs.make("sandbox-host-git-");
+    const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(hostBin)], {
+      encoding: "utf8",
+    });
+    expect(installed.status, installed.stderr).toBe(0);
+    expect(fs.statSync(hostBin).mode & 0o777).toBe(0o755);
     mocks.execContainerRaw.mockImplementationOnce(async (_engine, args) => {
-      const resolved = spawnSync("/bin/sh", ["-c", args[5]], { encoding: "buffer" });
+      // Translate the read-only resource mount into this transport fixture's host path.
+      const resolved = spawnSync(
+        "/bin/sh",
+        ["-c", args[5].replaceAll("/openclaw/git-tools", hostBin)],
+        { encoding: "buffer" },
+      );
       return { code: resolved.status, stdout: resolved.stdout, stderr: resolved.stderr };
     });
     const backend = await createDockerSandboxBackend(
@@ -526,7 +538,7 @@ it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
       }),
     );
     const spec = await backend.buildExecSpec({
-      command: 'printf "%s\\n" "$PATH"; mktemp -d "$TMPDIR/proof.XXXXXXXX"',
+      command: 'printf "%s\\n" "$PATH"; mktemp -d "$TMPDIR/proof.XXXXXXXX"; git --version',
       env: requestedPath ? { PATH: requestedPath } : {},
       usePty: false,
     });
@@ -543,13 +555,13 @@ it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
         encoding: "utf8",
       });
       expect(child.status).toBe(0);
-      const [toolPath, temporary] = child.stdout.trim().split("\n");
+      const [toolPath, temporary, gitVersion] = child.stdout.trim().split("\n");
       expect(path.dirname(temporary!)).toBe(path.join(cfg.docker.workdir, ".openclaw/tmp"));
-      expect(staged.OPENCLAW_AGENT_GIT_TARGET).toMatch(/^\//);
+      expect(gitVersion).toMatch(/^git version /);
       expect(staged.TMP).toBe(path.dirname(temporary!));
       expect(staged.TEMP).toBe(path.dirname(temporary!));
       expect(toolPath).toBe(
-        `/openclaw/git-tools:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
+        `${path.join(cfg.docker.workdir, ".openclaw/tmp/agent-git")}:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
       );
       expect(child.stderr).toBe("");
     } finally {

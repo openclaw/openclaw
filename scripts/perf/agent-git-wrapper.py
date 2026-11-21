@@ -1,7 +1,7 @@
-"""Git-wrapper A/A and A/B overhead; exported base/candidate shims and resolver required.
+"""Git-wrapper A/A and A/B overhead; base shim and prepared candidate launcher required.
 
 Run inside a Linux container with --network none --pids-limit 64. Arguments:
-  BASE_SHIM CANDIDATE_SHIM RESOLVER SCRATCH_DIR [ALLOCATION_PRELOAD]
+  BASE_SHIM CANDIDATE_SHIM SCRATCH_DIR [ALLOCATION_PRELOAD]
 The scratch directory must not exist. No production state is read.
 Acceptance: no per-call wall overhead increase; report CPU, allocation requests,
 and A/A spread separately. Allocation instrumentation is for single-threaded
@@ -17,17 +17,16 @@ import subprocess
 import sys
 import time
 
-base, candidate, resolver, scratch, *preload = sys.argv[1:]
+base, candidate, scratch, *preload = sys.argv[1:]
 root = Path(scratch).resolve()
 root.mkdir()
 rows = []
-env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'OPENCLAW_AGENT_GIT_'))}
+env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
 env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1',
            GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='gc.auto', GIT_CONFIG_VALUE_0='0',
            GIT_CONFIG_KEY_1='maintenance.auto', GIT_CONFIG_VALUE_1='false')
-native = subprocess.check_output(['/bin/sh', resolver], env=env, text=True).strip()
+native = shutil.which('git')
 assert native.startswith('/')
-env['OPENCLAW_AGENT_GIT_TARGET'] = native
 try:
     for arm, source in [('A', base), ('B', candidate)]:
         (root / arm).mkdir()

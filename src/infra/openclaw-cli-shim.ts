@@ -8,7 +8,7 @@ import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { runExec } from "../process/exec.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { AGENT_GIT_SHIM, RESOLVE_AGENT_GIT } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim.js";
 import { writeTextAtomic } from "./json-files.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -74,17 +74,8 @@ exec ${[command, ...args].map(quoteCliArg).join(" ")} "$@"
   gatewayAgentCliState.binDir = binDir;
   if (platform !== "win32") {
     const gitBinDir = path.join(resolveStateDir(env), AGENT_GIT_BIN_DIR);
-    const { stdout } = await runExec("/bin/sh", ["-c", RESOLVE_AGENT_GIT], { timeoutMs: 10_000 });
-    // Containers supply their own prepared target; host calls use this installation's binding.
-    const gitShim = AGENT_GIT_SHIM.replace(
-      "#!/bin/sh\n",
-      `#!/bin/sh\nOPENCLAW_AGENT_GIT_TARGET=\${OPENCLAW_AGENT_GIT_TARGET-${quoteCliArg(stdout.trim())}}\n`,
-    );
-    await writeTextAtomic(path.join(gitBinDir, "git"), gitShim, {
-      mode: 0o755,
-      dirMode: 0o755,
-      durable: false,
-      tempPrefix: "openclaw-agent-git",
+    await runExec("/bin/sh", ["-c", buildAgentGitShimInstallCommand(gitBinDir)], {
+      timeoutMs: 10_000,
     });
     gatewayAgentCliState.gitBinDir = gitBinDir;
   }

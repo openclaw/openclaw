@@ -8,7 +8,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { prepareLocalWorkspaceCheckout } from "../gateway/worker-environments/local-workspace-checkout.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AGENT_GIT_SHIM, RESOLVE_AGENT_GIT } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim.js";
 import {
   createSourceCliFixture,
   withSourceCliParent,
@@ -45,9 +45,6 @@ it.skipIf(process.platform === "win32")(
         ...Object.fromEntries(
           Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
         ),
-        OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
-          encoding: "utf8",
-        }).stdout.trim(),
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_AUTHOR_NAME: "Fixture",
@@ -85,7 +82,11 @@ it.skipIf(process.platform === "win32")(
       const tree = git(origin, "rev-parse", "HEAD^{tree}");
       const tool = await createGitExecTool(root, root);
       const shim = path.join(root, "git");
-      await fs.writeFile(shim, AGENT_GIT_SHIM, { mode: 0o755 });
+      const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(root)], {
+        env,
+        encoding: "utf8",
+      });
+      expect(installed.status, installed.stderr).toBe(0);
       const packedObjects = (cwd: string) =>
         Number(git(cwd, "count-objects", "-v").match(/in-pack: (\d+)/)?.[1]);
       const pythonCommands: [string, string, ...string[]][] = [
@@ -245,9 +246,6 @@ it.skipIf(process.platform === "win32")(
         ...Object.fromEntries(
           Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
         ),
-        OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
-          encoding: "utf8",
-        }).stdout.trim(),
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_AUTHOR_NAME: "Fixture",

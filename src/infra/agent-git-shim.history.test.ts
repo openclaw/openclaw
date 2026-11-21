@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AGENT_GIT_SHIM, RESOLVE_AGENT_GIT } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim.js";
 
 async function withHistoryFixture(
   run: (fixture: Awaited<ReturnType<typeof historyFixture>>) => Promise<void>,
@@ -20,9 +21,6 @@ async function historyFixture(
 ) {
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
-    OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
-      encoding: "utf8",
-    }).stdout.trim(),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_ALLOW_PROTOCOL: "file",
@@ -42,7 +40,11 @@ async function historyFixture(
   const seed = path.join(root, "seed");
   let file = "folder/history file.txt";
   const shim = path.join(root, "git");
-  await fs.writeFile(shim, AGENT_GIT_SHIM, { mode: 0o755 });
+  const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(root)], {
+    env,
+    encoding: "utf8",
+  });
+  expect(installed.status, installed.stderr).toBe(0);
   git(root, ["init", "--initial-branch=main", origin]);
   git(origin, ["config", "uploadpack.allowFilter", "true"]);
   let input = "";
@@ -250,25 +252,17 @@ it.skipIf(process.platform === "win32")(
       const bin = path.join(root, "failed-batch");
       await fs.mkdir(bin);
       const fetchLog = path.join(root, "failed-fetch.log");
-      await fs.writeFile(
-        path.join(bin, "git"),
-        `#!/bin/sh
-for arg do
-  if [ "$arg" = fetch ]; then
-    echo fetch >> "$OPENCLAW_FIXTURE_FETCH_LOG"
-    exit 1
-  fi
-done
-exec "$OPENCLAW_FIXTURE_GIT" "$@"
-`,
-        { mode: 0o755 },
-      );
-      const failed = await reader();
-      const failure = await failed.invoke(["log", "-p", "--", file], undefined, {
-        OPENCLAW_AGENT_GIT_TARGET: path.join(bin, "git"),
-        OPENCLAW_FIXTURE_GIT: path.join(git(root, ["--exec-path"]).trim(), "git"),
-        OPENCLAW_FIXTURE_FETCH_LOG: fetchLog,
+      const uploadPack = path.join(bin, "upload-pack");
+      await fs.writeFile(uploadPack, `#!/bin/sh\nprintf 'fetch\\n' >> "$1"\nexit 1\n`, {
+        mode: 0o755,
       });
+      const failed = await reader();
+      git(failed.base, [
+        "config",
+        "remote.origin.uploadpack",
+        `${quoteCliArg(uploadPack)} ${quoteCliArg(fetchLog)}`,
+      ]);
+      const failure = await failed.invoke(["log", "-p", "--", file]);
       expect(await fs.readFile(fetchLog, "utf8")).toBe("fetch\n");
       expect(await failed.newPacks()).toHaveLength(0);
       expect(await failed.requests()).toHaveLength(0);

@@ -12,15 +12,16 @@ The Docker backend runs tools locally through the `docker` CLI. Its selection an
 
 Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:trixie-slim`.
 
-The agent Git wrapper binds a native Git executable during preparation, using
-an absolute path resolved inside the container. Script shims and symlinks to
-script shims are skipped. Later workspace `PATH` changes cannot redirect the
-wrapper's Git calls. Nested entry into the wrapper exits with a recursion error
-instead of spawning another wrapper. Git credentials, identity, offline probes,
-and shared-history fetch behavior retain their existing contracts. This also
-applies to Podman; host execution resolves its own native Git during Gateway
-launcher preparation. If no native Git is installed, Git calls report an error
-without preventing other sandbox tools from running.
+The agent Git wrapper records a stable absolute native Git path when prepared.
+It validates the target with realpath and skips script shims and their symlink
+aliases. Calls use that stored path without searching PATH. Replacing Git behind
+a stable package-manager symlink keeps working; if the recorded path disappears,
+the wrapper repeats the same validation once to find an available native Git.
+Docker/Podman prepare their own launcher in writable temporary storage, including
+private persistent-execution containers. Host launchers are prepared at Gateway
+startup. Git credentials, egress, identity, and maintenance settings are unchanged.
+If no native Git is available, Git calls report an error; other sandbox tools
+remain available.
 
 Tmpfs mounts without an explicit `size=` option are capped at 1 GiB for `/tmp`,
 4 GiB for the managed dependency store at `/tmp/openclaw-deps`, and 256 MiB for

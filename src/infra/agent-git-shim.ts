@@ -1,36 +1,40 @@
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+
 export const AGENT_GIT_SANDBOX_BIN = "/openclaw/git-tools";
 
-/** Resolve only at preparation, in the filesystem where Git will execute. */
-export const RESOLVE_AGENT_GIT = `
+/** Validate native Git without pinning upgrade-managed symlinks to their current target. */
+const RESOLVE_AGENT_GIT = `
 remaining=$PATH
 while :; do
   entry=\${remaining%%:*}
-  candidate=$(command -p realpath -- "\${entry:-.}/git" 2>/dev/null) || candidate=
-  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-    # Accept native executables, never scripts (including symlinked copies of this shim).
-    magic=$(command -p od -An -tx1 -N4 "$candidate" 2>/dev/null)
-    set -- $magic
-    case "$*" in
-      '7f 45 4c 46'|'ce fa ed fe'|'cf fa ed fe'|'fe ed fa ce'|'fe ed fa cf'|'ca fe ba be'|'be ba fe ca'|'ca fe ba bf'|'bf ba fe ca')
-        printf '%s\\n' "$candidate"
-        exit 0 ;;
-    esac
+  case $entry in (/*) ;; (*) entry=$PWD/\${entry:-.} ;; esac
+  candidate=$entry/git
+  if [ "$entry" != "$wrapper_bin" ]; then
+    resolved=$(command -p realpath -- "$candidate" 2>/dev/null) || resolved=
+    if [ -f "$resolved" ] && [ -x "$resolved" ]; then
+      # Reject scripts and symlinks to wrappers without executing candidates.
+      magic=$(command -p od -An -tx1 -N4 "$resolved" 2>/dev/null)
+      set -- $magic
+      case "$*" in
+        ('7f 45 4c 46'|'ce fa ed fe'|'cf fa ed fe'|'fe ed fa ce'|'fe ed fa cf'|'ca fe ba be'|'be ba fe ca'|'ca fe ba bf'|'bf ba fe ca')
+          printf '%s\\n' "$candidate"
+          exit 0 ;;
+      esac
+    fi
   fi
-  case $remaining in *:*) remaining=\${remaining#*:} ;; *) exit 0 ;; esac
+  case $remaining in (*:*) remaining=\${remaining#*:} ;; (*) exit 0 ;; esac
 done
 `;
 
 /** A PATH tool contract: local probes, shared history, and partial-clone fetches/hydration. */
-export const AGENT_GIT_SHIM = `#!/bin/sh
-if [ -n "\${OPENCLAW_AGENT_GIT_ACTIVE:-}" ]; then
-  echo 'OpenClaw: recursive agent Git wrapper invocation refused.' >&2
-  exit 98
-fi
-export OPENCLAW_AGENT_GIT_ACTIVE=1
-git=\${OPENCLAW_AGENT_GIT_TARGET:-}
-if [ -z "$git" ]; then
-  echo 'OpenClaw: no native Git executable found during preparation. Install Git, then prepare the agent again.' >&2
-  exit 127
+const AGENT_GIT_SHIM = `
+if [ ! -x "$git" ]; then
+  wrapper_bin=\${0%/*}
+  git=$(${RESOLVE_AGENT_GIT})
+  if [ -z "$git" ]; then
+    echo 'OpenClaw: no native Git executable found. Install Git, then retry.' >&2
+    exit 127
+  fi
 fi
 is_probe() {
   prepare_history=
@@ -676,3 +680,29 @@ if [ "$result" -ne 0 ] && { [ "$result" -ne 1 ] || [ "$probe_kind" != ancestor ]
 fi
 exit "$result"
 `;
+
+/** Install in the filesystem where Git executes, including each private container. */
+export function buildAgentGitShimInstallCommand(binDir: string, source?: string): string {
+  return `set -e
+wrapper_bin=${quoteCliArg(binDir)}
+git=$(${RESOLVE_AGENT_GIT})
+mkdir -p -- "$wrapper_bin"
+temporary=$(mktemp "$wrapper_bin/git.XXXXXXXX")
+trap 'rm -f -- "$temporary"' 0
+{
+  printf '#!/bin/sh\\ngit="'
+  printf '%s' "$git" | command -p sed 's/[\\\\$\`"]/\\\\&/g'
+  printf '"\\n'
+  ${
+    source
+      ? `tail -n +3 ${quoteCliArg(source)}`
+      : `cat <<'AGENT_GIT_BODY'
+${AGENT_GIT_SHIM}
+AGENT_GIT_BODY`
+  }
+} > "$temporary"
+chmod 755 "$temporary" "$wrapper_bin"
+mv -f -- "$temporary" "$wrapper_bin/git"
+trap - 0
+`;
+}
