@@ -502,22 +502,28 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
 );
 
 it.each([
-  { version: "2026.9.7", ownsRun: true },
-  { version: "2026.9.8", ownsRun: true },
-  { version: "2026.9.33", ownsRun: true },
-  { version: "2026.9.34", ownsRun: true },
-  { version: "2026.9.37", ownsRun: true },
-  { version: "2026.9.37", ownsRun: false },
-  { version: "2026.10.33", ownsRun: true },
+  { version: "2026.9.7", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.8", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.33", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.34", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.37", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.37", ownsRun: true, profile: "restored" },
+  { version: "2026.9.37", ownsRun: false, profile: "fresh" },
+  { version: "2026.10.33", ownsRun: true, profile: "fresh" },
 ])(
-  "round-trips the $version capture through Doctor and unmarked rollback (ownsRun=$ownsRun)",
-  async ({ version, ownsRun }) => {
+  "round-trips the $version capture through Doctor and unmarked rollback (ownsRun=$ownsRun, profile=$profile)",
+  async ({ version, ownsRun, profile }) => {
     const { root, env, pathname } = fixture("source.sqlite", "SELECT 1;");
     const parent = readUpdateRunDriver(ownsRun ? process.pid : process.ppid);
     createUpdateRun({ trigger: "cli", before: { version }, origin: { driver: parent } }, { env });
     // The updater closes its ledger writer before handing the inventory to Doctor.
     await closeOpenClawStateDatabaseAsync();
     const shared = fs.realpathSync(resolveOpenClawStateSqlitePath(env));
+    if (profile === "restored") {
+      // The published updater restores a standalone rollback-journal image.
+      using restoredState = new DatabaseSync(shared);
+      restoredState.exec("PRAGMA journal_mode=DELETE");
+    }
     // Earlier parents can inspect a single store without requesting the shared ledger.
     const missing = path.join(root, "missing.sqlite");
     const paths =
@@ -541,6 +547,12 @@ it.each([
           )
         : readUpdateDatabaseGenerations(paths);
       const { receipt } = await withCapture(env, capture, async () => {
+        if (profile === "restored") {
+          await openOpenClawStateDatabaseForDoctor({ env });
+          // Agent maintenance needs a second writer while Doctor retains its state handle.
+          using leaseWriter = new DatabaseSync(shared, { timeout: 0 });
+          leaseWriter.exec("BEGIN IMMEDIATE; ROLLBACK");
+        }
         using db = new DatabaseSync(pathname);
         migrate(db, pathname);
       });
