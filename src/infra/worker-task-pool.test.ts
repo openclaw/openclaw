@@ -471,5 +471,7 @@ it("keeps SQLite worker diagnostics off the parent JSON stdout", async () => {
     },
   );
   expect(JSON.parse(stdout)).toEqual({ value: "ready" });
-  expect(stderr).toContain("[state/sqlite] SQLite read-only snapshot for synthetic.sqlite:");
+  expect(stderr).toMatch(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\S* \[state\/sqlite\] SQLite read-only snapshot for synthetic\.sqlite:/m,
+  );
 });

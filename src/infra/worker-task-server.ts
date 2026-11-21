@@ -160,6 +160,8 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
       initialize(port) {
         // Results use the host port; worker-local diagnostics must keep JSON stdout clean.
         loggingState.forceConsoleToStderr = true;
+        // The host relays worker stderr on its own event loop; stamp lines when the worker writes them.
+        loggingState.consoleTimestampPrefix = true;
         memoryPort = port;
       },
       onReady() {
