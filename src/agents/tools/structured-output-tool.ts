@@ -26,21 +26,29 @@ export function createStructuredOutputTool(params: {
   runId: string;
   schema: Record<string, unknown>;
   initialState?: SwarmStructuredOutputState;
-  onStateChange?: (state: SwarmStructuredOutputState) => void | Promise<void>;
+  onStateChange?: (
+    state: SwarmStructuredOutputState,
+  ) => "completed" | void | Promise<"completed" | void>;
 }): AnyAgentTool {
   const requestedSchema = JSON.stringify(params.schema);
   if (params.initialState && !states.has(params.runId)) {
     states.set(params.runId, params.initialState);
   }
   const commitState = async (next: SwarmStructuredOutputState) => {
+    let completed: boolean;
     try {
-      await params.onStateChange?.(next);
+      completed = (await params.onStateChange?.(next)) === "completed";
     } catch (error) {
       throw new ToolInputError(
         `Failed to persist structured_output: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    states.set(params.runId, next);
+    // A late result may already be frozen durably; do not repopulate its retired capture.
+    if (completed) {
+      states.delete(params.runId);
+    } else {
+      states.set(params.runId, next);
+    }
   };
   return {
     label: "Structured Output",
