@@ -6,6 +6,22 @@ This plugin is separate from the active memory plugin. The active memory plugin 
 
 When the active memory plugin exposes shared recall, agents can use `memory_search` with `corpus=all` to search durable memory and the compiled wiki in one pass, then fall back to `wiki_search` / `wiki_get` when wiki-specific ranking or provenance matters.
 
+## Search freshness
+
+Gateway-hosted `wiki_search` and `wiki.search` do not wait for source import or
+compilation. The plugin checks sources in the background on demand, shares the
+work with dashboard refreshes, and automatically rebuilds missing indexes when
+`ingest.autoCompile` is enabled. Successful checks are reused for one minute;
+failed checks retry automatically with backoff from five seconds up to one minute.
+Stopping the plugin cancels pending retries and joins active maintenance.
+
+Search uses the existing compiled metadata for candidate selection and reads live
+Markdown pages. With no compiled index it falls back to the existing local scan;
+results can therefore reflect individual imported pages before a new index is
+published. The search deadline still bounds that scan, without cancelling shared
+maintenance. Explicit imports and standalone CLI operations retain their awaited
+behavior, and `ingest.autoCompile: false` remains respected.
+
 ## Modes
 
 - `isolated`: own vault, own sources, no dependency on `memory-core`

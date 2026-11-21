@@ -1,11 +1,16 @@
 import os from "node:os";
 import path from "node:path";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
-import { syncMemoryWikiImportedSources } from "./source-sync.js";
+import {
+  createMemoryWikiSourceRefresh,
+  syncMemoryWikiImportedSources,
+  waitForMemoryWikiImportedSourceSyncs,
+} from "./source-sync.js";
 
 const { syncBridgeMock, syncUnsafeLocalMock, refreshIndexesMock } = vi.hoisted(() => ({
   syncBridgeMock: vi.fn(),
@@ -186,4 +191,65 @@ describe("syncMemoryWikiImportedSources", () => {
     resume();
     await first;
   });
+});
+
+it("retries failed background imports with backoff, coalesces demand, and stops with the service", async () => {
+  vi.useFakeTimers();
+  const service = createTestPluginServiceScheduler();
+  const onError = vi.fn();
+  const refresh = createMemoryWikiSourceRefresh({ scheduler: service, onError });
+  const config = createConfig();
+  const first = deferred();
+  const retried = deferred();
+  syncBridgeMock
+    .mockReset()
+    .mockImplementationOnce(async () => {
+      first.resolve();
+      throw new Error("temporarily unavailable");
+    })
+    .mockImplementationOnce(async () => {
+      retried.resolve();
+      return bridgeResult;
+    });
+  refreshIndexesMock.mockResolvedValue(refreshResult);
+  try {
+    refresh(config, appConfig);
+    await vi.advanceTimersByTimeAsync(0);
+    await first.promise;
+    await waitForMemoryWikiImportedSourceSyncs();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onError).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 8; i++) {
+      refresh(config, appConfig);
+    }
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(syncBridgeMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await retried.promise;
+    await waitForMemoryWikiImportedSourceSyncs();
+    await vi.advanceTimersByTimeAsync(0);
+    refresh(config, appConfig);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncBridgeMock).toHaveBeenCalledTimes(2);
+    // A later demand may retry again; shutdown must cancel that retry timer.
+    const failedAgain = deferred();
+    syncBridgeMock.mockImplementationOnce(async () => {
+      failedAgain.resolve();
+      throw new Error("offline");
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    refresh(config, appConfig);
+    await vi.advanceTimersByTimeAsync(0);
+    await failedAgain.promise;
+    await waitForMemoryWikiImportedSourceSyncs();
+    await vi.advanceTimersByTimeAsync(0);
+    service.beginClose();
+    await vi.advanceTimersByTimeAsync(120_000);
+    refresh(config, appConfig);
+    expect(syncBridgeMock).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    await service.stop();
+    vi.useRealTimers();
+  }
 });
