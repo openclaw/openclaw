@@ -76,7 +76,7 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   context: AgentBootstrapHookContext;
 };
 
-export type GatewayStartupHookContext = {
+type GatewayStartupHookContext = {
   cfg?: OpenClawConfig;
   deps?: CliDeps;
   workspaceDir?: string;

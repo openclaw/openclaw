@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isKnownInternalHookEventKey,
   type AgentBootstrapHookContext,
-  type GatewayStartupHookContext,
+  type GatewayStartupHookEvent,
   type InternalHookEvent,
 } from "./internal-hook-types.js";
 
@@ -89,7 +89,7 @@ describe("isGatewayStartupEvent", () => {
         sessionKey: "gateway:startup",
         context: {
           cfg: {},
-        } satisfies GatewayStartupHookContext,
+        } satisfies GatewayStartupHookEvent["context"],
         timestamp: new Date(0),
         messages: [],
       },
