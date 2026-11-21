@@ -1,7 +1,15 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginsReloadParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -13,6 +21,10 @@ import {
   metadataSnapshot,
   mockHostedOfficialCatalog,
 } from "./management-service.test-helpers.js";
+import {
+  rememberGatewayStartupPluginProtection,
+  rememberRetiredGitPluginInstall,
+} from "./retired-git-installs.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -125,6 +137,7 @@ describe("plugin management service", () => {
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
     mockHostedOfficialCatalog(mocks.officialCatalog, []);
+    rememberGatewayStartupPluginProtection({ configs: [], paths: [] });
   });
 
   it("projects third-party manifest recommendations into the cold management catalog", async () => {
@@ -518,5 +531,55 @@ describe("plugin management service", () => {
       "Plugin not found: ghost",
     );
     expect(mocks.commitRecords).not.toHaveBeenCalled();
+  });
+
+  it("keeps a startup-configured git checkout when reload drops that path", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reload-startup-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir, HOME: stateDir };
+    const repo = path.join(stateDir, "git", "git-old", "repo");
+    const executable = path.join(repo, "tool");
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(executable, "old");
+    const previousSnapshot = getRuntimeConfigSnapshot();
+    try {
+      expect(
+        await rememberRetiredGitPluginInstall({
+          pluginId: "discovered",
+          env,
+          removal: {
+            target: repo,
+            cleanup: { kind: "git", parentDir: path.dirname(repo) },
+          },
+        }),
+      ).toBe(true);
+      rememberGatewayStartupPluginProtection({
+        configs: [{ tools: { demo: { command: executable } } }],
+        paths: [],
+      });
+      setRuntimeConfigSnapshot({});
+      const metadata = metadataSnapshot({ enabled: true, id: "discovered", origin: "config" });
+      mocks.metadata.mockReturnValue(metadata);
+      mocks.readConfig.mockResolvedValue(configSnapshot({}));
+      mocks.readPersistedRecords.mockReturnValue({});
+      const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
+        request.assertInvokerOwned?.();
+        return { operationId: "reload", generation: 2, pluginIds: [...request.pluginIds] };
+      });
+      await reloadManagedPlugin({
+        plugins: [{ pluginId: "discovered" }],
+        env,
+        applyRuntime,
+      });
+      expect(mocks.applyUninstall).not.toHaveBeenCalled();
+      expect(fs.readFileSync(executable, "utf8")).toBe("old");
+    } finally {
+      rememberGatewayStartupPluginProtection({ configs: [], paths: [] });
+      if (previousSnapshot) {
+        setRuntimeConfigSnapshot(previousSnapshot);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });

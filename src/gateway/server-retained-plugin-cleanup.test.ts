@@ -16,6 +16,7 @@ import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "../plugins/plugin-lifecycle-lea
 import * as metadataState from "../plugins/plugin-metadata-state-worker.js";
 import * as captures from "../plugins/plugin-source-capture-directory.js";
 import { resolvePluginSourceCapturesDirectory } from "../plugins/plugin-source-capture-path.js";
+import { rememberRetiredGitPluginInstall } from "../plugins/retired-git-installs.js";
 import * as index from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import * as stateDb from "../state/openclaw-state-db.js";
@@ -127,6 +128,32 @@ function nativeCapture(stateDir: string, name: string) {
   fs.writeFileSync(file, `synthetic ${name}`);
   return { capture, file };
 }
+
+it(
+  "removes a retired git checkout when nothing else is retained",
+  withFixture(async ({ state, log }) => {
+    const repo = path.join(state.stateDir, "git", "git-old", "repo");
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, "kept.txt"), "old");
+    expect(
+      await rememberRetiredGitPluginInstall({
+        pluginId: "demo-slow",
+        env: state.env,
+        removal: {
+          target: repo,
+          cleanup: { kind: "git", parentDir: path.dirname(repo) },
+        },
+      }),
+    ).toBe(true);
+    await index.seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
+
+    await cleanup(log);
+
+    expect(fs.existsSync(repo)).toBe(false);
+    expect(log.info).toHaveBeenCalledWith("cleaned 1 retired git plugin checkout(s)");
+    expect(log.warn).not.toHaveBeenCalled();
+  }),
+);
 
 it(
   "leaves shared state and hot metadata untouched with only state captures",
