@@ -132,6 +132,37 @@
   color: var(--accent);
 }
 
+/* Flat peers share their actual icon column; grouped rows have their own indent. */
+.picker-select__options[role="listbox"]
+  > div:not(.picker-select__window):has(> .picker-select__option > .picker-select__leading):has(
+    > .picker-select__option > .picker-select__copy:first-child
+  ) {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: var(--space-2);
+
+  > .picker-select__option {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+  }
+
+  .picker-select__copy {
+    grid-column: 2;
+  }
+}
+
+/* Absolute model rows cannot subgrid. Their intrinsic sizer retains every icon
+   group, including the ones outside the rendered window. */
+.model-picker .picker-select__menu:has(> .picker-select__sizer .picker-select__leading) {
+  --picker-window-leading-inset: calc(var(--space-5) + var(--space-2));
+}
+
+.picker-select__sizer .picker-select__copy:first-child,
+.picker-select__option--windowed > .picker-select__copy:first-child {
+  margin-inline-start: var(--picker-window-leading-inset, 0px);
+}
+
 .picker-select__leading {
   display: inline-flex;
   align-items: center;
