@@ -94,7 +94,8 @@ async function resolveAuthorizedRepoRoot(
     opts.context.getRuntimeConfig(),
   );
   // A stored project row authorizes its canonical repo root for write-scoped clients.
-  const authorizedRoot = containment?.path ?? (await resolveRecordedProjectByRoot(repoRoot))?.repoRoot;
+  const authorizedRoot =
+    containment?.path ?? (await resolveRecordedProjectByRoot(repoRoot))?.repoRoot;
   if (authorizedRoot) {
     return authorizedRoot;
   }

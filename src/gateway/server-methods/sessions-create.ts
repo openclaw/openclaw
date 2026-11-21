@@ -310,14 +310,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     deviceFolderAuthority.assertCurrent = preparedFolder?.value.assertCurrent;
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
-    let requestedProjectId = normalizeOptionalString(p.projectId);
     const requestedProjectGitUrl = p.projectGitUrl;
     const projectPreparationError = validateSessionProjectPreparation({
       cwd: requestedCwd,
       execNode: requestedExecNode,
       gitUrl: requestedProjectGitUrl,
       hasInitialTurn,
-      projectId: requestedProjectId,
+      projectId: normalizeOptionalString(p.projectId),
     });
     if (projectPreparationError) {
       respond(false, undefined, projectPreparationError);
@@ -365,7 +364,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedProject.error);
       return;
     }
-    requestedProjectId = requestedProject.value.projectId;
     const projectRoot = requestedProject.value.root;
     if (requestedProject.value.worktree || requestedProjectGitUrl) {
       p.worktree = true;
@@ -389,7 +387,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             cfg,
             enforceSandboxContainment: Boolean(sessionCwd && !requestedExecNode),
             requestedExecNode,
-            requestedProjectId,
+            requestedProjectId: requestedProject.value.projectId,
             sessionCwd,
             sessionKey,
             targetAgentId: sessionAgentId,
@@ -516,7 +514,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       thinkingLevel: p.thinkingLevel,
       cyberAccessProgram: p.cyberAccessProgram,
       fastMode: p.fastMode,
-      projectId: requestedProjectId,
+      projectId: requestedProject.value.projectId,
       deviceFolder,
       pendingProjectGitUrl: normalizeSessionProjectGitUrl(requestedProjectGitUrl),
       incognito: p.incognito,
@@ -677,9 +675,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           branch: preparedWorktree.worktree.branch,
         }
       : undefined;
-    const responseEntry = sessionEntryForkedFromParent(created.entry)
-      ? { ...created.entry, forkedFromParent: true as const }
-      : created.entry;
     const freshSession = !created.resetExisting;
     const runStarted =
       freshSession &&
@@ -693,7 +688,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ok: true,
       key: created.key,
       sessionId: created.entry.sessionId,
-      entry: responseEntry,
+      entry: sessionEntryForkedFromParent(created.entry)
+        ? { ...created.entry, forkedFromParent: true as const }
+        : created.entry,
       runStarted,
       publicRead,
       ...(freshSession && runPayload ? runPayload : {}),

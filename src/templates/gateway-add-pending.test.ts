@@ -14,7 +14,6 @@ import { readTranscriptEventMessage } from "../config/sessions/session-accessor.
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveSessionWorkStartError } from "../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { deleteAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
 import { createDeletionCron } from "../gateway/server-methods/agents-delete.fixture.test-support.js";
 import { deleteGatewayAgent } from "../gateway/server-methods/agents-delete.js";
 import { completeAgentOnboarding } from "../gateway/server-methods/agents-onboarding.js";

@@ -242,7 +242,8 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         const active = params.sessions.get(params.sessionId) === params.session;
         if (corrective || !active) {
           await retireSystemAgentProposal(params.session, manager, correction.hash);
-          const notice = "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request.";
+          const notice =
+            "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request.";
           params.session.engine.noteAssistantMessage(notice);
           return { kind: "completed", reply: { ...reply, text: `${reply.text}\n\n${notice}` } };
         }

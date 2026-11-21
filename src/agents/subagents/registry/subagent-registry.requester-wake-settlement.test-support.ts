@@ -108,9 +108,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
     ).toBe("failed");
     expect(subagentRuns.get(child.runId)?.execution.outcome).toMatchObject({
       status: "error",
-      error: expect.stringContaining(
-        "no registered continuation can resume it",
-      ),
+      error: expect.stringContaining("no registered continuation can resume it"),
     });
     expect(getRequesterWakeCalls()).toHaveLength(1);
     expect(getRequesterWakeCalls()[0]?.params).toMatchObject({

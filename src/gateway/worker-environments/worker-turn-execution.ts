@@ -513,7 +513,7 @@ export async function executeWorkerTurn(
       }
       const persistInput = async () => {
         assertWorkerTurnInputAdmitted(connectionIdentity);
-        baseLeafId = await persistWorkerTurnInput({
+        return (baseLeafId = await persistWorkerTurnInput({
           ...inputContext,
           manager,
           media,
@@ -523,8 +523,7 @@ export async function executeWorkerTurn(
           userMessageAlreadyPersisted,
           baseLeafId,
           modelPromptProjection: promptContext.modelPromptProjection,
-        });
-        return baseLeafId;
+        }));
       };
       const admitTurn = createWorkerTurnInputAdmission({
         ...inputContext,
