@@ -53,6 +53,48 @@ const expectUploadFailure = (upload: TerminalPanelUpload, error: unknown) =>
     expect(upload.progress()).toMatchObject({ state: "failed", retryable: false, error }),
   );
 
+function pasteClipboardItems(items: { type: string; file?: File }[]) {
+  const base = createApplicationConfigCapability({ resourceBasePath: "" });
+  const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
+  const terminal = createTerminalController();
+  const tab = {
+    gatewaySessionId: "session-1",
+    shell: "/bin/zsh",
+    status: "live",
+    controller: terminal as unknown as GhosttyTerminalController,
+  };
+  const request = vi.fn();
+  let upload!: TerminalPanelUpload;
+  mountSolid(() => {
+    upload = createTerminalPanelUpload({
+      config: () => config,
+      activeTab: () => tab,
+      client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
+      isCurrent: (candidate) => candidate === tab,
+      fileInput: () => null,
+      setError: vi.fn(),
+    });
+    return null;
+  });
+  const paste = new Event("paste", { cancelable: true });
+  Object.defineProperty(paste, "clipboardData", {
+    value: {
+      items: items.map((item) => ({ type: item.type, getAsFile: () => item.file ?? null })),
+      getData: () => "",
+    },
+  });
+  upload.handlePaste(paste as ClipboardEvent);
+  return { upload, request, paste };
+}
+
+it("leaves text-only pastes on the native input path", () => {
+  const textFile = new File(["hello"], "hello.txt", { type: "text/plain" });
+  const { upload, request, paste } = pasteClipboardItems([{ type: textFile.type, file: textFile }]);
+  expect(paste.defaultPrevented).toBe(false);
+  expect(upload.progress()).toBeNull();
+  expect(request).not.toHaveBeenCalled();
+});
+
 afterEach(async () => {
   await i18n.setLocale("en");
 });

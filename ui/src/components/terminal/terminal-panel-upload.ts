@@ -129,6 +129,13 @@ export function createTerminalPanelUpload(host: {
     return Array.from(event.dataTransfer?.types ?? []).includes("Files");
   }
 
+  function pastedImageFiles(event: ClipboardEvent): File[] {
+    return Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+  }
+
   function admitDraggedFiles(event: DragEvent): boolean {
     if (!hasDraggedFiles(event)) {
       return false;
@@ -334,6 +341,17 @@ export function createTerminalPanelUpload(host: {
       }
       const files = Array.from(input.files ?? []);
       input.value = "";
+      uploadFiles(files);
+    },
+    handlePaste(event: ClipboardEvent): void {
+      const files = pastedImageFiles(event);
+      if (files.length === 0) {
+        return;
+      }
+      // Clipboard images are never command text: hand them to the upload owner
+      // (admission, quoting, attachment staging, explicit submit) instead of
+      // the native paste path, which would silently drop them.
+      event.preventDefault();
       uploadFiles(files);
     },
     handleDragEnter(event: DragEvent): void {
