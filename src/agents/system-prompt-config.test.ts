@@ -195,30 +195,42 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     { toolNames: ["exec", "openclaw"] },
     { toolNames: ["exec", "gateway", "openclaw"] },
     { toolNames: ["gateway", "openclaw"] },
-  ])(
-    "describes maintenance without forcing an update method with tools $toolNames",
-    async ({ toolNames }) => {
-      const config: OpenClawConfig = { commands: { restart: false } };
-      const prompts = [
-        await buildPrompt({ config, toolNames }),
-        buildAgentHarnessBasePrompt({ config, toolNames }),
-      ];
-      for (const prompt of prompts) {
-        expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
-        expect(prompt).not.toContain("perform the work with `gateway`");
-        expect(prompt).not.toContain("restart, config, channels");
-        expect(prompt).not.toContain("For an update request, use the Control UI");
-        expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
-        expect(prompt).toContain("Keep a working restart path before stopping");
-        expect(prompt).toContain(
-          "if runtime admission refuses, report the blocker and never bypass via `exec`",
-        );
-        expect(prompt.includes("`gateway` runs `update.run` (supervised restart)")).toBe(
-          toolNames.includes("gateway"),
-        );
-      }
-    },
-  );
+  ])("scopes the in-place Git update exception with tools $toolNames", async ({ toolNames }) => {
+    const config: OpenClawConfig = { commands: { restart: false } };
+    const prompts = [
+      await buildPrompt({ config, toolNames }),
+      buildAgentHarnessBasePrompt({ config, toolNames }),
+    ];
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
+      expect(prompt).not.toContain("perform the work with `gateway`");
+      expect(prompt).not.toContain("restart, config, channels");
+      expect(prompt).not.toContain("For an update request, use the Control UI");
+      expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+      expect(prompt).toContain("Use the built-in updater for standard installs.");
+      expect(prompt).toContain(
+        "For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure.",
+      );
+      expect(prompt).toContain(
+        "Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization.",
+      );
+      expect(prompt).toContain(
+        "If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing.",
+      );
+      expect(prompt).toContain(
+        "Shell access is not update authority. Change installation methods only on explicit operator request.",
+      );
+      expect(prompt).toContain("Keep a working restart path before stopping");
+      expect(prompt).toContain(
+        "if runtime admission refuses, report the blocker and never bypass via `exec`",
+      );
+      expect(
+        prompt.includes(
+          "`gateway`: use update.run only when the installation uses the built-in updater",
+        ),
+      ).toBe(toolNames.includes("gateway"));
+    }
+  });
 
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "keeps bounded local config recovery available with tools $toolNames",

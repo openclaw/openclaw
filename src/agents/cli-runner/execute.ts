@@ -13,6 +13,7 @@ import type { ImageContent } from "../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import {
   fingerprintCliRuntimeArtifact,
   resolveCliRuntimeOwnerFingerprint,
@@ -41,7 +42,6 @@ import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { resolveCliChildEnv } from "./execution-env.js";
-import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { readCliStreamRefusalOutput, recordCliStreamRefusalToolEffects } from "./exit-error.js";
 import {
   buildCliArgs,
@@ -92,23 +92,8 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
-  // A writer that replays history may put saved history in this prompt: a fresh recovery
-  // prompt, or durable reference context and interrupted inputs on a resumed turn.
-  const carriesSavedHistory = inputContext.cliHistoryWriter?.replaysHistory === true;
-  // Reuse the writer's run authority; each transport checks private history
-  // separately at its disclosure boundary.
-  const context = inputContext.cliHistoryWriter
-    ? {
-        ...inputContext,
-        params: {
-          ...inputContext.params,
-          assertCurrent: inputContext.cliHistoryWriter.assertCurrent,
-        },
-      }
-    : inputContext;
+  const context = inputContext;
   const params = context.params;
-  const assertCurrent = createCliRunCurrentAssertion(params);
-  assertCurrent();
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
   const localProcessEnv = installationTargetEnv(getInstallationTarget());
@@ -194,7 +179,6 @@ export async function executePreparedCliRun(
     const request = await context.beforeModelRequest(
       toCliModelRequestPayload(prompt, promptContext),
     );
-    assertCurrent();
     prompt = request.prompt;
     promptContext = readCliPromptContext(request);
   }
@@ -302,9 +286,7 @@ export async function executePreparedCliRun(
     }
   };
   const executeAttempt = async (): Promise<CliOutput> => {
-    assertCurrent();
     await context.preparedBackend.beforeExecution?.();
-    assertCurrent();
     if (!nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt) {
       systemPromptFile = await writeCliSystemPromptFile({
         backend,
@@ -380,8 +362,6 @@ export async function executePreparedCliRun(
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
       ];
-      // The history writer's native owner must be the one this final environment selects.
-      context.cliHistoryWriter?.bindExecutionEnv(env, carriesSavedHistory);
 
       let executionCommand = backend.command;
       let executionArgv0: string | undefined;
@@ -468,7 +448,6 @@ export async function executePreparedCliRun(
       }
       // Process supervision can add a scope wait after the CLI queue and backend setup.
       const resolveExecutionArgs = () => {
-        assertCurrent();
         const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
           config: params.config,
           agentId: params.agentId,
@@ -547,7 +526,6 @@ export async function executePreparedCliRun(
       }
       runOutput = await executeCliProcess({
         context,
-        assertCurrent,
         backend,
         events,
         toolTracking,
@@ -580,8 +558,6 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
-      // Attest a token the CLI rotated during the run before any of its rows commit.
-      await context.cliHistoryWriter?.settleNativeLogin();
       await toolTracking.finishDeliveryTracking({
         useManagedClaudeLiveSession,
         recordRunError,
@@ -628,7 +604,15 @@ export async function executePreparedCliRun(
       `cli:${queueKey}`,
       () => {
         const runQueuedAttempt = async () => {
-          assertCurrent();
+          params.assertCurrent?.();
+          const assertAdmitted = resolveAdmittedRunActiveAssertion(
+            params.admittedRunContext,
+            params.abortSignal,
+          );
+          if (!assertAdmitted) {
+            throw new Error("CLI run admission is closed");
+          }
+          assertAdmitted();
           if (params.lifecycleGeneration) {
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
           }

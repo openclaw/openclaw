@@ -51,6 +51,7 @@ import type {
 } from "./chat-sidebar-content-types.ts";
 
 export { downloadSessionFile };
+export { checkFileLinkAvailability } from "./chat-file-link-availability.ts";
 
 type WorkspaceFileOptions = {
   requestPath: string;
