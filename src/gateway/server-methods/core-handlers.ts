@@ -98,6 +98,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "plugins-mutations": () =>
     import("./plugins-mutations.js").then((module) => module.pluginMutationHandlers),
   projects: () => import("./projects.js").then((module) => module.projectsHandlers),
+  "projects-session-move": () =>
+    import("./projects-session-move.js").then((module) => module.projectsSessionMoveHandlers),
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () => import("./migrations.js").then((module) => module.migrationsHandlers),

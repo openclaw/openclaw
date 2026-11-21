@@ -199,6 +199,7 @@ export async function prepareCodexAttemptContext(
       skillsInstructions,
       workspaceBootstrapContext.sharedPersonaInstructions,
       workspaceBootstrapContext.memoryInstructions,
+      workspaceBootstrapContext.sessionProjectGuidance,
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {

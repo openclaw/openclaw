@@ -53,6 +53,7 @@ import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation
 import { resolveSessionProjectRootForRecord } from "../session-project-source.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveExplicitSessionName } from "../session-title-state.js";
+import { applyUnsavedWork, deleteCarryRef } from "../session-workspace-carry.js";
 import {
   prepareSessionWorktree,
   resolveSessionWorktreeBase,
@@ -487,6 +488,12 @@ export async function prepareSessionWorkspaceForRun(params: {
         saved = { ...saved, ...updated };
         pending = next;
       }
+      // A moved conversation brings its checkout work and keeps its earlier files readable.
+      const { carried, prior } = pending;
+      const priorWorkspace = (prepared: { worktree?: { id: string } }) =>
+        prior && prepared.worktree
+          ? { ...prior, worktreeId: prepared.worktree.id, sessionId: entry.sessionId }
+          : undefined;
       // Retries inherit workspace intent, not a previous caller's setup authority.
       const result = await prepareSessionWorktree({
         cfg,
@@ -516,28 +523,34 @@ export async function prepareSessionWorkspaceForRun(params: {
                 : "creating_worktree",
           ),
         acceptedSource: pending.source,
-        onPromptReady: params.onPromptReady
-          ? async (promptWorkspace) => {
-              // Keep pending intent authoritative until the complete checkout
-              // is published. These path facts let only this admitted turn
-              // initialize its prompt in the final execution directory.
-              const bound = await commitPreparedSessionWorkspace({
-                prepared: promptWorkspace,
-                signal,
-                target,
-                projectId: project?.id,
-                assertCurrent: assertRunOwnership,
-                assertEntry: assertSavedWorkspaceIntent,
-                missingSessionMessage:
-                  "Session disappeared while preparing its workspace; start a new session.",
-              });
-              // Subsequent Git effects must accept the project binding this
-              // preparation just published, while retaining its pending intent.
-              saved = { ...saved, ...bound };
-              Object.assign(entry, bound);
-              params.onPromptReady?.();
-            }
+        prepareCheckout: carried
+          ? (worktreePath, guard) => applyUnsavedWork(carried.work, worktreePath, guard)
           : undefined,
+        // A carried checkout's prompt includes the restored files.
+        onPromptReady:
+          params.onPromptReady && !carried
+            ? async (promptWorkspace) => {
+                // Keep pending intent authoritative until the complete checkout
+                // is published. These path facts let only this admitted turn
+                // initialize its prompt in the final execution directory.
+                const bound = await commitPreparedSessionWorkspace({
+                  prepared: promptWorkspace,
+                  signal,
+                  target,
+                  projectId: project?.id,
+                  priorWorkspace: priorWorkspace(promptWorkspace),
+                  assertCurrent: assertRunOwnership,
+                  assertEntry: assertSavedWorkspaceIntent,
+                  missingSessionMessage:
+                    "Session disappeared while preparing its workspace; start a new session.",
+                });
+                // Subsequent Git effects must accept the project binding this
+                // preparation just published, while retaining its pending intent.
+                saved = { ...saved, ...bound };
+                Object.assign(entry, bound);
+                params.onPromptReady?.();
+              }
+            : undefined,
       });
       if (!result.ok) {
         throw new Error(result.error.message);
@@ -547,6 +560,7 @@ export async function prepareSessionWorkspaceForRun(params: {
         signal,
         target,
         projectId: project?.id,
+        priorWorkspace: priorWorkspace(result.value),
         assertCurrent: assertRunOwnership,
         assertEntry: assertSavedWorkspaceIntent,
         clearPendingIntent: true,
@@ -558,6 +572,9 @@ export async function prepareSessionWorkspaceForRun(params: {
       Object.assign(entry, bound);
       delete entry.pendingProjectGitUrl;
       delete entry.pendingWorktree;
+      if (carried) {
+        await deleteCarryRef(directory, carried.ref);
+      }
       assertRunOwnership();
       emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
     });
