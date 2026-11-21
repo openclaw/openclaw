@@ -1,7 +1,9 @@
 // Gateway lifecycle readiness tests distinguish healthy, still-starting, and failed outcomes.
+import { createServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { defaultRuntime } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { requireMockCallArg, type RestartParams } from "./lifecycle.test-helpers.js";
 import { createDaemonActionContext } from "./response.js";
@@ -112,6 +114,77 @@ describe("Gateway service readiness", () => {
     expect(waitForGatewayHttpReadiness).toHaveBeenCalledWith(
       expect.objectContaining({ attempts, delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS }),
     );
+  });
+
+  it("settles start when the managed service is stopped before HTTP readiness", async () => {
+    mockProcessPlatform("win32");
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected the loopback server to reserve a TCP port.");
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    const port = address.port;
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", String(port)],
+      environment: {},
+    });
+    readCliConfig.mockResolvedValue({ gateway: { port } });
+    const { waitForGatewayHttpReadiness: waitForRealHttpReadiness } =
+      await vi.importActual<typeof import("./restart-health.js")>("./restart-health.js");
+    waitForGatewayHttpReadiness.mockImplementation(waitForRealHttpReadiness);
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((exitCode) => {
+      throw new Error(`exit ${exitCode}`);
+    });
+    runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+      await postStartCheck({
+        ...createDaemonActionContext({ action: "start", json: true }),
+        json: true,
+      });
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "stopped" },
+      portUsage: { port, status: "free", listeners: [], hints: [] },
+      waitOutcome: "stopped-free",
+      elapsedMs: 90_000,
+    });
+
+    const work = new AsyncWorkScope();
+    const startPromise = work.track(() => runDaemonStart({ json: true }));
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        startPromise.then(
+          () => ({ kind: "resolved" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timeoutTimer = setTimeout(() => resolve({ kind: "timeout" }), 1_000);
+        }),
+      ]);
+      if (outcome.kind === "timeout") {
+        work.beginClose(new Error("Managed start did not settle after stopped-free health."));
+      }
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind === "rejected") {
+        expect(outcome.error).toMatchObject({ message: "exit 1" });
+      }
+      expect(writeJson).toHaveBeenCalledWith(expect.objectContaining({ ok: false, action: "start" }));
+    } finally {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
+      await work.drain();
+    }
   });
 
   it.each([
