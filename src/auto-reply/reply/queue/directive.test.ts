@@ -9,11 +9,9 @@ it.each(["How does /queue work?", "Explain /queue behavior please"])(
 );
 
 it("retains strict native errors and valid directives", () => {
-  expect(extractQueueDirective("/queue work?", { strict: true })).toMatchObject({
-    hasDirective: true,
-    rawMode: "work?",
-    queueMode: undefined,
-  });
+  const strict = extractQueueDirective("/queue work?", { strict: true });
+  expect(strict).toMatchObject({ hasDirective: true, rawMode: "work?" });
+  expect(strict.queueMode).toBeUndefined();
   expect(extractQueueDirective("/queue: backlog")).toMatchObject({ hasDirective: true });
   expect(extractQueueDirective("/queue collect")).toMatchObject({
     hasDirective: true,
