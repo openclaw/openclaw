@@ -891,11 +891,17 @@ suite.define(() => {
         const sidebarUpdate = sidebar.locator(
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
-        const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
+        const automationDot = sidebar.locator(".sidebar-rail .sidebar-automations__failed");
         await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
+        await automationDot.waitFor();
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
-        await expect.poll(() => sidebarAutomation.count()).toBe(1);
+        expect(
+          await sidebar
+            .locator("#sidebar-issues-panel")
+            .getByText("Release digest", { exact: true })
+            .count(),
+        ).toBe(0);
         await sidebar.locator(".sidebar-issues-button").click();
 
         await page.setViewportSize({ height: 852, width: 393 });
@@ -920,7 +926,13 @@ suite.define(() => {
           .toContain("shell--nav-drawer-open");
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
-        await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
+        await automationDot.waitFor();
+        expect(
+          await sidebar
+            .locator("#sidebar-issues-panel")
+            .getByText("Release digest", { exact: true })
+            .count(),
+        ).toBe(0);
 
         expect(floatingKinds).toEqual([]);
       },

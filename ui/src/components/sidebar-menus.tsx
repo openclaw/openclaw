@@ -8,6 +8,7 @@ import {
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -636,7 +637,16 @@ export function createSidebarMenus(deps: {
       routeId: NavigationRouteId,
       view: SidebarRouteView,
       triggerRef?: (element: HTMLAnchorElement) => void,
+      options?: { rail: boolean },
     ): JSX.Element {
+      const failure =
+        options?.rail && routeId === "cron"
+          ? projectOwner(
+              useApplication().sidebarAttention,
+              (attention) => attention.hasFailedAutomation,
+              Object.is,
+            )
+          : undefined;
       const sessionTarget = createMemo(() => {
         const routeSessionKey = isSessionRouteId(routeId) ? view.getRouteSessionKey() : "";
         const context = view.sessionDataContext;
@@ -654,6 +664,7 @@ export function createSidebarMenus(deps: {
       const link = (
         <SidebarNavLink
           ref={triggerRef}
+          indicator={failure?.read() ? t("nav.automationFailure") : undefined}
           icon={<Icon name={navigationIconForRoute(routeId)} filled={active()} />}
           label={titleForRoute(routeId, t)}
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}

@@ -10,8 +10,6 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "outbox",
-  "cronFailed",
-  "cronOverdue",
   "modelAuthExpired",
   "openClawIdKeys",
   "openClawIdRequest",
@@ -159,7 +157,7 @@ export function isSidebarAttentionDismissed(
 export function reconcileSidebarAttentionDismissals(params: {
   active: readonly SidebarAttentionDismissal[];
   key: string | null;
-  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
+  scope?: { modelAuthAgentId: string };
 }): SidebarAttentionDismissals {
   const dismissals = loadDismissals(params.key);
   const active = params.active;
@@ -182,19 +180,12 @@ export function reconcileSidebarAttentionDismissals(params: {
       if (kind === "openClawIdRecoveryUse") {
         return true;
       }
-      // Selected-agent responses are partial: they may re-arm their own auth
-      // warning, but only an all-agent cron inventory may re-arm cron entries.
+      // A selected-agent response can only re-arm its own auth warnings.
       const authoritative =
         !scope ||
-        (kind === "modelAuthExpired"
-          ? Boolean(
-              scope.modelAuthAgentId &&
-              (!signature.startsWith("agent:") ||
-                signature.startsWith(`agent:${scope.modelAuthAgentId}\n`)),
-            )
-          : kind === "cronFailed" || kind === "cronOverdue"
-            ? scope.cronInventoryComplete
-            : true);
+        kind !== "modelAuthExpired" ||
+        !signature.startsWith("agent:") ||
+        signature.startsWith(`agent:${scope.modelAuthAgentId}\n`);
       return (
         !authoritative ||
         active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature)

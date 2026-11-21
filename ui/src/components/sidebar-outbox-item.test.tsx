@@ -42,6 +42,7 @@ it.each([
     basePath: "/team",
     navigate,
     sidebarAttention: {
+      hasFailedAutomation: false,
       get entries() {
         return entries;
       },

@@ -1,12 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
-import {
-  createSidebarCustomizationSuite,
-  sidebarCronJob,
-} from "./sidebar-customization.test-support.ts";
+import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI Inbox opening latency");
 
@@ -28,7 +24,7 @@ async function expectInboxOnNextFrame(page: Page, populated: boolean) {
                 style?.visibility === "visible" &&
                 style.opacity === "1",
               ),
-              hasItem: Boolean(panel?.querySelector('[data-attention-kind="cronFailed"]')),
+              hasItem: Boolean(panel?.querySelector('[data-attention-kind="modelAuthExpired"]')),
               hasSkeleton: Boolean(panel?.querySelector('[class*="skeleton"]')),
             });
           });
@@ -52,30 +48,23 @@ suite.define(() => {
         viewport: { width: 1440, height: 900 },
       },
       async ({ page }) => {
-        const jobs = populated
-          ? [sidebarCronJob({ id: "inbox-latency-job", name: "Daily report" })]
-          : [];
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "sessions.list": chatSessionListResponse(),
-            "cron.list": {
-              jobs: jobs.map(compactCronJobFixture),
-              snapshotRevision: "inbox-latency",
-              total: jobs.length,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
+            "models.authStatus": {
+              ts: 1,
+              providers: populated
+                ? [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }]
+                : [],
             },
-            "models.authStatus": { ts: 1, providers: [] },
           },
         });
         await page.goto(`${suite.server.baseUrl}new`);
-        await gateway.waitForRequest("cron.list");
+        await gateway.waitForRequest("models.authStatus");
         const button = page.locator(".sidebar-issues-button");
         const emptyOrItem = page.locator(
           populated
-            ? '#sidebar-issues-panel [data-attention-kind="cronFailed"]'
+            ? '#sidebar-issues-panel [data-attention-kind="modelAuthExpired"]'
             : ".sidebar-issues-panel__empty",
         );
         await button.waitFor();
