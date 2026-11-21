@@ -28,12 +28,6 @@ extension ChatSessionSidebarModel {
         return key == "main" ? "agent:main:main" : key
     }
 
-    static func isSidebarRun(_ key: String) -> Bool {
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let parts = key.split(separator: ":")
-        return key.hasPrefix("subagent:") || (parts.count >= 4 && parts[0] == "agent" && parts[2] == "subagent")
-    }
-
     static func sidebarTree(
         roots: [OpenClawChatSessionEntry],
         rows: [OpenClawChatSessionEntry],

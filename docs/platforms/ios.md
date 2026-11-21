@@ -247,6 +247,12 @@ to find their transcripts; sidebar search also includes matching automation sess
 Archived and snoozed chats stay out of the sidebar even when pinned or selected;
 their open conversations stay open. Saved pins are preserved.
 
+Subagent runs do not get their own sidebar rows. A run's status and unread state
+show on the conversation that started it, including **Home**, and any chats the
+run starts appear in its place. **Mark as Read** on that conversation also clears
+its unread runs. Sidebar search still lists matching runs. The recent-session
+limit counts only top-level chats.
+
 Long-press an eligible session and choose **Snooze**:
 **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, only when more than
 one hour away), **Tomorrow** (09:00 on the next calendar day), or **Next week**

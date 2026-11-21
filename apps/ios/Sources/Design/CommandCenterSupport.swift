@@ -86,6 +86,8 @@ struct CommandSessionActionsModifier: ViewModifier {
     let canArchive: Bool
     let canDelete: Bool
     let archivesSession: () -> Bool
+    /// Keys Mark as Read clears; a sidebar row adds the runs folded into it.
+    let unreadSessionKeys: [String]?
     let performMutation: (String?, @escaping Mutation) -> Void
     let fork: () -> Void
 
@@ -120,12 +122,16 @@ struct CommandSessionActionsModifier: ViewModifier {
                         self.snoozeMenu
                     }
                     self.actionButton(
-                        self.session.unread == true
-                            ? OpenClawTextValue.localized("Mark as Read")
-                            : OpenClawTextValue.localized("Mark as Unread"),
-                        systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
+                        self.unreadKeys.isEmpty
+                            ? OpenClawTextValue.localized("Mark as Unread")
+                            : OpenClawTextValue.localized("Mark as Read"),
+                        systemImage: self.unreadKeys.isEmpty ? "envelope.badge" : "envelope.open")
                     {
-                        self.patch(unread: self.session.unread != true)
+                        if self.unreadKeys.isEmpty {
+                            self.patch(unread: true)
+                        } else {
+                            self.markRead(self.unreadKeys)
+                        }
                     }
                     self.actionButton("Rename…", systemImage: "pencil") {
                         self.beginRename()
@@ -211,6 +217,26 @@ struct CommandSessionActionsModifier: ViewModifier {
                 pinned: pinned,
                 archived: archived,
                 unread: unread)
+        }
+    }
+
+    private var unreadKeys: [String] {
+        self.unreadSessionKeys ?? (self.session.unread == true ? [self.session.key] : [])
+    }
+
+    private func markRead(_ keys: [String]) {
+        self.performMutation(nil) { transport in
+            for key in keys {
+                try await transport.patchSession(
+                    key: key,
+                    expectedSessionID: nil,
+                    label: nil,
+                    category: nil,
+                    color: nil,
+                    pinned: nil,
+                    archived: nil,
+                    unread: false)
+            }
         }
     }
 
@@ -375,6 +401,7 @@ extension View {
         canArchive: Bool = true,
         canDelete: Bool = true,
         archivesSession: @escaping () -> Bool = { true },
+        unreadSessionKeys: [String]? = nil,
         performMutation: @escaping (String?, @escaping CommandSessionActionsModifier.Mutation) -> Void,
         fork: @escaping () -> Void) -> some View
     {
@@ -387,6 +414,7 @@ extension View {
             canArchive: canArchive,
             canDelete: canDelete,
             archivesSession: archivesSession,
+            unreadSessionKeys: unreadSessionKeys,
             performMutation: performMutation,
             fork: fork))
     }
