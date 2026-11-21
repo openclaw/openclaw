@@ -147,6 +147,8 @@ export const OpenClawSchemaShape = {
       executablePath: z.string().optional(),
       /** Local managed browsers default to headless; false requests a visible window. */
       headless: z.boolean().optional(),
+      /** Opt-in user-agent compatibility for local headless Chromium. Default: native. */
+      headlessUserAgent: z.enum(["native", "chrome"]).optional(),
       /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
       noSandbox: z.boolean().optional(),
       /** If true: never launch; only attach to an existing browser. Default: false */
@@ -188,6 +190,8 @@ export const OpenClawSchemaShape = {
                 .optional(),
               /** If true, launch this profile in headless mode. Falls back to browser.headless. */
               headless: z.boolean().optional(),
+              /** Override browser.headlessUserAgent for this local managed profile. */
+              headlessUserAgent: z.enum(["native", "chrome"]).optional(),
               /** Browser executable path for this profile. Falls back to browser.executablePath. */
               executablePath: z.string().optional(),
               /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
@@ -243,6 +247,7 @@ export const OpenClawSchemaShape = {
                 "mcpCommand",
                 "mcpArgs",
                 "headless",
+                "headlessUserAgent",
                 "executablePath",
               ] as const) {
                 if (value[key] !== undefined) {

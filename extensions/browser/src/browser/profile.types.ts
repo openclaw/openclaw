@@ -17,6 +17,7 @@ export type ResolvedBrowserProfile = {
   driver: "openclaw" | "existing-session" | "extension";
   executablePath?: string;
   headless: boolean;
+  headlessUserAgent?: "native" | "chrome";
   headlessSource?: "profile" | "config" | "default";
   attachOnly: boolean;
 };

@@ -115,6 +115,12 @@ For the full key index and the other top-level config domains, see [Configuratio
   Chrome and another in Brave.
 - Managed browsers are headless by default. Explicit global or per-profile
   `headless: false` keeps headed mode; externally owned browsers are unchanged.
+- `headlessUserAgent` is `"native"` by default. Set `"chrome"` globally or on a
+  local managed profile to replace the native `HeadlessChrome` user-agent marker
+  with `Chrome`, retaining the browser's detected platform and version. It has no
+  effect on headed or externally owned browsers. Explicit `--user-agent` entries
+  in `extraArgs` take precedence. See [profile behavior](/tools/browser/configuration#profile-behavior)
+  for limitations and restart instructions.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary → installed Playwright browser cache.
   Cache discovery selects full Chromium only. On Linux and macOS, use an explicit
   per-profile `executablePath` for headless shell and keep it in a separate profile;

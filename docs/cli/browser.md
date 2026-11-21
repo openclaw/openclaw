@@ -90,6 +90,29 @@ openclaw browser --browser-profile openclaw reset-profile
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
 - Local managed profiles run headless by default on every platform. `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser; Linux then needs `DISPLAY` or `WAYLAND_DISPLAY`. Externally owned browsers keep their current mode.
 
+## Headless user-agent compatibility
+
+For a site that fails only in headless mode, opt in to the normal Chrome product
+marker without maintaining a fixed browser-version string:
+
+```bash
+openclaw config set browser.headlessUserAgent chrome
+openclaw browser stop
+openclaw browser start --headless
+```
+
+For a browser launched by this runtime, `openclaw browser status` reports the
+applied `headlessUserAgent` mode; a config edit alone is not proof it is active.
+
+The default is `native`. Use `openclaw config set browser.headlessUserAgent native`
+and restart the browser to restore it. An existing named profile can override the
+global choice with `browser.profiles.<name>.headlessUserAgent`.
+
+This changes the user-agent only for locally launched headless Chromium. It does
+not make every browser-identification signal equivalent to visible Chrome or
+guarantee access to a site. See [profile behavior](/tools/browser/configuration#profile-behavior)
+for precedence, launch cost, and Client Hints limitations.
+
 ## If the command is missing
 
 If `openclaw browser` is an unknown command, check `plugins.allow` in `~/.openclaw/openclaw.json`. When `plugins.allow` is present, list the bundled browser plugin explicitly unless the config already has a root `browser` block:

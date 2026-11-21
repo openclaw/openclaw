@@ -354,6 +354,8 @@ export type RunningChrome = {
   proc: ChildProcess;
   headless?: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
+  /** Native-UA normalization applied to this owned process, not desired config. */
+  headlessUserAgent?: "native" | "chrome";
   graphicsDiagnostics?: BrowserGraphicsDiagnostics;
   graphicsDiagnosticsPending?: Promise<BrowserGraphicsDiagnostics>;
 };
@@ -605,8 +607,14 @@ async function launchOpenClawChromeLocked(
   const localStatePath = path.join(userDataDir, "Local State");
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
   const profileIsNew = !(await canAccess(localStatePath));
+  const needsUserAgentProbe =
+    headlessMode.headless &&
+    profile.headlessUserAgent === "chrome" &&
+    !resolved.extraArgs.some((arg) => arg === "--user-agent" || arg.startsWith("--user-agent="));
   const needsBootstrap =
-    !headlessMode.headless && (profileIsNew || !(await canAccess(preferencesPath)));
+    needsUserAgentProbe ||
+    (!headlessMode.headless && (profileIsNew || !(await canAccess(preferencesPath))));
+  let headlessUserAgent: string | undefined;
   // Never change the encryption key source for an established profile: doing
   // so would make its existing cookies unreadable. New headless profiles opt in.
   const useMockKeychain =
@@ -615,7 +623,7 @@ async function launchOpenClawChromeLocked(
       (profileIsNew && headlessMode.headless));
 
   // Headless profiles are seeded directly; headed profiles retain Chrome's first-run bootstrap.
-  const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
+  const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void, userAgentProbe = false) => {
     signal?.throwIfAborted();
     const platform = headlessOptions.platform ?? process.platform;
     const spawnHeadlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, headlessOptions);
@@ -653,6 +661,13 @@ async function launchOpenClawChromeLocked(
     }
     if (resolved.extraArgs.length > 0) {
       args.push(...resolved.extraArgs);
+    }
+    if (userAgentProbe) {
+      // Discover the native UA without restoring tabs or issuing page requests.
+      args.push("--no-startup-window");
+    } else if (spawnHeadlessMode.headless && headlessUserAgent) {
+      // A launch-wide override covers first requests, popups, and subframes too.
+      args.push(`--user-agent=${headlessUserAgent}`);
     }
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
@@ -701,7 +716,11 @@ async function launchOpenClawChromeLocked(
     }
   };
 
-  const runningForProcess = (proc: ChildProcess, pid: number): RunningChrome => ({
+  const runningForProcess = (
+    proc: ChildProcess,
+    pid: number,
+    userAgentMode: "native" | "chrome" = headlessUserAgent ? "chrome" : "native",
+  ): RunningChrome => ({
     pid,
     exe,
     userDataDir,
@@ -709,19 +728,46 @@ async function launchOpenClawChromeLocked(
     proc,
     headless: headlessMode.headless,
     headlessSource: headlessMode.source,
+    headlessUserAgent: userAgentMode,
   });
 
   if (needsBootstrap) {
-    const { pid: bootstrapPid, proc: bootstrap, releaseAbort } = await spawnOnce();
+    const {
+      pid: bootstrapPid,
+      proc: bootstrap,
+      releaseAbort,
+    } = await spawnOnce(undefined, needsUserAgentProbe);
     let bootstrapError: Error | undefined;
     try {
-      const deadline = performance.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
+      const deadline =
+        performance.now() +
+        (needsUserAgentProbe ? resolved.localLaunchTimeoutMs : CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS);
       while (performance.now() < deadline) {
         signal?.throwIfAborted();
-        if ((await canAccess(localStatePath)) && (await canAccess(preferencesPath))) {
+        if (needsUserAgentProbe) {
+          if (bootstrap.exitCode != null || bootstrap.signalCode != null) {
+            throw new Error("Managed Chrome exited while discovering its native user-agent.");
+          }
+          const version = await fetchChromeVersion(
+            profile.cdpUrl,
+            MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+            undefined,
+            signal,
+          );
+          const nativeUserAgent = normalizeOptionalString(version?.["User-Agent"]);
+          if (nativeUserAgent) {
+            headlessUserAgent = nativeUserAgent.replace(/\bHeadlessChrome\//g, "Chrome/");
+            break;
+          }
+        } else if ((await canAccess(localStatePath)) && (await canAccess(preferencesPath))) {
           break;
         }
         await waitForManagedLaunchPoll(CHROME_BOOTSTRAP_PREFS_POLL_MS, signal);
+      }
+      if (needsUserAgentProbe && !headlessUserAgent) {
+        throw new Error(
+          "Could not discover Chrome's native user-agent. Retry, or set headlessUserAgent to native.",
+        );
       }
     } catch (err) {
       bootstrapError =
@@ -735,7 +781,7 @@ async function launchOpenClawChromeLocked(
     if (!exited) {
       throw new ManagedChromeCleanupError(
         `Managed Chrome bootstrap ${bootstrapPid} survived cleanup.`,
-        runningForProcess(bootstrap, bootstrapPid),
+        runningForProcess(bootstrap, bootstrapPid, "native"),
       );
     }
     if (bootstrapError) {

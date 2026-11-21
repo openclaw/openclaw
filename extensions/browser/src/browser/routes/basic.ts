@@ -191,6 +191,7 @@ async function buildBrowserStatus(
     color: profileCtx.profile.color,
     headless: headlessMode.headless,
     headlessSource: headlessMode.source,
+    headlessUserAgent: running?.headlessUserAgent,
     noSandbox: current.resolved.noSandbox,
     executablePath: profileCtx.profile.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,

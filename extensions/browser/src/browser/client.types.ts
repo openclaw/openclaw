@@ -111,6 +111,8 @@ export type BrowserStatus = {
   color: string;
   headless: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
+  /** Applied native-UA normalization; absent for browsers not launched by this runtime. */
+  headlessUserAgent?: "native" | "chrome";
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;

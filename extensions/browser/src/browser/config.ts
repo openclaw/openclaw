@@ -320,6 +320,7 @@ export function resolveBrowserConfig(
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
     headless: cfg?.headless ?? true,
+    headlessUserAgent: cfg?.headlessUserAgent ?? "native",
     headlessSource: typeof cfg?.headless === "boolean" ? "config" : "default",
     noSandbox: cfg?.noSandbox === true,
     attachOnly: cfg?.attachOnly === true,
@@ -474,6 +475,7 @@ export function resolveProfile(
         ? false
         : headless,
     headlessSource,
+    headlessUserAgent: profile.headlessUserAgent ?? resolved.headlessUserAgent ?? "native",
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }

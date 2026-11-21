@@ -106,6 +106,7 @@ describe("browser config", () => {
     { mcpArgs: [] },
     { executablePath: "/usr/bin/chromium" },
     { headless: false },
+    { headlessUserAgent: "chrome" },
   ])("rejects incompatible Lightpanda runtime config without schema validation: %j", (invalid) => {
     expect(() =>
       resolveRequiredProfile(
@@ -369,6 +370,18 @@ describe("browser config", () => {
     [{ attachOnly: true }, {}, { attachOnly: true }],
     [{ attachOnly: false }, { attachOnly: true }, { attachOnly: true }],
     [{ headless: true }, {}, { headless: true }],
+    [{}, {}, { headlessUserAgent: "native" }],
+    [{ headlessUserAgent: "chrome" }, {}, { headlessUserAgent: "chrome" }],
+    [
+      { headlessUserAgent: "chrome" },
+      { headlessUserAgent: "native" },
+      { headlessUserAgent: "native" },
+    ],
+    [
+      { headlessUserAgent: "native" },
+      { headlessUserAgent: "chrome" },
+      { headlessUserAgent: "chrome" },
+    ],
     [{ headless: false }, { headless: true }, { headless: true }],
     [{ headless: true }, { headless: false }, { headless: false }],
     [

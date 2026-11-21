@@ -13,6 +13,7 @@ describe.each(["lightpanda", "kitesurf"] as const)("%s browser engine config", (
     ["attachOnly", undefined],
     ["driver", "extension"],
     ["userDataDir", "/tmp/chrome-profile"],
+    ["headlessUserAgent", "chrome"],
   ])("rejects incompatible external engine %s=%s", (key, value) => {
     const result = OpenClawSchemaShape.browser.safeParse({
       profiles: { lightweight: { ...externalProfile, engine, [key as string]: value } },
@@ -37,4 +38,18 @@ describe.each(["lightpanda", "kitesurf"] as const)("%s browser engine config", (
       expect(result.error.issues[0]?.message).toContain("dedicated CDP endpoint");
     }
   });
+});
+
+// The persisted config boundary must accept the opt-in while rejecting typos.
+it.each([
+  ["native", true],
+  ["chrome", true],
+  ["automatic", false],
+])("validates headless user-agent mode %s", (headlessUserAgent, success) => {
+  for (const browser of [
+    { headlessUserAgent },
+    { profiles: { work: { cdpPort: 18801, headlessUserAgent } } },
+  ]) {
+    expect(OpenClawSchemaShape.browser.safeParse(browser).success).toBe(success);
+  }
 });

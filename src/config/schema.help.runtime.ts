@@ -14,6 +14,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use an absolute stable path, or a path starting with ~ for your OS home directory, so launch behavior stays predictable across restarts.",
   "browser.headless":
     "Local managed browsers run headless by default. Set false for a visible browser window. Existing-session, extension, remote, and attach-only browsers keep their externally selected mode.",
+  "browser.headlessUserAgent":
+    'User-agent compatibility for locally launched headless Chromium: "native" (default) keeps Chromium’s user-agent; "chrome" replaces its HeadlessChrome product marker with Chrome while retaining the detected version and platform. Restart the browser after changing this. Explicit --user-agent launch arguments take precedence. Does not make all browser-identification signals equivalent to visible Chrome.',
   "browser.noSandbox":
     "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
   "browser.attachOnly":
@@ -40,6 +42,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Per-profile browser executable path for locally launched managed browser profiles. Overrides browser.executablePath and accepts paths starting with ~ for the OS home directory.",
   "browser.profiles.*.headless":
     "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
+  "browser.profiles.*.headlessUserAgent":
+    'Per-profile override of browser.headlessUserAgent: "native" or "chrome". Applies only when OpenClaw launches this profile headless; external and attach-only browsers are unchanged.',
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.evaluateEnabled":
