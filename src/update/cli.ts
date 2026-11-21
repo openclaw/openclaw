@@ -3,6 +3,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
@@ -87,7 +88,7 @@ async function requestGatewayUpdate(target?: {
   }
 }
 
-/** The Gateway restarts during a run; transport errors until the deadline are expected. */
+/** The Gateway restarts during a run; until the deadline, its unavailability is expected. */
 async function followRun(runId: string, json: boolean): Promise<UpdateRunRecord | undefined> {
   const deadline = Date.now() + RUN_DEADLINE_MS;
   let lastLine = "";
@@ -103,7 +104,13 @@ async function followRun(runId: string, json: boolean): Promise<UpdateRunRecord 
           })
         ).run ?? undefined;
     } catch (error) {
-      if (!isGatewayTransportError(error)) {
+      // A draining or starting Gateway refuses with a retryable UNAVAILABLE error, not a closed socket.
+      const restarting =
+        isGatewayTransportError(error) ||
+        (error instanceof GatewayClientRequestError &&
+          error.retryable &&
+          error.gatewayCode === "UNAVAILABLE");
+      if (!restarting) {
         throw error;
       }
     }
