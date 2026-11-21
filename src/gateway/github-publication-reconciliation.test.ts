@@ -358,6 +358,16 @@ it.each([
       recoveryLookup = false,
       unavailableLookups = 0;
     let acceptedWrites: string[] = [];
+    const recover = async (requestId: string, restarted = f.restart()) => {
+      readbackAvailable = true;
+      await restarted.resumeSessionRequests();
+      expect(f.externalWrites).toEqual(acceptedWrites);
+      expect(await restarted.readAsync(requestId)).toMatchObject(
+        published(first.url, pullRequest.headSha),
+      );
+      expect(await restarted.readAsync(first.requestId)).toEqual(first);
+      return restarted;
+    };
     const hostScans = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
     let recoveryScanStart = 0;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -465,7 +475,6 @@ it.each([
         head_commit: pullRequest.headSha,
       });
       expect(pullRequest.body).not.toContain(`<!-- openclaw-publication:${requestId} -->`);
-      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
       acceptedWrites = [...f.externalWrites];
       // Closing the known PR cannot undo an accepted update.
       if (backend === "local") {
@@ -476,14 +485,7 @@ it.each([
       }
       if (authorized && mode !== "interrupted-authorized-open") {
         if (!f.local) {
-          readbackAvailable = true;
-          const restarted = f.restart();
-          await restarted.resumeSessionRequests();
-          expect(f.externalWrites).toEqual(acceptedWrites);
-          expect(await restarted.readAsync(requestId)).toMatchObject(
-            published(first.url, pullRequest.headSha),
-          );
-          expect(await restarted.readAsync(first.requestId)).toEqual(first);
+          await recover(requestId);
           return;
         }
         const { cwd, git } = f.local;
@@ -519,15 +521,8 @@ it.each([
             fs.readFile(path.join(cwd, "untracked.txt")),
           ]);
         const saved = await snapshot();
-        readbackAvailable = true;
-        const restarted = f.restart();
-        await restarted.resumeSessionRequests();
-        expect(f.externalWrites).toEqual(acceptedWrites);
-        expect(await restarted.readAsync(requestId)).toMatchObject(
-          published(first.url, pullRequest.headSha),
-        );
+        const restarted = await recover(requestId);
         expect(await snapshot()).toEqual(saved);
-        expect(await restarted.readAsync(first.requestId)).toEqual(first);
         const next = await restarted.requestForSessionV2(f.request("explicit-new-pr", f.guest));
         expect(next).toMatchObject(
           published(first.url.replace(/\d+$/u, "125201"), await git("rev-parse", "HEAD")),
@@ -574,10 +569,7 @@ it.each([
           unavailableRead.mockRestore();
         }
       }
-      await restarted.resumeSessionRequests();
-      expect(await restarted.readAsync(requestId)).toMatchObject(
-        published(first.url, pullRequest.headSha),
-      );
+      await recover(requestId, restarted);
       if (backend === "local") {
         expect(f.readReceipt(requestId)?.base_branch).toBe("review/continuation");
       }
@@ -592,7 +584,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "recovers a new PR after closure without selecting the old PR (publisher changed: %s)",
+  "recovers a new PR after closure through the next publish (publisher changed: %s)",
   async (publisherChanged) => {
     const { f, first, pullRequest, transport } = await prepareExistingPullRequest("local");
     pullRequest.state = "closed";
@@ -663,10 +655,18 @@ it.each([false, true])(
     })!;
     expect(nextPullRequest?.body).toContain(`<!-- openclaw-publication:${request.request_id} -->`);
     const acceptedWrites = [...f.externalWrites];
+    const restarted = f.restart();
+    const retry = () => restarted.requestForSessionV2(f.request("after-restart", f.maintainer));
+    await expect(retry()).rejects.toThrow(
+      `github_publish({"action":"readiness","requestId":"${request.request_id}"})`,
+    );
+    expect(f.externalWrites).toEqual(acceptedWrites);
     await f.revoke();
     readbackAvailable = true;
-    const restarted = f.restart();
-    await restarted.resumeSessionRequests();
+    expect(await retry()).toMatchObject({
+      requestId: request.request_id,
+      ...published(nextUrl, acceptedHead),
+    });
     expect(await restarted.readAsync(request.request_id)).toMatchObject(
       published(nextUrl, acceptedHead),
     );

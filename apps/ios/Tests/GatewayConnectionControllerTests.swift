@@ -1307,9 +1307,10 @@ private func pendingHandoffDiagnostic(
             role: "node",
             token: "legacy-share-token",
             profile: .shareExtension)
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "unproven-field-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
         saveActiveManualGateway(
             host: "gateway.example.com",
             port: 443,
@@ -1374,9 +1375,10 @@ private func pendingHandoffDiagnostic(
             deviceId: primaryIdentity.deviceId,
             role: "operator",
             token: "legacy-operator-without-shared-auth")
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "unproven-field-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
         saveActiveManualGateway(
             host: "pair-again.example.com",
             port: 443,

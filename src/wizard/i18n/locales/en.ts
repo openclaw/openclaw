@@ -343,11 +343,11 @@ export const en = {
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
       quickstartBackground: "To keep the Gateway running in the background later: {command}",
       quickstartReopen:
-        "Run openclaw to open the TUI, or openclaw dashboard to reopen the web dashboard.",
+        "Run {tuiCommand} to open the TUI, or {dashboardCommand} to reopen the web dashboard.",
       quickstartBrowserUnavailable:
         "The browser handoff did not finish. The Gateway is still running; open the dashboard when you are ready.",
       quickstartGatewayPending:
-        "The Gateway is not reachable yet. Keep this terminal open and run openclaw gateway status to check startup.",
+        "The Gateway is not reachable yet. Keep this terminal open and run {statusCommand} to check startup.",
       accessFullHint:
         "I find AI apps and keys on this machine; you choose which connection to test.",
       accessFullLabel: "Full access — find everything automatically",
@@ -411,7 +411,7 @@ export const en = {
       nextSteps:
         "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw setup` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
       nextStepsWithoutAi:
-        "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
+        "Workspace: {workspace}\nAdd AI later: re-run `{onboardCommand}`\nAfter AI connects, add a channel: `{channelsCommand}`\nOpen the dashboard: `{dashboardCommand}`",
       nextStepsTitle: "Next steps",
       noInferenceOptions:
         "No inference option is available yet. Sign in to Claude Code or Codex, or configure an API-key provider, then run onboarding again.",
@@ -1137,6 +1137,8 @@ export const en = {
     channelsPrimer: {
       approveWith: "Approve with: {command}",
       docs: "Docs: {link}",
+      credentialStorage:
+        "Entering a supported credential saves it in the shared secret store. If you run the CLI while the Gateway is running, this requires local Gateway admin access. Without that access, use an existing secret reference where supported, or stop the Gateway before entering the credential.",
       inboundSafety:
         "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
       multiUserDm:

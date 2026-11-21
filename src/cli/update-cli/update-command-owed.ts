@@ -16,12 +16,14 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { CLI_NAME } from "../cli-name.js";
+import { formatCliCommand } from "../command-format.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   listOwedPluginSteps,
   pluginPhaseConverged,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins-internals.js";
+import { recordServiceReconciliationWarning } from "./update-command-result.js";
 import {
   inspectManagedGatewayServiceBeforeUpdate,
   readGatewayServiceStateForUpdate,
@@ -53,6 +55,23 @@ export function recordOwedUpdateStep(run: OwedRun | undefined, step: OwedStep): 
     }
     return false;
   }
+}
+
+/** The update keeps its result; the service definition refresh it could not make is owed. */
+export function oweServiceDefinitionRefresh(
+  run: OwedRun | undefined,
+  result: UpdateRunResult,
+  serviceEnv: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+  failure?: string,
+): void {
+  const warning =
+    `Gateway service still points outside the updated install ${result.root}. ` +
+    (failure ? `Automatic service staging failed: ${failure}. ` : "") +
+    `Run \`${formatCliCommand("openclaw gateway install --force", serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", serviceEnv)}\`.`;
+  recordServiceReconciliationWarning(result, serviceEnv, warning);
+  assertCurrent();
+  recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
 }
 
 /** Reports an owed step in the command result. A recorded row already carries its warning. */

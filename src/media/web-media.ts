@@ -36,6 +36,7 @@ import {
   HOST_READ_DECLARED_TEXT_ERROR,
   type HostReadHtmlTrust,
 } from "./host-read-media-policy.js";
+import { readImageMetadataFromHeader } from "./image-header-metadata.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import { createImageProcessorWithPixelLimits } from "./image-processor.js";
@@ -53,7 +54,6 @@ import { MediaReferenceError, resolveInboundMediaReference } from "./media-refer
 import {
   createImageProcessor,
   isAnimatedWebpBuffer,
-  readImageMetadataFromHeader,
   readImageProbeFromHeader,
   type ImageMetadata,
 } from "./media-services.js";

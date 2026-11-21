@@ -216,14 +216,13 @@ it.each(promptUpdateCases)(
         toolNames,
         runtimeInfo: { channel },
       });
-      const guidance = expectDefined(
-        prompt.split("\n").find((line) => line.startsWith("This Gateway:")),
-        "hosting Gateway guidance",
-      );
       const action = expectDefined(
-        guidance.match(/`gateway` runs `([\w.]+)`/u)?.[1],
-        "prompt-advertised update action",
+        prompt.match(
+          /`gateway`: use ([\w.]+) only when the installation uses the built-in updater/u,
+        )?.[1],
+        "prompt-advertised built-in update action",
       );
+      expect(action).toBe("update.run");
       const result = await tool.execute("update", {
         action,
         requesterSenderId: "model-supplied-sender",

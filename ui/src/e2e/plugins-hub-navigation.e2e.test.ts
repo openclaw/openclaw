@@ -160,24 +160,43 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   }[active];
   const header = page.locator(".plugins-hub-header");
   expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
-  // The phone's floating header carries the title, leaving it for assistive tech.
+  const compactWorkshop =
+    active === "skill-workshop" &&
+    (await page.evaluate(
+      () =>
+        matchMedia(
+          "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+        ).matches,
+    ));
+  // Compact headers keep the heading available to assistive technology.
   const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
-  await expect
-    .poll(() =>
-      header.evaluate((element) => {
-        const title = element.querySelector(".page-title")?.getBoundingClientRect();
-        return title ? title.width > 1 && title.height > 1 : null;
-      }),
-    )
-    .toBe(!floatingHeader);
+  if (!compactWorkshop) {
+    await expect
+      .poll(() =>
+        header.evaluate((element) => {
+          const title = element.querySelector(".page-title")?.getBoundingClientRect();
+          return title ? title.width > 1 && title.height > 1 : null;
+        }),
+      )
+      .toBe(!floatingHeader);
+  }
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
-  expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
-    expected.docs,
-  );
+  if (compactWorkshop) {
+    const learningMenu = page.getByRole("button", { name: "Skill Workshop learning mode" });
+    await learningMenu.click();
+    expect(await page.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
+      expected.docs,
+    );
+    await learningMenu.click();
+  } else {
+    expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
+      expected.docs,
+    );
+  }
 }
 
-async function installButtonPresentation(page: Page) {
-  const button = page.getByRole("button", { name: /^Install /u }).first();
+async function buttonPresentation(page: Page, name: RegExp) {
+  const button = page.getByRole("button", { name }).first();
   await button.waitFor({ state: "visible" });
   return button.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -231,7 +250,7 @@ function customizeSidebar(page: Page, mobile: boolean) {
 }
 
 suite.define(() => {
-  it("keeps model-provider video capabilities discoverable in Media across pagination", async () => {
+  it("finds installed video providers in Media search and paginates uninstalled entries", async () => {
     const context = await createContext({ width: 1200, height: 928 });
     const page = await context.newPage();
     const local: PluginsListResult = {
@@ -327,7 +346,7 @@ suite.define(() => {
       all: { items: [fal, novita, zai], categories: discoveryCategories.categories },
       models: { items: [novita, zai] },
       media: { items: [fal, novita, zai], nextCursor: "media-page-two" },
-      nextMedia: { items: [publishedNovita] },
+      nextMedia: { items: [fal, publishedNovita] },
     } satisfies Record<string, PluginsCatalogBrowseResult>;
     const gateway = await installMockGateway(page, {
       featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
@@ -356,6 +375,16 @@ suite.define(() => {
           }))
           .toEqual({ selected: "true", names: names.toSorted() });
       };
+      await expect
+        .poll(async () => ({
+          models: await page
+            .locator('[data-catalog-section="models"] .plugin-catalog-card')
+            .count(),
+          media: await page.locator('[data-catalog-section="media"] .plugin-catalog-card').count(),
+        }))
+        .toEqual({ models: 0, media: 1 });
+      await page.getByRole("searchbox", { name: "Search plugins", exact: true }).fill("video");
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "video" } });
       if (captureUiProof) {
         await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.beforeModels);
         await chips.getByRole("button", { name: "Models", exact: true }).click();
@@ -370,12 +399,7 @@ suite.define(() => {
         await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.all);
         await chips.getByRole("button", { name: "All", exact: true }).click();
       }
-      await expect
-        .poll(() => page.locator('[data-catalog-section="models"] .plugin-catalog-card').count())
-        .toBe(2);
-      await expect
-        .poll(() => page.locator('[data-catalog-section="media"] .plugin-catalog-card').count())
-        .toBe(3);
+      await expectFilteredCards("All", ["fal", "Novita", "Z.AI"]);
       if (captureUiProof) {
         const priorModels = (
           await gateway.getRequests("plugins.catalog.browse", { category: "models" })
@@ -403,6 +427,15 @@ suite.define(() => {
         expect(await cards.filter({ hasText: name }).count()).toBe(1);
       }
       await captureScreenshot(page, "media-discovery-after.png");
+      const priorBrowse = (
+        await gateway.getRequests("plugins.catalog.browse", { category: "media" })
+      ).length;
+      await page.getByRole("searchbox", { name: "Search plugins", exact: true }).fill("");
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        after: priorBrowse,
+        match: { category: "media" },
+      });
+      await expectFilteredCards("Media", ["fal"]);
       await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.nextMedia);
       await page.getByRole("button", { name: "Load more", exact: true }).click();
       await gateway.waitForRequest("plugins.catalog.browse", {
@@ -411,8 +444,9 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Load more", exact: true }).count())
         .toBe(0);
-      expect(await cards.count()).toBe(3);
-      expect(await cards.filter({ hasText: "Novita" }).count()).toBe(1);
+      expect(await cards.count()).toBe(1);
+      expect(await cards.filter({ hasText: "fal" }).count()).toBe(1);
+      expect(await cards.filter({ hasText: "Novita" }).count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -527,7 +561,7 @@ suite.define(() => {
         await expectHeaderCopy(page, "plugins");
         // The Customize sidebar replaces the hub's tabs.
         expect(await page.getByRole("tab").count()).toBe(0);
-        const pluginInstallPresentation = await installButtonPresentation(page);
+        const pluginInstallPresentation = await buttonPresentation(page, /^Install /u);
         const mobile = viewport.width <= 900;
         const customize = customizeSidebar(page, mobile);
 
@@ -535,7 +569,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
-        expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
+        expect(await buttonPresentation(page, /^Add /u)).toEqual(pluginInstallPresentation);
         await captureScreenshot(page, `${label}-02-skills.png`);
 
         await customize.open("Skill workshop");

@@ -699,12 +699,21 @@ describe("Gateway owner lease", () => {
           "fixture:state-file",
         );
 
+        expect(readGatewayOwnerLease({ env: state.env })?.externalRestartReceipt).toBeUndefined();
+        await lock?.publishExternalRestartReceipt?.();
+        const first = readGatewayOwnerLease({ env: state.env })?.externalRestartReceipt;
+        expect(first).toEqual(expect.any(String));
         lock?.markListening?.();
-
-        expect(readGatewayOwnerLease({ env: state.env, current: true })).toMatchObject({
+        const listening = readGatewayOwnerLease({ env: state.env, current: true });
+        expect(listening).toMatchObject({
+          externalRestartReceipt: first,
           listeningAt: expect.any(Number),
           stateDatabaseProvenance: "fixture:state-file",
         });
+        await lock?.publishExternalRestartReceipt?.();
+        const next = await readGatewayOwnerLeaseAsync({ env: state.env });
+        expect(next?.externalRestartReceipt).not.toBe(first);
+        expect(next).toEqual({ ...listening, externalRestartReceipt: expect.any(String) });
       } finally {
         await lock?.release();
       }
@@ -1023,6 +1032,8 @@ describe("Gateway owner lease", () => {
     );
     expect(() => lease.markListening()).toThrow("owner changed before listening publication");
     expect(readGatewayOwnerLease({ env })?.listeningAt).toBeUndefined();
+    await expect(lease.publishExternalRestartReceipt()).rejects.toThrow();
+    expect(readGatewayOwnerLease({ env })?.externalRestartReceipt).toBeUndefined();
     await lease.release();
     expect(readGatewayOwnerLease({ env })?.owner).toBe("replacement");
   });

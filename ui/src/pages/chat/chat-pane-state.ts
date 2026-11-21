@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
@@ -22,6 +23,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
+registerChatComposerEnglish();
 
 export function createSessionObservationRefresh(
   sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
@@ -259,6 +261,7 @@ export function chatSubmitState(
   state: ChatState & Pick<ChatPageHost, "handleChatDraftChange" | "sessionsResult">,
   unavailable: boolean,
   nativeChat: boolean,
+  session?: GatewaySessionRow,
 ) {
   const historyLoad = getChatHistoryLoadState(state);
   const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
@@ -268,6 +271,7 @@ export function chatSubmitState(
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
   const routePending = state.isRouteSessionPending?.() === true;
+  const workspaceRemoved = session?.worktreeState && session.worktreeState !== "ready";
   return {
     initialSubmission:
       nativeChat &&
@@ -276,9 +280,13 @@ export function chatSubmitState(
         state.chatSubmissions?.readInitial(state.sessionKey, state.client, state.currentSessionId),
       ),
     goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
-    ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
-    submitDisabledReason:
-      pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    ...(workspaceRemoved || routePending || (connectionPendingReason && !controlCommand)
+      ? { canSend: false }
+      : {}),
+    submitDisabledReason: workspaceRemoved
+      ? t("chat.composer.workspaceRemoved")
+      : (pendingReason ??
+        (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null)),
     submitPending:
       routePending || pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {

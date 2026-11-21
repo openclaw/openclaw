@@ -5913,6 +5913,12 @@ jobs:
               export IOS_DEST="generic/platform=iOS Simulator"
             fi
           fi
+          export OPENCLAW_CI_SIMSLIM_BINARY=""
+          if [[ -n "${IOS_SIMULATOR_ID:-}" && -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            export OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim"
+          fi
           python3 - <<'PY'
           import os
           import signal
@@ -5931,11 +5937,8 @@ jobs:
                   if os.environ.get("IOS_SIMULATOR_ID"):
                       preparation = subprocess.Popen(["/bin/bash", "-euo", "pipefail", "-c", '''
           xcrun simctl bootstatus "$IOS_SIMULATOR_ID" -b
-          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
-            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
-            ./scripts/install-simslim.sh "$simslim_dir"
-            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
-              ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
+          if [[ -n "$OPENCLAW_CI_SIMSLIM_BINARY" ]]; then
+            ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
           fi
           '''], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                   if os.environ["HISTORICAL_TARGET"] != "true" and (

@@ -6,6 +6,7 @@ import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-a
 import { withoutRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -19,6 +20,11 @@ import { withSessionControllerOwner } from "../../sessions/session-controller.co
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
+import {
+  sanitizeSessionRunError,
+  truncateSessionRunError,
+} from "../../sessions/session-run-error-format.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
@@ -451,6 +457,46 @@ export function createFollowupRunner(
       }
       activitySummaryCompletion?.release();
       const sourceDisposition = (admittedTurn?.queued ?? queued).queuedFollowupReplyDisposition;
+      if (withheld && completion.kind === "failed" && queued.run.scheduledAutomation) {
+        const runId =
+          admittedTurn?.runId ??
+          queued.sourceTurnId ??
+          queued.messageId ??
+          `${queued.run.sessionId}:${queued.enqueuedAt}`;
+        const sessionKey = queued.run.sessionKey;
+        const outcomes = await Promise.allSettled([
+          queued.run.scheduledAutomation.deliveryAttemptFence?.recordWithheld?.({
+            runId,
+            sessionKey,
+            error: completion.error,
+          }),
+          sessionKey && queued.run.sessionId
+            ? recordGatewaySessionRunFailure({
+                target: {
+                  agentId: queued.run.agentId,
+                  sessionKey,
+                  sessionId: queued.run.sessionId,
+                  storePath:
+                    queued.controllerInput?.target?.storeScope ??
+                    defaults.storePath ??
+                    resolveSessionStorePathCore(queued.run.config.session?.store, {
+                      agentId: queued.run.agentId,
+                    }),
+                },
+                runId,
+                error: completion.error,
+                notice: `withheld: ${truncateSessionRunError(sanitizeSessionRunError(completion.error), 512)}`,
+              })
+            : undefined,
+        ]);
+        for (const outcome of outcomes) {
+          if (outcome.status === "rejected") {
+            defaultRuntime.error?.(
+              `followup queue: withheld outcome recording failed: ${formatErrorMessage(outcome.reason)}`,
+            );
+          }
+        }
+      }
       if (
         disposition.kind === "consumed" &&
         (admittedTurn || withheld) &&
