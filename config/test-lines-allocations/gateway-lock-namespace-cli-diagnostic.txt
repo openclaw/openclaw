@@ -1,0 +1,2 @@
+# Covers the CLI startup diagnostic for an unverified Gateway owner.
+14
