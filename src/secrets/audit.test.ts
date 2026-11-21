@@ -258,6 +258,25 @@ describe("secrets audit", () => {
     expectFinding(report, { code: "PLAINTEXT_FOUND" });
   });
 
+  it("classifies gateway auth tokens with the supported SecretRef contract", async () => {
+    await writeConfig({
+      gateway: { auth: { mode: "token", token: "synthetic-plaintext-gateway-token" } },
+    }); // pragma: allowlist secret
+    const plaintext = await audit();
+    expectFinding(plaintext, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "gateway.auth.token",
+    });
+    expect(plaintext.summary.plaintextCount).toBe(1);
+
+    // env/file/exec/store refs are supported sources; a missing DPAPI backend is not a gap.
+    await writeConfig({ gateway: { auth: { mode: "token", token: ENV_REF } } });
+    const reference = await audit();
+    expectFinding(reference, { code: "PLAINTEXT_FOUND", jsonPath: "gateway.auth.token" }, false);
+    expect(reference.summary.plaintextCount).toBe(0);
+    expect(reference.summary.unresolvedRefCount).toBe(0);
+  });
+
   it("audits inactive Talk speech and realtime provider references independently", async () => {
     const providerSelection = (missingKey: string) => ({
       provider: "openai",

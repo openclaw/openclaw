@@ -607,6 +607,7 @@ server.listen(port, "127.0.0.1", () => {
       expect(() => parseOptions(args)).toThrow(error);
     }
     for (const flag of [
+      "--config",
       "--cpu-prof-dir",
       "--heap-prof-dir",
       "--log-file",
@@ -647,6 +648,67 @@ server.listen(port, "127.0.0.1", () => {
     ]) {
       expect(() => parseOptions(args)).toThrow();
     }
+  });
+
+  it("measures one caller-provided config and rejects ambiguous overrides", () => {
+    const root = tempDirs.make("openclaw-bench-custom-config-");
+    const inputDir = path.join(root, "input");
+    const outputDir = path.join(root, "output");
+    fs.mkdirSync(inputDir, { recursive: true });
+    fs.mkdirSync(outputDir, { recursive: true });
+    const source = path.join(inputDir, "openclaw.json");
+    fs.writeFileSync(
+      source,
+      JSON.stringify({ gateway: { mode: "local" }, agents: { entries: { main: {} } } }),
+    );
+
+    const options = testing.parseOptions(["--case", "default", "--config", source]);
+    expect(options.cases).toHaveLength(1);
+    expect(options.cases[0]).toMatchObject({
+      id: "customConfig",
+      configSource: path.resolve(source),
+    });
+    const written = readConfig(outputDir, options.cases[0]!);
+    expect(written.gateway).toEqual({ mode: "local" });
+    expect(written.agents?.entries).toEqual({ main: {} });
+
+    const bomSource = path.join(inputDir, "bom.json");
+    fs.writeFileSync(bomSource, `\uFEFF${JSON.stringify({ gateway: { mode: "local" } })}`);
+    expect(
+      testing.parseOptions(["--case", "default", "--config", bomSource]).cases[0]?.config,
+    ).toMatchObject({ gateway: { mode: "local" } });
+
+    const writeInvalid = (name: string, contents: string) => {
+      const file = path.join(inputDir, name);
+      fs.writeFileSync(file, contents);
+      return file;
+    };
+    expect(() => testing.parseOptions(["--config", source])).toThrow(
+      "--config requires exactly one --case",
+    );
+    expect(() =>
+      testing.parseOptions(["--case", "default", "--case", "skipChannels", "--config", source]),
+    ).toThrow("--config requires exactly one --case");
+    expect(() =>
+      testing.parseOptions(["--case", "default", "--config", source, "--seed-only"]),
+    ).toThrow("--seed-only is not supported with --config");
+    expect(() =>
+      testing.parseOptions(["--case", "default", "--config", path.join(inputDir, "missing.json")]),
+    ).toThrow("--config file not found");
+    expect(() =>
+      testing.parseOptions(["--case", "default", "--config", writeInvalid("bad.json", "{")]),
+    ).toThrow("--config is not valid JSON");
+    expect(() =>
+      testing.parseOptions(["--case", "default", "--config", writeInvalid("array.json", "[]")]),
+    ).toThrow("--config must contain a JSON object");
+    expect(() =>
+      testing.parseOptions([
+        "--case",
+        "default",
+        "--config",
+        writeInvalid("invalid-config.json", JSON.stringify({ agents: "invalid" })),
+      ]),
+    ).toThrow("--config is invalid");
   });
 
   it("selects the Gateway runtime and affinity independently of the controller", () => {

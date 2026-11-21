@@ -321,6 +321,8 @@ Gateway startup, restart, and agent concurrency benchmark fixtures use temporary
 
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 
+Use `--config <path>` to measure one caller-provided config file instead of a case's synthetic config. The benchmark validates the file, writes the validated config into the isolated benchmark home and state, and records the resolved path as `configSource`. Its standard loopback, no-auth, and `--allow-unconfigured` overrides still apply, so the result measures config shape and plugin loading rather than production auth policy. The child keeps the benchmark's minimal, reproducible environment, so env-backed SecretRefs resolve only from variables the benchmark already passes. `--config` requires exactly one `--case` and rejects flags that seed or rewrite config-owned state (`--team-scale`, `--bundled-plugin-fixture`, `--plugin-migration-fixture`, `--fixture-root`, `--seed-only`, delayed-publication fixtures, and agent database sizing). Use `--runs 1 --warmup 0` for one cold boot and compare only reports produced from the same config bytes. A config that never reaches `/readyz` fails the sample through the normal readiness check.
+
 Use `--exit-listeners` to capture main-thread process-exit registration stacks,
 removals, warnings, and peak/current counts after post-ready maintenance and
 handler prewarming. `--assert-exit-listeners` also fails above Node's default
