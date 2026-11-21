@@ -4,18 +4,13 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-patte
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
-import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEnvironmentKey } from "../shared/environment-key.js";
 import {
   getLoadedRuntimePluginRegistry,
   createRuntimePluginManifestLookup,
 } from "./active-runtime-registry.js";
-import {
-  isBundledConversationReadToolRegistration,
-  isHostRestrictedConversationReadTool,
-  registrationIncludesHostRestrictedConversationReadTool,
-} from "./compat/conversation-read-tools.js";
+import { createConversationReadToolGate } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
@@ -574,14 +569,14 @@ function* resolvePluginToolsFromRegistry(
       if (!matchesAllowlist) {
         continue;
       }
-      const restrictConversationRead =
-        normalizeConversationReadInvocationOrigin(params.context.conversationReadOrigin) !==
-          "direct-operator" &&
-        !isBundledConversationReadToolRegistration({ entry, manifestPlugin });
-      if (
-        restrictConversationRead &&
-        registrationIncludesHostRestrictedConversationReadTool(entry)
-      ) {
+      const readGate = createConversationReadToolGate(
+        params.context.conversationReadOrigin,
+        registry,
+        entry,
+        manifestPlugin,
+        context.logger,
+      );
+      if (readGate.excludeRegistration()) {
         continue;
       }
       const factoryContext = createPluginToolFactoryContext({
@@ -661,8 +656,7 @@ function* resolvePluginToolsFromRegistry(
           denylistBlocksName(toolName, denylist) ||
           (entry.optional && !allowlist.allowsTool(entry.pluginId, toolName)) ||
           // Factories may return other declared tools, so check the actual name as well.
-          (restrictConversationRead &&
-            isHostRestrictedConversationReadTool({ pluginId: entry.pluginId, toolName }))
+          readGate.excludeTool(toolName)
         ) {
           continue;
         }
