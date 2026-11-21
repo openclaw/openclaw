@@ -1,10 +1,12 @@
-import { execFile } from "node:child_process";
+import assert from "node:assert/strict";
+import { ChildProcess, execFile } from "node:child_process";
 import { once } from "node:events";
 import { promisify } from "node:util";
 import { MessageChannel, Worker, type Transferable } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as spawnBroker from "../process/spawn-broker/host.js";
 import type { BrokerResourceAttachment } from "../process/spawn-broker/resource-protocol.js";
 import { readGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -308,6 +310,56 @@ it("replaces failed retained broker authority after completed source close", asy
   const nextReply = once(successor.port, "message");
   successor.port.postMessage("pid", []);
   expect((await nextReply)[0]).not.toBe(pid);
+});
+
+it("selects a fresh broker after native disconnect before its callback runs", async () => {
+  const createBroker = spawnBroker.createSpawnBrokerHost;
+  const brokers: spawnBroker.SpawnBrokerHost[] = [];
+  const factory = vi.spyOn(spawnBroker, "createSpawnBrokerHost").mockImplementation((options) => {
+    const broker = createBroker(options);
+    brokers.push(broker);
+    return broker;
+  });
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => {
+    factory.mockRestore();
+  });
+  cleanup.defer(async () => {
+    await Promise.all(brokers.map((broker) => broker.close()));
+  });
+  cleanup.defer(closeDefaultRetainedNativeWorkerSource);
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const moduleUrl = new URL(
+    `data:text/javascript,${encodeURIComponent(
+      'export function createNativeWorkerResource(port) { port.on("message", () => port.postMessage(process.pid)); return { close() { port.close(); } }; }',
+    )}`,
+  );
+  const resource = await source.captureIndependentResource(moduleUrl);
+  cleanup.defer(() => resource.close());
+  resource.retainBrokerUntilProcessExit();
+  await resource.close();
+  await closeDefaultRetainedNativeWorkerSource();
+  const broker = brokers[0];
+  assert.ok(broker);
+  // Observe the real child; do not fabricate a disconnected flag or callback.
+  const native: unknown = Reflect.get(broker, "process");
+  assert.ok(native instanceof ChildProcess);
+  let callbackDelivered = false;
+  native.once("disconnect", () => {
+    callbackDelivered = true;
+  });
+  native.disconnect();
+  const successorSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  expect([native.connected, callbackDelivered]).toEqual([false, false]);
+  const successor = await successorSource.captureIndependentResource(moduleUrl);
+  cleanup.defer(() => successor.close());
+  const reply = once(successor.port, "message");
+  successor.port.postMessage("pid", []);
+  expect((await reply)[0]).not.toBe(native.pid);
+  await successor.close();
+  await closeDefaultRetainedNativeWorkerSource();
+  await broker.close();
+  expect(native.exitCode).toBe(0);
 });
 
 it("shares cold broker admission between independent and synchronous execution resources", async () => {

@@ -22,7 +22,7 @@ import {
   applyMessageSendingHook,
   type ReplyPayloadSuppressedObserver,
 } from "../../infra/outbound/deliver-hooks.js";
-import { normalizeEmptyPayloadForDelivery } from "../../infra/outbound/deliver-payload.js";
+import { normalizeEmptyPayloadForDelivery } from "../../infra/outbound/deliver-payload-normalize.js";
 import {
   isPlatformMessageNotDispatchedError,
   isPlatformMessageRejectedError,
