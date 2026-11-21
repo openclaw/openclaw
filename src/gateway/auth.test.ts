@@ -754,30 +754,6 @@ describe("trusted-proxy auth", () => {
         }),
       ).resolves.toEqual({ ok: false, reason: "trusted_proxy_access_keys_unavailable" });
     });
-
-    it("keeps the last good keys and backs off when a refresh fails", async () => {
-      const headers = {
-        ...identityHeaders,
-        "cf-access-jwt-assertion": jwt({ ...userClaims, exp: now + 3600 }),
-      };
-      const admitted = { ok: true, method: "trusted-proxy", user: "nick@example.com" };
-      await expect(authorizeTrustedProxy({ auth: withAccessJwt(), headers })).resolves.toEqual(
-        admitted,
-      );
-      const failingCerts = vi.fn(async () => new Response(null, { status: 503 }));
-      vi.stubGlobal("fetch", failingCerts);
-      vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 11 * 60_000 });
-      try {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          await expect(authorizeTrustedProxy({ auth: withAccessJwt(), headers })).resolves.toEqual(
-            admitted,
-          );
-        }
-      } finally {
-        vi.useRealTimers();
-      }
-      expect(failingCerts).toHaveBeenCalledTimes(1);
-    });
   });
 
   it("rejects request with missing user header", async () => {

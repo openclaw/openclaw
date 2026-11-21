@@ -213,7 +213,10 @@ signing keys. This is off by default and existing configurations keep working un
 - `issuer` is your team domain without a trailing slash. OpenClaw fetches the signing keys
   from `<issuer>/cdn-cgi/access/certs` when it first needs them. It fetches them again on the
   first request after they are ten minutes old, or when an assertion names a key it has not
-  seen, but at most once every 30 seconds. If a fetch fails, the last keys fetched stay in use.
+  seen, but at most once every 30 seconds. A successful response with usable RSA keys
+  replaces the previous set. If a fetch fails or returns no usable RSA keys, the last good
+  set remains usable for up to 24 hours from its last successful fetch. The Gateway logs
+  a warning the first time it uses that set at least one hour after fetching it.
 - `audience` is the Application Audience (AUD) tag from the Access application's overview page.
 
 With verification on, OpenClaw admits a request only when the assertion is signed by the team
@@ -221,8 +224,8 @@ key (RS256), was issued by `issuer` for `audience`, and has not expired. Expiry 
 allow 60 seconds of clock skew between the Gateway host and Cloudflare. The user comes from the
 signed `email` claim, and the user header must match it. Forged, expired, or other-application
 assertions are rejected with `trusted_proxy_access_invalid`, a header that disagrees with the claim
-with `trusted_proxy_access_user_mismatch`, and an unreachable certs endpoint with
-`trusted_proxy_access_keys_unavailable`.
+with `trusted_proxy_access_user_mismatch`. When a refresh fails and the Gateway has no
+usable cached set, it returns `trusted_proxy_access_keys_unavailable`.
 
 Verification does not combine with [enterprise browser delegation](/gateway/trusted-proxy-auth):
 delegated identities are not Access emails, so they are refused while it is on.

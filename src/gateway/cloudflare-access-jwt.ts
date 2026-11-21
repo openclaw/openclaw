@@ -2,14 +2,20 @@ import { createPublicKey, verify, type KeyObject } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { readResponseWithLimit } from "../infra/http-response-body.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 type CloudflareAccessJwtConfig = NonNullable<GatewayTrustedProxyConfig["cloudflareAccessJwt"]>;
-type KeySet = { keys: Map<string, KeyObject>; fetchedAt: number };
+type KeySet = { keys: Map<string, KeyObject>; fetchedAt: number; warnedStale?: boolean };
 
+const log = createSubsystemLogger("gateway/cloudflare-access");
 const CERTS_PATH = "/cdn-cgi/access/certs";
 const CERTS_MAX_BYTES = 64 * 1024;
 const CERTS_TIMEOUT_MS = 10_000;
 const KEY_SET_TTL_MS = 10 * 60_000;
+// Cloudflare rotates Access signing keys every six weeks by default and keeps
+// previous keys valid for seven days. Limit outage fallback to one day:
+// https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/#access-signing-keys
+const MAX_KEY_SET_AGE_MS = 24 * 60 * 60_000;
 // At most one certs fetch per issuer this often, whether the last one failed or an
 // assertion names an unknown kid (Access rotated keys, or a forgery).
 const MIN_REFETCH_MS = 30_000;
@@ -39,20 +45,51 @@ async function fetchKeySet(issuer: string): Promise<KeySet> {
       isRecord(jwk) &&
       jwk.kty === "RSA" &&
       typeof jwk.kid === "string" &&
+      jwk.kid.length > 0 &&
       typeof jwk.n === "string" &&
-      typeof jwk.e === "string"
+      /^[\w-]+$/u.test(jwk.n) &&
+      typeof jwk.e === "string" &&
+      /^[\w-]+$/u.test(jwk.e)
     ) {
       try {
-        keys.set(
-          jwk.kid,
-          createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" }),
-        );
+        const key = createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" });
+        const { modulusLength = 0, publicExponent = 0n } = key.asymmetricKeyDetails ?? {};
+        const modulus = BigInt(`0x${Buffer.from(jwk.n, "base64url").toString("hex")}`);
+        // Node can import RSA parameters that cannot verify an RS256 signature.
+        if (
+          modulusLength >= 512 &&
+          modulus % 2n === 1n &&
+          publicExponent >= 3n &&
+          publicExponent % 2n === 1n &&
+          publicExponent < modulus
+        ) {
+          keys.set(jwk.kid, key);
+        }
       } catch {
-        // Skip a malformed key; assertions signed by it fail verification.
+        // A malformed entry does not invalidate the other keys in this response.
       }
     }
   }
+  if (keys.size === 0) {
+    throw new Error("Cloudflare Access certs response contained no usable RSA keys");
+  }
   return { keys, fetchedAt: Date.now() };
+}
+
+function readCachedSigningKey(issuer: string, keySet: KeySet | undefined, kid: string) {
+  if (!keySet) {
+    return null;
+  }
+  const ageMs = Date.now() - keySet.fetchedAt;
+  if (ageMs >= MAX_KEY_SET_AGE_MS) {
+    return null;
+  }
+  const key = keySet.keys.get(kid);
+  if (key && ageMs >= 60 * 60_000 && !keySet.warnedStale) {
+    keySet.warnedStale = true;
+    log.warn("Using Cloudflare Access signing keys fetched at least one hour ago", { issuer });
+  }
+  return key;
 }
 
 /** Returns the key for kid, undefined for an unknown kid, or null when no keys could be loaded. */
@@ -68,7 +105,7 @@ async function resolveSigningKey(
   let pending = refreshes.get(issuer);
   if (!pending) {
     if (Date.now() - (lastFetchAttempts.get(issuer) ?? -Infinity) < MIN_REFETCH_MS) {
-      return cached ? key : null;
+      return readCachedSigningKey(issuer, cached, kid);
     }
     lastFetchAttempts.set(issuer, Date.now());
     pending = fetchKeySet(issuer)
@@ -82,11 +119,13 @@ async function resolveSigningKey(
       .finally(() => refreshes.delete(issuer));
     refreshes.set(issuer, pending);
   } else if (key) {
-    // A known key never waits on a refresh (which a forged kid may have triggered).
-    return key;
+    // A usable cached key need not wait on another request's refresh.
+    const fallback = readCachedSigningKey(issuer, cached, kid);
+    if (fallback) {
+      return fallback;
+    }
   }
-  const keySet = (await pending) ?? cached;
-  return keySet ? keySet.keys.get(kid) : null;
+  return readCachedSigningKey(issuer, (await pending) ?? cached, kid);
 }
 
 function decodeSegment(segment: string): Record<string, unknown> | undefined {
