@@ -161,8 +161,9 @@ async function checkApprovalForwarding() {
           id,
           decision: "deny",
         });
-        expect(resolved.ok).toBe(true);
-        expect((await waitForGatewayActiveWork(5_000)).drained).toBe(true);
+        expect(resolved.ok, JSON.stringify({ title, resolved })).toBe(true);
+        const drained = await waitForGatewayActiveWork(5_000);
+        expect(drained.drained, JSON.stringify({ title, drained })).toBe(true);
       }
       expect(prompts()).toHaveLength(forwarded ? 1 : 0);
       if (forwarded) {

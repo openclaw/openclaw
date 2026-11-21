@@ -113,7 +113,7 @@ suite.define(() => {
         kind: "oauth",
       },
     ]);
-    const savedProfile = { type: "api_key", profileId: `${loginProvider}:default` };
+    const savedProfile = { type: "oauth", profileId: `${loginProvider}:default` };
     const approve = async (page: Page) => {
       const callback = page.waitForResponse(
         (response) => new URL(response.url()).pathname === "/oauth/provider/callback",

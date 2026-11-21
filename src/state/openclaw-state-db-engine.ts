@@ -11,6 +11,7 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
+import { getAdmittedPostgresSchema } from "../infra/database-engine/postgres-schema.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -49,10 +50,11 @@ import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v3
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "./openclaw-state-db-schema-v41-approval-profile.js";
 import {
   admitStateSchemaFacts,
-  parseStateSchemaContentVersion,
   PostgresSchemaAdmissionUnavailableError,
+  parseStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
@@ -174,7 +176,11 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     postgres: stateEngineSchema.postgres,
     postgresFragments: stateEngineSchema.postgresFragments,
   };
-  const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchema.postgres);
+  const statePostgresSchemaV40 = {
+    ...statePostgresSchema,
+    postgres: withLegacyApprovalProfile(statePostgresSchema.postgres),
+  };
+  const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchemaV40.postgres);
   const v39WithoutBootstrapDeferred = withLegacyWorkspaceBootstrapDeferred(v39Postgres);
   const statePostgresSchemaV39 = {
     ...statePostgresSchema,
@@ -406,7 +412,7 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 40,
       fromSchema: statePostgresSchemaV39,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV40,
       sql: `ALTER TABLE workspace_setup_state ADD COLUMN IF NOT EXISTS bootstrap_deferred bigint;
         ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
         UPDATE worker_environments
@@ -415,6 +421,13 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
           OR state = 'bootstrapping' AND owner_epoch = 0)
           AND provision_source_json IS NULL;
         ${statePostgresVersionSql(40)}`,
+    },
+    {
+      version: 41,
+      fromSchema: statePostgresSchemaV40,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE operator_approvals ADD COLUMN requested_by_profile_id text COLLATE "C";
+        ${statePostgresVersionSql(41)}`,
     },
   ];
 }
@@ -515,7 +528,34 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   ) {
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
+  // Another process may install an additive fragment without our process-local publication.
+  // Only a cache miss probes the catalog, under the owner's existing writer lock.
+  const present = db // sqlite-allow-raw: Schema presence primitive under the owner's writer lock.
+    .prepare(`SELECT 1 AS present FROM pg_catalog.pg_class
+    WHERE relnamespace = ?::regnamespace AND relname IN (${fragmentTables.map(() => "?").join(", ")})
+    LIMIT 1`)
+    .get(facts.namespace, ...fragmentTables);
+  const schema = getAdmittedPostgresSchema(db);
+  if (!schema) {
+    throw new PostgresSchemaAdmissionUnavailableError(
+      `Missing PostgreSQL state admission. ${recovery}`,
+    );
+  }
   invalidateLocalSqliteSchemaAdmissions(db);
+  if (present) {
+    // Verify the peer's committed seal; never hide a partial fragment with IF NOT EXISTS.
+    admitPostgresPhysicalFacts({
+      db,
+      namespace: facts.namespace,
+      storeId: facts.storeId,
+      store: facts.store,
+      version: facts.version,
+      schema,
+      preserveSchemaSeal: true,
+    });
+    admitStatePostgres(db, false);
+    return;
+  }
   const repositorySql =
     facts.version < 38 ? withLegacyRepositoryDiskAuthority(fragment.sql) : fragment.sql;
   const templateSql =

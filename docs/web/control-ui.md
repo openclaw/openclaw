@@ -808,10 +808,11 @@ read succeeds. Failed summary reads show **Failed** instead of an unexplained
 with **Refresh** available; previously loaded jobs remain visible while a
 refresh is pending or fails.
 
-Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
-This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**
-to make it available; when disabled, both the Pages entry and direct visits to
-Templates discovery or details are unavailable. The former `/agents` overview is removed.
+Open **Customize → Templates** (find **Customize** in **Pages** if it is not pinned),
+or visit `/templates`, to discover official Templates.
+Templates are available by default, without a Labs switch. An explicit
+`gateway.controlUi.experimental.templates: false` hides the Templates entry and
+direct visits to discovery or details. The former `/agents` overview is removed.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two

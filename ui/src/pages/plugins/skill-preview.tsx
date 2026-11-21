@@ -1,4 +1,4 @@
-import { Show, onSettled } from "solid-js";
+import { Loading, Show, lazy, onSettled } from "solid-js";
 import type {
   PluginsSkillsReadParams,
   PluginsSkillsReadResult,
@@ -8,19 +8,21 @@ import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
-import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import "./custom-elements.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import "../../styles/sidebar-markdown.css";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
 import "./skill-preview.css";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
+
+const PluginSkillDocument = lazy(() => import("./skill-preview-document.tsx"), {
+  export: "PluginSkillDocument",
+});
 
 type SkillRequest =
   | Omit<Extract<PluginsSkillsReadParams, { source: "installed" }>, "path">
@@ -28,7 +30,7 @@ type SkillRequest =
 
 type SkillDocument =
   | { status: "loading" }
-  | { status: "ready"; html: string }
+  | { status: "ready"; content: string }
   | { status: "error"; message: string; retryable: boolean };
 
 type SkillPreviewIdentity = { description?: string; publisher?: string };
@@ -89,11 +91,7 @@ function createPluginPreviewOwner(
             selected = { ...request, version: result.version };
           }
           if (entry?.status === "ready" && entry.content !== undefined) {
-            const { renderPluginSkillDocument } = await import("./skill-preview-document.ts");
-            if (active !== pending || !gateway.isCurrent(connection)) {
-              return;
-            }
-            skill = { status: "ready", html: renderPluginSkillDocument(entry.content) };
+            skill = { status: "ready", content: entry.content };
           } else {
             const tooLarge = entry?.status === "too-large";
             skill = {
@@ -259,7 +257,17 @@ export function PluginSkillPreview(props: {
                 </Show>
                 <Show when={document()}>
                   {(ready) => (
-                    <SanitizedHtml tag="article" class="sidebar-markdown" html={ready().html} />
+                    <Loading
+                      fallback={
+                        <PanelLoadingSkeleton
+                          variant="document"
+                          label={t("common.loading")}
+                          compact
+                        />
+                      }
+                    >
+                      <PluginSkillDocument content={ready().content} />
+                    </Loading>
                   )}
                 </Show>
               </div>

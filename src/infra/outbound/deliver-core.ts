@@ -19,13 +19,15 @@ import { createChannelHandler } from "./deliver-channel.js";
 import type { ChannelHandler, DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import {
+  normalizeEmptyPayloadForDelivery,
+  stripInternalRuntimeScaffoldingFromPayload,
+} from "./deliver-payload-normalize.js";
+import {
   buildPayloadSummary,
   deliveryKindForPayload,
   maybeNotifyAfterDeliveredPayload,
   maybePinDeliveredMessage,
-  normalizeEmptyPayloadForDelivery,
   resolveChannelHandlerParams,
-  stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import {
   OutboundDeliveryError,

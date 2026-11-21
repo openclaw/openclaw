@@ -46,6 +46,9 @@ import {
 } from "./tunnel-principal.js";
 import type { TunnelRuntime } from "./tunnel-runtime.js";
 
+/** Why the Gateway closes a peer's connections: a membership removal or the peer's own sign-out. */
+export type OpenClawIdConnectionCloseCause = "removed" | "signed-out";
+
 /** Side effects of membership changes that other Gateway owners perform. */
 export type OpenClawIdEffects = {
   /**
@@ -58,8 +61,14 @@ export type OpenClawIdEffects = {
    * the cut. Resolves with the number of runs it stopped.
    */
   cancelRuns?: (connectionIds: readonly string[]) => Promise<number>;
-  /** Closes these Gateway connections. */
-  closeConnections: (connectionIds: readonly string[]) => void;
+  /**
+   * Closes these Gateway connections. The cause selects the close reason; it is
+   * a membership removal unless the peer signed itself out.
+   */
+  closeConnections: (
+    connectionIds: readonly string[],
+    cause?: OpenClawIdConnectionCloseCause,
+  ) => void;
   /** Revokes device tokens (device id and role) that were bound to removed keys. */
   /** Revokes tunnel-issued tokens; returns those confirmed revoked (or already absent). */
   revokeDeviceTokens: <T extends { deviceId: string; role: string }>(

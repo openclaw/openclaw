@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/state/state-upgrade.large-agent-db.test.ts",
   "src/sessions/session-controller-model.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",
   "src/agents/embedded-agent-runner/compact.watched-sessions.postgres.test.ts",
@@ -76,6 +77,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/session-prompt-state.tool-usage.worker.test.ts",
   "src/agents/embedded-agent-runner.responses-cold-prefix.test.ts",
   "src/agents/workspace-sandbox.test.ts",
+  "src/agents/workspace-sandbox.restore.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
@@ -390,6 +392,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/session-event-config-readmission.test.ts",
   "src/auto-reply/reply/session-event-handoff.test.ts",
   "src/auto-reply/reply/session-event-permissions.test.ts",
+  "src/auto-reply/reply/session-event-reply-expectation.test.ts",
   "src/auto-reply/reply/session-reset-prompt.test.ts",
   "src/auto-reply/reply/session-updates.exec-preparation.test.ts",
   "src/status/status-plugin-health.runtime.test.ts",
@@ -439,7 +442,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/session-repository-workspaces.test.ts",
   "src/state/session-repository-workspaces.migration.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
-  "src/infra/update-runner-git.test.ts",
   "src/infra/update-run-abandonment.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
