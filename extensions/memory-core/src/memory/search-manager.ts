@@ -2,17 +2,14 @@
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { loadMemoryManagerRuntime } from "./lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
-
-const loadManagerRuntime = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 
 type MemorySearchManagerPurpose = "default" | "status" | "cli";
 type MemorySearchManagerParams = {
@@ -45,7 +42,7 @@ export async function getMemorySearchManager(
     const access = settings?.sources.includes("memory")
       ? getAgentWorkspaceAccess(resolveAgentWorkspaceDir(params.cfg, params.agentId), "memoryFiles")
       : undefined;
-    const { MemoryIndexManager } = await loadManagerRuntime();
+    const { MemoryIndexManager } = await loadMemoryManagerRuntime();
     result = {
       manager: await MemoryIndexManager.get({ ...params, memoryFiles: access?.memoryFiles }),
     };
@@ -60,25 +57,4 @@ export async function getMemorySearchManager(
       managerMs: Math.max(0, Date.now() - startedAt),
     },
   };
-}
-
-export async function closeAllMemorySearchManagers(): Promise<void> {
-  if (!loadManagerRuntime.peek()) {
-    return;
-  }
-  const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
-  await closeAllMemoryIndexManagers();
-}
-
-export async function closeMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<void> {
-  if (!loadManagerRuntime.peek()) {
-    return;
-  }
-  const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
-  await closeMemoryIndexManagersForAgent({
-    agentId: normalizeAgentId(params.agentId),
-  });
 }

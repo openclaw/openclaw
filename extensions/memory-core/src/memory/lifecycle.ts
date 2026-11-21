@@ -1,6 +1,9 @@
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
 type ReloadChange = Parameters<NonNullable<MemoryPluginRuntime["prepareReload"]>>[0];
@@ -78,4 +81,31 @@ export function prepareMemoryManagerReload(
       lifecycle.reload = undefined;
     },
   };
+}
+
+// The plugin entry closes managers through this module, so Gateway shutdown never
+// first-imports a chunk that an in-place update may already have replaced.
+export const loadMemoryManagerRuntime = createLazyRuntimeModule(
+  () => import("../../manager-runtime.js"),
+);
+
+export async function closeAllMemorySearchManagers(): Promise<void> {
+  if (!loadMemoryManagerRuntime.peek()) {
+    return;
+  }
+  const { closeAllMemoryIndexManagers } = await loadMemoryManagerRuntime();
+  await closeAllMemoryIndexManagers();
+}
+
+export async function closeMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  if (!loadMemoryManagerRuntime.peek()) {
+    return;
+  }
+  const { closeMemoryIndexManagersForAgent } = await loadMemoryManagerRuntime();
+  await closeMemoryIndexManagersForAgent({
+    agentId: normalizeAgentId(params.agentId),
+  });
 }

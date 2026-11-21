@@ -207,8 +207,14 @@ async function startGatewayServerWithRuntime(
   if (process.platform !== "linux" || !supportsSpawnBrokerCommandTransport()) {
     return await start();
   }
-  const { startGatewaySpawnBroker, runWithSpawnBroker } =
-    await import("../process/spawn-broker/context.js");
+  // Broker close runs after an in-place update may have replaced chunks on disk; it
+  // must not first-import its cleanup owners then.
+  const [{ startGatewaySpawnBroker, runWithSpawnBroker }, supervisor, readOnlyWorkerRuntime] =
+    await Promise.all([
+      import("../process/spawn-broker/context.js"),
+      import("../process/supervisor/index.js"),
+      import("../infra/sqlite-readonly-worker.js"),
+    ]);
   let logger: { info: (message: string) => void } | undefined;
   const broker = await startGatewaySpawnBroker({
     onReady(pid, restarted) {
@@ -229,22 +235,12 @@ async function startGatewayServerWithRuntime(
     // broker alive until command results, output, and service-child cleanup settle.
     const errors: unknown[] = [];
     const steps = [
-      [
-        "process-supervisor",
-        async () => {
-          const { shutdownProcessSupervisor } = await import("../process/supervisor/index.js");
-          await shutdownProcessSupervisor();
-        },
-      ],
+      ["process-supervisor", () => supervisor.shutdownProcessSupervisor()],
       // A failed required core join can stop before the admission sidecar runs.
       ["database-admission", () => stopDatabaseAdmission?.()],
       [
         "broker-read-only-workers",
-        async () => {
-          const { closeSqliteReadOnlyWorkersForBroker } =
-            await import("../infra/sqlite-readonly-worker.js");
-          await closeSqliteReadOnlyWorkersForBroker(broker);
-        },
+        () => readOnlyWorkerRuntime.closeSqliteReadOnlyWorkersForBroker(broker),
       ],
       // Readers that did not close remain attached children for broker termination.
       ["spawn-broker", () => broker.close()],

@@ -1,4 +1,5 @@
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
+import { restartLifecycleOperations } from "../infra/restart-lifecycle.worker.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
@@ -60,10 +61,8 @@ const commandRegistry = createWorkerOperationRegistry<
     >,
   WorkerWriteOperationContext
 >({
-  restartLifecycle: () =>
-    import("../infra/restart-lifecycle.worker.js").then(
-      (loaded) => loaded.restartLifecycleOperations,
-    ),
+  // SIGTERM reads restart intent here after an update may have replaced the chunks on disk.
+  restartLifecycle: async () => restartLifecycleOperations,
   worktrees: async () => {
     const [templates, reserveCapacity, recoverPending] = await Promise.all([
       import("../agents/worktrees/template-registry.worker.js").then(
