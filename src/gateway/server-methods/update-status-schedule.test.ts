@@ -340,7 +340,7 @@ it("keeps the optional schedule unknown when local identity cannot resolve its c
   expect(install).toHaveBeenCalledExactlyOnceWith(false, expect.any(AbortSignal));
 });
 
-it("omits app-owned install and stale package targets from the protocol schedule", async () => {
+it("reports the app owner and omits stale package targets from the protocol schedule", async () => {
   stalePackageSchedule("dev", false);
   install.mockResolvedValue(
     installAt("host", "/opt/OpenClaw.app/openclaw", {
@@ -350,7 +350,18 @@ it("omits app-owned install and stale package targets from the protocol schedule
 
   const result = await status(makeConfig(), { refreshCheckout: true });
 
-  expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
+  expect(result.schedule).toEqual({
+    channel: "dev",
+    autoEnabled: false,
+    install: {
+      kind: "host",
+      host: {
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      },
+    },
+  });
   expect(result.updateAvailable).toBeNull();
 });
 

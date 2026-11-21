@@ -21,8 +21,10 @@ at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
 app updater to update the bundled Gateway and runtime together. `openclaw update`,
 `openclaw update repair`, and Gateway update requests return the marker's update
 hint without changing the package or stopping the Gateway; background checks
-skip package-registry updates. Missing or invalid markers retain normal install
-behavior, with a warning for an invalid marker.
+skip package-registry updates. Gateway `update.status` reports the owner as
+`schedule.install.host`, and Control UI Settings → Updates shows that guidance
+instead of a Gateway update action. Missing or invalid markers retain normal
+install behavior, with a warning for an invalid marker.
 
 After a Mac app update, recovery checks the service selected by the connection
 mode: the local Gateway or, with a remote primary, the Mac node service. If a

@@ -46,6 +46,34 @@ describe("ConfigSchemaLookupResultSchema", () => {
 });
 
 describe("update protocol schemas", () => {
+  it("carries the owner of a host-owned installation and rejects unknown owners", () => {
+    const payload = {
+      channel: "stable",
+      autoEnabled: false,
+      install: {
+        kind: "host",
+        host: {
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        },
+      },
+    };
+    expect(Value.Check(UpdateScheduleStateSchema, payload)).toBe(true);
+    expect(
+      Value.Check(UpdateScheduleStateSchema, {
+        ...payload,
+        install: { ...payload.install, host: { ...payload.install.host, owner: "other-app" } },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(UpdateScheduleStateSchema, {
+        ...payload,
+        install: { ...payload.install, host: { ...payload.install.host, updateHint: "" } },
+      }),
+    ).toBe(false);
+  });
+
   it("carries inspect-only immutable retention facts without granting collection", () => {
     const releaseRetention = {
       version: 1,
