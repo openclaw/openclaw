@@ -21,6 +21,9 @@ export function startMemoryRecall(params: {
       } catch (error) {
         throw new MemoryRecallEmbeddingError(error);
       }
+      if (performance.now() >= deadlineAtMs) {
+        return [];
+      }
       params.beforeSearch?.();
       phase = "search";
       return await params.search(vector, Math.max(0, Math.floor(deadlineAtMs - performance.now())));

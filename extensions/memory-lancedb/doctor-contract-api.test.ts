@@ -115,14 +115,58 @@ describe("MemoryDB agent isolation", () => {
   });
   afterEach(() => db.close());
 
-  test("cancels a timed-out native search and keeps the table usable", async () => {
+  test("rejects an expired search and keeps the table usable", async () => {
     const stored = await db.store("alpha", entry("alpha"));
     await expect(db.search("alpha", [1, 0], 5, 0, { timeoutMs: 0 })).rejects.toThrow(
       "Query timeout",
     );
+    await withTable(async (table) => {
+      await expect(table.vectorSearch([1, 0]).toArray({ timeoutMs: 0 })).rejects.toThrow(
+        "Query timeout",
+      );
+    });
     await expect(db.search("alpha", [1, 0], 5, 0, { timeoutMs: 5_000 })).resolves.toMatchObject([
       { entry: { id: stored.id, text: "alpha" } },
     ]);
+  });
+
+  test("does not start a vector query after table preparation exhausts the budget", async () => {
+    const stored = await db.store("alpha", entry("alpha"));
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    const query = vi.spyOn(lancedb.VectorQuery.prototype, "toArray");
+    try {
+      await expect(
+        db.search("alpha", [1, 0], 5, 0, {
+          timeoutMs: 5_000,
+          beforeRead: () => void now.mockReturnValue(5_000),
+        }),
+      ).rejects.toThrow("Query timeout");
+      expect(query).not.toHaveBeenCalled();
+    } finally {
+      query.mockRestore();
+      now.mockRestore();
+    }
+    await expect(db.search("alpha", [1, 0], 5, 0, { timeoutMs: 5_000 })).resolves.toMatchObject([
+      { entry: { id: stored.id, text: "alpha" } },
+    ]);
+  });
+
+  test("passes only the remaining budget to the native query", async () => {
+    const stored = await db.store("alpha", entry("alpha"));
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    const query = vi.spyOn(lancedb.VectorQuery.prototype, "toArray");
+    try {
+      await expect(
+        db.search("alpha", [1, 0], 5, 0, {
+          timeoutMs: 5_000,
+          beforeRead: () => void now.mockReturnValue(1_500.25),
+        }),
+      ).resolves.toMatchObject([{ entry: { id: stored.id } }]);
+      expect(query).toHaveBeenCalledExactlyOnceWith({ timeoutMs: 3_499 });
+    } finally {
+      query.mockRestore();
+      now.mockRestore();
+    }
   });
 
   test("scopes store, search, list, query, delete, and restart reads", async () => {
