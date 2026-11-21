@@ -26,6 +26,27 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class GatewayNodeApprovalTest {
   @Test
+  fun approvedCameraCanFinishWhenGatewayPolicyWithholdsCaptureCommands() =
+    runTest {
+      for (approveInApp in listOf(false, true)) {
+        val gateway = Gateway()
+        val action = GatewayNodeApproval()
+        gateway.cameraEffective = true
+        gateway.cameraCommandsFiltered = true
+        gateway.approved = !approveInApp
+
+        action.refresh(gateway.context(), gateway.nodes())
+        if (approveInApp) action.approve("phone-request")
+
+        assertTrue("Approved camera consent must not require policy-blocked capture commands", action.state.value.verified)
+        assertEquals(if (approveInApp) listOf("phone-request") else emptyList<String>(), gateway.approvedRequests)
+        gateway.approved = false
+        action.refresh(gateway.context(), gateway.nodes())
+        assertFalse("Enabled camera metadata must not bypass pending approval", action.state.value.verified)
+      }
+    }
+
+  @Test
   fun approvalTargetsOnlyThisPhoneAndWaitsForEffectiveCameraReadback() =
     runTest {
       val gateway = Gateway()
@@ -292,6 +313,7 @@ class GatewayNodeApprovalTest {
     var approved = false
     private var pendingConsumed = false
     var cameraEffective = false
+    var cameraCommandsFiltered = false
     var notificationsEffective = true
     var pendingIncludesNotifications = true
     var catalogPending = true
@@ -309,7 +331,7 @@ class GatewayNodeApprovalTest {
       desired: GatewayNodeApprovalSurface =
         GatewayNodeApprovalSurface(
           setOf("camera", "notifications"),
-          setOf("camera.snap", "notifications.list", "sms.search"),
+          setOf("camera.list", "camera.snap", "notifications.list", "sms.search"),
           mapOf("camera" to true, "smsRead" to false, "smsSend" to false),
         ),
     ): GatewayNodeApprovalContext {
@@ -373,7 +395,8 @@ class GatewayNodeApprovalTest {
       requestId: String,
     ): String {
       val caps = if (pendingIncludesNotifications) """["camera","notifications"]""" else """["camera"]"""
-      val commands = if (pendingIncludesNotifications) """["camera.snap","notifications.list"]""" else """["camera.snap"]"""
+      val cameraCommands = if (cameraCommandsFiltered) "\"camera.list\"" else "\"camera.snap\""
+      val commands = if (pendingIncludesNotifications) """[$cameraCommands,"notifications.list"]""" else """[$cameraCommands]"""
       return """{"nodeId":"$nodeId","requestId":"$requestId","caps":$caps,"commands":$commands,"permissions":{"camera":true},"requiredApproveScopes":["operator.pairing","operator.write"]}"""
     }
 
@@ -381,7 +404,7 @@ class GatewayNodeApprovalTest {
       val approvalState = if (approved || !catalogPending) "approved" else "pending-reapproval"
       val pendingRequestId = if (approved || !catalogPending) JsonNull else JsonPrimitive(catalogRequestId ?: requestId)
       val caps = JsonArray(listOfNotNull(if (cameraEffective) JsonPrimitive("camera") else null, if (notificationsEffective) JsonPrimitive("notifications") else null))
-      val commands = JsonArray(listOfNotNull(if (cameraEffective) JsonPrimitive("camera.snap") else null, if (notificationsEffective) JsonPrimitive("notifications.list") else null))
+      val commands = JsonArray(listOfNotNull(if (cameraEffective) JsonPrimitive(if (cameraCommandsFiltered) "camera.list" else "camera.snap") else null, if (notificationsEffective) JsonPrimitive("notifications.list") else null))
       return Json
         .parseToJsonElement(
           """{"nodes":[{"nodeId":"phone","approvalState":"$approvalState","pendingRequestId":$pendingRequestId,"connected":$catalogConnected,"caps":$caps,"commands":$commands,"permissions":{"camera":$cameraEffective}}]}""",

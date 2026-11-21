@@ -524,7 +524,6 @@ fun OnboardingFlow(
         step == OnboardingStep.NodeApproval &&
         nodeApprovalCheckCanContinue(
           checkRequested = nodeApprovalCheckRequested,
-          refreshStarted = nodeApprovalCheckRefreshStarted,
           nodesDevicesRefreshing = nodesDevicesRefreshing,
           ready = ready,
         )
@@ -2111,14 +2110,16 @@ private fun NodeApprovalScreen(
           modifier = Modifier.fillMaxWidth(),
         )
         ApprovalCommandBlock(command = "openclaw nodes pending", onCopy = { onCopyCommand("openclaw nodes pending") })
-        ApprovalCommandBlock(command = approveCommand, onCopy = { onCopyCommand(approveCommand) })
-        Text(
-          text = nativeString("Use the requestId from the pending command in the approve command."),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
-          textAlign = TextAlign.Center,
-          modifier = Modifier.fillMaxWidth(),
-        )
+        if (approveCommand != null) {
+          ApprovalCommandBlock(command = approveCommand, onCopy = { onCopyCommand(approveCommand) })
+          Text(
+            text = nativeString("Use the requestId from the pending command in the approve command."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textSubtle,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+          )
+        }
       }
     }
     action.errorText?.let { error ->
@@ -2788,9 +2789,9 @@ private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConn
   }
 }
 
-internal fun recoveryNodeApprovalCommand(pendingRequestId: String?): String {
-  val requestId = pendingRequestId?.trim()?.takeIf { it.isNotEmpty() }
-  return if (requestId != null) "openclaw nodes approve $requestId" else "openclaw nodes approve REQUEST_ID"
+internal fun recoveryNodeApprovalCommand(pendingRequestId: String?): String? {
+  val requestId = pendingRequestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+  return "openclaw nodes approve $requestId"
 }
 
 internal fun approvalRequestId(approval: GatewayNodeCapabilityApproval): String? =
@@ -2834,14 +2835,9 @@ internal fun nodeApprovalCheckShouldClearUnobservedRefresh(
 
 internal fun nodeApprovalCheckCanContinue(
   checkRequested: Boolean,
-  refreshStarted: Boolean,
   nodesDevicesRefreshing: Boolean,
   ready: Boolean,
-): Boolean =
-  checkRequested &&
-    refreshStarted &&
-    !nodesDevicesRefreshing &&
-    ready
+): Boolean = checkRequested && !nodesDevicesRefreshing && ready
 
 internal fun nodeApprovalShouldAutoContinue(
   step: OnboardingStep,
