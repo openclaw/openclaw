@@ -588,7 +588,6 @@ describe("session organizer destructive confirmations", () => {
     expect(h.deleteMany).toHaveBeenCalledWith(
       rows.map((row) => ({
         key: row.key,
-        agentId: "main",
         expectedSessionId: row.sessionId,
         deleteTranscript: true,
       })),
@@ -598,6 +597,24 @@ describe("session organizer destructive confirmations", () => {
       "Managed worktrees:\nopenclaw/busy — live run or cleanup active",
     );
     alertSpy.mockRestore();
+  });
+
+  it("keeps the selected owner when batch-deleting a global session", async () => {
+    const h = createHarness(destructiveHarness);
+    const row = sessionRow(0, { key: "global" });
+    const pending = deleteSessionsBatch(h.host, [row], h.scope);
+    const actions = await waitForConfirmDialogActions();
+    answerConfirmDialog(actions, "confirm");
+    await pending;
+
+    expect(h.deleteMany).toHaveBeenCalledExactlyOnceWith([
+      {
+        key: "global",
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+        deleteTranscript: true,
+      },
+    ]);
   });
 
   it.each(
@@ -716,6 +733,34 @@ describe("session organizer destructive confirmations", () => {
     await pending;
     expect(h.deleteOne).toHaveBeenCalledOnce();
     expect(h.deleteOne).toHaveBeenCalledWith(row.key, {
+      deleteTranscript: true,
+      expectedSessionId: row.sessionId,
+    });
+  });
+
+  it("deletes an ACP session by its qualified key without a redundant owner", async () => {
+    patchSettings({ sessionDeleteConfirm: false });
+    const h = createHarness(destructiveHarness);
+    const row = sessionRow(0, {
+      key: "agent:acp-unlisted:acp:00000000-0000-4000-8000-000000000001",
+    });
+
+    await h.remove(row, { offerSkip: true });
+
+    expect(h.deleteOne).toHaveBeenCalledExactlyOnceWith(row.key, {
+      deleteTranscript: true,
+      expectedSessionId: row.sessionId,
+    });
+  });
+
+  it("keeps the selected owner when deleting a global session", async () => {
+    patchSettings({ sessionDeleteConfirm: false });
+    const h = createHarness(destructiveHarness);
+    const row = sessionRow(0, { key: "global" });
+
+    await h.remove(row, { offerSkip: true });
+
+    expect(h.deleteOne).toHaveBeenCalledExactlyOnceWith(row.key, {
       agentId: "main",
       deleteTranscript: true,
       expectedSessionId: row.sessionId,

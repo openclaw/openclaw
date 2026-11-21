@@ -17,11 +17,7 @@ import { normalizeSessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { filterSessionRows } from "../../lib/sessions/navigation.ts";
 import type { SessionPatch } from "../../lib/sessions/patch.ts";
-import {
-  resolveSessionPreferredFaceForKey,
-  resolveSessionNavigationAgentId,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
+import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -35,6 +31,7 @@ import { createSessionsArchive } from "./archive-actions.ts";
 import { createSessionGroups } from "./custom-groups.ts";
 import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
+import { navigateToSessionFromPage } from "./open-session-navigation.ts";
 import { createSessionsDialog } from "./page-dialog.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { createSessionsRosterReadiness } from "./roster-readiness.ts";
@@ -662,17 +659,7 @@ export function createSessionsPage(
         state.selectedSessions = new Map();
       },
       onDeleteSelected: () => actions.deleteSelected(),
-      onNavigateToChat: (sessionKey: string) => {
-        const face = resolveSessionPreferredFaceForKey(application, sessionKey);
-        const target = sessionNavigationTarget({
-          context: application,
-          face,
-          sessionKey,
-          agentId: sessionPathAgentId(sessionKey, application),
-          preferenceDerivedFace: true,
-        });
-        application.navigate(face, target.options);
-      },
+      onNavigateToChat: (sessionKey: string) => navigateToSessionFromPage(application, sessionKey),
       onOpenSessionMenu: actions.openSessionMenu,
       onToggleDetails: (key: string) => {
         state.expandedSessionKey = state.expandedSessionKey === key ? null : key;

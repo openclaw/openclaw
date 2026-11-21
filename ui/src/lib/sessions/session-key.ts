@@ -56,6 +56,19 @@ export function parseAgentSessionKey(
   );
 }
 
+export function isRedundantAcpSessionOwner(
+  sessionKey: string | undefined | null,
+  explicitAgentId: string | undefined | null,
+): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const normalizedExplicitAgentId = normalizeOptionalString(explicitAgentId);
+  return Boolean(
+    parsed?.rest.startsWith("acp:") &&
+    normalizedExplicitAgentId &&
+    normalizeAgentId(normalizedExplicitAgentId) === normalizeAgentId(parsed.agentId),
+  );
+}
+
 export function parseSessionKeyParts(
   key: string,
 ): { agentId: string; channel: string; accountId: string } | null {

@@ -1,3 +1,4 @@
+import { isRedundantAcpSessionOwner } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
@@ -30,7 +31,9 @@ export function chatHistoryRequestParams(
     sessionKey,
     toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
     knownState,
-    ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    ...(requestAgentId && !isRedundantAcpSessionOwner(sessionKey, requestAgentId)
+      ? { agentId: requestAgentId }
+      : {}),
     ...(cursor !== undefined ? { cursor } : {}),
     limit: CHAT_HISTORY_REQUEST_LIMIT,
     maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
