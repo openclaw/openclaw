@@ -5,6 +5,7 @@ import {
   type ApprovalRequestInput as NativeApprovalRequest,
 } from "../infra/approval-types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { resolveGroupAccountIsolationThreadId } from "../routing/session-key.js";
 import type {
   NativeApprovalDeliveryMode,
   NativeApprovalSurface,
@@ -199,6 +200,32 @@ function prepareApproverRestrictedSuppression(
   return { cfg: input.cfg, accountId };
 }
 
+/**
+ * Native origin targets of standard routes carry no thread, so a session forwarding target only
+ * matches once the group account isolation thread, which is internal and never a platform thread,
+ * is left out of the comparison. Real threads and explicit targets are compared unchanged.
+ */
+function resolveStandardForwardingTargetForMatch(
+  channel: string,
+  params: {
+    forwardingTarget: NativeApprovalTarget;
+    accountId?: string | null;
+    target: { source?: string };
+  },
+): NativeApprovalTarget {
+  const isolationThreadId =
+    params.target.source === "session" && params.accountId
+      ? resolveGroupAccountIsolationThreadId({ channel, accountId: params.accountId })
+      : undefined;
+  const isIsolationThread =
+    isolationThreadId !== undefined && params.forwardingTarget.threadId === isolationThreadId;
+  return {
+    ...params.forwardingTarget,
+    accountId: params.accountId,
+    ...(isIsolationThread ? { threadId: null } : {}),
+  };
+}
+
 function createStandardNativeApprovalRouting(
   channel: string,
   params: StandardNativeApprovalRoutingParams,
@@ -247,10 +274,8 @@ function createStandardNativeApprovalRouting(
       normalizeForwardTarget: targetResolvers.normalizeForwardTarget,
       resolveAccountId: ({ forwardingTarget, request }) =>
         forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId),
-      resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
-        ...forwardingTarget,
-        accountId,
-      }),
+      resolveForwardingTargetForMatch: (input) =>
+        resolveStandardForwardingTargetForMatch(channel, input),
       isSessionRouteEligible: routeGates.isSessionApprovalEligible,
       isExplicitTargetEligible:
         params.suppressExplicitTargetFallback === false
@@ -621,10 +646,8 @@ function createStandardNativeApprovalRoutingAsync(
       normalizeForwardTarget: targetResolvers.normalizeForwardTarget,
       resolveAccountId: ({ forwardingTarget, request }) =>
         forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId),
-      resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
-        ...forwardingTarget,
-        accountId,
-      }),
+      resolveForwardingTargetForMatch: (input) =>
+        resolveStandardForwardingTargetForMatch(channel, input),
       isSessionRouteEligible: routeGates.isSessionApprovalEligible,
       isExplicitTargetEligible:
         params.suppressExplicitTargetFallback === false
