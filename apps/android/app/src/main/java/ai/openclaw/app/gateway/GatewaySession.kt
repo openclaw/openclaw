@@ -316,6 +316,9 @@ internal data class GatewayCanvasHostRoute(
   val tlsFingerprintSha256: String?,
 )
 
+/** A connection that stays up this long counts as healthy and restarts the retry ladder. */
+private const val STABLE_CONNECTION_NS = 10_000_000_000L
+
 /** Preserve the first six retry slots; prolonged outages converge to a finite 30–60s timer band. */
 internal fun gatewayReconnectDelayMs(attempt: Int): Long {
   val ceilingMs = if (attempt <= 6) 8_000L else 60_000L
@@ -2311,8 +2314,19 @@ class GatewaySession(
             onDisconnected(if (target.attempt == 0) "Connecting…" else "Reconnecting…")
           }
         }
+        val connectedAtNs = System.nanoTime()
         connectOnce(target, loopJob)
-        target.attempt = 0
+        if (System.nanoTime() - connectedAtNs >= STABLE_CONNECTION_NS) {
+          target.attempt = 0
+        } else {
+          // A gateway that closes right after hello must not turn this loop into a tight reconnect.
+          target.attempt = (target.attempt + 1).coerceAtMost(10)
+          if (desired === target && !target.reconnectPausedForAuthFailure &&
+            awaitGatewayReconnectSignal(reconnectSignal, gatewayReconnectDelayMs(target.attempt))
+          ) {
+            target.attempt = 0
+          }
+        }
       } catch (err: Throwable) {
         loopJob.ensureActive()
         if (err is CancellationException) throw err

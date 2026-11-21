@@ -314,6 +314,42 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun gatewayThatClosesRightAfterHelloGetsTheRetryLadder() =
+    runBlocking {
+      val dispatcher = ReconnectTestDispatcher()
+      val starts = ConcurrentLinkedQueue<Long>()
+      val fourthAttempt = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          if (method == "connect") {
+            socket.send(connectResponseFrame(id))
+            socket.close(1012, "service restart")
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          lifecycleDispatcher = dispatcher,
+          onDisconnected = { message ->
+            if (message == "Connecting…" || message == "Reconnecting…") {
+              starts += dispatcher.nowMs
+              if (starts.size == 4) fourthAttempt.complete(Unit)
+            }
+          },
+        )
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) {
+          repeat(3) { dispatcher.advanceNextTimeout() }
+          fourthAttempt.await()
+        }
+        val spanMs = starts.toList()[3] - starts.toList()[0]
+        assertTrue("Three hello-then-close cycles took ${spanMs}ms of backoff", spanMs >= 3_000)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun manualReconnectResetsTheSameRetryLadder() = assertWakeResetsRetryLadder(manual = true)
 
   @Test
