@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { getUpdateRunAsync } from "../infra/update-run-reader.js";
+import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -9,7 +11,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { settleRunFromTrial } from "./gateway-trial.js";
-import { createRun, readRun, recordStep } from "./runs.js";
 import { readTrial, resolvePrefix, writeTrial, type Trial } from "./store.js";
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
@@ -40,7 +41,7 @@ it.each(["succeeded", "rolled-back"] as const)(
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
     const options = { env: process.env };
     openOpenClawStateDatabase(options);
-    const run = createRun({ trigger: "cli" }, options);
+    const run = await createUpdateRunAsync({ trigger: "cli" }, options);
     const trial: Trial = {
       v: 2,
       runId: run.runId,
@@ -62,7 +63,7 @@ it.each(["succeeded", "rolled-back"] as const)(
     };
     await writeTrial(trial);
     await settleRunFromTrial(trial);
-    const finished = readRun(run.runId, options);
+    const finished = await getUpdateRunAsync(run.runId, options);
     expect(finished).toMatchObject({
       status: status === "succeeded" ? "succeeded" : "failed",
       phase: "finished",
@@ -83,7 +84,9 @@ it.each(["succeeded", "rolled-back"] as const)(
     }
     expect(await readTrial(resolvePrefix())).toMatchObject({ reported: true });
     await settleRunFromTrial((await readTrial())!);
-    expect(readRun(run.runId, options)?.finishedAtMs).toBe(finished?.finishedAtMs);
+    expect((await getUpdateRunAsync(run.runId, options))?.finishedAtMs).toBe(
+      finished?.finishedAtMs,
+    );
   },
 );
 
@@ -95,12 +98,12 @@ it.each([true, false])(
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
     const options = { env: process.env };
     openOpenClawStateDatabase(options);
-    const run = createRun(
+    const run = await createUpdateRunAsync(
       { trigger: "chat", origin: { sessionKey: "agent:main:telegram:dm:1" } },
       options,
     );
     if (acknowledged) {
-      recordStep(
+      await recordUpdateRunStepAsync(
         run.runId,
         { step: "notice:ack", status: "completed", endedAtMs: Date.now() },
         options,

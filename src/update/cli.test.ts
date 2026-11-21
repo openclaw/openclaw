@@ -32,7 +32,9 @@ afterEach(() => {
 it("sends a pinned commit that the Gateway protocol accepts", async () => {
   const { runReleaseUpdateCli } = await import("./cli.js");
   const sha = "a".repeat(40);
-  await expect(runReleaseUpdateCli({ json: true, sha })).rejects.toThrow("refused for the test");
+  await expect(
+    runReleaseUpdateCli({ json: true, restart: true, runningRoot: "/tmp/openclaw-checkout", sha }),
+  ).rejects.toThrow("refused for the test");
   expect(sent).toEqual([{ target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha } }]);
   expect(validateUpdateRunParams(sent[0])).toBe(true);
 });

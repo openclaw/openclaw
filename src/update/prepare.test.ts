@@ -218,6 +218,20 @@ describe("update preflight", () => {
     ).toMatchObject({ ok: false, reason: "missing-tool" });
   });
 
+  it("refuses a checkout with local changes before preparation", async () => {
+    const target = await repository();
+    await fs.appendFile(path.join(target.checkout, "package.json"), "\n");
+    expect(
+      await preflight({
+        kind: "git",
+        target: { kind: "git", ...target, version: "2026.11.21" },
+        prefix: root,
+        stateDir: root,
+        node,
+      }),
+    ).toMatchObject({ ok: false, reason: "dirty" });
+  });
+
   it("refuses insufficient installation and state disk space", async () => {
     const target = await repository();
     const params = {

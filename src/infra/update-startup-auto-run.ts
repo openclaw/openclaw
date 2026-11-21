@@ -91,9 +91,8 @@ export async function runAutoUpdateCommand(
   }
   // Git installs prepare a release and restart into the launcher's trial; no handoff helper.
   if (params.mode === "git" && params.root) {
-    const [{ prepareUpdate }, { recordPhase }, { scheduleGatewayRestart }] = await Promise.all([
+    const [{ prepareUpdate }, { scheduleGatewayRestart }] = await Promise.all([
       import("../update/run.js"),
-      import("../update/runs.js"),
       import("./restart.js"),
     ]);
     // prepareUpdate settles the run itself unless a trial is pending; later writes are no-ops.
@@ -114,7 +113,7 @@ export async function runAutoUpdateCommand(
     if (outcome.status === "failed") {
       return failure(outcome.reason, outcome.message);
     }
-    recordPhase(params.runId, "restarting");
+    await recordUpdateRunPhase(params.runId, "restarting");
     scheduleGatewayRestart({ reason: "update.auto" });
     return { status: "handoff" };
   }

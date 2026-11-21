@@ -212,17 +212,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
         ) {
           throw new Error('--admission must be "auto" or "installed".');
         }
-        const { runReleaseUpdateCli } = await import("../update/cli.js");
-        if (
-          !opts.dryRun &&
-          (await runReleaseUpdateCli({
-            json: Boolean(opts.json),
-            channel: opts.channel,
-            sha: opts.sha,
-          }))
-        ) {
-          return;
-        }
         const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
           runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,

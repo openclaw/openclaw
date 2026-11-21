@@ -18,6 +18,8 @@ import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "../infra/node-sqlite.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { collectRegisteredPaths } from "../infra/update-candidate-state.shared.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { getPersistedInstalledPluginIndexCacheEntry } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -31,10 +33,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-schema-versions.js";
-import {
-  resolveOpenClawRegisteredAgentDatabasePath,
-  resolveOpenClawStateSqlitePath,
-} from "../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { listStateDatabases } from "./preflight.js";
 
 export type ReleaseSurface = { plugin: string; surface: string; error?: string };
@@ -74,7 +73,7 @@ export async function checkRelease(
         timeout: 5000,
       });
       try {
-        const version = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+        const version = readSqliteUserVersion(db);
         const supported =
           kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
         if (version > supported) {
@@ -87,17 +86,9 @@ export async function checkRelease(
             "plugins.installedIndex",
             "plugins.bundledDiscovery",
           ]);
-          // Bootstrap inspection deliberately uses no current-schema agent registry reader.
-          if (
-            db
-              .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_databases'")
-              .get()
-          ) {
-            for (const row of db.prepare("SELECT path FROM agent_databases").all()) {
-              if (typeof row.path === "string") {
-                agentPaths.add(resolveOpenClawRegisteredAgentDatabasePath(statePath, row.path));
-              }
-            }
+          // The update inspection owner reads registries of any schema age, read-only.
+          for (const { source } of collectRegisteredPaths(db, statePath, new Map())) {
+            agentPaths.add(source);
           }
         }
       } finally {

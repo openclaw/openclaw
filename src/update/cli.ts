@@ -1,41 +1,32 @@
-// `openclaw update` for installs on the release launcher: a client of the running Gateway's
-// `update.run`, or the same steps in-process when no Gateway answers.
+// `openclaw update` for Git installs, after the update command's refusals: a client of the
+// running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
 import { setTimeout as sleep } from "node:timers/promises";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
-import {
-  normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
-  type UpdateChannel,
-} from "../infra/update-channels.js";
+import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
+import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
-import { createRun } from "./runs.js";
 
 const POLL_MS = 2_000;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
 
-export type UpdateCliOptions = { json: boolean; channel?: string; sha?: string };
+export type ReleaseUpdateOptions = {
+  json: boolean;
+  restart: boolean;
+  /** The Git checkout the update command admitted. */
+  runningRoot: string;
+  channel?: UpdateChannel;
+  sha?: string;
+};
 
-/** Returns false when this install is not on the release path (the caller runs the package updater). */
-export async function runReleaseUpdateCli(opts: UpdateCliOptions): Promise<boolean> {
-  const { root: runningRoot, status } = await resolveStartupInstallStatus(
-    false,
-    new AbortController().signal,
-  );
-  if (!runningRoot || status.installKind !== "git") {
-    return false;
-  }
-  const channel = (opts.channel ? normalizeUpdateChannel(opts.channel) : undefined) ?? undefined;
-  if (opts.channel && !channel) {
-    throw new Error(
-      `--channel must be stable, extended-stable, beta or dev (got "${opts.channel}").`,
-    );
-  }
+export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
+  const { runningRoot, channel } = opts;
   if (channel) {
     await mutateConfigFileWithRetry({
       base: "source",
@@ -46,7 +37,9 @@ export async function runReleaseUpdateCli(opts: UpdateCliOptions): Promise<boole
     });
   }
   // The protocol names the tracked upstream with the commit; the install status already reads it.
-  const upstreamRef = status.git?.upstream;
+  const upstreamRef = opts.sha
+    ? (await resolveStartupInstallStatus(false, new AbortController().signal)).status.git?.upstream
+    : undefined;
   if (opts.sha && !upstreamRef) {
     throw new Error(
       "--sha needs a checkout that tracks an upstream branch (git branch --set-upstream-to).",
@@ -56,13 +49,16 @@ export async function runReleaseUpdateCli(opts: UpdateCliOptions): Promise<boole
     opts.sha && upstreamRef
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
-  const runId = await requestGatewayUpdate(target);
+  // --no-restart prepares in this process; the release starts at the Gateway's next start.
+  const runId = opts.restart ? await requestGatewayUpdate(target) : null;
   const record = runId
     ? await followRun(runId, opts.json)
     : await updateWithoutGateway(runningRoot, channel, opts.sha);
   report(record, opts.json);
-  process.exitCode = record?.status === "succeeded" || record?.status === "skipped" ? 0 : 1;
-  return true;
+  process.exitCode =
+    record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
+      ? 0
+      : 1;
 }
 
 async function requestGatewayUpdate(target?: {
@@ -129,7 +125,7 @@ async function updateWithoutGateway(
   configChannel: UpdateChannel | undefined,
   sha?: string,
 ): Promise<UpdateRunRecord | undefined> {
-  const run = createRun({ trigger: "cli", before: { version: VERSION } });
+  const run = await createUpdateRunAsync({ trigger: "cli", before: { version: VERSION } });
   const channel = resolveEffectiveUpdateChannel({
     configChannel,
     currentVersion: VERSION,
@@ -146,15 +142,21 @@ async function updateWithoutGateway(
     defaultRuntime.log(
       `OpenClaw ${outcome.target.version} is ready and starts the next time the Gateway starts.`,
     );
-    return { ...run, status: "succeeded" };
   }
-  const { readRun } = await import("./runs.js");
-  return readRun(run.runId);
+  return await getUpdateRunAsync(run.runId);
+}
+
+/** Prepared and published; the Gateway's next start activates it. */
+function isPendingActivation(record: UpdateRunRecord | undefined) {
+  return record?.status === "running" && record.phase === "activating";
 }
 
 function report(record: UpdateRunRecord | undefined, json: boolean) {
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
+    return;
+  }
+  if (isPendingActivation(record)) {
     return;
   }
   if (!record) {

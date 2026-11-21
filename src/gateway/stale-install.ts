@@ -28,7 +28,6 @@ import {
   onGatewaySuspendAdmissionChange,
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { announceReady } from "../update/gateway-trial.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { isGatewayTransportError } from "./transport-error.js";
 
@@ -187,9 +186,11 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   // The maintenance owner starts only after the Gateway listener is serving.
   if (observer && !observer.trialSettled) {
     observer.trialSettled = true;
-    void announceReady(observer.running.buildId).catch(() => {
-      observer.trialSettled = false;
-    });
+    void import("../update/gateway-trial.js")
+      .then(({ announceReady }) => announceReady(observer.running.buildId))
+      .catch(() => {
+        observer.trialSettled = false;
+      });
   }
   const root = observer?.installationRoot;
   if (

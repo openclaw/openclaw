@@ -4,8 +4,11 @@ import path from "node:path";
 import { resolveStateDir, resolveConfigPath } from "../config/paths.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { collectPackageReleases } from "./release-retention.js";
-import { capturePackageReleaseSlot, switchPackageReleaseLink } from "./release-slot.js";
+import { collectPackageReleases } from "../infra/package-release-retention.js";
+import {
+  capturePackageReleaseSlot,
+  switchPackageReleaseLink,
+} from "../infra/package-release-slot.js";
 
 export type ReleaseKind = "git" | "package";
 export type Trial = {

@@ -96,6 +96,19 @@ async function updateCommandWithRuntime(
       ),
     );
   }
+  // Git installs that stay on Git update through prepared releases; every refusal above still
+  // applies. A requested non-dev channel switches the checkout to a package (the package flow).
+  const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
+  if (prepared.installKind === "git" && staysGit && !inputOpts.dryRun) {
+    const { runReleaseUpdateCli } = await import("../../update/cli.js");
+    return await runReleaseUpdateCli({
+      json: Boolean(inputOpts.json),
+      restart: prepared.shouldRestart,
+      runningRoot: prepared.discoveredRoot,
+      channel: prepared.requestedChannel ?? undefined,
+      sha: inputOpts.sha,
+    });
+  }
   const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
   return await withUpdateAdmissionReporting(
     inputOpts,

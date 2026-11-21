@@ -7,13 +7,17 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import {
+  finishUpdateRunAsync,
+  recordUpdateRunPhaseAsync,
+  recordUpdateRunStepAsync,
+} from "../infra/update-run-write.async.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { checkRelease } from "./check-release.js";
 import { writeLauncher } from "./launcher.js";
 import { preflight } from "./preflight.js";
 import { prepareGit, type PrepareResult } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
-import { finishRun, recordPhase, recordStep } from "./runs.js";
 import {
   acquireUpdateLock,
   allocateStaging,
@@ -23,6 +27,7 @@ import {
   readTrial,
   releaseUpdateLock,
   resolvePrefix,
+  switchLink,
   type ReleaseKind,
 } from "./store.js";
 import { resolveTarget } from "./target.js";
@@ -68,13 +73,26 @@ export async function prepareUpdate(params: {
   const env = params.env ?? process.env;
   const prefix = resolvePrefix(env);
   const node = params.node ?? process.execPath;
-  const fail = (reason: string, message: string, detail?: string): UpdateRunOutcome => {
-    finishRun(params.runId, { status: "failed", reason, nextAction: message, detail }, { env });
+  const fail = async (
+    reason: string,
+    message: string,
+    detail?: string,
+  ): Promise<UpdateRunOutcome> => {
+    await finishUpdateRunAsync(
+      params.runId,
+      {
+        status: "failed",
+        reason,
+        nextAction: message,
+        ...(detail ? { diagnostics: { failure: { step: "outcome", detail } } } : {}),
+      },
+      { env },
+    );
     return { status: "failed", reason, message };
   };
   const trial = await readTrial(prefix);
   if (trial && ["pending", "trial", "restoring"].includes(trial.phase)) {
-    return fail(
+    return await fail(
       "update-running",
       "Another update is switching releases. Try again in a few minutes.",
     );
@@ -84,12 +102,16 @@ export async function prepareUpdate(params: {
     prefix,
   );
   if (!lock.acquired) {
-    return fail("update-running", `Update ${lock.lock.runId} is already running.`);
+    return await fail("update-running", `Update ${lock.lock.runId} is already running.`);
   }
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
   try {
     if (lock.previous) {
-      finishRun(lock.previous.runId, { status: "failed", reason: "interrupted" }, { env });
+      await finishUpdateRunAsync(
+        lock.previous.runId,
+        { status: "failed", reason: "interrupted" },
+        { env },
+      );
     }
     // Releases left by an earlier update; never on the critical path.
     void collectReleases(prefix).catch(() => undefined);
@@ -104,9 +126,9 @@ export async function prepareUpdate(params: {
         sha: params.sha,
       });
     } catch (error) {
-      return fail("no-target", `No update target: ${formatErrorMessage(error)}`);
+      return await fail("no-target", `No update target: ${formatErrorMessage(error)}`);
     }
-    recordPhase(
+    await recordUpdateRunPhaseAsync(
       params.runId,
       "staging",
       {
@@ -119,7 +141,11 @@ export async function prepareUpdate(params: {
       { env },
     );
     if (target.kind === "package" && target.version === params.runningVersion) {
-      finishRun(params.runId, { status: "skipped", reason: "already-current" }, { env });
+      await finishUpdateRunAsync(
+        params.runId,
+        { status: "skipped", reason: "already-current" },
+        { env },
+      );
       return { status: "current", version: target.version };
     }
     if (target.kind === "git") {
@@ -128,7 +154,11 @@ export async function prepareUpdate(params: {
         { timeoutMs: 10_000 },
       );
       if (head.code === 0 && head.stdout.trim() === target.sha) {
-        finishRun(params.runId, { status: "skipped", reason: "already-current" }, { env });
+        await finishUpdateRunAsync(
+          params.runId,
+          { status: "skipped", reason: "already-current" },
+          { env },
+        );
         return { status: "current", version: target.version };
       }
     }
@@ -141,11 +171,11 @@ export async function prepareUpdate(params: {
       env,
     });
     if (!checked.ok) {
-      return fail(checked.reason, checked.message);
+      return await fail(checked.reason, checked.message);
     }
     staging = await allocateStaging({ kind: install.kind }, prefix);
-    const onStep = (name: string) => {
-      recordStep(
+    const onStep = async (name: string) => {
+      await recordUpdateRunStepAsync(
         params.runId,
         { step: `prepare:${name}`, status: "in_progress", startedAtMs: Date.now() },
         { env },
@@ -170,16 +200,16 @@ export async function prepareUpdate(params: {
             onStep,
           });
     if (!prepared.ok) {
-      return fail(
+      return await fail(
         prepared.reason,
         "The new version could not be built. The current version is still running.",
         prepared.stderrTail,
       );
     }
-    recordPhase(params.runId, "validating", {}, { env });
+    await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
     const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
     if (!verdict.ok) {
-      return fail(
+      return await fail(
         "release-check-failed",
         `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
         verdict.detail,
@@ -188,19 +218,25 @@ export async function prepareUpdate(params: {
     const releaseRoot = await publishStaging(staging);
     staging = undefined;
     const launcher = await writeLauncher(prefix);
+    // Forwarded commands run `prefix/openclaw` until the launcher switches it; on the first
+    // conversion that link must already serve the running tree.
+    const slot = path.join(prefix, "openclaw");
+    if (!(await fs.readlink(slot).catch(() => null))) {
+      await switchLink(path.relative(prefix, params.runningRoot), prefix);
+    }
+    const previous = await fs.readlink(slot);
     await markForwarding(install, params.runningRoot, launcher, prefix);
-    const current = await fs.readlink(path.join(prefix, "openclaw")).catch(() => null);
     await createTrialPending(
       {
         runId: params.runId,
         target: path.relative(prefix, releaseRoot),
-        previous: current ?? path.relative(prefix, params.runningRoot),
+        previous,
         version: prepared.version,
         buildId: prepared.buildId,
       },
       prefix,
     );
-    recordPhase(
+    await recordUpdateRunPhaseAsync(
       params.runId,
       "activating",
       {
@@ -213,7 +249,7 @@ export async function prepareUpdate(params: {
     );
     return { status: "pending", target: { version: prepared.version }, releaseRoot };
   } catch (error) {
-    return fail(
+    return await fail(
       "update-failed",
       "The update failed before anything changed. The current version is still running.",
       error instanceof Error && error.stack ? error.stack : formatErrorMessage(error),

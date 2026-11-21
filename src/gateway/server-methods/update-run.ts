@@ -12,8 +12,12 @@ import {
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
+import {
+  createUpdateRunAsync,
+  finishUpdateRunAsync,
+  recordUpdateRunPhaseAsync,
+} from "../../infra/update-run-write.async.js";
 import { prepareUpdate } from "../../update/run.js";
-import { createRun, finishRun, recordPhase } from "../../update/runs.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isBrowserOperatorUiClient,
@@ -22,16 +26,16 @@ import {
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
-import type { GatewayRequestHandler } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { admitGatewayUpdateRequest } from "./update-admission.js";
-import { packageUpdateRunHandlers } from "./update-package-run.js";
+import { updateHandlers as legacyUpdateHandlers } from "./update.js";
 
 export const updateRunHandler: GatewayRequestHandler = async (request) => {
   const { respond, client, context } = request;
   // Git installs move to the release launcher first; package installs follow in the next change.
   const installed = await readInstallStatus();
   if (!installed.root || installed.status.installKind !== "git") {
-    return await packageUpdateRunHandlers["update.run"]!(request);
+    return await legacyUpdateHandlers["update.run"]!(request);
   }
   const params = await admitGatewayUpdateRequest(request);
   if (!params) {
@@ -67,7 +71,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     : isBrowserOperatorUiClient(client?.connect.client) || params.sessionKey
       ? "control-ui"
       : "api";
-  const run = createRun({
+  const run = await createUpdateRunAsync({
     trigger,
     origin: {
       ...(requester ? { requester } : {}),
@@ -126,7 +130,7 @@ async function runUpdateInBackground(
       sha: options.sha,
     });
     if (outcome.status === "pending") {
-      recordPhase(runId, "restarting");
+      await recordUpdateRunPhaseAsync(runId, "restarting");
       // A process-replacing reason: the next process starts through the release launcher.
       scheduleGatewayRestart({ reason: "update.run", sessionKey: options.sessionKey });
     }
@@ -134,11 +138,11 @@ async function runUpdateInBackground(
     options.warn(`update.run ${runId} failed: ${String(error)}`);
     // Detached work: a failed record must not become an unhandled rejection.
     try {
-      finishRun(runId, {
+      await finishUpdateRunAsync(runId, {
         status: "failed",
         reason: "update-failed",
         nextAction: "The update failed before anything changed. Run `openclaw update` to retry.",
-        detail: String(error),
+        diagnostics: { failure: { step: "outcome", detail: String(error) } },
       });
     } catch (recordError) {
       options.warn(`update.run ${runId} outcome was not recorded: ${String(recordError)}`);
@@ -155,3 +159,9 @@ async function readInstallStatus() {
     resolveStartupInstallStatus(false, signal, lifecycle.installStatus),
   );
 }
+
+/** The update handlers with `update.run` routed by install kind. */
+export const updateHandlers: GatewayRequestHandlers = {
+  ...legacyUpdateHandlers,
+  "update.run": updateRunHandler,
+};

@@ -5,6 +5,7 @@ import { satisfies } from "semver";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { gitCleanCheckArgs } from "../infra/update-runner-git-commands.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { UpdateTarget } from "./target.js";
 
@@ -126,6 +127,21 @@ export async function preflight(params: {
         return refuse(
           reason,
           `Required tool ${tool} is unavailable. Install it and retry the update.`,
+        );
+      }
+    }
+    if (params.target.kind === "git") {
+      // The release builds from the commit; local edits would silently stop running.
+      reason = "dirty";
+      const status = await runCommandWithTimeout(gitCleanCheckArgs(params.target.checkout), {
+        env,
+        timeoutMs: 30_000,
+        killProcessTree: true,
+      });
+      if (status.code !== 0 || status.stdout.trim()) {
+        return refuse(
+          reason,
+          "This checkout has local changes. Commit your changes and retry, or run `openclaw triage` for help.",
         );
       }
     }
