@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { captureRequesterOrigin } from "../agents/requester-origin.js";
-import { normalizePromptMetadataString } from "../auto-reply/reply/inbound-meta.text.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
@@ -43,8 +42,7 @@ export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["send
           },
         }
       : {}),
-    // Same test as the prompt's "Forwarded message context" block in inbound-meta.ts.
-    ...(normalizePromptMetadataString(ctx.ForwardedFrom) ? { forwarded: true } : {}),
+    ...(normalizeOptionalString(ctx.ForwardedFrom) ? { forwarded: true } : {}),
   };
 }
 
