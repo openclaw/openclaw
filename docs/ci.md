@@ -451,7 +451,7 @@ weighted resource limits and exact-candidate artifact checks remain unchanged.
 Package Acceptance admits its long standalone upgrade lanes before expanded
 scenario jobs and orders pinned baseline cohorts newest first. Its
 [expanded package-survivor matrix](/ci/release-validation/package-acceptance)
-admits up to 48 jobs on GitHub-hosted runners without a custom runner group;
+admits up to 64 jobs on GitHub-hosted runners without a custom runner group;
 source-only, unexpanded, self-hosted/custom-group, and update-migration matrices
 retain 32. Scenario coverage and per-runner limits are unchanged.
 
