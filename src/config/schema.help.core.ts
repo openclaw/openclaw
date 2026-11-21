@@ -142,8 +142,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.sessionControl":
     "Explicit opt-ins for session control surfaces. Authentication and saved device grants do not enable publication or active steering.",
+  "gateway.sessionControl.publicationWriteEnabled":
+    "Allows restricted publication-writer connections only when true (default: false). Independent of publication reads and host steering. Source plugins still require their own opt-in and device grant. Checked at each request admission; disabling denies new requests without revoking admitted work.",
   "gateway.sessionControl.publicationReadEnabled":
-    "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Disabling retires existing reader admissions, including pending reads, even if enabled again before their next check.",
+    "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Checked when each connection or read request starts; disabling denies new requests without revoking an already admitted read.",
   "gateway.sessionControl.steeringEnabled":
     "Allows authenticated people to steer an existing run only when true (default: false). Independent of publication reads and writer transport. Checked when each request starts; disabling denies new requests without revoking one already admitted.",
   "gateway.cliAgents":
@@ -176,6 +178,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Accept revision-scoped OCE browser identity and scope grants through the private trusted proxy. Delegated profiles do not use email aliases or device grants.",
   "gateway.auth.trustedProxy.delegation.credentialFile":
     "Absolute path to a private file containing the revision's 32-byte credential as 64 lowercase hexadecimal characters. File replacement or removal invalidates existing grants.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt":
+    "Opt-in check that each request's cf-access-jwt-assertion is signed by your Cloudflare Access team, is for this application, and has not expired. The user header must match the signed email claim. Without it, the Gateway trusts the identity headers from any trusted proxy source, including other local processes.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.issuer":
+    "Exact HTTPS origin of your Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Signing keys are fetched from its /cdn-cgi/access/certs endpoint.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.audience":
+    "Application Audience (AUD) tag from the Access application's overview page. Assertions issued for other applications are rejected.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc":
     "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
   "gateway.auth.trustedProxy.gitCoauthor":

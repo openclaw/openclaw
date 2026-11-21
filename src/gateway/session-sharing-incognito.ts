@@ -1,3 +1,4 @@
+import { SessionSharingAuthorityUnknownError } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -11,7 +12,12 @@ type IncognitoSessionSharingTarget = {
 
 export class SessionMutationFactsUnavailableError extends Error {
   constructor(options?: ErrorOptions) {
-    super("Session access facts are unavailable; retry after session storage is ready.", options);
+    super(
+      options?.cause instanceof SessionSharingAuthorityUnknownError
+        ? "Session access facts are unavailable after an uncertain write; restart the Gateway to restore this session."
+        : "Session access facts are unavailable; retry after session storage is ready.",
+      options,
+    );
     this.name = "SessionMutationFactsUnavailableError";
   }
 }

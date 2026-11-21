@@ -924,6 +924,7 @@ src/config/zod-schema.session.ts
 src/config/zod-schema.storage.ts
 src/config/zod-schema.telemetry.ts
 src/config/zod-schema.ts
+src/config/zod-schema.tts-auto.ts
 src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
@@ -2292,6 +2293,7 @@ src/state/openclaw-state-db-schema-v38-repository-disk.ts
 src/state/openclaw-state-db-schema-v39-worker-retention.ts
 src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
 src/state/openclaw-state-db-schema-v40-lazy-additions.ts
+src/state/openclaw-state-db-schema-v41-approval-profile.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
