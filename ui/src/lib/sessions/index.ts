@@ -543,13 +543,12 @@ export function createSessionCapability(
       githubPublication.observePullRequests(event.payload);
       return;
     }
-    const configChanged = isConversationConfigChange(event);
-    if (configChanged || event.event === "chat.metadata.changed") {
+    if (event.event === "chat.metadata.changed" || isConversationConfigChange(event)) {
       roster.observations.descriptions.clear();
-    }
-    if (configChanged) {
-      // Config can change configured-agent membership even with no chat pane mounted.
-      roster.scheduleEvent();
+      if (event.event === "config.changed") {
+        // Config can change configured-agent membership even with no chat pane mounted.
+        roster.scheduleEvent();
+      }
       return;
     }
     if (event.event !== "sessions.changed" && event.event !== "session.message") {
