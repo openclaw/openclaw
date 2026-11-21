@@ -52,7 +52,10 @@ import {
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
-import { createReplyCronAuthorityFactory } from "./get-reply-run.cron-requester.js";
+import {
+  createReplyCronAuthorityFactory,
+  logReplyCronOwnerWithoutAuthority,
+} from "./get-reply-run.cron-requester.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -409,10 +412,14 @@ export async function executePreparedReplyRun(
           channel: messageProvider,
           senderId: sessionCtx.SenderId,
           accountId: ctx.AccountId ?? sessionCtx.AccountId,
-          replyAccountId: replyRoute.accountId,
-          commandSenderId: command.senderId,
         })
       : undefined;
+  if (authorityRunId && !inheritedCronCreatorAuthorityCapability && !createChannelCronAuthority) {
+    logReplyCronOwnerWithoutAuthority(sessionCtx, {
+      channel: messageProvider,
+      accountId: ctx.AccountId ?? sessionCtx.AccountId,
+    });
+  }
   const followupRun = {
     createChannelCronAuthority,
     prompt: queuedBody,

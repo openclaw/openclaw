@@ -1,3 +1,6 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -17,6 +20,46 @@ import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { createOpencodeGoWireWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
+const loadConsoleOAuth = createLazyRuntimeModule(() => import("./console-oauth.js"));
+
+async function signInWithOpencodeConsole(ctx: ProviderAuthContext) {
+  const credentials = await (await loadConsoleOAuth()).loginOpencodeConsole(ctx);
+  const notes = [
+    "OpenClaw is signed in to the OpenCode Console workspace you picked for Go. Tokens refresh automatically.",
+  ];
+  ctx.assertCurrent?.();
+  const credentialOnly = {
+    profiles: [
+      {
+        profileId: `${PROVIDER_ID}:default`,
+        credential: { type: "oauth" as const, provider: PROVIDER_ID, ...credentials },
+      },
+    ],
+    notes,
+  };
+  if (ctx.credentialOnly) {
+    return credentialOnly;
+  }
+  // The starter model only becomes the default when this workspace's Go plan offers it.
+  const defaultModel = await resolveOpencodeGoStarterModel({
+    apiKey: credentials.access,
+    preferredModelRef: OPENCODE_GO_DEFAULT_MODEL_REF,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+  });
+  ctx.assertCurrent?.();
+  if (!defaultModel) {
+    return credentialOnly;
+  }
+  return buildOauthProviderAuthResult({
+    providerId: PROVIDER_ID,
+    defaultModel,
+    access: credentials.access,
+    refresh: credentials.refresh,
+    expires: credentials.expires,
+    profileName: "default",
+    notes,
+  });
+}
 
 function normalizeGoBaseUrl<T extends { api?: string | null; baseUrl?: string }>(value: T) {
   const baseUrl = normalizeOpencodeGoBaseUrl(value);
@@ -51,6 +94,25 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "OpenCode",
     },
+    extraAuth: [
+      {
+        id: "oauth",
+        label: "OpenCode Console browser sign-in (Go)",
+        hint: "Sign in with your browser and pick a Console workspace with Go",
+        kind: "device_code",
+        wizard: {
+          choiceId: "opencode-go-console",
+          choiceLabel: "OpenCode Go (browser sign-in)",
+          choiceHint: "Sign in in your browser and pick a Console workspace with Go",
+          groupId: "opencode",
+          groupLabel: "OpenCode Go",
+          groupHint: "Browser sign-in or shared Zen + Go API key",
+        },
+        run: signInWithOpencodeConsole,
+      },
+    ],
+    refreshOAuth: async (credential) =>
+      (await loadConsoleOAuth()).refreshOpencodeConsoleCredential(credential),
     normalizeConfig: ({ providerConfig }) => normalizeGoBaseUrl(providerConfig),
     normalizeResolvedModel: ({ model }) => {
       const baseUrlNormalized = normalizeGoBaseUrl(model);

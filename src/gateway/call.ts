@@ -37,6 +37,7 @@ import {
   GatewayStoredDeviceAuthUnavailableError,
   loadStoredOperatorDeviceAuthToken,
   resolveGatewayCallDeviceAuth,
+  withEdgeAuthPairingHint,
 } from "./call-device-auth.js";
 import type {
   CallGatewayBaseOptions,
@@ -59,6 +60,7 @@ import {
 } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
+  GATEWAY_PAIRING_APPROVAL_HINT,
   projectGatewayConnectionDetailsForDiagnostics,
   projectGatewayUrlForDiagnostics,
   type GatewayConnectionDetails,
@@ -73,7 +75,6 @@ import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
   resolveEdgeAuthHeaders,
-  type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
 import {
   canSkipGatewayConfigLoad,
@@ -552,18 +553,18 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
           "No stored device auth for this gateway origin.",
-          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request.`,
+          GATEWAY_PAIRING_APPROVAL_HINT,
         ].join("\n"),
       );
     }
   }
   const tlsFingerprint = bootstrap.tlsFingerprint;
-  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
-    gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
-  );
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config: context.config,
-    value: edgeAuthConfig,
+    value: normalizeEdgeAuthHeadersConfig(
+      gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
+    ),
     targetUrl: url,
     env: process.env,
   });
@@ -591,8 +592,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     (resolvedAuth.mode === "token" || resolvedAuth.mode === "password") &&
     !token &&
     !password &&
-    !opts.approvalRuntimeToken &&
-    !resolvedAuth.allowTailscale
+    // gateway.remote.edgeAuth authenticates at the proxy; first connects then pair.
+    !(opts.approvalRuntimeToken || resolvedAuth.allowTailscale || edgeAuthHeaders)
   ) {
     const availableAuth =
       storedAuth === undefined
@@ -767,7 +768,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (settled || dispatchGeneration !== connectionGeneration) {
               return;
             }
-            stop(err as Error);
+            stop(withEdgeAuthPairingHint(err as Error, edgeAuthHeaders, deviceIdentity, opts.url));
           }
         })();
       },

@@ -36,7 +36,8 @@ import {
 } from "../../transcripts/store-columns.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
-import { summarizeTranscripts, type TranscriptsSummary } from "../../transcripts/summary.js";
+import { summarizeTranscripts } from "../../transcripts/summary.js";
+import type { TranscriptsSummary } from "../../transcripts/types.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";

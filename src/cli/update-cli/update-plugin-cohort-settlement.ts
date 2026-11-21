@@ -34,7 +34,7 @@ import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-
 import {
   hasUnrecordedUpdateRunDriver,
   inspectUpdateRunAbandonment,
-  needsPostCoreRepair,
+  inspectNewerRecoveryHistory,
   updateRunLastActivity,
 } from "../../infra/update-run-activity.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
@@ -111,9 +111,22 @@ async function inspectGitActivation(
   if (activation.buildId !== to.buildId || activation.previousBuildId !== from.buildId) {
     return " whose recorded build does not match its plugin recovery";
   }
-  // Read-only probes must not refresh the checkout's index.
+  // Settlement tells the two cores apart by version and build ID alone.
+  if (from.version === to.version && from.buildId === to.buildId) {
+    return " whose build has the same version and build ID as the build it replaced";
+  }
+  // Read-only probes must not refresh the checkout's index or fetch a partial clone's
+  // objects. Older Git ignores GIT_NO_LAZY_FETCH, so every transport is denied too.
+  const { gitReadOnlyEnvironment } = await import("../../infra/git-exec.js");
   const git = (argv: string[]) =>
-    runCommandWithTimeout(argv, { cwd: root, timeoutMs, env: { GIT_OPTIONAL_LOCKS: "0" } });
+    runCommandWithTimeout(argv, {
+      cwd: root,
+      timeoutMs,
+      env: gitReadOnlyEnvironment(argv.slice(1), {
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_ALLOW_PROTOCOL: "",
+      }),
+    });
   const head = await git(["git", "-C", root, "rev-parse", "HEAD"]);
   if (head.code !== 0 || head.stdout.trim() !== activation.sha) {
     return ", and the checkout is no longer at the commit that update activated";
@@ -356,25 +369,23 @@ export async function inspectInterruptedUpdateRecovery(
       const history = listUpdateRuns({ limit: 100 }, options);
       const since = getUpdateRun(pair.cohort.runId, options)?.createdAtMs ?? 0;
       const stop = findUpdateGatewayStop(history);
+      // Repair's own rule: post-core work since the killed run, unproven past a page that ends after it.
+      const { postCoreRuns, incomplete } = inspectNewerRecoveryHistory(since, history);
       const others = new Set(
-        history
-          .filter(
+        [
+          ...history.filter(
             (run) =>
               run.status === "running" ||
-              (!isAcknowledgedAbandonedUpdateRun(run) &&
-                (isAbandonedUpdateRun(run) ||
-                  (run.status === "failed" &&
-                    run.createdAtMs >= since &&
-                    needsPostCoreRepair(run)))),
-          )
-          .map((run) => run.runId),
+              (isAbandonedUpdateRun(run) && !isAcknowledgedAbandonedUpdateRun(run)),
+          ),
+          ...postCoreRuns,
+        ].map((run) => run.runId),
       );
       if (stop?.started === false) {
         others.add(stop.runId);
       }
       others.delete(pair.cohort.runId);
-      // A full page cannot show that nothing older still owes recovery.
-      return others.size || history.length === 100
+      return others.size || incomplete
         ? refuse(
             `Other update history also needs repair${others.size ? ` (${[...others].join(", ")})` : ""}.`,
           )

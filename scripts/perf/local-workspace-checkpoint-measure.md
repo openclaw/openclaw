@@ -206,8 +206,11 @@ correctness reads and reset. CPU profile duration is elapsed coverage, not CPU
 consumption. Workers created during a window and exited workers are unmeasured;
 missing/failed profile values are null. First-use work may therefore lack worker
 coverage; check the post-import reuse's captured Git worker and hash counters
-before making an allocation claim. This adds no profiler work or awaits to timing
-mode. Main and worker samples have different boundaries and must stay separate.
+before making an allocation claim. Timing mode does not run profilers. The serial
+`--fingerprint-import` workload also reads native worker allocation counters before
+and after each owner call, outside its timing window, so allocation comparisons can
+use the same interleaved arms. Main and worker samples have different boundaries
+and must stay separate; their sum covers only the matched workers, not child processes.
 
 Supplemental `retainedMemory` collection runs after the measured work and, for
 serial preparation, after full correctness validation. It reports main memory after

@@ -438,7 +438,8 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
   // Explicit cells with a fixture-managed Gateway service: a newer writer recovering
-  // an older runtime, and a killed update that stopped the Gateway.
+  // an older runtime, a killed update that stopped the Gateway, and an automatic retry
+  // of owed plugin convergence.
   ...serviceRecoveryCuts.map((cut) =>
     npmLane(`package-installed-recovery-${cut}`, {
       command: upgradeSurvivorScriptCommand(
@@ -499,6 +500,16 @@ export const mainLanes: DockerE2eLane[] = [
     resources: ["service"],
     stateScenario: "empty",
     timeoutMs: 35 * 60 * 1000,
+  }),
+  // A published updater's first update with official npm plugins while openclaw.json is a link to
+  // a read-only file: plugin convergence changes no config, so the update must succeed. Local
+  // cells took 6-7 minutes inside the script's 1125 s envelope. No CI workflow selects it yet.
+  // By hand, OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT=corrupt-plugin serves one corrupt plugin
+  // tarball instead, and =refused-channel-change also requests a channel the config cannot take.
+  npmLane("published-driver-plugin-publication", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
   }),
   npmLane("published-driver-scoped-restore", {
     resources: ["service"],

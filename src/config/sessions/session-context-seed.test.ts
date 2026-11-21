@@ -7,7 +7,7 @@ import { toolResult } from "../../agents/sessions/session-message-fixtures.test-
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { boundContextEngineAssembly } from "../../context-engine/bounded-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { readSessionContextSeed } from "./session-context-seed.js";
 import { prepareSessionHistoryReadOperation } from "./session-history-read-operation.worker.js";
 

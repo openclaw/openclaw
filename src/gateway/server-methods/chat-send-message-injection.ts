@@ -28,7 +28,9 @@ import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { QueueConfig } from "../../config/types.messages.js";
+import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { hasStagedMediaFacts } from "../../media/media-facts.js";
@@ -50,6 +52,7 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import type { UserTurnTranscriptPersistResult } from "../../sessions/user-turn-transcript.types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
@@ -60,12 +63,42 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { GatewayRequestContext } from "./types.js";
 
+const mediaDocumentContextLoader = createLazyImportLoader(
+  () => import("../../media-understanding/file-context.js"),
+);
+
+/** Rendering can fail independently of admission; preserve the raw steer on failure. */
+export async function prepareChatSendSteerDocumentContext(input: {
+  steering: boolean;
+  isInternalTextSlashCommandTurn: boolean;
+  ctx: RuntimeMsgContext;
+  cfg: PreparedChatSendSession["cfg"];
+}) {
+  if (!input.steering || input.isInternalTextSlashCommandTurn || !input.ctx.media?.length) {
+    return undefined;
+  }
+  return mediaDocumentContextLoader
+    .load()
+    .then(async (runtime) => ({
+      status: "rendered" as const,
+      ...(await runtime.renderInboundDocumentContext({ ctx: input.ctx, cfg: input.cfg })),
+    }))
+    .catch((err: unknown) => {
+      mediaDocumentContextLoader.clear();
+      logVerbose(`steer document render failed, injecting raw content: ${formatErrorMessage(err)}`);
+      return { status: "failed" as const };
+    });
+}
+
 /** Captures admitted request data for the detached injection attempt. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   sourceRef: RpcSourceRef;
   abortSignal: AbortSignal;
-  request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
+  request: Pick<
+    NormalizedChatSendRequest,
+    "p" | "rawMessage" | "supportsTaskSuggestions" | "activeSteer"
+  >;
   session: Pick<
     PreparedChatSendSession,
     | "agentId"
@@ -91,7 +124,10 @@ export function createChatSendMessageInjectionStarter(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   diagnostics?: ChatSendDiagnostics;
 }) {
-  const { p, rawMessage, supportsTaskSuggestions } = params.request;
+  const { p, rawMessage, supportsTaskSuggestions, activeSteer } = params.request;
+  const rejectionMessage = activeSteer
+    ? "active-only steering rejected; no fallback"
+    : "chat steering rejected; falling back to follow-up dispatch";
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId, resolvedSessionModel } =
     params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
@@ -134,7 +170,7 @@ export function createChatSendMessageInjectionStarter(params: {
           if (!(error instanceof MessageInjectionTargetUnavailableError)) {
             throw error;
           }
-          params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+          params.logGateway.warn(rejectionMessage, {
             reason: "terminal-delivery-unavailable",
             runId: clientRunId,
             activeRunId: target.runId,
@@ -218,7 +254,7 @@ export function createChatSendMessageInjectionStarter(params: {
         },
       });
       if (join.kind === "deferred") {
-        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+        params.logGateway.warn(rejectionMessage, {
           reason: join.reason,
           error: join.errorMessage,
           runId: clientRunId,
@@ -233,7 +269,7 @@ export function createChatSendMessageInjectionStarter(params: {
         await delivery.prepareCurrent();
       } catch (error) {
         assertCurrent();
-        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+        params.logGateway.warn(rejectionMessage, {
           reason: "terminal-delivery-unavailable",
           runId: clientRunId,
           activeRunId: target.runId,
@@ -328,9 +364,12 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(injectionImages?.length ? { images: injectionImages } : {}),
           ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
           ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
+          ...(activeSteer ? { debounceMs: 0 } : {}),
           waitForTranscriptCommit: true,
           abortSignal: params.abortSignal,
-          ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
+          ...(!activeSteer &&
+          !isProgressCardRefreshInputProvenance(ctx.InputProvenance) &&
+          debounceMs !== undefined
             ? { debounceMs }
             : {}),
           // A prepared continuation keeps the incumbent's negotiated tool

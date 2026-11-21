@@ -24,6 +24,7 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   expectedSessionMutationTargetError,
   createSessionCreationAuthorizationRecorder,
+  bindSessionMutationSharingReader,
   assertSessionMutationProjectionCurrent,
   findPreparedSharingTarget,
   resolvePreparedTalkAuthorizationTarget,
@@ -515,6 +516,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
       ? authorizedTargets[0]
       : undefined;
+  if (chatTarget) {
+    params.preparedProfiles?.admit();
+  }
   const admittedInput = createAdmittedSessionSharingAuthority({
     target: chatTarget,
     request: params,
@@ -683,6 +687,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       );
     },
   };
+  bindSessionMutationSharingReader(authorization, params, authorizedTargets);
   authorization.admittedInputAuthority = createSessionSharingInputAuthority(
     params,
     // Input custody requires full transaction facts; admission can use committed projections.

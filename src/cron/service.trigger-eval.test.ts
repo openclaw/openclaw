@@ -731,7 +731,7 @@ describe("cron webhook optional output", () => {
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     expect(sendCronWebhook).not.toHaveBeenCalled();
     expect(h.events.find((event) => event.action === "finished")).toMatchObject({
-      status: "skipped",
+      status: "ok",
       summary: "Automation scratch is explicitly empty",
       deliveryStatus: "not-requested",
     });

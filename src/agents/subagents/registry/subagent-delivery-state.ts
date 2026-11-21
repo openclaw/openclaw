@@ -222,7 +222,10 @@ export function recordRequesterDelivery(
   if (delivery.requesterDelivery?.state !== "consumed") {
     delivery.requesterDelivery = fact;
   }
-  if (delivery.status === "pending" || delivery.status === "in_progress") {
+  if (
+    delivery.disposition !== "ambiguous" &&
+    (delivery.status === "pending" || delivery.status === "in_progress")
+  ) {
     delivery.disposition = undefined;
     delivery.lastError = undefined;
   }
@@ -233,12 +236,20 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
-/** A private result is delivered by its committed input; a yielded final also owes an answer. */
-export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+/** Captured private findings stay internal unless their admitted wake owes a visible final. */
+export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
-    hasConsumedRequesterInput(entry) &&
     entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
     (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+  );
+}
+
+/** A committed private result can settle delivery when there is no uncertain send to resolve. */
+export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    entry.delivery?.disposition !== "ambiguous" &&
+    hasConsumedRequesterInput(entry) &&
+    hasPrivateRequesterInput(entry)
   );
 }
 
@@ -249,11 +260,12 @@ const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]
   "requester_preparation_changed",
   "requester_state_conflict",
   "requester_transcript_conflict",
+  "visible_reply_missing",
 ]);
 
 /**
- * A committed result is delivered when its turn failed before answering. A turn that answered,
- * or ended for a recorded reason, keeps its own outcome: a missed send stays a failure.
+ * A committed result can cover a turn that failed before answering. An unconfirmed
+ * channel send keeps its own outcome even when the requester received the input.
  */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
@@ -264,11 +276,13 @@ export function resolveRequesterDeliveryOutcome(
     (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
   return outcome &&
     !outcome.delivered &&
+    outcome.disposition !== "ambiguous" &&
     entries.length > 0 &&
     entries.every(
       (entry) =>
-        hasConsumedPrivateRequesterInput(entry) ||
-        (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry)),
+        entry.delivery?.disposition !== "ambiguous" &&
+        (hasConsumedPrivateRequesterInput(entry) ||
+          (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry))),
     )
     ? { delivered: true, path: "direct" }
     : outcome;

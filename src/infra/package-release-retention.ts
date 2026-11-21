@@ -8,6 +8,7 @@ import {
   PACKAGE_RELEASES_DIR,
   packageReleaseGlobalRoot,
   readPackageReleaseSlotSync,
+  type PackageReleaseSlot,
 } from "./package-release-slot-path.js";
 import { readPackageReleaseIdentity, type PackageReleaseIdentity } from "./package-release-slot.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -23,6 +24,19 @@ export type PackageReleaseEntry = PackageReleaseIdentity & {
 
 const releasesDirOf = (prefix: string) => path.join(prefix, PACKAGE_RELEASES_DIR);
 
+/**
+ * Where a release keeps its package: at the link's path below the prefix, or at npm's
+ * `lib/node_modules/<name>`, where Git releases lived before they moved out (#201874).
+ */
+function packageRootsIn(releasePrefix: string, selected: PackageReleaseSlot): string[] {
+  return [
+    ...new Set([
+      path.join(releasePrefix, path.relative(selected.prefix, selected.slot)),
+      path.join(packageReleaseGlobalRoot(releasePrefix), path.basename(selected.slot)),
+    ]),
+  ];
+}
+
 /** Releases under the prefix, newest first, with what keeps each one. */
 export async function listPackageReleases(slot: string): Promise<PackageReleaseEntry[]> {
   const selected = readPackageReleaseSlotSync(slot);
@@ -35,11 +49,10 @@ export async function listPackageReleases(slot: string): Promise<PackageReleaseE
     if (id.startsWith(".")) {
       continue;
     }
-    const root = path.join(
-      packageReleaseGlobalRoot(path.join(releasesDir, id)),
-      path.basename(slot),
-    );
-    const identity = await readPackageReleaseIdentity(root).catch(() => null);
+    let identity: Awaited<ReturnType<typeof readPackageReleaseIdentity>> | null = null;
+    for (const root of packageRootsIn(path.join(releasesDir, id), selected)) {
+      identity ??= await readPackageReleaseIdentity(root).catch(() => null);
+    }
     const stat = await fs.stat(path.join(releasesDir, id)).catch(() => null);
     if (!identity || !stat) {
       continue;
@@ -112,12 +125,11 @@ export async function collectPackageReleases(params: {
       continue;
     }
     const releasePrefix = path.join(releasesDir, id);
-    const root = path.join(packageReleaseGlobalRoot(releasePrefix), path.basename(selected.slot));
     const stat = await fs.lstat(releasePrefix).catch(ignoreMissingPath);
     const leases = readPackageReleaseLeases(selected.prefix, id);
     if (
       !stat?.isDirectory() ||
-      kept.has(root) ||
+      packageRootsIn(releasePrefix, selected).some((root) => kept.has(root)) ||
       leases.live > 0 ||
       now - stat.mtimeMs < PACKAGE_RELEASE_MIN_AGE_MS
     ) {

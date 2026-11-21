@@ -188,7 +188,7 @@ suite.define(() => {
           );
           await writeFile(`${proofDir}/${name}.png`, frame.png);
         };
-        const navigate = async (path: string) => {
+        const navigate = async (path: "activity" | "systems") => {
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
           if (path === "activity") {
             // Activity heads the Users section; on a phone People only opens its list.
@@ -198,6 +198,9 @@ suite.define(() => {
           }
           await page.locator("[data-rail-more]").click();
           await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
+          await waitForControlUiRoute(page, { routeId: path });
+          // Systems opens in the phone drawer; dismiss it to measure the page itself.
+          await page.keyboard.press("Escape");
         };
         await page.goto(suite.server.baseUrl + "systems");
         await page
@@ -219,7 +222,7 @@ suite.define(() => {
             .locator("main.content")
             .evaluate((element) => getComputedStyle(element).paddingInline);
         expect(await inset()).toBe("0px");
-        // New session shows the Sessions drawer; tapping its avatar there would open the agent menu.
+        // New session shows the Sessions drawer, collapsed; Expand sidebar reopens it.
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
         await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
         await page.locator(".chat-thread").waitFor();

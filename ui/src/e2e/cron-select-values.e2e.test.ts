@@ -125,7 +125,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}cron`);
         await editAutomation(page, job.id);
         await page.locator("#cron-name").fill("Renamed garden summary");
-        await page.locator(".cron-form-status__link").filter({ hasText: "Mode:" }).click();
+        await page.locator(".cron-form-status__link").filter({ hasText: "Send results:" }).click();
         const mode = page.locator("#cron-delivery-mode");
         expect(await mode.evaluate((element) => document.activeElement === element)).toBe(true);
         await page.evaluate(() => document.fonts.ready);
@@ -140,7 +140,7 @@ suite.define(() => {
         expect(await gateway.getRequests("cron.update")).toHaveLength(0);
 
         await mode.click();
-        await page.getByRole("option", { name: "None (internal)", exact: true }).click();
+        await page.getByRole("option", { name: "Don’t send", exact: true }).click();
         await expect
           .poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled())
           .toBe(false);
@@ -206,7 +206,7 @@ suite.define(() => {
       // Leaving Activity and returning recreates the dropdown with the persisted non-first value.
       const newAutomation = page.locator(".sidebar-automations__new");
       await newAutomation.click();
-      await page.locator("#cron-name").waitFor({ state: "visible" });
+      await page.locator("#cron-payload-text").waitFor({ state: "visible" });
       await openAutomationActivity(page);
       await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
       expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
