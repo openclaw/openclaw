@@ -413,6 +413,10 @@ export function createSessionRowChildProjection(params: {
     mark(change: SessionRowChange) {
       if (!("all" in change)) {
         invalidate(change.sessionKey);
+        if (change.scope === "runtime") {
+          // The keyed publication already invalidated this run's dependent ancestors.
+          activity.invalidateRuntime([]);
+        }
         return;
       }
       if (change.factsInvalidated) {
