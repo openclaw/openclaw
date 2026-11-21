@@ -5,6 +5,7 @@ import {
   validateWebPushSubscribeParams,
   validateWebPushPreferencesGetParams,
   validateWebPushPreferencesSetParams,
+  validateWebPushSendParams,
   validateWebPushTestParams,
   validateWebPushUnsubscribeParams,
   validateWebPushVapidPublicKeyParams,
@@ -42,6 +43,7 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { sendProfileWebPush } from "../event-web-push.js";
 import { prepareDeviceTokenBindingLookup } from "../openclaw-id/device-token-binding.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
@@ -434,6 +436,16 @@ export const pushHandlers = {
           (target) => setWebPushSubscriptionPreferences({ ...target, preferences }),
           () => ({ scope: "device", preferences }),
         );
+      });
+    },
+  ),
+
+  "push.web.send": defineValidatedGatewayHandler(
+    "push.web.send",
+    validateWebPushSendParams,
+    async ({ params, respond, context }) => {
+      await respondUnavailableOnThrow(respond, async () => {
+        respond(true, await sendProfileWebPush(context.getRuntimeConfig, params), undefined);
       });
     },
   ),
