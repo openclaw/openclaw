@@ -256,6 +256,8 @@ async function recordMissingContinuationLineage(): Promise<SubagentRunRecord[]> 
             nextAttemptAt: undefined,
             queueId: undefined,
           });
+          // A requester settle wake (a yield batch it joined) would address the same key.
+          entry.requesterSettleWake = undefined;
         }
         postimages.set(entry.runId, entry);
       }

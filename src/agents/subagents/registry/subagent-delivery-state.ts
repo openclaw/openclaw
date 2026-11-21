@@ -306,9 +306,10 @@ export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">):
 
 /**
  * Continuation: a suspended outcome that restart custody recorded with no requester binding
- * (subagent-registry-restart-custody.ts). It stays inspectable until the sweeper discards it at
- * retention end, but a session at its recorded requester key is not its requester: readers never
- * list, count, hold or protect anything for it, and its discard notifies no session.
+ * (subagent-registry-restart-custody.ts). A session at its recorded requester key is not its
+ * requester: no runtime fact, pending-descendant count, reset retention or maintenance protection
+ * includes it, and its discard at retention end notifies no session. Explicit inspection
+ * (`/subagents`, the subagents tool) still shows the retained record until then.
  */
 export function isDeliverySuspendedUnbound(
   entry: Pick<SubagentRunReadRecord, "delivery" | "continuationLineageMissing">,

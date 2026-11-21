@@ -37,9 +37,7 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
     !Number.isFinite(entry.execution.endedAt) ||
     entry.suppressCompletionDelivery === true ||
     entry.killReconciliation?.suppressTaskDelivery === true ||
-    entry.killIntent?.suppressTaskDelivery === true ||
-    // Continuation: owed to no session, including a later one at its recorded requester key.
-    isDeliverySuspendedUnbound(entry)
+    entry.killIntent?.suppressTaskDelivery === true
   ) {
     return false;
   }
@@ -95,6 +93,8 @@ export async function buildActiveSubagentRuntimeContext(params: {
     params.cfg,
   );
   const isVisible = (entry: SubagentRunReadRecord) =>
+    // Continuation: a suspended-unbound run belongs to no session at its recorded requester key.
+    !isDeliverySuspendedUnbound(entry) &&
     isSubagentRunVisibleToSession(entry, controllerSessionKey, agentId, params.cfg) &&
     ((entry.controllerSessionKey?.trim() === controllerSessionKey &&
       entry.controllerStorePath === storePath) ||

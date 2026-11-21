@@ -62,6 +62,8 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<void> {
   const { runId, entry, now, resumedRuns } = params;
+  // Continuation: a suspended-unbound outcome has no requester, so its discard only logs.
+  const unbound = isDeliverySuspendedUnbound(entry);
   const stateContext = captureOpenClawStateWorkerContext();
   const resumeKey = getSubagentRunRuntimeKey(entry);
   const isCurrent = () => {
@@ -120,8 +122,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       prepareCurrent: prepareHookCurrent,
     });
   }
-  // Continuation: a suspended-unbound outcome has no requester, so its discard only logs.
-  if (isDeliverySuspendedUnbound(entry)) {
+  if (unbound) {
     return;
   }
   // Retiring the obligation is the final failure: the requester sees it, not only the log.

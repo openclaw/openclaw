@@ -919,8 +919,8 @@ it("7: a later session at an unbound outcome's requester key is not its requeste
   )
     .map((fragment) => fragment.text)
     .join("\n\n");
-  expect(facts).not.toContain("## Child results awaiting delivery");
-  expect(facts).not.toContain(`run_json=${JSON.stringify(delegate.runId)}`);
+  // Neither awaiting delivery nor recently completed: it is not this session's child.
+  expect(facts).not.toContain(delegate.runId);
   expect(await countPendingDescendantRuns(parent, () => {})).toBe(0);
   const reset = { resetId: "reset-later", sessionKey: parent, agentId: "main" };
   expect(
@@ -980,6 +980,39 @@ it("7: an in-process restart suspends an unbound delegate it settles, and starts
   });
   expect(messages).toEqual([]);
   expect(fixture.announce).not.toHaveBeenCalled();
+});
+
+it("7: an unbound delegate drops its requester's yield-batch wake, so no later session at the key is woken with its result", async () => {
+  const delegate = productionDelegate("unbound-wake");
+  const child = await addRunningChild(delegate.runId, {
+    childSessionKey: delegate.childSessionKey,
+    // The electing turn yielded on a batch holding this delegate before the restart.
+    requesterTurnRunId: "electing-turn",
+    requesterSettleWake: {
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds: [delegate.runId],
+      requesterYieldBatch: true,
+      requesterRunId: "electing-turn",
+    },
+  });
+  await removeChildSession(child);
+  rotateAgentEventLifecycleGeneration();
+  const messages = recordRequesterMessages();
+  await activateSubagentRegistry(resolveGateway);
+  await fixture.settle();
+  await writeParentSession();
+  for (let sweep = 0; sweep < 3; sweep += 1) {
+    await testing.sweepOnceForTests();
+    await fixture.settle();
+  }
+
+  const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
+  expect(durable?.continuationLineageMissing?.unresolved).toBe("requester-session-missing");
+  expect(durable?.delivery?.status).toBe("suspended");
+  expect(durable?.requesterSettleWake).toBeUndefined();
+  expect(fixture.wake).not.toHaveBeenCalled();
+  expect(messages).toEqual([]);
 });
 
 it("7: a requester that elected to stop its delegate still gets intentional non-delivery when lineage and requester are both missing", async () => {
