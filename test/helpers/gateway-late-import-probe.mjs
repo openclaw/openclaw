@@ -29,15 +29,26 @@ if (log) {
     };
     syncBuiltinESMExports();
   }
+  // Modules this thread loaded before SIGTERM belong to the tree an update can replace.
+  const loadedBeforeSigterm = new Set();
   registerHooks({
     resolve(specifier, context, next) {
       afterSigterm ||= !isMainThread && fs.existsSync(marker);
-      const key = JSON.stringify([threadId, context.parentURL ?? null, specifier]);
+      const parent = context.parentURL ?? null;
+      const key = JSON.stringify([threadId, parent, specifier]);
       if (afterSigterm && !seen.has(key) && !specifier.startsWith("node:")) {
-        fs.appendFileSync(log, `${key}\n`);
+        const fromLoadedModule = parent !== null && loadedBeforeSigterm.has(parent);
+        fs.appendFileSync(
+          log,
+          `${JSON.stringify([threadId, parent, specifier, fromLoadedModule])}\n`,
+        );
       }
       seen.add(key);
-      return next(specifier, context);
+      const resolved = next(specifier, context);
+      if (!afterSigterm) {
+        loadedBeforeSigterm.add(resolved.url);
+      }
+      return resolved;
     },
   });
 }
