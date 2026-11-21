@@ -135,8 +135,8 @@ export async function changeSkillLibrarySelection(
     return current.filter((item) => item.skillId !== params.skillId);
   }
   const prepared = await captureSkillLibraryAccess(authority, options).read("change", {
-    current,
-    params,
+    current: captureSkillLibrarySelection(current),
+    params: { ...params },
   });
   return bindPreparedSelection(prepared);
 }

@@ -322,7 +322,7 @@ suite.define(() => {
               const surface = document.querySelector<HTMLElement>(
                 ".agent-chat__capability-menu-panel",
               );
-              if (surface && Number(getComputedStyle(surface).opacity) > 0) {
+              if (surface?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
                 seen.push(getComputedStyle(surface).height);
               }
               if (surface?.dataset.phase === "open") {
