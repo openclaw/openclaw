@@ -425,11 +425,15 @@ function failureIncident(params: {
   route: ResolvedFailureAlert;
 }): FailureAlertSignal {
   // Classified causes ignore changing provider prose; unknown errors stay private. A script's
-  // own error is its cause, so a different message (numbers aside) is a new failure.
+  // own error is its cause, so a different message is a new failure. Long digit runs (ids,
+  // timestamps, counts) are ignored; short numbers such as HTTP statuses name the cause.
   const detail = params.failureNotificationDetail;
   const scriptMessage =
     detail?.kind === "script-failure" && detail.code === "script_error"
-      ? params.error?.trim().split("\n", 1)[0]?.replace(/\d+/g, "#")
+      ? params.error
+          ?.trim()
+          .split("\n", 1)[0]
+          ?.replace(/\d{5,}/g, "#")
       : undefined;
   const cause =
     params.errorReason ??

@@ -262,14 +262,15 @@ describe("CronService failure repair", () => {
         error,
         ...cronScriptFailureMetadata("payload", "script_error"),
       });
-      f.runIsolatedAgentJob.mockResolvedValue(scriptError("Error: GitHub search failed: HTTP 503"));
+      const failed = (text: string) => f.runIsolatedAgentJob.mockResolvedValue(scriptError(text));
+      failed("Error: GitHub search failed: HTTP 503 (request 1795294744434)");
       const job = await f.addJob("script watcher", owned);
       await f.cron.run(job.id, "force");
-      // The same message with other numbers is the same failure.
-      f.runIsolatedAgentJob.mockResolvedValue(scriptError("Error: GitHub search failed: HTTP 502"));
+      // Another request id is the same failure; another status is not.
+      failed("Error: GitHub search failed: HTTP 503 (request 1795294755512)");
       await f.cron.run(job.id, "force");
       expectNotifications(f, 1, 1);
-      f.runIsolatedAgentJob.mockResolvedValue(scriptError("Error: Plugin runtime changed."));
+      failed("Error: GitHub search failed: HTTP 401 (request 1795294766001)");
       await f.cron.run(job.id, "force");
       expectNotifications(f, 2, 2);
     }),
