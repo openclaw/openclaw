@@ -159,7 +159,11 @@ describe("ACP replay worker", () => {
     const db = getDb();
     expectValues(db, "seq, update_json FROM acp_replay_events").toEqual([
       2,
-      JSON.stringify({ sessionUpdate: "user_message_chunk", content: content("tail") }),
+      JSON.stringify({
+        sessionUpdate: "user_message_chunk",
+        messageId: "user:run",
+        content: content("tail"),
+      }),
     ]);
     await expect(ledger.readReplayBySessionId(session)).resolves.toEqual({
       complete: false,

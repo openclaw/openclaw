@@ -2,6 +2,7 @@
 export type GatewayTranscriptMessage = {
   role?: unknown;
   content?: unknown;
+  __openclaw?: unknown;
 };
 
 export type GatewayChatContentBlock = {
