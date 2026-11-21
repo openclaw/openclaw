@@ -320,6 +320,8 @@ available context fields depend on the emitting harness. Its event contains:
 - optional `event.result`: the tool outcome supplied by the harness.
 - optional `event.error`: an error message supplied or extracted by the harness.
 - optional `event.durationMs`: elapsed milliseconds when the start time is known.
+- optional `event.rejected`: the harness refused the call because the named tool
+  was not offered to this run.
 
 ```typescript
 type AfterToolCallEvent = {
@@ -330,6 +332,7 @@ type AfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+  rejected?: boolean;
 };
 ```
 
@@ -345,6 +348,19 @@ absence of `error` can record a failed call as a successful one; treat an
 unreadable outcome as unknown rather than as either result. What `result`
 carries for exec and bash-family tools is tracked separately in
 [#102961](https://github.com/openclaw/openclaw/issues/102961).
+
+`rejected: true` means nothing ran: the model named a tool the run never
+offered, the harness refused it on its own, and `result` holds the harness's
+refusal text rather than tool output. `error` does not distinguish that case,
+because a tool that ran and failed carries the same harness-supplied message.
+The host sets `rejected` only from the run's own offered-tool registry, and
+omits it whenever that set is not known to be complete, so a missing field
+means unknown rather than "the call ran". It is also omitted for tools the
+harness does not dispatch itself, such as a search the provider runs on its own
+servers: the harness cannot refuse those, so they are never marked. A handler that treats tool results as
+content should skip a rejected call entirely, and must not reconstruct the
+signal from `error` or from text inside `result`, which the called tool
+authors.
 
 Do not use this hook to enforce policy. As the
 [hook reference](/plugins/hooks/reference) puts it, use a gate that blocks the operation on error

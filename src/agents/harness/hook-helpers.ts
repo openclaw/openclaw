@@ -20,6 +20,8 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   startArgs: Record<string, unknown>;
   result?: unknown;
   error?: string;
+  /** Set only when the caller holds the run's complete offered-tool set. */
+  rejected?: boolean;
   startedAt?: number;
 }): Promise<void> {
   const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
@@ -41,6 +43,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
         toolCallId: params.toolCallId,
         ...(params.result ? { result: params.result } : {}),
         ...(params.error ? { error: params.error } : {}),
+        ...(params.rejected ? { rejected: true } : {}),
         ...(params.startedAt != null ? { durationMs: Date.now() - params.startedAt } : {}),
       },
       {
