@@ -40,6 +40,25 @@ import { projectModelFastModeCatalog } from "./session-fast-mode-presentation.js
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "./session-utils.types.js";
 
+function hasThinkingDefaultChange(previous: OpenClawConfig, next: OpenClawConfig): boolean {
+  return (
+    previous.agents?.defaults?.thinkingDefault !== next.agents?.defaults?.thinkingDefault ||
+    Object.entries(next.agents?.entries ?? {}).some(
+      ([id, settings]) =>
+        settings.thinkingDefault !== previous.agents?.entries?.[id]?.thinkingDefault,
+    )
+  );
+}
+
+function serializeModelSelectionConfig(config: OpenClawConfig): string {
+  const { defaults, entries } = config.agents ?? {};
+  const agentSettings = new Set<unknown>([defaults, ...Object.values(entries ?? {})]);
+  // Preserve the order of other fields, including aliases with last-wins semantics.
+  return JSON.stringify(config, function (this: unknown, key, value: unknown) {
+    return key === "thinkingDefault" && agentSettings.has(this) ? undefined : value;
+  });
+}
+
 /**
  * Inventory/auth changes do not retire choices; changed selection authority does.
  * Commit listeners pass the published inventory; reload's lease cache cannot see it.
@@ -54,6 +73,13 @@ export function modelSelectionPoliciesMatch(
     !isDeepStrictEqual(previous.gateway?.roles, next.gateway?.roles)
   ) {
     return false;
+  }
+  if (
+    previous === next ||
+    (hasThinkingDefaultChange(previous, next) &&
+      serializeModelSelectionConfig(previous) === serializeModelSelectionConfig(next))
+  ) {
+    return true;
   }
   const manifestPlugins = publishedMetadata ?? getGatewayPluginMetadataSnapshot() ?? [];
   for (const role of Object.values(next.gateway?.roles?.definitions ?? {})) {

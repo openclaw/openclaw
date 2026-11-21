@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/index.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+import * as visibility from "../agents/model-visibility-policy.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -221,4 +222,71 @@ describe("post-commit readers use the published plugin inventory", () => {
       expect(loadManifestMetadataSnapshot).not.toHaveBeenCalled();
     });
   });
+});
+
+it("skips visibility builds for a thinking-only agent edit", () => {
+  const previous: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-4o",
+        modelPolicy: { allow: ["openai/gpt-4o"] },
+      },
+      entries: { main: {}, worker: {} },
+    },
+  };
+  const next: OpenClawConfig = {
+    agents: {
+      ...previous.agents,
+      entries: { main: { thinkingDefault: "low" }, worker: {} },
+    },
+  };
+  using build = vi.spyOn(visibility, "createModelVisibilityPolicy");
+  const metadata = createPluginMetadataSnapshotFixture();
+  expect(modelSelectionPoliciesMatch(previous, next, metadata)).toBe(true);
+  const thinkingOnlyBuilds = build.mock.calls.length;
+  build.mockClear();
+  expect(
+    modelSelectionPoliciesMatch(
+      next,
+      {
+        agents: {
+          ...next.agents,
+          entries: {
+            main: { thinkingDefault: "medium", modelPolicy: { allow: ["openai/gpt-4o-mini"] } },
+            worker: {},
+          },
+        },
+      },
+      metadata,
+    ),
+  ).toBe(false);
+  expect(build).toHaveBeenCalled();
+  expect(thinkingOnlyBuilds).toBe(0);
+});
+
+it("compares a reordered model alias when thinking also changes", () => {
+  const first = "openai/gpt-4o";
+  const second = "openai/gpt-4o-mini";
+  const alias = { alias: "choice" };
+  const previous: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: first,
+        modelPolicy: { allow: ["choice"] },
+        models: { [first]: alias, [second]: alias },
+      },
+    },
+  };
+  const next: OpenClawConfig = {
+    agents: {
+      defaults: {
+        ...previous.agents?.defaults,
+        thinkingDefault: "low",
+        models: { [second]: alias, [first]: alias },
+      },
+    },
+  };
+  expect(modelSelectionPoliciesMatch(previous, next, createPluginMetadataSnapshotFixture())).toBe(
+    false,
+  );
 });
