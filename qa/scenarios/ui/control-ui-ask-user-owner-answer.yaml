@@ -1,0 +1,159 @@
+title: Owner answers a bot sender's question on its Control UI page
+
+scenario:
+  id: control-ui-ask-user-owner-answer
+  surface: control-ui
+  coverage:
+    primary:
+      - agent-runtime.tool-ask-user
+    secondary:
+      - control-ui.gateway-hosted-ui-control
+      - channels.qa-channel-outbound
+  objective: Verify that a question an agent asks while answering another agent reaches its owner with a link to the question's Control UI page, and that the owner, signed in to the Control UI, answers it there and resumes the run.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [alice]
+    gateway:
+      publicOrigin: https://qa-owner.example.test
+  successCriteria:
+    - A bot sender's turn calls ask_user, and QA Channel delivers the prompt to the owner with the question's Control UI page link.
+    - The linked page, opened in a signed-in Control UI, shows the question and accepts the owner's choice.
+    - The question records the Control UI answer, and the resumed run receives the owner's choice.
+  docsRefs:
+    - docs/tools/ask-user.md
+    - docs/web/control-ui.md
+  codeRefs:
+    - src/agents/tools/question-prompt-send.ts
+    - ui/src/app/approval-deep-link.ts
+  execution:
+    kind: flow
+    summary: Send a bot sender's turn through qa-channel, follow the owner prompt's answer link in a signed-in Control UI, choose an option and submit, then verify the question and the resumed run.
+    channel: qa-channel
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      peerConversationId: qa-owner-answer-peer-agent
+      ownerConversationId: alice
+      promptNeedle: Where should this deploy?
+      prompt: >-
+        Structured question QA check from a peer agent. Call ask_user exactly once with the
+        deploy_target question, then reply with the selected value.
+        ask_user_fixture=single
+        QA routing marker: tool search qa check target=ask_user.
+
+flow:
+  steps:
+    - name: the owner answers the bot sender's question on its Control UI page
+      actions:
+        - call: reset
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.peerConversationId
+              kind: direct
+            senderId:
+              ref: config.peerConversationId
+            senderName: Peer Agent
+            senderIsBot: true
+            text:
+              ref: config.prompt
+        - call: waitForCondition
+          saveAs: promptMessage
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.ownerConversationId && candidate.text.includes(config.promptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - set: answerLink
+          value:
+            expr: "/https:\\/\\/qa-owner\\.example\\.test\\/\\S+/.exec(promptMessage.text)?.[0]"
+        - assert:
+            expr: "Boolean(answerLink)"
+            message:
+              expr: "`the owner's prompt has no answer link: ${JSON.stringify(promptMessage.text)}`"
+        - set: questionId
+          value:
+            expr: "decodeURIComponent(new URL(answerLink).pathname.split('/').at(-1))"
+        - set: answerPageUrl
+          value:
+            expr: "(() => { const url = new URL(new URL(answerLink).pathname, env.gateway.baseUrl); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
+        - call: webOpenPage
+          saveAs: answerTab
+          args:
+            - url:
+                ref: answerPageUrl
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - set: answerPageId
+          value:
+            expr: answerTab.pageId
+        - call: webWait
+          args:
+            - pageId:
+                ref: answerPageId
+              selector: openclaw-question-page openclaw-chat-question-panel
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 45000)
+        - call: webEvaluate
+          args:
+            - pageId:
+                ref: answerPageId
+              expression: "(() => { const option = Array.from(document.querySelectorAll('openclaw-question-page .chat-question-panel__option[role=radio]')).find((candidate) => (candidate.textContent ?? '').includes('Staging')); option?.click(); return Boolean(option); })()"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 15000)
+        - call: webWait
+          args:
+            - pageId:
+                ref: answerPageId
+              selector: "openclaw-question-page .chat-question-panel__advance:not([disabled])"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 15000)
+        - call: webEvaluate
+          args:
+            - pageId:
+                ref: answerPageId
+              expression: "(() => { document.querySelector('openclaw-question-page .chat-question-panel__advance')?.click(); return true; })()"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 15000)
+        - call: waitForCondition
+          saveAs: answeredQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const { question } = await env.gateway.call('question.get', { id: questionId }); return question.status === 'answered' ? question : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 200
+        - call: waitForCondition
+          saveAs: resumedProviderRequest
+          args:
+            - lambda:
+                async: true
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.toolOutput ?? '').includes('Deploy:'))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "String(resumedProviderRequest.toolOutput).includes('Deploy: Staging (Recommended)')"
+            message:
+              expr: "`the resumed run did not receive the owner's Control UI answer: ${JSON.stringify(resumedProviderRequest.toolOutput)}`"
+        - call: webWait
+          args:
+            - pageId:
+                ref: answerPageId
+              selector: "openclaw-question-page main[data-state=answered]"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 15000)
+      detailsExpr: "JSON.stringify({ prompt: promptMessage.text, answerPage: new URL(answerPageUrl).pathname, question: { id: answeredQuestion.id, status: answeredQuestion.status, answers: answeredQuestion.answers, resolvedBy: answeredQuestion.resolvedBy }, resumedToolOutput: String(resumedProviderRequest.toolOutput).slice(0, 300) })"

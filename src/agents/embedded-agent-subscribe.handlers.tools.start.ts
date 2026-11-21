@@ -23,10 +23,14 @@ import {
   cancelAskUserPromptDelivery,
   normalizeAskUserParams,
   reserveAskUserPromptDelivery,
+  isAskUserPromptPending,
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./tools/ask-user-tool.js";
-import { sendQuestionToolPrompt } from "./tools/question-prompt-send.js";
+import {
+  resolveQuestionPromptDelivery,
+  sendQuestionToolPrompt,
+} from "./tools/question-prompt-send.js";
 import { normalizeSecretsRequestParams } from "./tools/secrets-tool.js";
 
 function reserveQuestionPromptDelivery(
@@ -416,7 +420,12 @@ export function handleToolExecutionStart(
             questionId,
             questions,
             config: ctx.params.config,
-            send: publishPrompt,
+            delivery: resolveQuestionPromptDelivery({
+              senderIsBot: ctx.params.senderIsBot,
+              agentId: ctx.params.agentId,
+              conversation: () => ({ send: publishPrompt }),
+            }),
+            isCurrent: () => isAskUserPromptPending(questionId),
           });
         })
         .then(

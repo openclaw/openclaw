@@ -96,6 +96,27 @@ async function withQuestion(
 
 afterEach(resetGlobalHookRunner);
 
+it("never takes a bot sender's text as the answer to a pending question", async () =>
+  withQuestion(async ({ broker, run }) => {
+    const result = await runReplyQuestionInput({
+      commandBody: "Continue",
+      followupRun: run,
+      sessionKey,
+      sessionCtx: buildTestCtx({
+        SessionKey: sessionKey,
+        AccountId: "default",
+        SenderId: "+1000",
+        SenderIsBot: true,
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+1000",
+      }),
+      opts: { [REPLY_OPERATION_RUN_STATE]: {} },
+    });
+
+    expect(result).toEqual({ handled: false });
+    expect(broker.get({ id: questionId }).question.status).toBe("pending");
+  }));
+
 it.each([
   "correction",
   "cancelled-correction",

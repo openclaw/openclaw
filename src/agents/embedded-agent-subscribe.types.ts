@@ -55,6 +55,7 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   | "replyToMode"
   | "hasRepliedRef"
   | "agentId"
+  | "senderIsBot"
   | "internalEvents"
 > & {
   session: AgentSession;

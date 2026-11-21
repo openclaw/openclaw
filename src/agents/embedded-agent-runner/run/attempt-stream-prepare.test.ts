@@ -443,6 +443,11 @@ describe("prepareEmbeddedAttemptStream", () => {
     );
   });
 
+  it("tells the subscriber a bot sent the turn, so its questions go to the owner", () => {
+    prepareCatalogExecutor({ attempt: { senderIsBot: true } });
+    expect(mocks.subscribe).toHaveBeenCalledWith(expect.objectContaining({ senderIsBot: true }));
+  });
+
   registerReplyPromotionTests();
 
   it.each([

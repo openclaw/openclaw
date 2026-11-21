@@ -32,6 +32,7 @@ type AttemptToolRunFacts = Pick<
   | "senderUsername"
   | "senderE164"
   | "senderIsOwner"
+  | "senderIsBot"
   | "gitContributorProfileId"
   | "requesterOrigin"
   | "operatorProfileId"
@@ -109,6 +110,7 @@ export function buildEmbeddedAttemptToolRunContext(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    senderIsBot: params.senderIsBot,
     gitContributorProfileId: params.gitContributorProfileId,
     requesterOrigin: params.requesterOrigin,
     operatorProfileId: params.operatorProfileId,
