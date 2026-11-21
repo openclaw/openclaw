@@ -90,6 +90,49 @@ describe("Telegram topic transport payloads", () => {
     resetPluginStateStoreForTests();
   });
 
+  it.each(["edit", "clear"] as const)(
+    "continues callback feedback when repeated button %s is unchanged",
+    async (operation) => {
+      const actions = callbackActions();
+      const update = () =>
+        operation === "clear"
+          ? actions.clearCallbackButtons()
+          : actions.editCallbackButtons(fixture.buttons);
+      await update();
+      fixture.rejections.push("Bad Request: message is not modified");
+
+      await update();
+      await actions.replyToCallbackChat("Action received");
+
+      expect(requests.map((request) => request.method)).toEqual([
+        "editMessageReplyMarkup",
+        "editMessageReplyMarkup",
+        "sendMessage",
+      ]);
+      expect(jsonFor("sendMessage")).toMatchObject({ text: "Action received" });
+    },
+  );
+
+  it.each(["edit", "clear"] as const)(
+    "propagates other Telegram errors from button %s",
+    async (operation) => {
+      const actions = callbackActions();
+      fixture.rejections.push({
+        error_code: 403,
+        description: "Forbidden: bot was blocked by the user",
+      });
+
+      await expect(
+        operation === "clear"
+          ? actions.clearCallbackButtons()
+          : actions.editCallbackButtons(fixture.buttons),
+      ).rejects.toMatchObject({
+        error_code: 403,
+        description: "Forbidden: bot was blocked by the user",
+      });
+    },
+  );
+
   it("serializes direct draft destinations while keeping edits topic-free", async () => {
     const direct = createTelegramDraftStream({
       api: fixture.bot.api,
