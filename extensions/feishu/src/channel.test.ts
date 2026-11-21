@@ -1316,14 +1316,13 @@ describe("Feishu topic routing", () => {
             : { source, replyToId: "om_inbound", mode: "all" },
       },
     );
-    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
-    expect(args(feishuOutboundSendTextMock).to).toBe("chat:oc_group_1");
-    expect(args(feishuOutboundSendTextMock).threadId).toBe(
-      source === "implicit" ? "om_inbound" : undefined,
-    );
-    expect(args(feishuOutboundSendTextMock).replyToId).toBe(
-      source === "explicit" ? "om_inbound" : undefined,
-    );
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
+      ...actionContext,
+      to: "chat:oc_group_1",
+      text: "reply",
+      mediaLocalRoots: undefined,
+      ...(source === "implicit" ? { threadId: "om_inbound" } : { replyToId: "om_inbound" }),
+    });
   });
   it.each([
     { name: "destination changes", params: { to: "chat:oc_other" }, context: topicContext },
@@ -1338,10 +1337,13 @@ describe("Feishu topic routing", () => {
       textDelivery();
       const target = { to: "chat:oc_group_1", ...params };
       await run("send", { ...target, text: "hello" }, context);
-      expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
-      expect(args(feishuOutboundSendTextMock).to).toBe(target.to);
-      expect(args(feishuOutboundSendTextMock).replyToId).toBeUndefined();
-      expect(args(feishuOutboundSendTextMock).threadId).toBeUndefined();
+      expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
+        ...actionContext,
+        to: target.to,
+        text: "hello",
+        mediaLocalRoots: undefined,
+        replyToId: undefined,
+      });
     },
   );
   it("requires a thread-reply anchor", async () => {
