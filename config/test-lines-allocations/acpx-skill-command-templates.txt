@@ -1,0 +1,2 @@
+123
+# Execute ACP skill and CLI examples against the pinned bin; assert the persisted target directory and continuation history.
