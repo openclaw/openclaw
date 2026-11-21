@@ -13,6 +13,7 @@ import {
   WhatsAppIngressPermanentError,
   type SerializedWhatsAppDurableInboundMessage,
 } from "./durable-payload.js";
+import { projectWhatsAppInboundMessage } from "./extract.js";
 
 const WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION = 1;
 
@@ -64,9 +65,16 @@ function inspectWhatsAppIngressMessage(message: WAMessage): WhatsAppIngressFacts
       "WhatsApp ingress message is missing key.remoteJid or key.id",
     );
   }
+  // Direct audio preparation may wait on transcription before session adoption.
+  // Keep audio ordered together while later text can enter the normal reply lane.
+  const directAudio =
+    /@(s\.whatsapp\.net|c\.us|lid|hosted|hosted\.lid)$/i.test(remoteJid) &&
+    projectWhatsAppInboundMessage(message.message ?? undefined).some(
+      (content) => content.audioMessage,
+    );
   return {
     eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }),
-    laneKey: remoteJid,
+    laneKey: directAudio ? `${remoteJid}:audio` : remoteJid,
   };
 }
 
@@ -105,6 +113,7 @@ export function createWhatsAppIngressMonitor(params: {
   >({
     queue: params.queue,
     inspect: (admission) => inspectWhatsAppIngressMessage(admission.message),
+    reuseAdmissionFactsForFreshClaims: true,
     payload: {
       version: WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION,
       serialize: (admission, { receivedAt }) => ({
@@ -140,6 +149,8 @@ export function createWhatsAppIngressMonitor(params: {
     drain: {
       // Debounce candidates share a reply lane, but retain separate durable claims.
       deferredLaneOccupancy: "release",
+      // Replay voice notes accepted before audio preparation got its own lane.
+      reconcileStoredLaneKey: (_record, stored, derived) => derived === `${stored}:audio`,
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
       deriveLaneKey: (record) => {
         try {
