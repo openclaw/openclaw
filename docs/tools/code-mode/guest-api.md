@@ -157,6 +157,13 @@ is limited to 512 UTF-16 code units without splitting surrogate pairs; input and
 output hints remain absent. Returning or emitting MCP discovery metadata uses
 the normal untrusted-content wrapper, even if no MCP tool is called.
 
+An unused search result does not mark the cell as external content. Reading an
+MCP or client handle's metadata does, even if the program discards that text;
+returning or emitting the handle also exposes its metadata. Reading MCP API
+declarations and executing network tools retain their external-content marking.
+This marking taints the current turn, so later memory writes remain untrusted.
+The distinction does not restore trust to previously quarantined memory files.
+
 MCP handles invoke the existing namespace path with one object argument, including
 its input defaults, policy checks, approvals, and native MCP result projection.
 Their `describe()` returns the exact tool's `$api(method, { schema: true })`

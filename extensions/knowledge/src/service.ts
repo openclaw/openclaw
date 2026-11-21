@@ -5,6 +5,7 @@ import type {
   FeatureInvocationContext,
 } from "openclaw/plugin-sdk/feature-plugin";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { featurePrincipal, toolGrant, type VaultAccess } from "./access.js";
@@ -153,11 +154,20 @@ export function createKnowledgeService(
     async start(ctx) {
       stores.start();
       if (ctx?.scheduler) {
-        await maintenance.start(ctx.scheduler);
+        const scheduler = ctx.scheduler;
+        if (getResourceProfile() === "lean") {
+          stores.onFirstUse = () => {
+            void maintenance
+              .start(scheduler)
+              .catch((error: unknown) => api.logger?.warn?.(String(error)));
+          };
+        } else {
+          await maintenance.start(scheduler);
+        }
       }
     },
-    // A maintenance pass writes through the registry, so the registry closes only
-    // after the pass has settled; the stores are fenced immediately.
+    // Initialization and passes write through the registry, which closes only
+    // after both have settled; the stores are fenced immediately.
     stop() {
       return stores.stop(maintenance.stop());
     },
@@ -583,6 +593,7 @@ export function createKnowledgeService(
     ) {
       throw new Error("Maintenance status is available to authorized operators only.");
     }
+    await stores.ensure();
     return maintenance.status();
   };
   return {

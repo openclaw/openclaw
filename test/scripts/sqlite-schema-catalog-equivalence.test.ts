@@ -17,6 +17,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema
 import { withLegacySkillSelectionCompanionAbsent } from "../../src/state/openclaw-state-db-schema-skill-selection.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "../../src/state/openclaw-state-db-schema-v41-approval-profile.js";
 import {
   getOpenClawStateRuntimeSchema,
   getOpenClawStatePredecessorSchema,
@@ -90,6 +91,12 @@ describe("generated SQLite schema catalogs", () => {
   it("keeps predecessor schemas free of objects introduced after their version", () => {
     // A state schema edit without a matching predecessor transform retires every
     // derived hash, stranding real databases on the previous layout.
+    const predecessor40 = getOpenClawStatePredecessorSchema(40);
+    expect(predecessor40).not.toContain("requested_by_profile_id");
+    expect(createHash("sha256").update(predecessor40).digest("hex")).toBe(
+      "fcbb00212b86de19fc5fa0f04654883e4714871ea6417f63645a97c1c9e9457f",
+    );
+    expect(readGeneratedSqliteCatalog(predecessor40)).toBeDefined();
     const predecessor39 = getOpenClawStatePredecessorSchema(39);
     expect(predecessor39).not.toContain(
       "CREATE TABLE IF NOT EXISTS device_pairing_browser_requests",
@@ -129,7 +136,9 @@ describe("generated SQLite schema catalogs", () => {
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
       const predecessor = withLegacyWorkerProvisionSource(
-        withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL),
+        withLegacySkillSelectionCompanionAbsent(
+          withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL),
+        ),
       );
       const historical = flags
         ? getOpenClawStateRuntimeSchema(
@@ -151,7 +160,9 @@ describe("generated SQLite schema catalogs", () => {
       options,
       withLegacyWorkspaceBootstrapDeferred(
         withLegacyWorkerProvisionSource(
-          withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL),
+          withLegacySkillSelectionCompanionAbsent(
+            withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL),
+          ),
         ),
       ),
     );

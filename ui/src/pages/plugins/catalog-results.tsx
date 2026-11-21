@@ -64,7 +64,7 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
 
 type CatalogResultsState = PluginCatalogResultsProps & {
   installedByCatalogId: ReadonlyMap<string, PluginCatalogItem>;
-  /** Result entries this selection lists; browsing omits installed plugins. */
+  /** Result entries visible in the current selection. */
   listed: readonly PluginDiscoveryEntry[];
 };
 
@@ -136,6 +136,7 @@ export function formatCompactCount(value: number): string {
 
 function CatalogCard(props: {
   plugin: PluginDiscoveryEntry;
+  showInstalledLabel?: boolean;
   state: CatalogResultsState;
   contentRef?: (element: HTMLDivElement) => void;
 }): JSX.Element {
@@ -174,7 +175,7 @@ function CatalogCard(props: {
           </div>
           <div class="plugin-catalog-card__action">
             {installed() ? (
-              renderPluginStateStatus(state()!, "plugin-catalog-card__status")
+              renderPluginStateStatus(state()!, props.showInstalledLabel)
             ) : (
               <PluginInstallAction
                 registerInstallAction={props.state.registerInstallAction}
@@ -265,7 +266,13 @@ function CatalogSection(params: {
           ) : params.onViewAll ? (
             <div class="plugin-catalog-grid">
               <For each={params.items.slice(0, SECTION_SIZE)} keyed={(plugin) => plugin.id}>
-                {(plugin) => <CatalogCard plugin={plugin()} state={params.state} />}
+                {(plugin) => (
+                  <CatalogCard
+                    plugin={plugin()}
+                    state={params.state}
+                    showInstalledLabel={params.id === "featured"}
+                  />
+                )}
               </For>
             </div>
           ) : (
@@ -443,7 +450,12 @@ function RawResults(props: CatalogResultsState): JSX.Element {
           ) : (
             <PluginCatalogGrid items={items()} results>
               {(plugin, contentRef) => (
-                <CatalogCard plugin={plugin()} state={props} contentRef={contentRef} />
+                <CatalogCard
+                  plugin={plugin()}
+                  state={props}
+                  contentRef={contentRef}
+                  showInstalledLabel={props.intent === "featured"}
+                />
               )}
             </PluginCatalogGrid>
           )}
@@ -528,9 +540,8 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const intent = createMemo(() => props.intent);
   const category = createMemo(() => props.category);
   const connected = createMemo(() => props.connected);
-  // Installed plugins are listed in the Customize sidebar, so browsing lists only plugins
-  // to add; search still finds installed ones. A plugin installed from this view keeps its
-  // row until the selection changes, so a finished install never pulls it from under the pointer.
+  // Keep newly installed rows under the pointer until the selection changes, even on
+  // discovery shelves that normally list only plugins to add.
   const installedHere = createMemo<{ selection: string; ids: ReadonlySet<string> }>(
     (previous) => {
       const selection = JSON.stringify([intent(), category(), query()]);
@@ -556,12 +567,11 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const listed = createMemo(
     () => {
       const items = props.result?.items ?? NO_ENTRIES;
-      return query() ? items : items.filter(listable);
+      return query() || intent() === "featured" ? items : items.filter(listable);
     },
     { equals: sameEntries },
   );
-  // Shelves hold every ranked overview entry; sections cap them after hiding installed ones.
-  const featured = createMemo(() => props.featured.filter(listable), { equals: sameEntries });
+  // Featured always keeps its curated lineup; Trending fills its preview with plugins to add.
   const trending = createMemo(() => props.trending.filter(listable), { equals: sameEntries });
   const grouped = () => !query() && intent() === "all" && category() === null;
   // Publisher headers must not repeat the virtualizer's scroll compensation.
@@ -615,7 +625,6 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
                   {...props}
                   installedByCatalogId={installedByCatalogId()}
                   listed={listed()}
-                  featured={featured()}
                   trending={trending()}
                   loading={true}
                 />
@@ -652,7 +661,6 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
                 {...props}
                 installedByCatalogId={installedByCatalogId()}
                 listed={listed()}
-                featured={featured()}
                 trending={trending()}
               />
             ) : props.hasCurrentResult || !recordedError() ? (

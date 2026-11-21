@@ -584,13 +584,13 @@ describe("renderPluginCatalogResults", () => {
     expect(cardIds(tools)).toEqual(["pin", ...items.slice(0, 7).map((item) => item.id)]);
   });
 
-  it("lists installed plugins only in search and keeps a row installed from the view", async () => {
+  it("keeps the curated Featured lineup while other browse shelves omit installed plugins", async () => {
     const local = { present: true, installed: true, enabled: true, state: "enabled" } as const;
     const installed = plugin("installed", { local: { ...local, action: "manage" } });
     const listedLater = plugin("inventory-installed", { catalog: { categories: ["channels"] } });
     const shelf = Array.from({ length: 8 }, (_, index) => plugin(`shelf-${index}`));
     const props = baseProps({
-      featured: [installed, ...shelf],
+      featured: [installed, listedLater, ...shelf],
       trending: [listedLater],
       result: { items: [installed, listedLater, plugin("tool")] },
       inventory: [
@@ -608,10 +608,26 @@ describe("renderPluginCatalogResults", () => {
     });
     const { container, ui } = await mount(props);
     const featured = container.querySelector('[data-catalog-section="featured"]')!;
-    expect(cardIds(featured)).toEqual(shelf.map((entry) => entry.id));
+    expect(cardIds(featured)).toEqual([
+      installed.id,
+      listedLater.id,
+      ...shelf.slice(0, 6).map((entry) => entry.id),
+    ]);
+    expect(featured.querySelector('[data-plugin-state="enabled"]')?.textContent).toBe("Installed");
     ui.node('[data-catalog-section="trending"]').toBeNull();
     ui.node('[data-catalog-section="channels"]').toBeNull();
     expect(cardIds(container.querySelector('[data-catalog-section="tools"]')!)).toEqual(["tool"]);
+
+    update(container, { ...props, intent: "featured", result: { items: [...props.featured] } });
+    await waitForSolid(() => {
+      expect(cardIds(container)).toEqual([
+        installed.id,
+        listedLater.id,
+        ...shelf.map((entry) => entry.id),
+      ]);
+      ui.content('[data-plugin-id="inventory-installed"] [data-plugin-state]').toBe("Installed");
+      ui.node('[data-plugin-id="inventory-installed"] button').toBeNull();
+    });
 
     update(container, { ...props, category: "channels", result: { items: [listedLater] } });
     await waitForSolid(() =>

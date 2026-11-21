@@ -526,6 +526,10 @@ const enPluginManagement = {
       lifecycle: "Lifecycle",
       advanced: "Advanced",
     },
+    skillPreview: {
+      unavailable: "Couldn’t read SKILL.md.",
+      tooLarge: "SKILL.md is too large to preview.",
+    },
     installCount: "{count} installs",
     installed: en.pluginsPage.installed,
     installedDisabled: "Installed · Disabled",

@@ -113,7 +113,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
-    expect(prompt).toContain("Working directory: /tmp/task-repo (tools and deliverables).");
+    expect(prompt).toContain(
+      "Working directory: /tmp/task-repo (tools, deliverables, and relative reply file paths; write other files as absolute paths).",
+    );
     expect(prompt).toContain("Agent workspace: /tmp/openclaw");
   });
 
