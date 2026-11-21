@@ -143,6 +143,7 @@ const sessionSpawnContextSchema = z
     gitContributorProfileId: normalizedRequiredStringSchema.optional(),
     requesterSenderIsOwner: z.boolean().optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    createdIndependently: z.literal(true).optional(),
     inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
     resolvedModel: z
       .object({
@@ -177,6 +178,7 @@ const sessionSpawnContextSchema = z
     ...(context.requesterSenderIsOwner !== undefined
       ? { requesterSenderIsOwner: context.requesterSenderIsOwner }
       : {}),
+    ...(context.createdIndependently ? { createdIndependently: true } : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
     ...(context.inheritedPermissionMode
       ? { inheritedPermissionMode: context.inheritedPermissionMode }

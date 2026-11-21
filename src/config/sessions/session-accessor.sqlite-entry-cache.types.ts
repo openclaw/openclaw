@@ -77,6 +77,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     sandbox: entry.sandbox,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
+    createdIndependently: entry.createdIndependently,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
     deviceFolder: entry.deviceFolder,

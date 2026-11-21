@@ -60,6 +60,9 @@ export function isSubagentSessionFromEntry(
   entry: SessionEntry | null | undefined,
   acpMeta?: unknown,
 ): boolean {
+  if (entry?.createdIndependently === true) {
+    return false;
+  }
   const spawnDepth = normalizeSpawnDepth(entry?.spawnDepth);
   return (
     (spawnDepth === undefined
