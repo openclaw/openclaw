@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 extension DashboardManager {
     func showRemovalIfNeeded(in controller: DashboardWindowController, present: Bool) -> Bool {
@@ -22,6 +23,14 @@ extension DashboardManager {
     nonisolated static func failureCopy(
         error: Error, joinedClaw: Bool) -> (title: String, message: String, detail: String)
     {
+        if let authorizationError = error as? GatewayExternalAuthorizationError,
+           authorizationError.isCloudflareAccess
+        {
+            return (
+                "Cloudflare Access sign-in required",
+                "This Gateway requires Cloudflare Access sign-in. Add it under Gateways with browser sign-in.",
+                "Use a saved Gateway with browser sign-in, or use SSH or Tailscale for the primary Gateway.")
+        }
         let superseded = error is CancellationError
         let title = superseded ? "Reconnecting to the Gateway" : "Dashboard unavailable"
         let message = superseded
