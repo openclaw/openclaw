@@ -1226,20 +1226,29 @@ reload result, not immediate retention before background reacquisition. Both
 copies share that limitation; no stronger timing coverage is claimed. Targeted
 agents-other typecheck, lint, formatting and all three line-count ratchets pass.
 
-### Chat mention duplicate layer (qualification in progress)
+### Chat mention duplicate layer
 
-At `1ed570fb2b288299e2e2a99036d2b9b1e1953a3e`, seven declarations / ten
-expanded cases in `chat-send-pending-inputs.test.ts` repeat the committed-mention
-suite under the same admission and SQLite fixture. Keep guest lookup/authority,
+At `1ed570fb2b288299e2e2a99036d2b9b1e1953a3e`, removed seven declarations / ten
+expanded cases from `chat-send-pending-inputs.test.ts` that repeat the committed-mention
+suite under the same admission and SQLite fixture: 393 net test lines, with no
+production or shared-support changes. Keep guest lookup/authority,
 commit-time recipient notification, idle ACK ordering, approved-token handling,
 recipient identity and replay/cancellation coverage in `chat-send-mentions.test.ts`.
 Transfer the guest display name to prevent unrelated background session naming.
 Keep its dispatch-before-Inbox-disposal cleanup order. The real-WebSocket
 presence-audience suite retains the guest `presence.query` refusal.
 
-Independent preservation review found no coverage gap at this base. The new
-active-steer path does not apply to these ordinary input fixtures. Removal,
-baseline/candidate runs, mutation controls and scoped checks remain pending.
+Independent review of the applied diff found no coverage gap. The new
+active-steer path does not apply to these ordinary input fixtures. Baseline:
+65 cases pass across both files; candidate: all 55 remaining cases pass. The
+real-WebSocket presence-audience case also passes. Disabling commit notification,
+cancellation refusal or submitted-recipient comparison makes the respective
+keeper fail its intended assertion; all production bytes were restored.
+Targeted gateway-methods typecheck, lint, formatting and all three line-count
+ratchets pass. These runs establish preservation, not a measured runtime saving.
+All candidate removal scan phases ran: unused files and script exports are clean;
+dependency and production/full-tree export scans report only UI workspace exports.
+The production dependency diagnostics reproduce on the untouched frozen base.
 
 ## Pending qualification and proof repairs
 
