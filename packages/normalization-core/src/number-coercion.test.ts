@@ -43,6 +43,10 @@ test.each([
 });
 
 test.each<[() => unknown, unknown]>([
+  [() => num.clampNumber(-1, 0, 1), 0],
+  [() => num.clampNumber(0.5, 0, 1), 0.5],
+  [() => num.clampNumber(2, 0, 1), 1],
+  [() => num.clampInt(-1.2, -5, 5), -2],
   [() => num.asPositiveFiniteNumber(0.5), 0.5],
   [() => num.asPositiveFiniteNumber(0), undefined],
   [() => num.asPositiveFiniteNumber(Number.POSITIVE_INFINITY), undefined],

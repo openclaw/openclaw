@@ -50,14 +50,6 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
-  return {
-    ...actual,
-    clampInt: vi.fn((value: number) => value),
-  };
-});
-
 vi.mock("./mentions.js", () => ({
   stripMentions: vi.fn((value: string) => value),
   stripStructuralPrefixes: vi.fn((value: string) => value),

@@ -1,5 +1,18 @@
 import { normalizeOptionalString } from "./string-coerce.ts";
 
+/** Clamps a number to an inclusive min/max range. */
+export function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+/** Floors a number before clamping it to an inclusive min/max range. */
+export function clampInt(value: number, min: number, max: number): number {
+  return clampNumber(Math.floor(value), min, max);
+}
+
+/** Alias for clampNumber (shorter, more common name) */
+export const clamp = clampNumber;
+
 export function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
