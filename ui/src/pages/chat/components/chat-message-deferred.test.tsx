@@ -133,7 +133,7 @@ it("loads permission recovery for tool cards, tool messages, and notices with cu
   ]);
 });
 
-it("reserves declared and saved widget height before the lazy renderer arrives", async () => {
+it("keeps a titled reservation at the declared or saved height before the renderer arrives", async () => {
   let setSavedHeight!: (height: number | undefined) => void;
   const mounted = mountSolid(() => {
     const [savedHeight, setHeight] = createSignal<number>();
@@ -144,7 +144,9 @@ it("reserves declared and saved widget height before the lazy renderer arrives",
           kind: "canvas",
           surface: "assistant_message",
           render: "url",
-          url: "/chart",
+          url: "/__openclaw__/canvas/documents/team-scale-chart-12/index.html",
+          viewId: "team-scale-chart-12",
+          title: "Team metric 12",
           preferredHeight: 220,
         }}
         surface="chat_message"
@@ -165,10 +167,42 @@ it("reserves declared and saved widget height before the lazy renderer arrives",
     const placeholder = () =>
       mounted.container.querySelector<HTMLElement>(".chat-tool-card__preview");
     expect(placeholder()?.style.minHeight).toBe("220px");
+    expect(placeholder()?.textContent).toContain("Team metric 12");
     expect(mounted.container.textContent).not.toContain("Widget renderer ready");
     setSavedHeight(700);
     flush();
     expect(placeholder()?.style.minHeight).toBe("700px");
+    // MCP Apps, strict documents and plain frames load untitled, so they reserve untitled.
+    for (const [kind, preview] of [
+      ["mcp-app", { url: "/app", mcpApp: { viewId: "app" } }],
+      ["canvas-html", { url: "/chart" }],
+      [
+        "canvas-html",
+        {
+          url: "/__openclaw__/canvas/documents/strict-chart/index.html",
+          viewId: "strict-chart",
+          sandbox: "strict" as const,
+        },
+      ],
+    ] as const) {
+      const untitled = mountSolid(() => (
+        <ToolPreview
+          preview={{
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            title: "Untitled frame",
+            ...preview,
+          }}
+          surface="chat_message"
+        />
+      ));
+      onTestFinished(untitled.unmount);
+      flush();
+      const box = untitled.container.querySelector(".chat-tool-card__preview");
+      expect(box?.getAttribute("data-content-kind")).toBe(kind);
+      expect(box?.textContent).toBe("");
+    }
     moduleReady.resolve();
     await waitForSolid(() =>
       expect(mounted.container.textContent).toContain("Widget renderer ready"),

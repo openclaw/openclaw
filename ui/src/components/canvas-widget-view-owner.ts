@@ -16,7 +16,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { observeWindowMessage } from "../lib/reactive/window-message.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
+import { WidgetSandboxHost } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
 import { isCanvasWidgetLoadRetryEvent } from "./canvas-widget-view-events.ts";
@@ -103,22 +103,24 @@ export function createCanvasWidget(
     accessDenied: boolean;
     unavailable: boolean;
     awaitingResult: boolean;
+    reconnecting: boolean;
     runtimeError: string;
     resourceError: boolean;
     contentHeight?: number;
     sandboxGeneration: number;
     scriptFrameAdmitted: boolean;
-    pending: boolean;
+    rendered: boolean;
   } = {
     error: "",
     accessDenied: false,
     unavailable: false,
     awaitingResult: false,
+    reconnecting: false,
     runtimeError: "",
     resourceError: false,
     sandboxGeneration: 0,
     scriptFrameAdmitted: false,
-    pending: false,
+    rendered: false,
   };
   let reportedHeight: number | undefined;
   let activeBinding: ViewBinding | undefined;
@@ -134,7 +136,6 @@ export function createCanvasWidget(
   let validatedBinding: ViewBinding | undefined;
   let ownerBinding: ViewBinding | undefined;
   let retryTimer: number | undefined;
-  let slowTimer: number | undefined;
   let retryDelayMs = 1_000;
   let cancelFrameAdmission: (() => void) | undefined;
   Object.defineProperties(element, {
@@ -148,8 +149,6 @@ export function createCanvasWidget(
     },
   });
   function clearRetry(): void {
-    window.clearTimeout(slowTimer);
-    slowTimer = undefined;
     window.clearTimeout(retryTimer);
     retryTimer = undefined;
   }
@@ -185,7 +184,7 @@ export function createCanvasWidget(
     if (retryTimer !== undefined) {
       return;
     }
-    state.pending = true;
+    state.reconnecting = true;
     retryTimer = window.setTimeout(
       () => {
         retryTimer = undefined;
@@ -216,6 +215,7 @@ export function createCanvasWidget(
     clearRetry();
     retryDelayMs = 1_000;
     state.awaitingResult = false;
+    state.reconnecting = false;
     validatedBinding = undefined;
     ownerBinding = undefined;
     state.sandboxGeneration += 1;
@@ -227,6 +227,7 @@ export function createCanvasWidget(
   }
 
   function clearSandbox(): void {
+    state.rendered = false;
     cancelFrameAdmission?.();
     cancelFrameAdmission = undefined;
     state.scriptFrameAdmitted = false;
@@ -302,7 +303,7 @@ export function createCanvasWidget(
       validatedBinding = undefined;
       sandboxHost?.setActive(false);
       state.awaitingResult = false;
-      state.pending = true;
+      state.reconnecting = true;
       return;
     }
     if (!hasOperatorSelfReadAccess(gateway.snapshot.hello?.auth ?? null)) {
@@ -345,13 +346,6 @@ export function createCanvasWidget(
     };
     activeBinding = binding;
     watchRetryEvents(binding);
-    state.pending = Boolean(state.view) || state.awaitingResult;
-    slowTimer = window.setTimeout(() => {
-      if (isCurrent(binding)) {
-        state.pending = true;
-        notify();
-      }
-    }, WIDGET_LOAD_NOTICE_MS);
     void loadCanvasWidgetView(binding, () => isCurrent(binding))
       .then((view) => {
         if (!view || !isCurrent(binding)) {
@@ -378,8 +372,8 @@ export function createCanvasWidget(
         releaseRetryEvents();
         ownerBinding = binding;
         validatedBinding = binding;
-        state.pending = false;
         state.awaitingResult = false;
+        state.reconnecting = false;
         retryDelayMs = 1_000;
         sandboxHost?.setActive(props.presentationActive);
       })
@@ -412,7 +406,6 @@ export function createCanvasWidget(
         props.onHeightChange?.(null, true);
         state.view = undefined;
         clearSandbox();
-        state.pending = false;
         state.accessDenied =
           error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
         state.unavailable = isTerminalCanvasViewError(error);
@@ -456,11 +449,15 @@ export function createCanvasWidget(
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
       onLoaded: () => {
-        state.pending = false;
+        state.reconnecting = false;
         postHostState();
         notify();
       },
-      onRendered: postHostState,
+      onRendered: () => {
+        state.rendered = true;
+        postHostState();
+        notify();
+      },
       onError: (error) => {
         clearSandbox();
         state.error = formatUiError(error);
@@ -468,11 +465,7 @@ export function createCanvasWidget(
         notify();
       },
       onReadyTimeout: () => {
-        state.pending = true;
-        notify();
-      },
-      onPending: () => {
-        state.pending = true;
+        state.reconnecting = true;
         notify();
       },
     });
