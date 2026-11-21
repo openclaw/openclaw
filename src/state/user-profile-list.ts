@@ -64,6 +64,14 @@ export function readUserProfileIdentity(
   );
 }
 
+/** Public identity for an already verified canonical requester; never opens storage or follows aliases. */
+export function readUserProfileGitHubIdentity(profileId: string) {
+  return readProfileCatalog({}, (resident) => {
+    const profile = resident.get(profileId);
+    return profile?.merged_into ? undefined : (profile?.githubIdentity ?? undefined);
+  });
+}
+
 /** Existing one-hop aliases are identity facts; this read never creates profile storage. */
 export const readUserProfileAliases = (
   profileId: string,
