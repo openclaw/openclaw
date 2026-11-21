@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asPositiveFiniteNumber, clampNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { clampNumber } from "../utils.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,

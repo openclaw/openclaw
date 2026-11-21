@@ -1,11 +1,10 @@
-import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { asPositiveInteger, clampNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CodeModeConfig as AuthoredCodeModeConfig } from "../config/types.tools.js";
 import { modelKey } from "../shared/model-key.js";
-import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
