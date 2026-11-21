@@ -55,6 +55,7 @@ import {
   text as clackText,
 } from "../configure.shared.js";
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
+import { planAuthProfileNames } from "./auth-account-name.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
 import {
@@ -80,6 +81,7 @@ import {
   type ModelAuthRefreshOutcome,
 } from "./auth-refresh.js";
 import {
+  listProviderReloginProfiles,
   resolveReloginProfileIdentity,
   snapshotReloginAuthProfiles,
 } from "./auth-relogin-identity.js";
@@ -266,17 +268,10 @@ async function runProviderAuthMethod(
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
   const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
-  const existingProfiles = Object.entries(store.profiles)
-    .filter(
-      ([profileId, credential]) =>
-        credential.provider === params.provider.id &&
-        (!params.profileId || profileId === params.profileId),
-    )
-    .map(([profileId, credential]) => ({ profileId, credential }));
   const result = await runProviderPluginAuthMethodUnpersisted({
     method: params.method,
     config: params.config,
-    existingProfiles,
+    existingProfiles: listProviderReloginProfiles(store.profiles, params),
     credentialOnly: params.credentialOnly,
     assertCurrent: params.assertCurrent,
     env: params.env ?? process.env,
@@ -314,7 +309,7 @@ async function runProviderAuthMethod(
     method: params.method,
     allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
-  const profiles = resolvedIdentity.profiles;
+  const { profiles, offerName } = planAuthProfileNames(resolvedIdentity, store, params);
 
   const login = {
     ...params,
@@ -449,6 +444,7 @@ async function runProviderAuthMethod(
     persistedProfiles.length > 0
       ? await allowLoginProviderModels(params, params.agentId, params.provider.id)
       : undefined;
+  await offerName(persistedProfiles);
   return { result: connectionResult, profiles: persistedProfiles, authRefresh, modelAccess };
 }
 
@@ -838,6 +834,7 @@ async function runModelsAuthLoginFlow(
   const existingProfiles = await snapshotReloginAuthProfiles({
     agentDir: context.agentDir,
     method: chosenMethod,
+    force: opts.force,
   });
   const imported =
     !opts.credentialOnly && !opts.force && !opts.profileId && !opts.setDefault

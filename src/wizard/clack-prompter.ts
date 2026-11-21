@@ -160,7 +160,7 @@ export function createClackPrompter(
   output: NodeJS.WriteStream = process.stdout,
   signal?: AbortSignal,
 ): WizardPrompter {
-  return {
+  const prompter: WizardPrompter = {
     intro: async (title) => {
       intro(stylePromptTitle(title) ?? title, { output });
     },
@@ -306,4 +306,8 @@ export function createClackPrompter(
       };
     },
   };
+  if (process.stdin.isTTY && output.isTTY) {
+    prompter.optionalText = prompter.text;
+  }
+  return prompter;
 }

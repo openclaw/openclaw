@@ -263,7 +263,14 @@ Then configure auth per-agent (wizard) and route chats to the right agent.
 ### 2) Advanced: multiple profiles in one agent
 
 The auth profile store supports multiple profile IDs for the same provider.
-Pick which one is used:
+When an interactive CLI login or **Settings → Models** adds a second account
+for the same provider, OpenClaw offers an optional name such as **Work**.
+Press Enter to keep the suggested label, or enter your own. Skipping the name
+does not remove the saved sign-in. Reconnecting keeps the saved name when
+OpenClaw can identify the same account. Chat `/login` adds accounts without
+asking for a name.
+
+Pick which profile is used:
 
 - globally via config ordering (`auth.order`)
 - per-session via `/model ...@<profileId> -s`

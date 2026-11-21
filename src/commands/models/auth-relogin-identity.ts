@@ -11,11 +11,28 @@ type ReloginMethod = Pick<
   "matchesPersonalAccount" | "matchesSharedAccount" | "canReplaceGeneratedProfile"
 >;
 
+function sharedAccountMatcher(method: ReloginMethod | undefined) {
+  return method?.matchesSharedAccount ?? method?.matchesPersonalAccount;
+}
+
+export function listProviderReloginProfiles(
+  stored: Readonly<Record<string, AuthProfileCredential>>,
+  { provider, profileId: requestedId }: { provider: { id: string }; profileId?: string },
+): ProviderAuthResult["profiles"] {
+  return Object.entries(stored)
+    .filter(
+      ([id, credential]) =>
+        credential.provider === provider.id && (!requestedId || id === requestedId),
+    )
+    .map(([profileId, credential]) => ({ profileId, credential }));
+}
+
 export async function snapshotReloginAuthProfiles(params: {
   agentDir: string;
   method: ReloginMethod;
+  force?: boolean;
 }): Promise<Readonly<Record<string, AuthProfileCredential>> | undefined> {
-  if (!(params.method.matchesSharedAccount ?? params.method.matchesPersonalAccount)) {
+  if (!sharedAccountMatcher(params.method) && !params.force) {
     return undefined;
   }
   // Main-agent OAuth writes are redirected to the shared owner. Read that owner
@@ -31,6 +48,41 @@ export async function snapshotReloginAuthProfiles(params: {
       const credential = store.profiles[profileId];
       return credential ? [[profileId, credential] as const] : [];
     }),
+  );
+}
+
+/** Match the account in a resolved slot without letting optional name handling fail sign-in. */
+export function isAuthProfileReconnect(
+  incoming: AuthProfileCredential,
+  previous: AuthProfileCredential | undefined,
+  method: ReloginMethod,
+): previous is AuthProfileCredential {
+  if (!previous || previous.provider !== incoming.provider || previous.type !== incoming.type) {
+    return false;
+  }
+  const matcher = sharedAccountMatcher(method);
+  if (matcher) {
+    try {
+      return matcher(incoming, previous);
+    } catch {
+      return false;
+    }
+  }
+  // A reused slot does not prove identity. A reference may resolve to a rotated secret.
+  if (incoming.type === "api_key" && previous.type === "api_key") {
+    return Boolean(incoming.key) && incoming.key === previous.key;
+  }
+  if (incoming.type === "token" && previous.type === "token") {
+    return Boolean(incoming.token) && incoming.token === previous.token;
+  }
+  // OAuth account IDs are registration-scoped.
+  return (
+    incoming.type === "oauth" &&
+    previous.type === "oauth" &&
+    Boolean(incoming.accountId) &&
+    incoming.accountId === previous.accountId &&
+    incoming.issuer === previous.issuer &&
+    incoming.clientId === previous.clientId
   );
 }
 
@@ -83,7 +135,7 @@ export function resolveReloginProfileIdentity(params: {
       },
     }),
   };
-  const matcher = params.method?.matchesSharedAccount ?? params.method?.matchesPersonalAccount;
+  const matcher = sharedAccountMatcher(params.method);
   if (!matcher || !params.existingProfiles || params.profiles.length !== 1) {
     return generated;
   }

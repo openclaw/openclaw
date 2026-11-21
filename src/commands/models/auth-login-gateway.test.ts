@@ -50,11 +50,14 @@ const step = (value: WizardStep): WizardNextResult => ({ done: false, step: valu
 const authUrl = "https://example.test/authorize";
 const browserStep = step({ id: "code", type: "text", externalUrl: authUrl });
 const done: WizardNextResult = { done: true, status: "done" };
-function gateway(results: Array<WizardNextResult | Error>) {
+function gateway(
+  results: Array<WizardNextResult | Error>,
+  closingStatus: "cancelled" | "done" = "cancelled",
+) {
   const calls: Array<{ method: string; params: unknown }> = [];
   const request: GatewayRequestFunction = async <T>(method: string, params?: unknown) => {
     calls.push({ method, params });
-    const result = method === "wizard.cancel" ? { status: "cancelled" } : results.shift();
+    const result = method === "wizard.cancel" ? { status: closingStatus } : results.shift();
     if (!result || result instanceof Error) {
       throw result ?? new Error("Unexpected wizard request");
     }
@@ -131,6 +134,31 @@ it("closes the admitted session when a terminal prompt is cancelled", async () =
   expect(runtime.log).toHaveBeenCalledWith(
     "Login session closed. Credentials already saved were not undone.",
   );
+});
+
+it("does not fail a completed sign-in when optional terminal input breaks", async () => {
+  prompts.text.mockRejectedValueOnce(new Error("Terminal input unavailable"));
+  const h = gateway([step({ id: "name", type: "text", initialValue: "Example" })], "done");
+  await expect(h.run()).resolves.toBeUndefined();
+  expect(h.calls.at(-1)).toEqual({
+    method: "wizard.cancel",
+    params: { sessionId: "login", closeInput: true },
+  });
+  expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("sign-in saved"));
+});
+
+it("displays a nonfatal naming warning from the Gateway before reporting success", async () => {
+  prompts.text.mockResolvedValueOnce("Work");
+  const warning = "Account connected, but its name was not saved.";
+  const h = gateway([
+    step({ id: "name", type: "text", initialValue: "Example" }),
+    step({ id: "warning", type: "note", format: "plain", message: warning }),
+    done,
+  ]);
+  await h.run();
+  expect(prompts.note).toHaveBeenCalledWith(warning, undefined);
+  expect(h.calls).toEqual([next(), next("name", "Work"), next("warning")]);
+  expect(runtime.error).not.toHaveBeenCalled();
 });
 
 it("observes browser completion while manual input remains open and retires the prompt", async () => {
