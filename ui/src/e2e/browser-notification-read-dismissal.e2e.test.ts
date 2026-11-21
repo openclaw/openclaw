@@ -177,7 +177,11 @@ suite.define(() => {
         upgradeWorker();
         await phase("candidate registration", () =>
           page.evaluate(async () => {
-            await navigator.serviceWorker.register("/sw.js?v=upgrade-candidate", { scope: "/" });
+            const registration = await navigator.serviceWorker.getRegistration();
+            if (!registration) {
+              throw new Error("Legacy registration disappeared before upgrade");
+            }
+            await registration.update();
           }),
         );
         // Running build identity, not a registration URL, owns upgrade completion.
@@ -230,6 +234,17 @@ suite.define(() => {
               channel.port2.close();
             }
           }, candidateBuild);
+          // The legacy source can echo a URL-derived version. Inspect the running
+          // worker's embedded build constant as well, never just its probe reply.
+          await phase("active candidate code identity", async () => {
+            await expect
+              .poll(async () => {
+                const url = await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL);
+                const worker = context.serviceWorkers().find((item) => item.url() === url);
+                return worker?.evaluate("EMBEDDED_CACHE_VERSION").catch(() => null);
+              })
+              .toBe(candidateBuild);
+          });
           console.info("[upgrade-proof] passed candidate activation");
         } catch (error) {
           console.error(
@@ -289,40 +304,69 @@ suite.define(() => {
           messageId: "key:proof-final",
           profileId,
         };
+        let hintReceived: (() => void) | undefined;
+        await page.exposeFunction("notificationHintObserved", () => hintReceived?.());
         const deliver = async (tag: string, changes: Record<string, unknown> = {}) => {
-          const displayed = page.evaluate(
-            () =>
-              new Promise<void>((resolve, reject) => {
-                const timer = setTimeout(() => {
+          const displayed = new Promise<void>((resolve) => {
+            hintReceived = resolve;
+          });
+          // This evaluate returns only after installation, before CDP delivery.
+          await phase(`arm hint listener: ${tag}`, () =>
+            page.evaluate(() => {
+              const listener = (event: MessageEvent) => {
+                if (event.data?.type === "openclaw-completion-delivered") {
                   navigator.serviceWorker.removeEventListener("message", listener);
-                  reject(new Error("No worker after-display hint within 10 seconds"));
-                }, 10_000);
-                const listener = (event: MessageEvent) => {
-                  if (event.data?.type === "openclaw-completion-delivered") {
-                    clearTimeout(timer);
-                    navigator.serviceWorker.removeEventListener("message", listener);
-                    resolve();
-                  }
+                  void (
+                    window as Window & { notificationHintObserved: () => Promise<void> }
+                  ).notificationHintObserved();
+                }
+              };
+              navigator.serviceWorker.addEventListener("message", listener, {
+                signal: AbortSignal.timeout(10_000),
+              });
+            }),
+          );
+          try {
+            await phase(
+              `delivery hint: ${tag}`,
+              async () => {
+                await protocol.send("ServiceWorker.deliverPushMessage", {
+                  origin: new URL(suite.server.baseUrl).origin,
+                  registrationId: registrationId!,
+                  data: JSON.stringify({
+                    title: "OpenClaw proof",
+                    body: "Completion",
+                    tag,
+                    url: controlUiSessionUrl(suite.server.baseUrl, sessionKey),
+                    completion: { ...completion, ...changes },
+                  }),
+                });
+                await displayed;
+              },
+              10_000,
+            );
+          } catch (error) {
+            const state = await phase("missing hint diagnostics", () =>
+              page.evaluate(async () => {
+                const registration = await navigator.serviceWorker.getRegistration();
+                return {
+                  url: location.href,
+                  visibility: document.visibilityState,
+                  controller: navigator.serviceWorker.controller?.scriptURL,
+                  active: registration?.active?.scriptURL,
+                  activeState: registration?.active?.state,
+                  notifications: (await registration?.getNotifications())?.map((item) => ({
+                    tag: item.tag,
+                    data: item.data,
+                  })),
                 };
-                navigator.serviceWorker.addEventListener("message", listener);
               }),
-          );
-          await phase(`delivery hint: ${tag}`, () =>
-            Promise.all([
-              displayed,
-              protocol.send("ServiceWorker.deliverPushMessage", {
-                origin: new URL(suite.server.baseUrl).origin,
-                registrationId: registrationId!,
-                data: JSON.stringify({
-                  title: "OpenClaw proof",
-                  body: "Completion",
-                  tag,
-                  url: controlUiSessionUrl(suite.server.baseUrl, sessionKey),
-                  completion: { ...completion, ...changes },
-                }),
-              }),
-            ]),
-          );
+            );
+            console.error("[upgrade-proof] missing hint state", JSON.stringify(state));
+            throw error;
+          } finally {
+            hintReceived = undefined;
+          }
         };
         try {
           await deliver("unread");
