@@ -874,14 +874,14 @@ it("charges conversation, not the saved system-prompt checkpoint, as active tran
       parentId: "assistant",
       customType: "openclaw.system-prompt",
       data: { prefix: "x".repeat(150_000), routeKey: "r", historyId: "h" },
-    } as TranscriptEvent;
+    };
     const conversationBytes = [user, assistant].reduce(
       (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
       0,
     );
     const expected = { kind: "value", value: { byteSize: conversationBytes, eventCount: 2 } };
     const options = { includeByteSize: true, includeUsage: false };
-    const f = fixture([user, assistant, checkpoint]);
+    const f = fixture([user, assistant, checkpoint as TranscriptEvent]);
     const accounting = () =>
       readProjection(f.database, f.scope, (projection) =>
         readSessionTranscriptAccountingFromProjection(projection, options),
