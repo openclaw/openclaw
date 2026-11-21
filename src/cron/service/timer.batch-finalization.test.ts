@@ -374,7 +374,7 @@ describe("cron batch outcome finalization", () => {
         "Recurring report",
         job.id,
         "10 consecutive run failures",
-        `Cause: ${cause}`,
+        `Latest cause: ${cause}`,
         `openclaw automations enable ${job.id}`,
       ]) {
         expect(text).toContain(fragment);
