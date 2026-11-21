@@ -556,7 +556,9 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           });
 
         const skillsSnapshot = await resolveCronSkillsSnapshot({
-          workspaceDir,
+          workspaceDir: modelOwner.workspaceDir,
+          executionWorkspaceDir: selectedWorkspace.executionWorkspaceDir,
+          executionWorkspaceFileHost: selectedWorkspace.executionWorkspaceFileHost,
           config: admittedConfig,
           agentId,
           existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
