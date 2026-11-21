@@ -27,6 +27,12 @@ import type {
   GoogleMeetTransport,
 } from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
+import {
+  executeMeetChatParticipation,
+  meetChatCapabilities,
+  observeMeetChat,
+  validateMeetChatParticipationAction,
+} from "./runtime-chat.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
 import {
   launchChromeMeet,
@@ -150,12 +156,16 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
             await getParticipationStore().registerIfAbsent(key, attempt),
           register: async (key, attempt) => await getParticipationStore().register(key, attempt),
         },
-        capabilities: () => [],
-        validateAction: () => undefined,
-        execute: async () => ({
-          status: "unsupported",
-          message: "Participation requires a supported tracked browser meeting.",
-        }),
+        capabilities: meetChatCapabilities,
+        validateAction: validateMeetChatParticipationAction,
+        execute: async (session, request, assertCurrent) =>
+          await executeMeetChatParticipation({
+            runtime: params.runtime,
+            config: params.config,
+            session,
+            request,
+            assertCurrent,
+          }),
       },
       logger: params.logger,
       logScope: "[google-meet]",
@@ -613,6 +623,9 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
     if (!tab) {
       return undefined;
     }
+    // In-call chat rides the caption capture cadence; a failed chat read never
+    // blocks the transcript snapshot.
+    await this.#observeChat(session, tab);
     return await readChromeMeetTranscript({
       runtime: this.params.runtime,
       ...(session.transport === "chrome-node"
@@ -624,6 +637,24 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       meetingSessionId: session.id,
       tab,
     });
+  }
+
+  async #observeChat(session: GoogleMeetSession, tab: GoogleMeetBrowserTab): Promise<void> {
+    try {
+      const sources = await observeMeetChat({
+        runtime: this.params.runtime,
+        config: this.params.config,
+        session,
+        tab,
+      });
+      for (const source of sources) {
+        this.observeParticipationSource(session.id, source);
+      }
+    } catch (error) {
+      this.params.logger.debug?.(
+        `[google-meet] chat observation ignored: ${formatErrorMessage(error)}`,
+      );
+    }
   }
 
   async #releaseBrowserTab(session: GoogleMeetSession): Promise<boolean | undefined> {
