@@ -547,6 +547,15 @@ export function readSessionActorMemoryProjection(
                 : undefined;
           continue;
         }
+        // Private custom payloads are selected separately, never as chat source.
+        if (isRecord(row.event) && row.event.type === "custom") {
+          cursor = {
+            ...cursor,
+            position: cursor.kind === "off-path" ? row.rawSeq : cursor.position + 1,
+          };
+          consumed++;
+          continue;
+        }
         if (messageIds) {
           const event = isRecord(row.event) ? row.event : undefined;
           const storedMessage = isRecord(event?.message) ? event.message : undefined;

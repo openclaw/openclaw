@@ -88,7 +88,7 @@ type Reads = {
     output: SessionTranscriptBoundedMessageTailPage;
   };
   "visitor-source": {
-    input: { offset?: number };
+    input: { offset?: number; mcpAppDisplays?: boolean };
     output: { messages: Array<{ message: unknown; seq: number }>; nextOffset?: number };
   };
 };

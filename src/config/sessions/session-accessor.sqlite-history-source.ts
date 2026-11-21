@@ -28,7 +28,7 @@ import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset
 import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { readTranscriptPayload } from "./transcript-payload.js";
+import { readTranscriptPayload, transcriptPredicateSql } from "./transcript-payload.js";
 
 type SqliteSourceCursor = Exclude<SessionTranscriptSourceCursor, { kind: "archive" }>;
 
@@ -161,10 +161,16 @@ export function readSessionTranscriptSourcePageFromProjection(
           ]),
         )
       : query;
+    // Private custom entries are not message source. Exclude them before applying
+    // message-page byte admission, without decoding their potentially larger display.
+    const messageSourceQuery = selectedQuery.where((eb) => {
+      const type = transcriptPredicateSql(projection.database.db, "navigation_last_type", "event");
+      return eb.or([eb(type, "is", null), eb(type, "!=", "custom")]);
+    });
     const rows =
       selectedIds?.length === 0 || (kind === "kept" && keptPositions.length === 0)
         ? []
-        : executeSqliteQuerySync(projection.database.db, selectedQuery.limit(remaining)).rows;
+        : executeSqliteQuerySync(projection.database.db, messageSourceQuery.limit(remaining)).rows;
     let admitted = 0;
     for (const row of rows) {
       if (row.bytes + 1 > SOURCE_PAGE_MAX_BYTES) {

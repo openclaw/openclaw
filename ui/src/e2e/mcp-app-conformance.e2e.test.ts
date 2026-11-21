@@ -14,11 +14,13 @@ import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-m
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import { getMcpAppModelContext } from "../../../src/agents/mcp-app-model-context.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
+import { SessionManager } from "../../../src/agents/sessions/session-manager.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
 import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../src/state/openclaw-agent-db.paths.js";
 import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 import * as testStateFixture from "../../../src/test-utils/openclaw-test-state.ts";
 import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
@@ -296,6 +298,47 @@ const suite = createControlUiE2eSuite({
       }
       showFixture = async (callId) => {
         const nextResult = await show.execute(callId, { city: "Paris" });
+        const manager = await SessionManager.openAsync(
+          {
+            agentId: "main",
+            sessionId: runtime.sessionId,
+            sessionKey,
+            storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state!.env }),
+          },
+          tempRoot,
+        );
+        await manager.appendMessageAsync({
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: callId,
+              name: "conformance__show",
+              arguments: { city: "Paris" },
+            },
+          ],
+          api: "openai-responses",
+          provider: "openai",
+          model: "synthetic",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: Date.now(),
+        });
+        await manager.appendMessageAsync({
+          role: "toolResult",
+          toolCallId: callId,
+          toolName: "conformance__show",
+          ...nextResult,
+          isError: false,
+          timestamp: Date.now(),
+        });
         const nextViewId = (
           nextResult.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } }
         ).mcpAppPreview?.mcpApp?.viewId;
@@ -756,4 +799,64 @@ suite.define(() => {
       },
     });
   }, 240_000);
+
+  it("recovers expired inline content with readable Retry and on return without replaying the tool", async (context) => {
+    await suite.runScenario(context, {
+      run: async () => {
+        await configureImmediate("expiry-restoration");
+        viewId = await showFixture("expiry-restoration-call");
+        const browser = await newProofContext();
+        const page = await browser.newPage();
+        await mountHost(page);
+        const app = await findAppFrame(page);
+        await waitForTextContaining(app.locator("#result"), "initial-result");
+        await waitForText(app.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-live");
+        // Controlled lease deadline; production keeps its ten-minute TTL.
+        viewLease().expiresAtMs = Date.now() - 1;
+        expect(getMcpAppViewLease(viewId, runtime)).toBeUndefined();
+        // A failed sandbox response must not erase the already rendered document.
+        // This faults real network I/O, not Gateway authorization or saved data.
+        const sandboxRoute = "**/mcp-app-sandbox?*";
+        await page.route(sandboxRoute, (route) => route.abort("failed"));
+        await app.locator("#update-context").click();
+        const replacementFrame = page.locator("mcp-app-view iframe[hidden]");
+        await expect.poll(() => replacementFrame.count()).toBe(1);
+        expect(await replacementFrame.isVisible()).toBe(false);
+        await expect
+          .poll(() => page.locator("mcp-app-view .error").textContent(), {
+            timeout: 25_000,
+          })
+          .toContain("Try again");
+        expect(app.isDetached()).toBe(false);
+        await waitForText(app.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-readable-retry");
+        await page.unroute(sandboxRoute);
+        await page.locator("mcp-app-view .error button").click();
+        await expect.poll(() => app.isDetached()).toBe(true);
+        const recoveredApp = await findAppFrame(page);
+        await waitForTextContaining(recoveredApp.locator("#result"), "initial-result");
+        await waitForText(recoveredApp.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-reconnected");
+        await mountHost(page);
+        await expect
+          .poll(() => page.locator("mcp-app-view").textContent())
+          .toContain("Send a message to interact again");
+        const returnedApp = await findAppFrame(page);
+        await waitForTextContaining(returnedApp.locator("#result"), "initial-result");
+        await waitForText(returnedApp.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-restored");
+        const calls = (await fixture.readEvents()).filter(
+          (event) =>
+            event.event === "incoming" &&
+            event.method === "tools/call" &&
+            event.tool === "show" &&
+            event.scenario === "expiry-restoration",
+        );
+        expect(calls).toHaveLength(1);
+        await suite.closeBrowserContext(browser);
+        console.log("MCP expiry proof:", proofDir);
+      },
+    });
+  });
 });

@@ -1,10 +1,37 @@
 import { type AppBridge, McpUiHostContextSchema } from "@modelcontextprotocol/ext-apps/app-bridge";
+import { raceWithTimeout } from "@openclaw/retry";
 import { t } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
+import type { McpAppResources } from "./mcp-app-view-types.ts";
 
 registerMcpAppEnglish();
+
+const MCP_APP_TEARDOWN_TIMEOUT_MS = 250;
+
+/** Retire host authority while optionally retaining the last readable document. */
+export async function closeMcpAppFrame(resources: McpAppResources, retainFrame: boolean) {
+  if (retainFrame) {
+    resources.requestAbort.abort();
+  }
+  for (const cleanup of resources.cleanups) {
+    resources.cleanups.delete(cleanup);
+    cleanup();
+  }
+  if (resources.bridge && !retainFrame) {
+    await raceWithTimeout(
+      resources.bridge.teardownResource({}).catch(() => undefined),
+      MCP_APP_TEARDOWN_TIMEOUT_MS,
+      () => undefined,
+    );
+  }
+  resources.requestAbort.abort();
+  await resources.transport?.close().catch(() => undefined);
+  if (!retainFrame) {
+    resources.iframe.remove();
+  }
+}
 
 type AddCleanup = (cleanup: () => void) => () => void;
 type HostContext = NonNullable<

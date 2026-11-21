@@ -11,6 +11,10 @@ import {
   readSessionTranscriptHistoryAnchorPageFromProjection,
 } from "../config/sessions/session-accessor.sqlite-history-query.js";
 import { readSessionTranscriptSourcePageFromProjection } from "../config/sessions/session-accessor.sqlite-history-source.js";
+import {
+  selectActiveTranscriptEventRows,
+  readProjectionTranscriptPayload,
+} from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import type {
   CurrentTranscriptProjection,
   SessionTranscriptMessageEvent,
@@ -22,6 +26,7 @@ import {
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { readRecentTranscriptConversationText } from "../config/sessions/transcript-recent-text.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   boundHistoryAnchorPageRange,
   type TranscriptAnchorPageOptions,
@@ -407,6 +412,30 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     return access.readSnapshot(target, (projection) =>
       select((visit) => {
         visitProjectionMessages(projection, visit);
+        if (query.kind === "mcp-app") {
+          // Private reconstruction only; never include these payloads in chat history.
+          const rows = iterateSqliteQuerySync(
+            projection.database.db,
+            selectActiveTranscriptEventRows(projection.database)
+              .select([
+                "event.seq",
+                "event.event_json",
+                "event.event_zstd",
+                "event.event_utf8_bytes",
+              ])
+              .where("active.session_id", "=", projection.resolved.sessionId)
+              .where("active.message_position", "is", null)
+              .orderBy("active.active_position", "asc"),
+          );
+          for (const row of rows) {
+            const event = asOptionalRecord(
+              JSON.parse(readProjectionTranscriptPayload(projection, row, row.seq)),
+            );
+            if (event?.type === "custom" && event.customType === "mcp-app-display") {
+              visit(event);
+            }
+          }
+        }
       }),
     );
   }

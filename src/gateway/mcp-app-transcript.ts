@@ -3,6 +3,8 @@ import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
+import { measureMcpAppViewBytes } from "../agents/mcp-ui-resource-bounds.js";
+import type { McpAppSavedDisplay } from "../agents/mcp-ui-resource.js";
 
 type McpAppDescriptor = BoardMcpAppDescriptor & {
   viewId: string;
@@ -15,6 +17,7 @@ export type McpAppReconstructionData = {
   descriptor: McpAppDescriptor;
   toolInput: unknown;
   toolResult: CallToolResult;
+  savedDisplay?: McpAppSavedDisplay;
 };
 
 type TranscriptVisit = (visit: (message: unknown) => void) => void;
@@ -151,8 +154,7 @@ function readTranscriptResult(
   if (
     normalizeOptionalString(message.toolCallId) !== descriptor.toolCallId ||
     normalizeOptionalString(details.mcpServer) !== descriptor.serverName ||
-    normalizeOptionalString(details.mcpTool) !== descriptor.toolName ||
-    descriptor.resultMetaState === "unavailable"
+    normalizeOptionalString(details.mcpTool) !== descriptor.toolName
   ) {
     return { kind: "unavailable" };
   }
@@ -182,6 +184,42 @@ export function selectMcpAppReconstructionData(
     return undefined;
   }
   const resolvedResult = resultRead.value;
+  let savedDisplay: McpAppSavedDisplay | undefined;
+  visitTranscript((entry) => {
+    const record = asOptionalRecord(entry);
+    if (record?.type !== "custom" || record.customType !== "mcp-app-display") {
+      return;
+    }
+    const data = asOptionalRecord(record.data);
+    const descriptor = readDescriptor(data?.descriptor);
+    if (
+      data?.version !== 1 ||
+      !descriptor ||
+      descriptor.viewId !== resolvedResult.descriptor.viewId ||
+      descriptor.serverName !== resolvedResult.descriptor.serverName ||
+      descriptor.toolName !== resolvedResult.descriptor.toolName ||
+      descriptor.uiResourceUri !== resolvedResult.descriptor.uiResourceUri ||
+      descriptor.toolCallId !== resolvedResult.descriptor.toolCallId ||
+      typeof data.html !== "string" ||
+      !asOptionalRecord(data.toolResult) ||
+      (data.requesterId !== undefined && typeof data.requesterId !== "string")
+    ) {
+      return;
+    }
+    // The resource owner normalizes the saved CSP before rendering.
+    // SAFETY: The version-1 writer owns the canonical result shape; identity is checked above.
+    const candidate = data as McpAppSavedDisplay;
+    try {
+      measureMcpAppViewBytes(candidate.html, candidate.toolInput, candidate.toolResult);
+    } catch {
+      return;
+    }
+    savedDisplay = candidate;
+  });
+  if (resolvedResult.descriptor.resultMetaState === "unavailable" && !savedDisplay) {
+    return undefined;
+  }
+
   let input: ReturnType<typeof readToolInputFromMessage>;
   messageIndex = 0;
   visitTranscript((message) => {
@@ -199,5 +237,9 @@ export function selectMcpAppReconstructionData(
     return undefined;
   }
   const { modelToolName: _modelToolName, ...reconstruction } = resolvedResult;
-  return { ...reconstruction, toolInput: input.input };
+  return {
+    ...reconstruction,
+    toolInput: savedDisplay?.toolInput ?? input.input,
+    ...(savedDisplay ? { toolResult: savedDisplay.toolResult, savedDisplay } : {}),
+  };
 }
