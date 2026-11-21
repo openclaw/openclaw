@@ -566,11 +566,11 @@ openclaw path emit ./gateway.jsonc --json
 
 ## Exit codes
 
-| Code | Meaning                                                                                             |
-| ---- | --------------------------------------------------------------------------------------------------- |
-| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.)                          |
-| `1`  | No match, invalid `validate` input, missing required arguments, or `set` rejected by the substrate. |
-| `2`  | Path or file parse error, refused pattern, or invalid mutation options.                             |
+| Code | Meaning                                                                                                                       |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success. `resolve` and `find` found a match, or `set` completed a write or dry-run preview.                                   |
+| `1`  | No match, invalid `validate` input, missing required arguments, or a rejected `set` (including `--diff` without `--dry-run`). |
+| `2`  | Path or file parse errors reported by other verbs, or a refused pattern.                                                      |
 
 ## Output mode
 
@@ -578,9 +578,12 @@ openclaw path emit ./gateway.jsonc --json
 stdout is piped or redirected. `--json` and `--human` override the
 auto-detection.
 
-Path/file parse errors and refused patterns in JSON mode write one error object to stdout, with `ok: false`
-and an `error` containing `type: "cli_error"`, the domain `code`, and `message`.
-Human-mode diagnostics remain on stderr. Refusals still return a nonzero exit code.
+Errors such as an unparseable `resolve` address or an unsupported `find` pattern
+write `{ ok: false, error: { type: "cli_error", code, message } }` to stdout in
+JSON mode and a diagnostic to stderr in human mode. Invalid `validate` input
+instead writes `{ valid: false, code, message }`, and `set --diff` without
+`--dry-run` writes `{ ok: false, reason: "--diff requires --dry-run" }`. Both
+of those results go to stdout in JSON and human modes.
 
 ## Notes
 
