@@ -330,19 +330,24 @@ export function rebuildPostgresSearch(db: PostgresSqlConnection, schema: SearchS
   if (!db.isTransaction) {
     throw new Error("Search rebuild requires the owner's transaction");
   }
-  for (const index of Object.values(schema.text ?? {})) {
-    db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_search_gin`)}`);
-    if (index.postgres?.mode === "trigram") {
-      db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_trgm_gin`)}`);
-    }
-  }
-  if (schema.mode === "keyword-only") {
-    return;
-  }
-  for (const index of Object.values(schema.vector ?? {})) {
-    const source = index.postgres!;
-    db.exec(
-      `DELETE FROM ${pgSearchName(index.table)}; INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE octet_length(${pgSearchName(source.embedding)}) > 0`,
-    );
-  }
+  db.runTransaction(
+    () => {
+      for (const index of Object.values(schema.text ?? {})) {
+        db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_search_gin`)}`);
+        if (index.postgres?.mode === "trigram") {
+          db.exec(`REINDEX INDEX ${pgSearchName(`${index.table}_trgm_gin`)}`);
+        }
+      }
+      if (schema.mode === "keyword-only") {
+        return;
+      }
+      for (const index of Object.values(schema.vector ?? {})) {
+        const source = index.postgres!;
+        db.exec(
+          `DELETE FROM ${pgSearchName(index.table)}; INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE octet_length(${pgSearchName(source.embedding)}) > 0`,
+        );
+      }
+    },
+    { maintenance: true },
+  );
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { buildRuntimeContextCustomMessage } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { sliceToolResultTextToBudget } from "../agents/embedded-agent-runner/tool-result-text-budget.js";
 import {
@@ -14,6 +15,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,6 +34,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 async function readPendingHeartbeatOutcomes(
   target: ExistingAgentDatabaseTarget,
@@ -69,6 +72,29 @@ export async function migrateHeartbeatOutcomes(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
+  try {
+    await importHeartbeatOutcomes(cfg, env);
+  } catch (error) {
+    if (!(error instanceof SessionCanonicalKeyMigrationRequiredError)) {
+      throw error;
+    }
+    // Heartbeat retirement runs before the session stage; a legacy alias session
+    // reads only after Doctor's canonical-key repair rekeys it and its outcome.
+    const { repairCanonicalSessionKeys } = await import("./doctor-session-canonical-keys.js");
+    const report = await withDoctorSqliteMaintenanceLock({
+      env,
+      operation: "session canonical-key repair",
+      run: () => repairCanonicalSessionKeys({ apply: true, cfg, env }),
+    });
+    note(
+      `Canonicalized ${report.repairedGroups} legacy session-key group(s) before importing their heartbeat outcomes.`,
+      "Doctor changes",
+    );
+    await importHeartbeatOutcomes(cfg, env);
+  }
+}
+
+async function importHeartbeatOutcomes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
   for (const target of listExistingAgentDatabaseTargets(cfg, env)) {
     const read = await readPendingHeartbeatOutcomes(target, env);
     if (!read.found) {

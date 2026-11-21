@@ -1098,7 +1098,15 @@ settings. The synchronous bridge has a 120-second deadline. If it expires, the
 process root terminates the whole I/O service, resetting every connection assigned
 to that service (roughly a quarter of the process's PostgreSQL connections) with
 an unknown outcome. Runtime statements time out after 90 seconds, so the bridge
-deadline covers a wedged service or a black-holed network. Offline port and restore
+deadline covers a wedged service or a black-holed network. Schema admission and
+migration transactions (including update generation fingerprints), first-use search
+extension builds, and explicit search rebuilds use a one-hour statement timeout and
+a bridge deadline of one hour plus 30 seconds. Lock waits still stop after 60 seconds.
+The maintenance statement limit is transaction-local; nested rebuilds restore the
+caller's limit on success or rollback, and ordinary requests keep their runtime limits.
+This lets large stores finish maintenance that would otherwise fail on every retry
+at the runtime deadline. Work exceeding the maintenance budget still fails.
+Offline port and restore
 materialization use a direct asynchronous client with a one-hour statement timeout;
 those statements do not pass through the synchronous bridge.
 These are not per-operation config options.
@@ -1345,7 +1353,8 @@ the heartbeat reports lease loss as before.
 
 If another store remains unavailable, restart the Gateway through its service owner.
 
-The 120-second bridge deadline also has an unknown outcome and resets the whole
+An expired bridge deadline (120 seconds for runtime requests, one hour plus
+30 seconds for maintenance) also has an unknown outcome and resets the whole
 I/O service, including its other assigned connections. Check the recorded result
 through the owning feature after connectivity recovers; a lost reply does not
 prove that the write rolled back. Do not blindly repeat an operation that could
