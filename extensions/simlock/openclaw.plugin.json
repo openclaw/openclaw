@@ -1,0 +1,89 @@
+{
+  "id": "simlock",
+  "name": "Simlock",
+  "description": "Owner-only mobile UI tools for an existing Simlock gateway; no provisioning or automatic resets.",
+  "activation": {
+    "onStartup": false
+  },
+  "contracts": {
+    "tools": [
+      "simlock_discover",
+      "simlock_acquire",
+      "simlock_status",
+      "simlock_renew",
+      "simlock_observe",
+      "simlock_ui",
+      "simlock_release"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "gatewayUrl",
+      "token"
+    ],
+    "properties": {
+      "gatewayUrl": {
+        "type": "string",
+        "minLength": 1
+      },
+      "token": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "enum": [
+                  "env",
+                  "file",
+                  "exec",
+                  "store"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "token",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
+  "uiHints": {
+    "gatewayUrl": {
+      "label": "Existing Simlock gateway origin",
+      "placeholder": "https://simlock.example.invalid"
+    },
+    "token": {
+      "label": "Simlock agent-token SecretRef",
+      "sensitive": true
+    }
+  }
+}

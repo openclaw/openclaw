@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/simlock-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Owner-scoped UI automation on an existing Simlock gateway",
+  "type": "module",
+  "files": [
+    "index.ts",
+    "src/client.ts",
+    "src/controller.ts",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "build": {
+      "bundledDist": false
+    }
+  },
+  "dependencies": {
+    "typebox": "1.4.3"
+  }
+}
