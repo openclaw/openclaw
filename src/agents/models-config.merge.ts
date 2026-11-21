@@ -224,7 +224,8 @@ export function mergeProviderModels(
           explicitModel.inference ??
           (catalogRouteMatches
             ? implicitModel.inference
-            : implicitModel.inference?.chat === false
+            : implicitModel.inference &&
+                (!implicitModel.inference.chat || implicitModel.inference.decision)
               ? { chat: false }
               : undefined),
       },
