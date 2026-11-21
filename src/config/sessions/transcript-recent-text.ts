@@ -41,6 +41,8 @@ export type SessionRecentConversationText = {
 export type SessionRecentConversationTurn = SessionRecentConversationText & {
   messageId?: string;
   isCompletedAnswer?: true;
+  /** Completed text reply or confirmed current-source delivery following this raw user turn. */
+  hasCompletedAnswer?: true;
 };
 
 export type ReadRecentSessionConversationTextOptions = {
@@ -154,10 +156,44 @@ export function readRecentTranscriptConversationText(
   const limit = Math.max(1, Math.floor(options.limit ?? 10));
   const pageSize = 250;
   const recent: ExtractedRecentConversationText[] = [];
+  let completedAnswer = false;
   for (let offset = 0; recent.length < limit; offset += pageSize) {
     const page = readPage({ maxMessages: pageSize, maxBytes: Number.MAX_SAFE_INTEGER, offset });
     for (const event of page.events.toReversed()) {
       const extracted = extractRecentConversationText(event.event, options);
+      if (options.includeTurnIdentity) {
+        const message = asOptionalRecord(asOptionalRecord(event.event)?.message);
+        const timestamp = asFiniteNumber(message?.timestamp);
+        if (
+          (options.beforeTimestampMs === undefined ||
+            timestamp === undefined ||
+            timestamp < options.beforeTimestampMs) &&
+          (options.minTimestampMs === undefined ||
+            timestamp === undefined ||
+            timestamp >= options.minTimestampMs)
+        ) {
+          completedAnswer ||= extracted?.entry.isCompletedAnswer === true;
+          if (
+            options.includeMessageToolSourceReplies &&
+            message?.role === "toolResult" &&
+            message.toolName === "message"
+          ) {
+            const delivery = asOptionalRecord(asOptionalRecord(message.details)?.messageDelivery);
+            // This fact is written by the message tool's source-delivery owner.
+            // A later presentation error cannot undo its confirmed delivery.
+            completedAnswer ||=
+              delivery?.status === "settled" &&
+              delivery.partialDelivery === false &&
+              delivery.sourceReplyDelivered === true;
+          }
+        }
+        if (message?.role === "user") {
+          if (completedAnswer && extracted?.entry.role === "user") {
+            extracted.entry.hasCompletedAnswer = true;
+          }
+          completedAnswer = false;
+        }
+      }
       if (
         extracted &&
         (options.beforeTimestampMs === undefined ||
