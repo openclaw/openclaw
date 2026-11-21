@@ -9,6 +9,7 @@ export type ResolvedBrowserProfileConfig = {
   mcpArgs?: string[];
   driver?: "openclaw" | "clawd" | "existing-session";
   headless?: boolean;
+  headlessUserAgent?: "native" | "chrome";
   executablePath?: string;
   attachOnly?: boolean;
   color: string;
@@ -43,6 +44,7 @@ export type ResolvedBrowserConfig = {
   color: string;
   executablePath?: string;
   headless: boolean;
+  headlessUserAgent?: "native" | "chrome";
   noSandbox: boolean;
   attachOnly: boolean;
   defaultProfile: string;
@@ -63,5 +65,6 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "existing-session";
   headless?: boolean;
+  headlessUserAgent?: "native" | "chrome";
   attachOnly: boolean;
 };

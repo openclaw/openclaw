@@ -116,7 +116,11 @@ async function callRoute(params: {
 
 function trackLaunch(
   state: ReturnType<typeof makeState>,
-  mode: { headless?: boolean; headlessSource?: string } = {},
+  mode: {
+    headless?: boolean;
+    headlessSource?: string;
+    headlessUserAgent?: "native" | "chrome";
+  } = {},
 ) {
   state.profiles.set("openclaw", {
     running: {
@@ -267,7 +271,7 @@ describe("basic browser routes", () => {
     const state = makeState({
       cdpUrl: "http://openclaw:relay-token@127.0.0.1:18800",
     });
-    trackLaunch(state, { headless: true, headlessSource: "request" });
+    trackLaunch(state, { headless: true, headlessSource: "request", headlessUserAgent: "chrome" });
 
     const response = await callRoute({ state });
 
@@ -278,6 +282,7 @@ describe("basic browser routes", () => {
       cdpUrl: "http://127.0.0.1:18800",
       headless: true,
       headlessSource: "request",
+      headlessUserAgent: "chrome",
       graphics: null,
     });
     expect(graphics.endpoint).not.toHaveBeenCalled();

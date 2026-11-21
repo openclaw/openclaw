@@ -238,10 +238,27 @@ main model can read the screenshot directly.
 
 </Accordion>
 
+<a id="profile-behavior" />
+
 <Accordion title="Profile behavior">
 
 - `attachOnly: true` means never launch a local browser; only attach to one you run yourself. If the CDP endpoint accepts connections but is not ready yet, for example a socket-activated browser starting on demand, the first browser operation waits up to about 30 seconds for it. A refused connection fails immediately because nothing is listening to start a browser.
 - Local managed profiles are headless by default. Set `headless: false` for a visible window; existing explicit headed settings are preserved. `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
+- `headlessUserAgent` defaults to `"native"`. Opt in to `"chrome"` globally or
+  per local managed profile to replace only the detected `HeadlessChrome`
+  user-agent product marker with `Chrome`; the browser supplies its platform
+  and version. Per-profile settings override the global choice, including an
+  explicit `"native"` override. An explicit `--user-agent` in `browser.extraArgs`
+  takes precedence. The option has no effect on headed, existing-session,
+  extension, remote CDP, or attach-only browsers.
+- The `"chrome"` compatibility mode probes the native user-agent before the
+  managed browser's final launch, adding startup work only when enabled. Restart
+  the browser after changing the setting. It applies process-wide to subsequent
+  tabs and frames, rather than changing one page after navigation.
+- This is a user-agent compatibility option, not full browser-identity emulation.
+  Chromium may omit or reduce User-Agent Client Hints when a custom user-agent is
+  supplied. Other headless behavior is unchanged, and sites may still reject or
+  fail in either mode. See [CLI instructions](/cli/browser#headless-user-agent-compatibility).
 - `POST /start?headless=true` and `openclaw browser start --headless` request a
   one-shot headless launch for local managed profiles without rewriting
   `browser.headless` or profile config. Existing-session, attach-only, and
@@ -254,7 +271,8 @@ main model can read the screenshot directly.
   also works because `status` does not define its own `--json`. The command reports
   `headlessSource` as `env`, `profile`, `config`,
   `request`, or `default`.
-- Fresh headless profiles are seeded before one browser launch; they do not run
+- With the default `"native"` user-agent mode, fresh headless profiles are seeded
+  before one browser launch; they do not run
   a temporary browser solely to create preference files. Existing profile preferences
   and cookie encryption settings are preserved.
 - When no installed Chromium-family browser is found, OpenClaw searches the

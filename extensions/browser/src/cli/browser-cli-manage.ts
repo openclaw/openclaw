@@ -347,6 +347,7 @@ export function registerBrowserManageCommands(
             `headless: ${status.headless}${
               status.headlessSource ? ` (${status.headlessSource})` : ""
             }`,
+            ...(status.headlessUserAgent ? [`headlessUserAgent: ${status.headlessUserAgent}`] : []),
             `profileColor: ${status.color}`,
             ...(status.graphics
               ? [`graphics: ${formatBrowserGraphicsSummary(status.graphics)}`]

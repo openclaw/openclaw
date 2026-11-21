@@ -241,3 +241,91 @@ it("refuses launch when the process listing exceeds the bounded capture", async 
   expect(fixture.spawn).not.toHaveBeenCalled();
   expect(fs.existsSync(resolveOpenClawUserDataDir(profile.name))).toBe(false);
 });
+
+it.each([
+  { mode: "chrome", extraArgs: [], probe: true },
+  { mode: "native", extraArgs: [], probe: false },
+  { mode: "chrome", extraArgs: ["--user-agent=Explicit/1.0"], probe: false },
+] as const)(
+  "launches headless UA mode $mode with $extraArgs",
+  async ({ mode, extraArgs, probe }) => {
+    const executablePath = path.join(fixture.root, "chrome");
+    fs.writeFileSync(executablePath, "");
+    const resolved = resolveBrowserConfig({
+      executablePath,
+      headlessUserAgent: mode,
+      extraArgs: [...extraArgs],
+    });
+    const native = "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/158.0.0.0 Safari/537.36";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              Browser: "Chrome/158.0.8127.37",
+              "User-Agent": native,
+              webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/browser/test",
+            }),
+          ),
+      ),
+    );
+    let nextPid = 4242;
+    const children: Array<ReturnType<typeof makeChild>> = [];
+    function makeChild() {
+      const child = Object.assign(new EventEmitter(), {
+        pid: nextPid++,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        stderr: new EventEmitter(),
+        kill: vi.fn((signal: NodeJS.Signals) => {
+          child.signalCode = signal;
+          child.emit("exit");
+          return true;
+        }),
+      });
+      return child;
+    }
+    fixture.spawn.mockImplementation((_command, args: string[]) => {
+      if (probe && children.length === 0) {
+        expect(args).toContain("--no-startup-window");
+        expect(args.some((arg) => arg.startsWith("--user-agent"))).toBe(false);
+      } else {
+        if (probe) {
+          expect(children[0]?.signalCode).toBe("SIGTERM");
+          expect(args).toContain(
+            "--user-agent=Mozilla/5.0 (X11; Linux x86_64) Chrome/158.0.0.0 Safari/537.36",
+          );
+        } else {
+          expect(args.filter((arg) => arg.startsWith("--user-agent"))).toEqual(extraArgs);
+        }
+        expect(args).not.toContain("--no-startup-window");
+      }
+      const child = makeChild();
+      children.push(child);
+      return child;
+    });
+    const running = await launchOpenClawChrome(resolved, resolveProfile(resolved, "openclaw")!);
+    expect(children).toHaveLength(probe ? 2 : 1);
+    expect(running.proc).toBe(children.at(-1));
+    expect(running.headlessUserAgent).toBe(probe ? "chrome" : "native");
+  },
+);
+
+it("cleans up a failed UA probe without launching the configured browser", async () => {
+  const executablePath = path.join(fixture.root, "chrome");
+  fs.writeFileSync(executablePath, "");
+  const resolved = resolveBrowserConfig({ executablePath, headlessUserAgent: "chrome" });
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4242,
+    exitCode: 1,
+    signalCode: null,
+    stderr: new EventEmitter(),
+    kill: vi.fn(),
+  });
+  fixture.spawn.mockReturnValue(child);
+  await expect(
+    launchOpenClawChrome(resolved, resolveProfile(resolved, "openclaw")!),
+  ).rejects.toThrow("exited while discovering its native user-agent");
+  expect(fixture.spawn).toHaveBeenCalledTimes(1);
+});

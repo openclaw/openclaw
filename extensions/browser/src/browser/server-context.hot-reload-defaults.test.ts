@@ -42,7 +42,7 @@ const profiles = {
   remote: { cdpUrl: "http://192.0.2.10:9222", color: "#00CC66" },
 };
 
-function updateBrowser(change: OpenClawConfig["browser"]) {
+function updateBrowser(change: NonNullable<OpenClawConfig["browser"]>) {
   config.current = { ...config.current, browser: { ...config.current.browser, ...change } };
 }
 function createFixture(pending = false, initial: OpenClawConfig["browser"] = {}) {
@@ -114,34 +114,64 @@ it("refreshes launch and cleanup settings but keeps restart-owned controls", asy
   });
 });
 
-it.each([false, true])("replaces only owned Chrome (launch pending=%s)", async (pending) => {
-  const change = pending ? { extraArgs: ["--disable-dev-shm-usage"] } : { noSandbox: true };
-  const { state, ctx, original, replacement, started, release } = createFixture(pending);
-  const attached = ctx.forProfile("attached");
-  const remote = ctx.forProfile("remote");
-  await attached.ensureBrowserAvailable();
-  await remote.ensureBrowserAvailable();
-  const initial = ctx.forProfile().ensureBrowserAvailable();
-  const outcome = pending ? initial.catch((error: unknown) => error) : initial;
-  if (pending) {
-    await started.promise;
-  } else {
-    await outcome;
-  }
-  updateBrowser(change);
-  const nextProfile = ctx.forProfile();
-  release.resolve();
-  if (pending) {
-    expect(await outcome).toBeInstanceOf(Error);
-    expect(state.profiles.get("openclaw")?.running).not.toBe(original);
-  }
-  await nextProfile.ensureBrowserAvailable();
+it.each<{ pending: boolean; change: NonNullable<OpenClawConfig["browser"]> }>([
+  { pending: false, change: { noSandbox: true } },
+  { pending: true, change: { extraArgs: ["--disable-dev-shm-usage"] } },
+  { pending: false, change: { headlessUserAgent: "chrome" } },
+])(
+  "replaces only owned Chrome (launch pending=$pending, change=$change)",
+  async ({ pending, change }) => {
+    const { state, ctx, original, replacement, started, release } = createFixture(pending);
+    const attached = ctx.forProfile("attached");
+    const remote = ctx.forProfile("remote");
+    await attached.ensureBrowserAvailable();
+    await remote.ensureBrowserAvailable();
+    const initial = ctx.forProfile().ensureBrowserAvailable();
+    const outcome = pending ? initial.catch((error: unknown) => error) : initial;
+    if (pending) {
+      await started.promise;
+    } else {
+      await outcome;
+    }
+    updateBrowser(change);
+    const nextProfile = ctx.forProfile();
+    release.resolve();
+    if (pending) {
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(state.profiles.get("openclaw")?.running).not.toBe(original);
+    }
+    await nextProfile.ensureBrowserAvailable();
+    expect(stopOpenClawChrome).toHaveBeenCalledExactlyOnceWith(original);
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(launchOpenClawChrome).mock.calls[1]?.[0]).toMatchObject(change);
+    expect(state.profiles.get("openclaw")?.running).toBe(replacement);
+    await expect(attached.isReachable()).resolves.toBe(true);
+    await expect(remote.isReachable()).resolves.toBe(true);
+  },
+);
+
+it("keeps a profile user-agent override until that profile setting changes", async () => {
+  const { state, ctx, original, replacement } = createFixture(false, {
+    profiles: { ...profiles, openclaw: { ...profiles.openclaw, headlessUserAgent: "native" } },
+  });
+  await ctx.forProfile().ensureBrowserAvailable();
+  updateBrowser({ headlessUserAgent: "chrome" });
+  await ctx.forProfile().ensureBrowserAvailable();
+  expect(state.profiles.get("openclaw")?.profile.headlessUserAgent).toBe("native");
+  expect(state.profiles.get("openclaw")?.running).toBe(original);
+  expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  expect(launchOpenClawChrome).toHaveBeenCalledOnce();
+
+  updateBrowser({
+    profiles: { ...profiles, openclaw: { ...profiles.openclaw, headlessUserAgent: "chrome" } },
+  });
+  await ctx.forProfile().ensureBrowserAvailable();
   expect(stopOpenClawChrome).toHaveBeenCalledExactlyOnceWith(original);
   expect(launchOpenClawChrome).toHaveBeenCalledTimes(2);
-  expect(vi.mocked(launchOpenClawChrome).mock.calls[1]?.[0]).toMatchObject(change);
+  expect(vi.mocked(launchOpenClawChrome).mock.calls[1]?.[1]).toMatchObject({
+    headlessUserAgent: "chrome",
+  });
   expect(state.profiles.get("openclaw")?.running).toBe(replacement);
-  await expect(attached.isReachable()).resolves.toBe(true);
-  await expect(remote.isReachable()).resolves.toBe(true);
 });
 
 const startBrowser = (signal?: AbortSignal) =>

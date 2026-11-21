@@ -135,6 +135,7 @@ function resolveExternalCdpProfile(
     "mcpCommand",
     "mcpArgs",
     "headless",
+    "headlessUserAgent",
     "executablePath",
   ] as const) {
     if (profile[key] !== undefined) {

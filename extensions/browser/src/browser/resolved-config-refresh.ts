@@ -70,7 +70,7 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
       }
       if (currentUsesLocalManagedLaunch && nextUsesLocalManagedLaunch) {
         changed.push(
-          ...(["headless", "executablePath"] as const).filter(
+          ...(["headless", "headlessUserAgent", "executablePath"] as const).filter(
             (key) => before[key] !== nextProfile[key],
           ),
         );

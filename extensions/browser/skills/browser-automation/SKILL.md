@@ -77,6 +77,25 @@ only for the smallest demonstrated human prerequisite: the named account's
 sign-in/2FA, the specific tab/extension sharing step, or the precise permission
 on the failing host. Never infer a missing login from an attach failure.
 
+## Headless page compatibility
+
+For an unexplained site failure in a local managed headless profile, capture the
+page/error and compare the same public page in visible mode when a display is
+available. A timeout alone is not proof of bot detection. Within the user's
+troubleshooting scope, try `browser.profiles.<name>.headlessUserAgent="chrome"`
+on an existing managed profile (or `browser.headlessUserAgent="chrome"` globally)
+and restart that browser for one comparison. Keep the same profile and browser
+version; do not submit forms or replay mutations just to test loading.
+
+The default `"native"` preserves Chromium's identity. `"chrome"` replaces only
+its `HeadlessChrome` user-agent marker using the detected version/platform;
+explicit `--user-agent` launch arguments take precedence. Client Hints may be
+reduced or absent, and this is not equivalent to a visible browser. Do not enable
+it automatically for every error. Report the observed result and restore the
+previous setting after a temporary comparison unless the user asked to retain it.
+See [CLI instructions](https://docs.openclaw.ai/cli/browser#headless-user-agent-compatibility)
+for the config/stop/start commands.
+
 ## Browser batch CLI
 
 `openclaw browser batch` runs an array of nested `/act` actions in one `/act` call (the same `kind="batch"` runtime reached through the agent tool), so CLI users and scripts can combine actions like `wait`, `click`, `type`, and `evaluate` into a single replayable plan without per-action round trips. Each entry in `actions[]` is a `BrowserActRequest` — the closed union the `/act` route accepts — not arbitrary `openclaw browser` subcommands. `batch` is not supported on `profile="user"` and other existing-session (chrome-mcp) profiles; send actions individually there.
