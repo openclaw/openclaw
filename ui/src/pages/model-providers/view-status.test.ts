@@ -23,7 +23,7 @@ it("uses the scoped check outcome without hiding catalog or account problems", (
     results: [{ label: "Secondary account", status: "auth" as const }],
   };
   mount({ ...viewProps, probeResults: { openai: partial } }, container);
-  expect(status()).toBe("Connected with warnings");
+  expect(status()).toBe("Access verified with warnings");
   for (const [catalogStatus, label] of [
     ["auth-rejected", "Credentials rejected"],
     ["unavailable", "Models unavailable"],
