@@ -115,7 +115,7 @@ it("prioritizes long families and preserves every CLI row and the remaining orde
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.9.3 2026.9.4",
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
-          "base legacy-operator-state package-publication-recovery package-verification-recovery",
+          "base legacy-operator-state package-publication-recovery package-verification-recovery acpx-openclaw-tools-bridge",
       },
     }),
   );
@@ -142,6 +142,8 @@ it("prioritizes long families and preserves every CLI row and the remaining orde
     lane("update-first-hop-compat-2026.9.1"),
     { ...lane("update-restart-auth"), timeout_minutes: 75 },
     lane("plugin-update"),
+    scenario("2026.9.4", "acpx-openclaw-tools-bridge", 3),
+    scenario("2026.9.3", "acpx-openclaw-tools-bridge", 3),
     scenario("2026.9.4", "legacy-operator-state", 2),
     scenario("2026.9.3", "legacy-operator-state", 2),
     lane("root-managed-vps-upgrade"),

@@ -27,6 +27,8 @@ const LONG_LANE_ORDER = [
   "update-first-hop-compat",
   "update-restart-auth",
   "plugin-update",
+  // Checks 44777975959 and 44794544663 ended on late-admitted ACPX survivor rows.
+  "acpx-openclaw-tools-bridge",
   "legacy-operator-state",
   "root-managed-vps-upgrade",
 ];
