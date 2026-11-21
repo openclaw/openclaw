@@ -6,17 +6,20 @@ export function observeMainThreadFs() {
   const originals = Object.getOwnPropertyDescriptors(fs);
   const calls = new Map<string, number>();
   let count = 0;
-  const stacks = new Map<string, { api: string; stack: string; calls: number }>();
-  function record(api: string) {
+  const stacks = new Map<
+    string,
+    { api: string; stack: string; calls: number; opensForWrite: boolean }
+  >();
+  function record(api: string, opensForWrite = false) {
     count++;
     calls.set(api, (calls.get(api) ?? 0) + 1);
     const stack = (new Error().stack ?? "").split("\n").slice(3).join("\n");
-    const key = `${api}\n${stack}`;
+    const key = `${api}\n${opensForWrite}\n${stack}`;
     const entry = stacks.get(key);
     if (entry) {
       entry.calls++;
     } else {
-      stacks.set(key, { api, stack, calls: 1 });
+      stacks.set(key, { api, stack, calls: 1, opensForWrite });
     }
   }
   for (const [name, original] of Object.entries(fs)) {
@@ -24,7 +27,21 @@ export function observeMainThreadFs() {
       continue;
     }
     const measured = (...args: unknown[]) => {
-      record(name);
+      const flags = args[1];
+      record(
+        name,
+        name === "openSync" &&
+          (typeof flags === "string"
+            ? /[wa+]/u.test(flags)
+            : typeof flags === "number" &&
+              (flags &
+                (fs.constants.O_WRONLY |
+                  fs.constants.O_RDWR |
+                  fs.constants.O_CREAT |
+                  fs.constants.O_TRUNC |
+                  fs.constants.O_APPEND)) !==
+                0),
+      );
       return Reflect.apply(original, fs, args);
     };
     Object.defineProperties(measured, Object.getOwnPropertyDescriptors(original));

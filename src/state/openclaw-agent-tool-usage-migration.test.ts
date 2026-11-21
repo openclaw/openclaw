@@ -29,7 +29,6 @@ const fixture = migrationFixture({
   predecessor: 41,
   target: 42,
   scope: ["agent_tool_usage", "schema_meta"],
-  admission: true,
 });
 
 it.each(["commit", "rollback"])(

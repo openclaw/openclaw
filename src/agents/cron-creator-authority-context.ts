@@ -5,7 +5,7 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
-  hasCronChannelRequester,
+  hasCronAuthenticatedRequester,
   isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
@@ -301,13 +301,7 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
     getGatewayToolCallerIdentity()?.requesterOrigin,
   );
   const scope = activeCronCreatorAuthority.getStore();
-  if (
-    !scope ||
-    (scope.callerOrigin.kind !== "local" &&
-      !hasCronChannelRequester(scope) &&
-      !scope.callerScopedCreation) ||
-    scope.runId !== runId
-  ) {
+  if (!scope || !hasCronAuthenticatedRequester(scope) || scope.runId !== runId) {
     return undefined;
   }
   return (

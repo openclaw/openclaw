@@ -23,6 +23,7 @@ export type UpgradeOp = {
   kind: "replace" | "add" | "remove";
 };
 
+/** `appVersion` names the generation: the writing build's ID, or its version before build IDs. */
 export type UpgradePlan = { appVersion: string; ops: UpgradeOp[] };
 
 const PLAN_FILE = "plan.json";
@@ -609,7 +610,8 @@ export function pruneGenerations(
   const directories = new Set([...ownedFiles].map((file) => path.dirname(file)));
   for (const directory of directories) {
     for (const name of fs.readdirSync(directory)) {
-      const match = /^(.*)\.pre-(\d[^/]*)$/u.exec(name);
+      // A generation is a build ID (custom IDs may start with a letter) or, before build IDs, a version.
+      const match = /^(.*)\.pre-([^/]+)$/u.exec(name);
       if (!match || RETIRED_BACKUP_NAME.test(name)) {
         continue;
       }

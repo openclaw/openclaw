@@ -31,7 +31,11 @@ import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
 import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
 import { userHasControlResult, withOperatorControlNote } from "./browser-tool.operator-control.js";
-import { resolveBrowserBaseUrl, resolveBrowserToolNodeTarget } from "./browser-tool.routing.js";
+import {
+  discoverBrowserNodeRoutes,
+  resolveBrowserBaseUrl,
+  resolveBrowserToolNodeTarget,
+} from "./browser-tool.routing.js";
 import { BROWSER_ACT_REQUEST_KEYS, type BrowserToolCapabilities } from "./browser-tool.schema.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
 import type { browserAct } from "./browser/client-actions.js";
@@ -560,8 +564,15 @@ export function createBrowserTool(
                     signal,
                   }),
                 };
+            const nodeDiscovery = await discoverBrowserNodeRoutes({
+              cfg: runtimeConfig,
+              allowHostControl: opts?.allowHostControl,
+              nodeSelected: Boolean(nodeTarget),
+              signal,
+            });
             return jsonResult({
               ...(result && typeof result === "object" ? result : { profiles: result }),
+              ...nodeDiscovery,
               systemProfiles,
               ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
             });

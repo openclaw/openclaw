@@ -203,6 +203,9 @@ it.each([
         expect(submit).not.toHaveBeenCalled();
       }
       expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
+      expect(count(".agent-chat__composer-combobox textarea")).toBe(
+        mode === "nondelegating" ? 0 : 1,
+      );
       expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
         action === "submit" ? "New contributors" : "Dismissed",
       );
@@ -264,6 +267,7 @@ it.each(["native", "delegated"] as const)(
     const onRefresh = vi.fn();
     const initial = createChatProps({
       paneId: `mobile-presentation-${mode}`,
+      selectedSession: { key: "agent:main:main", kind: "direct", hasMessages: true },
       mobileComposer: true,
       loading: true,
       draft: "Retain this draft",

@@ -9,6 +9,7 @@ export function replyWithBillingRouteWarnings(
   respond: RespondFn | undefined,
   warnings: readonly string[],
   context: GatewayRequestContext | undefined,
+  activationWarning?: string,
 ): RespondFn {
   return (...args) => {
     const [ok, payload] = args;
@@ -17,6 +18,9 @@ export function replyWithBillingRouteWarnings(
         context?.logGateway?.warn(warning);
       }
       args[1] = { ...payload, billingRouteWarnings: warnings };
+    }
+    if (ok && activationWarning && isRecord(args[1])) {
+      args[1] = { ...args[1], warnings: [activationWarning] };
     }
     // Forward the caller's exact arguments; responders and tests observe their arity.
     respond?.(...args);

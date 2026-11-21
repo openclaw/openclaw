@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
@@ -16,7 +15,10 @@ import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
+import {
+  resolveFileLinkOwnerOptions,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
@@ -29,12 +31,6 @@ import {
 } from "./chat-message-sender.ts";
 import { extractGroupMeta } from "./chat-message-timestamp-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-
-export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
-  frameContent?: JSX.Element[];
-  frameHeader?: boolean;
-  frameFooter?: boolean;
-};
 
 export type GroupMessage = MessageGroupData["messages"][number];
 
@@ -69,42 +65,6 @@ export function prepareGroupMessage(
     }
   }
   return { item, source, actions: details, ownsActions };
-}
-
-export function resolveFileLinkOwnerOptions(
-  group: MessageGroupData,
-  options: NativeMessageGroupOptions,
-) {
-  const sourceSessionKey = group.senderSession?.sessionKey;
-  const owned: NativeMessageGroupOptions = sourceSessionKey
-    ? {
-        ...options,
-        fileLinkSessionKey: sourceSessionKey,
-        onOpenWorkspaceFile:
-          options.onOpenWorkspaceFile &&
-          ((target) => {
-            const ownedTarget = { ...target, sessionKey: sourceSessionKey };
-            options.onOpenWorkspaceFile?.(ownedTarget);
-          }),
-        onOpenSidebar:
-          options.onOpenSidebar &&
-          ((content) =>
-            options.onOpenSidebar?.(
-              content.kind === "markdown"
-                ? { ...content, fileLinkSessionKey: sourceSessionKey }
-                : content,
-            )),
-      }
-    : options;
-  if (
-    group.senderSession &&
-    (sourceSessionKey !== options.sessionKey ||
-      (group.senderSession.agentId && group.senderSession.agentId !== options.agentId))
-  ) {
-    // Files search belongs to the current pane, unlike source-bound direct file references.
-    return { ...owned, onFindWorkspaceFile: undefined };
-  }
-  return owned;
 }
 
 export function prepareMessageGroupFrame(

@@ -137,7 +137,7 @@ registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
   const failures: unknown[] = [];
   for (const owner of owners.live.values()) {
     try {
-      owner.finish("cancelled");
+      owner.finish("cancelled", "reset");
     } catch (error) {
       failures.push(error);
     }
@@ -164,6 +164,8 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   owner.assertReadCurrent = owner.assertCurrent;
   owner.assertMentionInvitationCurrent = undefined;
   owner.finish = () => {};
+  owner.release = () => {};
+  owner.relinquish = () => {};
   owner.authority = undefined;
   owner.promotedOwner = undefined;
 }
@@ -291,13 +293,13 @@ export function hasRegisteredSessionPendingInputOwner(
   );
 }
 
-/** Durable queued text is visible only while its ordinary input owner is live. */
+/** Live owners identify queued inputs already held by this process. */
 export function listLiveSessionPendingInputs(
   databasePath: string,
   sessionKey: string,
   sessionId: string,
   queuedOnly = false,
-): Pick<SessionPendingInputOwner, "inputId" | "runId" | "recoverySource">[] {
+): Pick<SessionPendingInputOwner, "inputId">[] {
   return [...owners.live.values()]
     .filter(
       (owner) =>
@@ -307,11 +309,7 @@ export function listLiveSessionPendingInputs(
         (!queuedOnly || (!owner.consumed && !owner.settling)) &&
         (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
     )
-    .map((owner) => ({
-      inputId: owner.inputId,
-      runId: owner.runId,
-      recoverySource: owner.recoverySource,
-    }));
+    .map((owner) => ({ inputId: owner.inputId }));
 }
 
 /** Called after the exact IDs commit in the session marker, before shutdown cancellation. */
@@ -414,7 +412,8 @@ export function writeSessionInputCompletion(
       actor.completionsComplete = false;
     }
   }
-  if (isFinalInputCompletion(outcome)) {
+  // Active-only input needs its original source for exact retries even without a transcript.
+  if (isFinalInputCompletion(outcome) && !outcome.activeSteer) {
     // Handled hooks can finish without appending a user message. The completion
     // receipt retires that exact custody atomically in the caller's transaction.
     executeSqliteQuerySync(
@@ -684,7 +683,7 @@ export function consumeSessionPendingInput(
       database.db,
       getSessionKysely(database.db)
         .updateTable("session_pending_inputs")
-        .set({ consumed_event_id: pending.inputId })
+        .set({ consumed_event_id: pending.inputId, origin_source_json: null })
         .where("input_id", "in", [...pending.sourceInputIds])
         .where("state", "=", "queued")
         .where("consumed_event_id", "is", null),

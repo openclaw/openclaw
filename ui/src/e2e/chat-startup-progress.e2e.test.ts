@@ -200,7 +200,7 @@ suite.define(() => {
           toolCallId: "synthetic-exec",
         },
       });
-      const tool = page.locator(".chat-tool-msg-summary", { hasText: "pwd" });
+      const tool = page.locator(".chat-thread .chat-tool-disclosure__content", { hasText: "pwd" });
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => tool.count()).toBe(1);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
@@ -214,6 +214,8 @@ suite.define(() => {
         );
       }
       await gateway.resolveDeferred("chat.send", { status: "started", runId });
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+      expect(await tool.isVisible()).toBe(true);
       if (capture) {
         await writeFile(
           path.join(proofDir, "preack-adopted.png"),

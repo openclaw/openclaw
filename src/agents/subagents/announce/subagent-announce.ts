@@ -11,6 +11,7 @@ import { waitForSessionRunEnd } from "../../../sessions/session-controller.nativ
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
@@ -272,12 +273,12 @@ async function runSubagentAnnounceFlowBound(
           ? 0
           : await countPendingDescendantRuns(params.childSessionKey, assertChildSessionCurrent);
       if (pendingChildDescendantRuns > 0) {
-        // Suspended descendants keep the child session for recovery but cannot hold this completion.
+        // Settled descendant delivery may retain cleanup but cannot hold this completion.
         shouldDeleteChildSession = false;
         const unsettledDescendantRuns = await countPendingDescendantRuns(
           params.childSessionKey,
           assertChildSessionCurrent,
-          { excludeSuspendedDelivery: true },
+          { excludeSettledDelivery: true },
         );
         if (unsettledDescendantRuns > 0) {
           return "retryable";
@@ -583,6 +584,13 @@ async function runSubagentAnnounceFlowBound(
           requesterAgentId: targetRequesterAgentId,
           triggerMessage,
           internalEvents,
+          subagentCompletions: [
+            subagentCompletionForOutcome(
+              { runId: params.childRunId, sessionKey: params.childSessionKey, label: params.label },
+              outcome.status,
+              killed,
+            ),
+          ].filter((completion) => completion !== undefined),
           requesterSessionOrigin: targetRequesterOrigin,
           completionDirectOrigin,
           directOrigin,

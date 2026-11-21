@@ -64,6 +64,29 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
+In-process catalog calls bind the run's watchdog owner even when a tool already
+has a hook wrapper. The reply watchdog honors the deadline published by the
+tool's execution owner, so a silent command can reach its own exec timeout and
+return its error to guest code without losing the reply at the quiet-tool window.
+Local and sandbox exec publish an allowance before process preparation, then
+replace it with the supervisor's enforced deadline after spawn. A preparation
+that hangs can therefore remain pending until the exec timeout plus the
+900-second quiet window. Commands without a timeout retain the 900-second window.
+
+When the reply watchdog stops a turn during a bridge wait, the Code Mode
+`exec` or `wait` entry in `pendingTools` includes `awaiting`: at most three
+outstanding bridge operations, each with `kind: "bridge"`, the fixed bridge
+`method`, `deadlineAtMs` (or `null` when unpublished), and `elapsedMs`.
+Every pending tool also reports `explicitDeadline`, indicating whether its
+execution owner published a deadline. Nested local and sandbox exec entries
+include an `awaiting` item with `kind: "exec"`, `phase: "preparing"` (before
+spawn, including approval and sandbox preparation) or `"running"` (after spawn),
+and `deadlineSource`: `"default"`, `"explicit"`, or `"none"`. The last value
+identifies disabled timeouts or services without a configured timeout.
+This diagnostic reads the cell's existing pending frontier and execution-owner
+deadlines. It records no arguments, results, paths, or guest content and does
+not change watchdog timing.
+
 Completed nested calls persist as bounded display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
@@ -94,6 +117,14 @@ undo actions a tool already performed. Follow the
 effects before choosing another action. Network-controlled tool output and errors
 retain their existing untrusted-content wrapping and sanitization; continuing
 after a failure does not grant new permissions or replay completed side effects.
+
+A suspended cell is parked, not abandoned: its pending calls keep running so
+`wait` can deliver their results. A rejected program, canceled cell, expired
+continuation, or closed catalog abandons pending results and aborts those calls.
+For worker-hosted Gateway tools, a transport wait that rejects (including a
+request timeout) also abandons that invocation and requests remote cancellation.
+This does not add a tool deadline or undo completed effects; tools must honor
+their abort signal to stop ongoing work and release resources.
 
 Nested calls honor each tool’s `executionMode`. A `"sequential"` tool waits for
 earlier catalog calls to finish and blocks later calls until its result has been

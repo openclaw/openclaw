@@ -1,7 +1,7 @@
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "../../infra/boundary-path.js";
+} from "../../infra/path-existence.js";
 import { normalizeWindowsPathForComparison } from "../../infra/path-guards.js";
 
 export type SandboxStateOwnerPath = { path: string; canonicalPath: string };

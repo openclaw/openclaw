@@ -175,6 +175,12 @@ a repository URL. Long lists show the search field immediately; search remains
 available from the magnifying-glass button on shorter lists and stays visible
 while you scroll.
 
+For a new worktree, type part of a branch name in **From** to filter the loaded
+repository branches. The menu lists the default and current branches first,
+then the most recently committed ones, and shows up to eight matches; names
+that start with your text come first. You can still enter a custom branch, tag,
+or commit, or leave it blank for the Gateway default.
+
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
@@ -293,8 +299,6 @@ The saved sidebar also retains the session rows for its initial viewport, along 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 
 Message reactions appear in a compact tab on the message bubble. Flat agent replies have no bubble, so their tab leads the row under the reply and stays in place while the name, time and actions appear on hover. Open the tab to see each emoji count, including in read-only sessions. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
-
-**Skills used** in Chat Details lists successful skill loads from the conversation’s complete current history and live tool activity, including skills loaded through Code Mode. The section starts collapsed; repeated loads increase the count beside the skill rather than adding duplicate rows.
 
 The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
 
@@ -570,6 +574,12 @@ Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
 Once the Gateway confirms a rename, the saved name stays visible while the session
 list refreshes, even if an older snapshot arrives late.
+
+Choose **Archive all** from a shared sidebar group’s options to archive its
+unarchived sessions, including nested sessions that still belong to the group.
+The confirmation shows how many sessions will be archived, even when the
+sidebar hasn’t loaded them all. The group stays in place, and **Undo** cancels
+the archive before it is saved.
 
 Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes

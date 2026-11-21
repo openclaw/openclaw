@@ -18,7 +18,6 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
@@ -61,6 +60,7 @@ import {
   resolveGatewayStateOwnerPath,
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 
 export type GatewayLockHandle = {
   previousOwner?: GatewayOwnerLease["previousOwner"];
@@ -72,6 +72,7 @@ export type GatewayLockHandle = {
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
   markListening?: () => void;
+  publishExternalRestartReceipt?: () => Promise<void>;
   /**
    * Takes PostgreSQL custody for an engine selection resolved after this lock, as cold CLI
    * owners do. Its loss retires this owner; release ends it.
@@ -273,10 +274,7 @@ function shouldReclaimGatewayLock(params: {
         lockPath: params.lockPath,
       })
     : "unknown";
-  if (ownerPid) {
-    return ownerStatus === "dead";
-  }
-  return false;
+  return ownerStatus === "dead";
 }
 
 export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
@@ -719,6 +717,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
+    publishExternalRestartReceipt: ownerLease?.publishExternalRestartReceipt,
     markListening: () => {
       assertStateOwnerCurrent();
       try {

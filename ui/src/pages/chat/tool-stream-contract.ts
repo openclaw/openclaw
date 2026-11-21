@@ -49,6 +49,7 @@ export type ToolStreamEntry = {
   exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
+  resultTimestamp?: number;
   startedAt: number;
   receivedAt: number;
   /** Live-only placement; durable invocation positions supersede this boundary. */
@@ -94,12 +95,10 @@ export type ToolStreamHost = {
   sessionKey: string;
   /** The pane admits optional output only after its synchronous renderer is ready. */
   inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandDisclosurePolicy;
-  settings?: { chatInlineCommands?: boolean; gatewayUrl?: string | null };
+  settings?: { chatInlineCommands?: boolean };
   assistantAgentId?: string | null;
   agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: UiSessionDefaultsHost["hello"];
-  currentSessionId?: string | null;
-  chatDisplayedLeafEntryId?: string | null;
   chatRunId: string | null;
   chatQueue?: readonly ChatQueueItem[];
   chatMessages?: unknown[];

@@ -113,6 +113,8 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         );
       }
       let payload: Buffer<ArrayBuffer>;
+      let transferredInput: typeof options.transferredInput;
+      let transferredBytes = 0;
       let requestClass: string;
       let assertCurrent: (() => void) | undefined;
       const admission = scope?.assertCurrent;
@@ -126,6 +128,15 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.
         payload = v8.serialize({ type: commandType, input: command.input });
+        if (options.transferredInput) {
+          const buffers = [
+            ...new Set(Object.values(options.transferredInput).map((value) => value.buffer)),
+          ];
+          transferredBytes = buffers.reduce((bytes, buffer) => bytes + buffer.byteLength, 0);
+          transferredInput = structuredClone(options.transferredInput, {
+            transfer: buffers,
+          });
+        }
       } catch (error) {
         return Promise.reject(
           toErrorObject(error, "SQLite worker command could not be serialized"),
@@ -137,9 +148,10 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           actor: owner.actor.id,
           databaseIdentity: owner.databaseIdentity,
           input: payload,
+          transferredInput,
           ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
         },
-        sqliteWorkerRequestBytes(payload, scope?.stateContext),
+        sqliteWorkerRequestBytes(payload, scope?.stateContext) + transferredBytes,
         {
           signal: options.signal,
           requestClass,

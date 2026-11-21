@@ -39,7 +39,8 @@ export type WorktreeRemovalDeferral = {
   stage: string;
   elapsedMs: number;
   attempts: number;
-  retryAt: number;
+  /** Null records terminal preservation until an explicit operator retry. */
+  retryAt: number | null;
 };
 
 export type ManagedWorktreeRecord = Omit<
@@ -102,6 +103,7 @@ export type WorktreeWorkerAuthority = {
 };
 
 export type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
+  idleIoPriority?: boolean;
   workerAuthority?: WorktreeWorkerAuthority;
 };
 

@@ -88,7 +88,20 @@ export const ChatPendingInputsPageSchema = closedObject({
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
-      cancelledByUser: Type.Optional(Type.Literal(true)),
+      endCause: Type.Optional(
+        Type.String({
+          enum: [
+            "user-stop",
+            "delete",
+            "reset",
+            "revoked",
+            "restart-unrecoverable",
+            "overflow",
+            "policy-refused",
+            "failed",
+          ],
+        }),
+      ),
       steerNow: Type.Optional(
         closedObject({
           status: Type.Enum(["available", "blocked"]),
@@ -174,12 +187,6 @@ export const ChatHistoryActivitySchema = closedObject({
   items: Type.Array(AgentActivityItemSchema),
 });
 export type ChatHistoryActivity = Static<typeof ChatHistoryActivitySchema>;
-
-/** Compact, session-scoped instruction-load receipts, independent of history pagination. */
-export const ChatSkillLoadsSchema = Type.Array(
-  closedObject({ id: NonEmptyString, name: NonEmptyString }),
-);
-export type ChatSkillLoads = Static<typeof ChatSkillLoadsSchema>;
 
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`

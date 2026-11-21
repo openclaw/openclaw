@@ -8,17 +8,18 @@ import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import "../../templates/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../../infra/runtime-process-entrypoints.js";
 import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import "../../templates/tool-policy-runtime.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -28,15 +29,23 @@ import {
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "../auth-profiles/store-runtime.js";
 import { withAuthProfileStoreAgentDir } from "../auth-profiles/store.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
+import type { PreparedConfiguredRuntimeModel } from "../prepared-model-runtime.types.js";
+import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createModelAliasMetadata } from "./model-alias-metadata.test-support.js";
 import { resolveTieredModel } from "./model-resolution.js";
-import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
+import {
+  createEmptyPreparedModelRuntimeFixture,
+  guardModelFixtureAuth,
+} from "./model.fixture.test-support.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "./model.generation-scope.test-support.js";
-import { resolveModelAsync } from "./model.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
+import { createPreparedConfiguredRuntimeModelLookup } from "./model.static-id.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -654,4 +663,115 @@ describe("model runtime generation scope", () => {
     });
     expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
   });
+});
+
+describe("prepared model identity and captured policy", () => {
+  const provider = "configured-index-fixture",
+    baseUrl = "https://configured-index.example.invalid/v1";
+  const model = (id: string) => ({
+    ...makeProviderModelFixture({ provider, id, api: "openai-completions", baseUrl }),
+    contextWindow: 16_000,
+    maxTokens: 4_096,
+  });
+  const rows: PreparedConfiguredRuntimeModel[] = ["first", "second"].map((modelId, index) => ({
+    provider,
+    modelId,
+    model: { ...model(modelId), mediaInput: { image: { maxSidePx: 1100 * (index + 1) } } },
+  }));
+  function snapshot(aliases: Record<string, string>, ids: string[]) {
+    const metadataSnapshot = createModelAliasMetadata(provider, aliases);
+    const stores = createEmptyAgentDiscoveryStores();
+    stores.modelRegistry.registerProvider(provider, {
+      api: "openai-completions",
+      baseUrl,
+      models: ids.map(model),
+    });
+    return {
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: state.agentDir(),
+        config: {},
+        metadataSnapshot,
+        createStores: () => stores,
+      }),
+      configuredRuntimeModels: rows,
+      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+        rows,
+        metadataSnapshot,
+      ),
+    };
+  }
+  const resolve = (
+    preparedModelRuntime: ReturnType<typeof snapshot>,
+    modelId: string,
+    selected = true,
+  ) =>
+    resolveModelAsync(
+      provider,
+      modelId,
+      state.agentDir(),
+      {},
+      {
+        ...preparedModelRuntime.createStores(),
+        preparedModelRuntime,
+        ...(selected ? { modelIdSource: "selected" as const } : {}),
+        skipAgentDiscovery: true,
+        skipProviderRuntimeHooks: true,
+        allowBundledStaticCatalogFallback: true,
+      },
+    );
+  it("retains old policy indexes through projections while new snapshots use new policies", async () => {
+    const old = snapshot({ selected: "first" }, ["selected"]),
+      current = snapshot({ selected: "second" }, ["selected"]),
+      projected = { ...old, activeProjectKeys: ["fixture-project"] };
+    await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: current.metadataSnapshot },
+      async () => {
+        expect((await resolve(old, "selected")).model).toMatchObject({
+          mediaInput: { image: { maxSidePx: 1100 } },
+        });
+        expect((await resolve(projected, "selected")).model).toMatchObject({
+          mediaInput: { image: { maxSidePx: 1100 } },
+        });
+      },
+    );
+    await withPluginRuntimeGenerationScope({ metadataSnapshot: old.metadataSnapshot }, async () => {
+      expect((await resolve(current, "selected")).model).toMatchObject({
+        mediaInput: { image: { maxSidePx: 2200 } },
+      });
+    });
+  });
+  it.each(["credential", "route"] as const)(
+    "preserves the selected executable ID during %s materialization",
+    async (mode) => {
+      const prepared = snapshot({ entry: "middle", middle: "final" }, ["middle", "final"]);
+      const selected = await resolve(prepared, "entry", false);
+      expect(selected.model?.id).toBe("middle");
+      const materialized = await materializePreparedRuntimeModel({
+        plan: {
+          providerForAuth: provider,
+          authProfileProviderForAuth: provider,
+          selectedAuthMode: "api-key",
+          ...(mode === "route"
+            ? {
+                modelRoute: {
+                  provider,
+                  modelId: "middle",
+                  api: "openai-completions" as const,
+                  baseUrl,
+                  authRequirement: "api-key" as const,
+                  requestTransportOverrides: "none" as const,
+                },
+              }
+            : {}),
+        },
+        provider,
+        modelId: "middle",
+        model: selected.model,
+        metadataSnapshot: prepared.metadataSnapshot,
+        forceResolve: true,
+        resolveModel: () => resolve(prepared, "middle"),
+      });
+      expect(materialized?.id).toBe("middle");
+    },
+  );
 });

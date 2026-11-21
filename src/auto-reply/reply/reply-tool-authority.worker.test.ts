@@ -658,9 +658,8 @@ it.each(["current", "revoked policy", "reassigned session"] as const)(
                     toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
                   });
                   handle.messageInjectionV2 = createSteeredCliMessageInjection({
-                    cwd: state.workspaceDir,
+                    context: { params: { workspaceDir: state.workspaceDir } },
                     signal: source.signal,
-                    assertCurrent: () => source.signal.throwIfAborted(),
                     getInjection: () => ({
                       isAvailable: () => true,
                       async queueMessage(text, withCurrent) {

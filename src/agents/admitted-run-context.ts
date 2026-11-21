@@ -65,22 +65,19 @@ export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
   const check = source.assertCurrent;
-  const signal = source.signal;
-  let revoked = false;
-  let revocationReason: unknown;
+  const revocation = new AbortController();
+  const signal = source.signal
+    ? AbortSignal.any([source.signal, revocation.signal])
+    : revocation.signal;
   const assertCurrent = composeSessionSourceAssertion(
     [check],
     scopeOperatorAccessDecisions((assertSource: () => void) => {
-      if (revoked) {
-        throw revocationReason;
-      }
+      signal.throwIfAborted();
       try {
-        signal?.throwIfAborted();
         assertSource();
       } catch (error) {
         if (!isOperatorAuthorityUnavailable(error)) {
-          revoked = true;
-          revocationReason = error;
+          revocation.abort(error);
         }
         throw error;
       }
@@ -96,6 +93,7 @@ export function createAdmittedRunOperatorAuthority(
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,
+    recoverySnapshotUnavailableReason: source.recoverySnapshotUnavailableReason,
     channelRecoverySource: source.channelRecoverySource
       ? Object.freeze({
           reference: Object.freeze({ ...source.channelRecoverySource.reference }),
@@ -110,6 +108,7 @@ export function createAdmittedRunOperatorAuthority(
     invocation: source.invocation,
     signal,
     retain: source.retain,
+    reauthorize: source.reauthorize,
     onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
@@ -390,6 +389,19 @@ export function getAdmittedRunSource(
     : undefined;
 }
 
+/** Reads the initiating profile only from the host's exact active admission lease. */
+export function getAdmittedRunOperatorProfileId(
+  authority: AgentRunDelegatedAuthority,
+): string | undefined {
+  const context = admittedContextsByAuthority.get(authority);
+  if (!context || getAdmittedRunDelegatedAuthority(context) !== authority) {
+    return undefined;
+  }
+  const operator = readAdmittedRunOperatorAuthority(context);
+  operator?.assertCurrent();
+  return operator?.profileId;
+}
+
 /** Captures an exact admitted-run assertion for work that may cross an await boundary. */
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
@@ -639,6 +651,7 @@ export function prepareAgentRunAdmission(params: {
       admitted ??= runWithSessionSourceScope(
         assertSourceCurrent,
         async () => {
+          operatorAuthority?.reauthorize?.();
           assertSourceCurrent?.();
           const facts = executionIdentitySpawnAdmission({
             operation: "attach",

@@ -1970,25 +1970,6 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 /* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
-.settings-sidebar__esc {
-  margin-left: auto;
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 70%, transparent);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 550;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-/* Inside the drawer there is no Escape key to hint at. */
-.shell--mobile-nav .settings-sidebar__esc {
-  display: none;
-}
-
 .settings-sidebar__agent openclaw-agent-select {
   display: block;
   min-width: 0;
@@ -2019,6 +2000,31 @@ openclaw-approvals-page .data-table-pagination__info {
   .settings-sidebar__agent
   .agent-select__trigger[aria-expanded="true"] {
   background: var(--bg-hover);
+}
+
+/* In the header the picker is the agent's avatar alone; the trigger keeps the name
+   in its accessible label and the menu lists every agent by name. */
+.settings-sidebar__agent--header .agent-select__trigger {
+  gap: 4px;
+  width: auto;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 6px 0 4px;
+  border-radius: var(--radius-full);
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__label {
+  display: none;
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__chevron {
+  margin-inline-start: 0;
+  color: var(--muted);
 }
 
 .settings-sidebar__search::after {

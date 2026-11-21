@@ -19,11 +19,11 @@ import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopLoading } from "./chat-details-loading.tsx";
 import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
-import { ChatDetailsSkills } from "./chat-details-skills.tsx";
 import type {
   ChatDetailsDesktopSectionId,
   ChatDetailsOutputs,
@@ -510,13 +510,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </>
                   )}
                 </Show>
-                <ChatDetailsSkills
-                  details={props.props!}
-                  presented={active()}
-                  desktop={props.desktop}
-                  expanded={sectionExpanded("skills")}
-                  onExpandedChange={(expanded) => changeSection("skills", expanded)}
-                />
                 <Show when={!props.desktop}>
                   <Background details={props.props!} presented={active()} />
                 </Show>
@@ -652,14 +645,17 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   /** The native host keeps ownership of top-layer menus and Undo/focus behavior. */
   progressMenuRef?: (menu: MenuHandle) => void;
   onHideProgress?: () => void;
-  onReady?: () => void;
 };
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  onSettled(() => props.onReady?.());
   return (
     <>
+      <Show
+        when={props.props?.sessionFactsReady === false && !props.props.cachedDetails?.environment}
+      >
+        <ChatDetailsDesktopLoading />
+      </Show>
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}

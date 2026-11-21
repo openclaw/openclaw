@@ -17,6 +17,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
+import { findGitHubPullRequestContributor } from "./github-publication-contributors.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { createGitHubPublicationJsonReader } from "./github-publication-json-read.js";
 import { matchesGitHubPublicationIdentityRow } from "./github-publication-receipt.js";
@@ -260,22 +261,22 @@ export async function readOwnGitHubPullRequest(params: {
       ["read", "triage", "write", "maintain", "admin"].includes(String(permission.permission))
     );
   };
+  const hasAccountAccess = async (repository: string, accountId: number) => {
+    const user = await read(`user/${accountId}`);
+    return (
+      isRecord(user) &&
+      user.id === accountId &&
+      typeof user.login === "string" &&
+      isGitHubLogin(user.login) &&
+      (await hasAccess(repository, accountId, user.login))
+    );
+  };
   const baseRepository = repositoryFacts(await read(`repos/${target.repository}`));
   // Shared reader access alone must never disclose a private PR's existence or author.
   const privateReaders = new Set<number>();
   if (baseRepository.private && !operatorWrite) {
     for (const accountId of admittedIds) {
-      const user = await read(`user/${accountId}`);
-      const login =
-        isRecord(user) && typeof user.login === "string" && isGitHubLogin(user.login)
-          ? user.login
-          : undefined;
-      if (
-        isRecord(user) &&
-        user.id === accountId &&
-        login &&
-        (await hasAccess(baseRepository.name, accountId, login))
-      ) {
+      if (await hasAccountAccess(baseRepository.name, accountId)) {
         privateReaders.add(accountId);
       }
     }
@@ -294,10 +295,6 @@ export async function readOwnGitHubPullRequest(params: {
     !isRecord(pr) ||
     !isRecord(pr.user) ||
     typeof pr.user.id !== "number" ||
-    (baseRepository.private &&
-      !operatorWrite &&
-      !privateReaders.has(pr.user.id) &&
-      !ownPublication) ||
     typeof pr.user.login !== "string" ||
     !isGitHubLogin(pr.user.login) ||
     pr.number !== target.number ||
@@ -309,9 +306,32 @@ export async function readOwnGitHubPullRequest(params: {
   ) {
     throw unavailable();
   }
-  if (!operatorWrite && !admittedIds.includes(pr.user.id) && !ownPublication) {
+  const needsContribution = !operatorWrite && !admittedIds.includes(pr.user.id) && !ownPublication;
+  const contributorAccountId =
+    needsContribution &&
+    pr.user.id === identity.account.accountId &&
+    typeof pr.head.sha === "string" &&
+    commitPattern.test(pr.head.sha)
+      ? await findGitHubPullRequestContributor({
+          read,
+          repository: baseRepository.name,
+          number: target.number,
+          headCommit: pr.head.sha,
+          accountIds: baseRepository.private ? [...privateReaders] : admittedIds,
+        })
+      : undefined;
+  if (
+    baseRepository.private &&
+    !operatorWrite &&
+    !privateReaders.has(pr.user.id) &&
+    !ownPublication &&
+    contributorAccountId === undefined
+  ) {
+    throw unavailable();
+  }
+  if (needsContribution && contributorAccountId === undefined) {
     throw new Error(
-      "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr; continue it in the session that published it.",
+      "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR. Continue in the original publication conversation or ask a full-write maintainer to assist.",
     );
   }
   const base = refFacts(pr.base, baseRepository);
@@ -329,7 +349,9 @@ export async function readOwnGitHubPullRequest(params: {
       (headRepository.private &&
         !operatorWrite &&
         headRepository.id !== baseRepository.id &&
-        !(await hasAccess(headRepository.name, pr.user.id, pr.user.login)))
+        !(contributorAccountId !== undefined
+          ? await hasAccountAccess(headRepository.name, contributorAccountId)
+          : await hasAccess(headRepository.name, pr.user.id, pr.user.login)))
     ) {
       throw unavailable();
     }

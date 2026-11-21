@@ -38,6 +38,7 @@ export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
   attachments?: Array<SignalAttachment>;
+  viewOnce?: boolean | null;
   mentions?: Array<SignalMention> | null;
   groupInfo?: {
     groupId?: string | null;

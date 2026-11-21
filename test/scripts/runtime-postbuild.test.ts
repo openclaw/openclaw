@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
@@ -743,7 +743,13 @@ describe("runtime postbuild static assets", () => {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
           expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
-            origin.symbol,
+            // 2026.9.37 deliberately denied leased-handoff authority; its implementation
+            // is inline rather than one of the fixture's named runtime exports.
+            release.version === "2026.9.37" &&
+              chunk.path === "update-managed-service-handoff-current-E5XsvJxw.mjs" &&
+              exported === "isCurrentManagedServiceUpdateHandoffProcess"
+              ? false
+              : origin.symbol,
           );
         }
       }

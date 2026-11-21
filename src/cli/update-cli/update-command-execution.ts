@@ -9,12 +9,7 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { assertReadableGitMetadata } from "./schema-preflight.js";
-import {
-  normalizeTag,
-  readPackageVersion,
-  resolveGitInstallDir,
-  UpdatePreMutationError,
-} from "./shared.js";
+import { normalizeTag, readPackageVersion, UpdatePreMutationError } from "./shared.js";
 import {
   admitUpdateCandidateDatabaseMetadata,
   assertUpdateCandidateExecutor,
@@ -31,7 +26,6 @@ import {
 } from "./update-command-database-context.js";
 import { settleMutableUpdateResult } from "./update-command-execution-settlement.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
@@ -199,12 +193,6 @@ export async function executeMutableUpdate(
     return { ...context, runId, executorFence, inputHash };
   };
   const originalRecovery = () => readOriginalUpdateRecovery(params, updateStepTimeoutMs);
-  const gitMutationRoots =
-    params.updateInstallKind === "git"
-      ? params.switchToGit
-        ? [params.root, resolveGitInstallDir()]
-        : [params.root]
-      : null;
   const stopManagedServiceBeforeMutableUpdate = async (
     mutationRoots: readonly string[] = [params.root],
     phase: "inspect" | "prepare" = "prepare",
@@ -365,7 +353,7 @@ export async function executeMutableUpdate(
         // Explicit artifacts acquire their version before rehearsal or activation.
         await preflightPlugins(await readPackageVersion(root));
         if (deferredFamilyPreparation) {
-          await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
+          await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
         }
         await prepareMutableUpdate(ownedManagedUpdateContext?.env ?? admission?.managedEnv);
         if (params.updateInstallKind === "git") {
@@ -420,10 +408,13 @@ export async function executeMutableUpdate(
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     await waitForCurrent();
     familyAdmission.assertAdmitted();
-    if (params.switchToGit && !opts.run?.sourceArtifactLock) {
-      await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
-      assertExecutionCurrent();
-    }
+    // A Git release switches under a running Gateway once its service names the launcher. A
+    // service that still names another entry is stopped first, so the install can rebind it: an
+    // update the Gateway handed off runs inside its LaunchAgent, which cannot rewrite itself.
+    const gitServiceVerdict = preManagedServiceStop?.serviceUpdateVerdict;
+    servicePrepared ||=
+      params.updateInstallKind === "git" &&
+      !(gitServiceVerdict?.kind === "owned" && gitServiceVerdict.refreshDefinition);
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     // Use the validated config for this update; concurrent edits apply on the next run.
     const snapshot = validatedConfigSnapshot ?? (await readCandidateConfig(env));
@@ -477,7 +468,8 @@ export async function executeMutableUpdate(
     await recordPhase("activating");
     assertExecutionCurrent();
     const publication = {
-      roots,
+      // Every consumer keeps the release it started from; a release replaces no root.
+      roots: params.updateInstallKind === "git" ? [] : roots,
       env,
       timeoutMs: updateStepTimeoutMs,
       assertCurrent: assertExecutionCurrent,
@@ -541,7 +533,7 @@ export async function executeMutableUpdate(
   try {
     admission = await inspectUpdateDatabaseContexts({
       ...databaseContextOptions,
-      roots: gitMutationRoots ?? [params.root],
+      roots: [params.root],
       expectedForeground: opts.run?.completionOwner === "gateway-restart" || undefined,
     });
     deferredFamilyPreparation = familyAdmission.selectContexts(
@@ -578,6 +570,8 @@ export async function executeMutableUpdate(
         }),
         managedServiceEnv: preManagedServiceStop?.serviceEnv,
         onTransaction,
+        // Recorded inside activation, after the service stop and before the link changes.
+        onPackageRelease: (r) => recordPhase("activating", { origin: { packageRelease: r } }),
       };
       result = await withMutableUpdateForwardScope(opts, () =>
         params.stagedPackage
@@ -585,18 +579,19 @@ export async function executeMutableUpdate(
           : runPackageInstallUpdate(packageUpdate),
       );
     } else {
-      const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
-      const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
-      assertExecutionCurrent();
       const gitUpdate: Parameters<typeof updateGitInstall>[0] = {
-        ...installOptions,
-        sourceRuntimePrepared,
+        root: params.root,
+        installKind: params.installKind,
+        startedAt: params.startedAt,
+        progress: params.progress,
+        nodeRunner: params.packageUpdateNodeRunner,
+        assertCurrent: assertExecutionCurrent,
         switchToGit: params.switchToGit,
+        deferReleaseActivation: !params.shouldRestart,
         timeoutMs: params.timeoutMs,
         channel: params.channel,
         devTarget: params.devTarget,
         inspectGitTarget: async (target, installTarget) => {
-          rollbackCapture.selectTargetVersion(target.version);
           await waitForCurrent();
           await assertUpdateDatabaseEngineContexts(
             admission!.contexts,
@@ -613,25 +608,12 @@ export async function executeMutableUpdate(
           assertExecutionCurrent();
           admittedTargetSchemaVersions = target.schemaVersions;
           if (!gitContextPrepared && !deferredFamilyPreparation) {
-            await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
+            await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
             await prepareMutableUpdate(admission?.managedEnv);
             // Revalidation retains activation's stop and recovery state.
             gitContextPrepared = true;
           }
-          if (mutationStarted) {
-            await beforeActivate(gitMutationRoots ?? [params.root]);
-          }
         },
-        onTransaction,
-        // Foreign inspection metadata cannot authorize backup or Doctor writes.
-        getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
-        getSnapshotSource: async () => {
-          const env =
-            ownedManagedUpdateContext?.env ?? admission?.managedEnv ?? opts.run?.env ?? process.env;
-          const source = await readUpdateCandidateSource(env, params.legacyConfigPlan);
-          return { config: source.config, env };
-        },
-        jsonMode: Boolean(opts.json),
         validateCandidate: async (candidateRoot) => {
           const steps = await validateCandidate(candidateRoot);
           assertUpdateCandidateSteps(steps);
@@ -646,7 +628,7 @@ export async function executeMutableUpdate(
             target.postgresFamilies,
           );
           admittedTargetSchemaVersions = target.schemaVersions;
-          await beforeActivate(gitMutationRoots ?? [params.root]);
+          await beforeActivate([params.root]);
         },
       };
       result = await withMutableUpdateForwardScope(opts, () => updateGitInstall(gitUpdate));
@@ -684,6 +666,10 @@ export async function executeMutableUpdate(
     result,
     failure,
     mutationStarted,
+    // A Git release starts nothing from the candidate before its restart. A package
+    // candidate opens state only through its Doctor or the --no-restart boot check.
+    candidateOpenedState:
+      params.updateInstallKind === "package" && (doctorEntered || !params.shouldRestart),
     preManagedServiceStop,
     ownedManagedUpdateContext,
     recoveryEnv,

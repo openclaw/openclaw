@@ -1,6 +1,7 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
@@ -315,7 +316,7 @@ export function prepareGroupedMessage(
 
   const voiceTranscript = isProviderVoiceTranscript(message);
   const isToolShell = normalizedRole === "tool";
-  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
+  const standaloneToolSource = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
   // Nested cards moved under their parent must not leave empty message shells.
@@ -345,12 +346,18 @@ export function prepareGroupedMessage(
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
   const inlineViewBlocks = normalizedMessage.content.filter((item) => item.type === "plugin_view");
+  const automationPlan = normalizedMessage.content.find(
+    (item) => item.type === "automation_creation_card",
+  )?.plan;
   const hasImagesOrNotices = hasImages || expiredPairingQrCount !== 0 || omittedMedia.length !== 0;
   const hasMediaContent =
     hasImagesOrNotices ||
+    automationPlan !== undefined ||
     visibleAttachments.length !== 0 ||
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
+  // Promoted execution containers keep their media on the original message surface.
+  const isStandaloneToolMessage = standaloneToolSource && (hasToolCards || !hasMediaContent);
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
   const templatePluginCards = normalizedMessage.content.filter(
     (item) => item.type === "template_plugin_install",
@@ -422,11 +429,13 @@ export function prepareGroupedMessage(
   const toolMessageExpanded =
     opts.isToolMessageExpanded?.(toolMessageDisclosureId, toolCards[0]) ?? false;
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const singleImageTool =
+    singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image";
   const standaloneToolPayload =
     isStandaloneToolMessage &&
     Boolean(markdown) &&
     !jsonResult &&
-    !hasImages &&
+    (!hasImages || singleImageTool) &&
     singleToolCard?.outputText?.trim() === markdown?.trim();
   const bodyMarkdown = standaloneToolPayload ? null : markdown;
   const renderInOrder = rendersMediaInOrder({
@@ -447,7 +456,9 @@ export function prepareGroupedMessage(
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
   const expandsSingleToolCard =
-    Boolean(singleToolCard) && (!markdown || standaloneToolPayload) && !hasImages;
+    Boolean(singleToolCard) &&
+    (!markdown || standaloneToolPayload) &&
+    (!hasImages || singleImageTool);
   const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
 
   // Pure tool messages (no text/images/attachments) skip the "Tool output"
@@ -485,6 +496,7 @@ export function prepareGroupedMessage(
     inlineViewBlocks,
     clawHubCards,
     templatePluginCards,
+    automationPlan,
     reasoningMarkdown,
     markdown,
     markdownRenderOptions,
