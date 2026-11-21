@@ -292,9 +292,10 @@ describe("parseCliJsonl", () => {
       "claude-cli",
     );
 
+    // The assistant snapshots say 5 output tokens; the call's message_delta reports 534.
     expect(output.usage).toEqual({
       input: 4418,
-      output: 5,
+      output: 534,
       cacheRead: undefined,
       cacheWrite: 36955,
       cacheWrite1h: 36955,
@@ -311,6 +312,30 @@ describe("parseCliJsonl", () => {
     // Every write in this turn used the 1h TTL; the CLI reports costUSD 0.40499 for it.
     const opus48 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
     expect(calculateUsageCost(output.diagnosticUsage ?? {}, opus48).total).toBeCloseTo(0.40499, 8);
+  });
+
+  it("takes each Claude call's output count from its message_delta", () => {
+    const parser = createClaudeParser();
+    const startUsage = { input_tokens: 3, cache_read_input_tokens: 900, output_tokens: 1 };
+    parser.push(
+      joinJsonlFrames(
+        claudeStreamEvent({ type: "message_start", message: { id: "msg_1", usage: startUsage } }),
+        { type: "assistant", message: { id: "msg_1", content: [], usage: startUsage } },
+        // A background agent reports its own usage in the middle of the parent call.
+        { type: "system", subtype: "task_progress", usage: { total_tokens: 9678 } },
+        {
+          type: "stream_event",
+          parent_tool_use_id: "toolu_agent",
+          event: { type: "message_delta", usage: { output_tokens: 7 } },
+        },
+        // The Messages API may report only the output count in message_delta.
+        claudeStreamEvent({ type: "message_delta", usage: { output_tokens: 42 } }),
+        claudeMessageStop(),
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.usage).toEqual({ input: 3, output: 42, cacheRead: 900 });
   });
 
   it("keeps subagent thinking, tools, and messages out of the parent lane", () => {
@@ -340,6 +365,8 @@ describe("parseCliJsonl", () => {
     expect(thinking.join("")).not.toContain("The Glob tool returned no files found");
     expect(thinking.join("")).toContain("The agent has completed");
     expect(assistantMessages).toHaveLength(6);
+    // The latest parent call keeps its own message_delta output; subagent calls never replace it.
+    expect(parser.getOutput()?.usage).toMatchObject({ input: 10, output: 66, cacheRead: 29_095 });
     expect(text).toBe(
       "Agent is running. I'll let you know the count when it finishes.\n\nThere are **7 .d.ts files** in the ./package directory.",
     );
