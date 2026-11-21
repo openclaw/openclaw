@@ -18,7 +18,9 @@ Session permission modes set one session's filesystem boundary and exec escalati
 
 These tool-visibility and exec rules describe OpenClaw-managed tools. Native harnesses can retain their own tool surface under their permission controls; see [Codex runtime policy](/plugins/codex-harness-runtime).
 
-The filesystem boundary is enforced on the built-in OpenClaw runtime. A chat that runs on a CLI backend (for example `claude-cli`) uses that CLI's own permission controls: for owner and unrestricted turns, OpenClaw tools the CLI calls through the Gateway are not limited to `sessionRoot`. Turns from restricted senders still keep their sender limits. For the strictest boundary, use the built-in runtime.
+Whoever runs a tool enforces the mode for it. The Gateway runs OpenClaw's own tools, so it applies the session's boundary to them on every runtime, including OpenClaw tools a CLI backend such as `claude-cli` calls through the Gateway. A runtime enforces the mode for its own native tools when it has a real sandbox for them (Codex maps the mode onto its sandbox and approval policy). Harnesses that run on the Gateway host with their own tools, such as Muse and ACP agents, need **Full access**. A CLI backend's own native tools follow that CLI's permission controls, not the session mode: for example Gemini CLI's file tools, or Claude's own tools in a Claude CLI chat placed on a node.
+
+The mode bounds file tools and selects the exec reviewer. Exec itself is not confined to `sessionRoot`, except on a runtime that sandboxes its commands.
 
 Required workspace roots and sandbox restrictions still constrain file tools in `full` mode. Memory-flush runs expose only `read` and append-only `write`.
 

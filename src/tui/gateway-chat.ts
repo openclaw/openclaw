@@ -55,8 +55,6 @@ import {
   resolveEdgeAuthHeaders,
 } from "../gateway/edge-auth.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
@@ -64,6 +62,11 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { VERSION } from "../version.js";
+import {
+  loadStoredOriginDeviceAuth,
+  narrowTuiScopesToGrant,
+  resolveTuiOperatorScopes,
+} from "./gateway-chat-auth.js";
 import { GatewayChatRequests, isLegacyParameterError } from "./gateway-chat-requests.js";
 import type {
   ChatSendOptions,
@@ -94,6 +97,7 @@ type ResolvedGatewayConnection = {
   edgeAuthHeaders?: Readonly<Record<string, string>>;
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
+  scopes?: string[];
 };
 
 function throwGatewayAuthResolutionError(reason: string): never {
@@ -104,25 +108,6 @@ function throwGatewayAuthResolutionError(reason: string): never {
       "or resolve the configured secret provider for this credential.",
     ].join("\n"),
   );
-}
-
-async function hasStoredOriginDeviceAuth(deviceAuthScope: string | undefined): Promise<boolean> {
-  try {
-    const identity = await loadDeviceIdentityIfPresentAsync();
-    return Boolean(
-      deviceAuthScope &&
-      identity &&
-      (
-        await loadOriginDeviceToken({
-          gatewayScope: deviceAuthScope,
-          deviceId: identity.deviceId,
-          role: "operator",
-        })
-      )?.token,
-    );
-  } catch {
-    return false;
-  }
 }
 
 type HandoffSessionResolveParams = Required<
@@ -185,7 +170,11 @@ export class GatewayChatClient implements TuiBackend {
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.UI,
-      scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
+      scopes: connection.scopes ?? resolveTuiOperatorScopes(),
+      // A newly approved guest has no stored grant yet; the refusal reports it.
+      ...(connection.token || connection.password
+        ? {}
+        : { fitScopesToApprovedGrant: narrowTuiScopesToGrant }),
       caps: [
         GATEWAY_CLIENT_CAPS.AGENT_KIND,
         GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
@@ -729,14 +718,17 @@ async function resolveGatewayConnection(
     suppressEnvAuthFallback: opts.suppressEnvAuthFallback,
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
     explicitTlsFingerprint: opts.tlsFingerprint,
-    allowStoredOriginAuth: hasStoredOriginDeviceAuth,
+    allowStoredOriginAuth: async (scope) =>
+      Boolean((await loadStoredOriginDeviceAuth(scope))?.token),
     overrideAuthErrorHint:
       "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
     buildConnectionDetails: buildGatewayConnectionDetails,
   });
   const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);
-  const canConnectWithoutSharedAuth =
-    Boolean(edgeAuthHeaders) || (await hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope));
+  const storedOriginAuth = bootstrap.deviceAuthScope
+    ? await loadStoredOriginDeviceAuth(bootstrap.deviceAuthScope)
+    : null;
+  const canConnectWithoutSharedAuth = Boolean(edgeAuthHeaders || storedOriginAuth?.token);
   const missingSharedAuth =
     bootstrap.authFailureReason === "Missing gateway auth credentials." ||
     bootstrap.authFailureReason === "Missing gateway auth token." ||
@@ -762,5 +754,9 @@ async function resolveGatewayConnection(
     password: bootstrap.auth.password,
     ...(edgeAuthHeaders ? { edgeAuthHeaders } : {}),
     ...(bootstrap.tlsFingerprint ? { tlsFingerprint: bootstrap.tlsFingerprint } : {}),
+    // A shared token or password keeps the default request.
+    scopes: resolveTuiOperatorScopes(
+      bootstrap.auth.token || bootstrap.auth.password ? undefined : storedOriginAuth?.scopes,
+    ),
   };
 }

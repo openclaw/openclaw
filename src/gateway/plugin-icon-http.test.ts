@@ -48,11 +48,17 @@ vi.mock("../media/fetch.js", () => ({
   readRemoteMediaBuffer: (...args: unknown[]) => mocks.readRemoteMediaBuffer(...args),
 }));
 
+// mock-isolation: Keep icon encoder output deterministic for the HTTP policy fixtures.
 vi.mock("../media/image-ops.js", () => ({
   createImageProcessor: () => ({
     encode: (...args: unknown[]) => mocks.encodeImage(...args),
   }),
   MAX_IMAGE_INPUT_PIXELS: 25_000_000,
+}));
+
+// mock-isolation: Drive icon size cases with the fixture's controlled metadata.
+vi.mock("../media/image-header-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/image-header-metadata.js")>()),
   readImageMetadataFromHeader: (...args: unknown[]) => mocks.readImageMetadata(...args),
 }));
 
