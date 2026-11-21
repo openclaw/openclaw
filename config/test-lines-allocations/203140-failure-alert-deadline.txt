@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #203140: cron failure-alert deadline classification distinguishes pre-handoff non-delivery, in-flight unknown, and acked-complete delivery, and skips the in-app fallback for unproven non-delivery.
+66

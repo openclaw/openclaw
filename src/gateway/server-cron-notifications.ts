@@ -449,6 +449,8 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   params: CronFailureAlertParams,
 ): Promise<FailureAlertTransportResult> {
   let mayHaveReachedRecipient = false;
+  let providerHandoff = false;
+  let payloadDelivered = false;
   const onDeliveryAttempt = (reachedRecipient: boolean) => {
     mayHaveReachedRecipient ||= reachedRecipient;
   };
@@ -556,6 +558,12 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           }),
           abortSignal: abortController.signal,
           onDeliveryAttempt,
+          onProviderHandoff: () => {
+            providerHandoff = true;
+          },
+          onPayloadDelivered: () => {
+            payloadDelivered = true;
+          },
         });
       })(),
       CRON_WEBHOOK_TIMEOUT_MS,
@@ -580,12 +588,21 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     };
   } catch (err) {
     const error = formatErrorMessage(err);
+    // Deadline classification: once the durable batch has been handed off, the
+    // provider may still complete the delivery after the abort, so the deadline
+    // can no longer prove non-delivery. The complete payload set being acked
+    // settles it as delivered (the history write failing afterwards is a
+    // diagnostic, not a delivery failure); a handoff or any recipient-reached
+    // attempt without the delivered payload leaves the outcome unknown and skips
+    // the in-app fallback. Only a deadline that proves nothing reached the
+    // destination reports non-delivery.
+    const reachedUnconfirmed = !payloadDelivered && (providerHandoff || mayHaveReachedRecipient);
     return {
       kind: "failed",
       error: err,
       outcome: {
-        delivered: mayHaveReachedRecipient ? undefined : false,
-        status: mayHaveReachedRecipient ? "unknown" : "not-delivered",
+        delivered: payloadDelivered ? true : reachedUnconfirmed ? undefined : false,
+        status: payloadDelivered ? "delivered" : reachedUnconfirmed ? "unknown" : "not-delivered",
         error,
       },
     };

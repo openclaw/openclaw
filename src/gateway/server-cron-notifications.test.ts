@@ -575,6 +575,72 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     },
   );
 
+  it("settles a handoff whose complete payload was acked before the deadline as delivered", async () => {
+    vi.useFakeTimers();
+    const senderEntered = createVoidDeferred();
+    mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
+      ({
+        onProviderHandoff,
+        onPayloadDelivered,
+      }: {
+        onProviderHandoff?: () => void;
+        onPayloadDelivered?: () => void;
+      }) =>
+        new Promise<void>(() => {
+          // Provider accepted the complete alert, then the history write stalled
+          // past the deadline: delivery is proven, only the transcript is missing.
+          onProviderHandoff?.();
+          onPayloadDelivered?.();
+          senderEntered.resolve();
+        }),
+    );
+    const delivery = sendGatewayCronFailureAlert({ job: announceJob() });
+    const deliveryOutcome = delivery.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await awaitGateBeforeSettlement(
+      senderEntered.promise,
+      delivery,
+      "failure alert settled before entering the stalled sender",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(deliveryOutcome).resolves.toEqual(
+      expect.objectContaining({ message: "cron: failure alert announcement timed out" }),
+    );
+    expectSettlement("delivered", "cron: failure alert announcement timed out");
+    expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not queue the in-app fallback for a handoff without a complete acknowledgment", async () => {
+    vi.useFakeTimers();
+    const senderEntered = createVoidDeferred();
+    mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
+      ({ onProviderHandoff }: { onProviderHandoff?: () => void }) =>
+        new Promise<void>(() => {
+          // Handed off, but the ack never reached the callback: the provider may
+          // still complete the send, so non-delivery is unproven.
+          onProviderHandoff?.();
+          senderEntered.resolve();
+        }),
+    );
+    const delivery = sendGatewayCronFailureAlert({ job: announceJob() });
+    const deliveryOutcome = delivery.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await awaitGateBeforeSettlement(
+      senderEntered.promise,
+      delivery,
+      "failure alert settled before entering the stalled sender",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(deliveryOutcome).resolves.toEqual(
+      expect.objectContaining({ message: "cron: failure alert announcement timed out" }),
+    );
+    expectSettlement("unknown", "cron: failure alert announcement timed out");
+  });
+
   it("defers detached completion delivery while suspension is prepared", async () => {
     const job = createCompletionWebhookJob();
     const suspensionAdmission = tryBeginGatewaySuspendAdmission(() => {});

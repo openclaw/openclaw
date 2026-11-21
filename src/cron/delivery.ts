@@ -73,6 +73,10 @@ export async function sendCronAnnouncePayloadStrict(params: {
   };
   onDeliveryAttempt?: (reachedRecipient: boolean) => void;
   onDeliveryReceipt?: (receipt: NonNullable<CronDeliveryTrace["receipts"]>[number]) => void;
+  /** Fires when the durable batch is handed off to the provider, before any ack can arrive. */
+  onProviderHandoff?: () => void;
+  /** Fires once the provider has acknowledged the complete payload set. */
+  onPayloadDelivered?: () => void;
 }): Promise<CronAnnounceResult> {
   const delivery = params.target;
   params.abortSignal.throwIfAborted();
@@ -148,6 +152,10 @@ export async function sendCronAnnouncePayloadStrict(params: {
       await fence?.beforeAttempt();
       params.abortSignal.throwIfAborted();
       fence?.assertCurrent();
+      // The durable batch handoff is the point after which the provider may
+      // still complete the delivery even if this call is interrupted, so the
+      // deadline classifier can no longer prove non-delivery past it.
+      params.onProviderHandoff?.();
       const result = await sendDurableMessageBatchCore(
         {
           cfg: params.cfg,
@@ -183,8 +191,10 @@ export async function sendCronAnnouncePayloadStrict(params: {
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
           assertDirectAdapterHandoff: fence?.assertCurrent,
-          onDeliveredPayload: ({ hookContent, ...payload }) =>
-            deliveredPayloads.push({ ...payload, spokenText: hookContent }),
+          onDeliveredPayload: ({ hookContent, ...payload }) => {
+            deliveredPayloads.push({ ...payload, spokenText: hookContent });
+            params.onPayloadDelivered?.();
+          },
           onDeliveryResult: (deliveryResult) => {
             if (params.onDeliveryReceipt) {
               const receipt = createMessageReceiptFromOutboundResults({
