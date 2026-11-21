@@ -147,6 +147,50 @@ function expectNoNoteContaining(message: string, title = "Cron"): void {
 }
 
 describe("collectLegacyCronStoreHealthFindings", () => {
+  it("reports Docker-backed streams without treating an ordinary Gateway stream as sandboxed", async () => {
+    const schedule = { kind: "stream", command: ["watch", "private-argument"] };
+    const gateway = createCurrentCronJob({ id: "gateway-watch", schedule });
+    const sandbox = createCurrentCronJob({
+      id: "docker-watch",
+      enabled: false,
+      schedule: { ...schedule, kind: "sandbox-stream" },
+    });
+    await writeCronStore([gateway, sandbox]);
+    await saveCronQuarantinedJobs({
+      storePath,
+      nowMs: 123,
+      entries: [
+        {
+          sourceIndex: 0,
+          reason: "invalid-schedule",
+          job: createCurrentCronJob({
+            id: "quarantined-docker-watch",
+            schedule,
+            streamSandbox: { backendId: "docker" },
+          }),
+        },
+      ],
+    });
+
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() });
+    const advisory = findings.filter(
+      ({ requirement }) => requirement === "cron-sandbox-stream-cleanup",
+    );
+    expect(advisory.map(({ message }) => message)).toEqual(
+      ["docker-watch", "quarantined-docker-watch"].map((id) =>
+        expect.stringContaining(JSON.stringify(id)),
+      ),
+    );
+    expect(advisory.every(({ fixHint }) => fixHint?.includes("original Docker daemon"))).toBe(true);
+    expect(JSON.stringify(advisory)).not.toMatch(/gateway-watch|private-argument/);
+    const db = openOpenClawStateDatabase().db;
+    expect(
+      db
+        .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+        .get(resolveCronStoreKeyInDatabase(db, storePath), sandbox.id),
+    ).toEqual({ job_json: JSON.stringify(sandbox) });
+  });
+
   it("reports alias-only Gateway exec jobs with recreation guidance", async () => {
     await writeCurrentCronStore([
       createCurrentCronJob({
