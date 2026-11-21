@@ -350,26 +350,42 @@ function filterVerifiedWindowsGatewayPids(rawPids: number[], protectedPid?: numb
     .filter((pid) => verifyWindowsGatewayArgv(pid, readWindowsProcessArgsSync(pid)));
 }
 
+type VerifiedWindowsGatewayPidsResult =
+  | { ok: true; pids: number[]; starts: ReadonlyMap<number, number> }
+  | Extract<WindowsListeningPidsResult, { ok: false }>;
+
 function filterVerifiedWindowsGatewayPidsResult(
   rawPids: number[],
   processArgsResult: (pid: number) => WindowsProcessArgsResult,
   protectedPid?: number,
-): WindowsListeningPidsResult {
+  env?: NodeJS.ProcessEnv,
+): VerifiedWindowsGatewayPidsResult {
   const excluded = getExcludedGatewayPidsSync(PROCESS_INSPECTION_TIMEOUT_MS, protectedPid);
   const verified: number[] = [];
+  const starts = new Map<number, number>();
   for (const pid of uniqueValues(rawPids)) {
     if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
+      continue;
+    }
+    // Bracket the argv observation: a later PID occupant must not inherit the
+    // Gateway eligibility established by the process whose argv we inspected.
+    const startedAt = getFileLockProcessStartTime(pid, env);
+    if (startedAt == null) {
       continue;
     }
     const argsResult = processArgsResult(pid);
     if (!argsResult.ok) {
       return { ok: false, permanent: argsResult.permanent };
     }
-    if (verifyWindowsGatewayArgv(pid, argsResult.args)) {
+    if (
+      verifyWindowsGatewayArgv(pid, argsResult.args) &&
+      getFileLockProcessStartTime(pid, env) === startedAt
+    ) {
       verified.push(pid);
+      starts.set(pid, startedAt);
     }
   }
-  return { ok: true, pids: verified };
+  return { ok: true, pids: verified, starts };
 }
 
 type CleanStaleGatewayProcessesOptions = {
@@ -391,7 +407,7 @@ function resolveProtectedPidAfterEnumeration(
 function findVerifiedWindowsGatewayPidsOnPortResultSync(
   port: number,
   options?: CleanStaleGatewayProcessesOptions,
-): WindowsListeningPidsResult {
+): VerifiedWindowsGatewayPidsResult {
   const result = readWindowsListeningPidsResultSync(port);
   if (!result.ok) {
     return result;
@@ -400,6 +416,7 @@ function findVerifiedWindowsGatewayPidsOnPortResultSync(
     result.pids,
     (pid) => readWindowsProcessArgsResultSync(pid),
     resolveProtectedPidAfterEnumeration(options),
+    options?.env,
   );
 }
 
@@ -672,11 +689,13 @@ function* cleanStaleGatewayProcessesSteps(
     typeof portOverride === "number" && Number.isFinite(portOverride) && portOverride > 0
       ? Math.floor(portOverride)
       : resolveGatewayPort(undefined, options?.env ?? process.env);
+  let starts: ReadonlyMap<number, number | null> = new Map();
   const stalePids =
     process.platform === "win32"
       ? (() => {
           const result = findVerifiedWindowsGatewayPidsOnPortResultSync(port, options);
           if (result.ok) {
+            starts = result.starts;
             return result.pids;
           }
           return undefined;
@@ -691,9 +710,9 @@ function* cleanStaleGatewayProcessesSteps(
     yield* waitForPortFree(port);
     return [];
   }
-  const starts = new Map(
-    stalePids.map((pid) => [pid, getFileLockProcessStartTime(pid, options?.env)]),
-  );
+  if (process.platform !== "win32") {
+    starts = new Map(stalePids.map((pid) => [pid, getFileLockProcessStartTime(pid, options?.env)]));
+  }
   if (stalePids.length === 0 || (yield { type: "lease" })) {
     return [];
   }
