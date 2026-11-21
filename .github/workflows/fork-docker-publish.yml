@@ -74,9 +74,11 @@ jobs:
           # Prefer the version the release job resolved; fall back to the file.
           version="${INPUT_VERSION:-$(node -p "require('./package.json').version")}"
           suffix="$(date -u +%Y%m%d)"
-          short_sha="${GITHUB_SHA:0:12}"
+          revision="$(git rev-parse HEAD)"
+          short_sha="${revision:0:12}"
           {
             echo "version=${version}"
+            echo "revision=${revision}"
             echo "sha_tag=sha-${short_sha}"
             echo "release_tag=${version}-r${suffix}"
           } >> "$GITHUB_OUTPUT"
@@ -117,7 +119,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           build-args: |
-            GIT_COMMIT=${{ github.sha }}
+            GIT_COMMIT=${{ steps.tags.outputs.revision }}
             OPENCLAW_EXTENSIONS=${{ inputs.extensions }}
           cache-from: type=gha
           cache-to: type=gha,mode=min
@@ -131,6 +133,6 @@ jobs:
             echo "- SHA tag: ${{ steps.tags.outputs.sha_tag }}"
             echo "- Release tag: ${{ steps.tags.outputs.release_tag }}"
             echo "- Digest: ${{ steps.build.outputs.digest }}"
-            echo "- Git commit: ${GITHUB_SHA}"
+            echo "- Git commit: ${{ steps.tags.outputs.revision }}"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "digest=${{ steps.build.outputs.digest }}"
