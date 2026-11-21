@@ -82,7 +82,6 @@ export async function prepareSessionMaintenancePreservation(
     env: target?.env ?? options.env,
     memory: target !== undefined,
   };
-  const personalPins = await preparePersonalSessionPins({ env: store.env });
   const registrations = [...preserveKeysProviders];
   const prepared: PreparedSessionMaintenancePreserveKeys[] = [];
   let disposed = false;
@@ -111,6 +110,8 @@ export async function prepareSessionMaintenancePreservation(
       prepared.push(await registration.prepare(store));
       assertProvidersCurrent();
     }
+    // Providers may wait on storage; read pins last so that wait cannot outdate the snapshot.
+    const personalPins = await preparePersonalSessionPins({ env: store.env });
     const capture = (
       sessionKeys?: readonly string[],
       operation?: RetainedWorkerTransactionAdmission,

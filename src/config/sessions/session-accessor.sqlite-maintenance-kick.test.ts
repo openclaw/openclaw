@@ -18,6 +18,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
 import { loadSessionEntry, loadTranscriptEvents } from "./session-accessor.js";
 import {
   deleteSessionEntryRows,
@@ -547,6 +548,36 @@ it("commits automatic maintenance after 20 sessions write during preparation", a
   for (const key of writers) {
     expect(read(key)?.label).toBe("busy");
     expectArchive(key);
+  }
+});
+
+it("commits automatic maintenance after a profile change lands while a provider prepares", async ({
+  signal,
+}) => {
+  const { updatedAt, archived, write, expectArchive, request } = createWorkerStore();
+  const victimKey = "agent:main:provider-wait-victim";
+  write([victimKey, { sessionId: "victim", updatedAt: updatedAt - 172_800_000 }]);
+  const preparing = createDeferred();
+  const release = createDeferred();
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => {
+    preparing.resolve();
+    await release.promise;
+    return { capture: () => [], dispose() {} };
+  });
+  // A refused pins snapshot schedules the write-quiet retry instead of committing.
+  const retried = observeNextPeriodicMaintenance(1_000);
+  try {
+    kickSessionEntryMaintenanceAfterWrite(request);
+    await withinTest(preparing.promise, signal);
+    emitUserProfilesChanged();
+    release.resolve();
+    await Promise.race([withinTest(archived, signal), retried(signal)]);
+    expectArchive(victimKey, "age-retention");
+    expect(countPlanningPasses()).toBe(1);
+  } finally {
+    release.resolve();
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
+    unregister();
   }
 });
 
