@@ -111,14 +111,14 @@ export const WebPushTestParamsSchema = closedObject({
  * Request payload for a preference-aware Web Push to one user profile's current browsers.
  *
  * Recipients come from the Gateway's subscription authority, never from the caller.
- * Approval requests keep their own delivery owner and are not accepted here.
+ * Approval requests and human mentions keep their own delivery owners (mentions are
+ * sent only after core checks session visibility), so neither category is accepted here.
  */
 export const WebPushSendParamsSchema = closedObject({
   profileId: Type.String({ minLength: 1, maxLength: 256 }),
   category: Type.Union([
     Type.Literal("agent-finished"),
     Type.Literal("agent-question"),
-    Type.Literal("human-mentioned"),
     Type.Literal("scheduled-task-failed"),
   ]),
   /** Collapses repeated notifications on the device; namespaced by the Gateway. */

@@ -65,7 +65,10 @@ const WEB_PUSH_CATEGORY_TEXT = {
     title: "OpenClaw scheduled task failed",
     body: "A scheduled task needs attention.",
   },
-} as const satisfies Record<WebPushSendParams["category"], { title: string; body: string }>;
+} as const satisfies Record<
+  WebPushSendParams["category"] | "human-mentioned",
+  { title: string; body: string }
+>;
 
 type EventNotification = {
   category: WebPushNotificationCategory;
