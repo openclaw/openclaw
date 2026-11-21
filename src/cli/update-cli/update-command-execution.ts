@@ -402,13 +402,19 @@ export async function executeMutableUpdate(
       throw error;
     }
   };
-  // A Git release never stops or verifies the serving Gateway before activation.
-  let servicePrepared = params.updateInstallKind === "git";
+  let servicePrepared = false;
   // Activation-window timing the install runners cannot observe.
   const activationSteps: UpdateStepResult[] = [];
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     await waitForCurrent();
     familyAdmission.assertAdmitted();
+    // A Git release switches under a running Gateway once its service names the launcher. A
+    // service that still names another entry is stopped first, so the install can rebind it: an
+    // update the Gateway handed off runs inside its LaunchAgent, which cannot rewrite itself.
+    const gitServiceVerdict = preManagedServiceStop?.serviceUpdateVerdict;
+    servicePrepared ||=
+      params.updateInstallKind === "git" &&
+      !(gitServiceVerdict?.kind === "owned" && gitServiceVerdict.refreshDefinition);
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     // Use the validated config for this update; concurrent edits apply on the next run.
     const snapshot = validatedConfigSnapshot ?? (await readCandidateConfig(env));

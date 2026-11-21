@@ -560,7 +560,8 @@ export async function maybeRestartService(
         }
         // The update continues on the previous definition, so its refresh is owed.
         recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
-        if (requiresInstallRootRefresh) {
+        // An install the previous definition does not start (a Git release) is not served.
+        if (requiresInstallRootRefresh || (await serviceUsesUpdatedRoot()) === false) {
           return await reconciliationPending();
         }
         if (DEFINITION_DENIAL.test(String(err))) {
