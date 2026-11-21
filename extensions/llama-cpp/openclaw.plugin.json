@@ -1,6 +1,9 @@
 {
   "id": "llama-cpp",
   "categories": ["models"],
+  "doctorContract": {
+    "configRepair": true
+  },
   "name": "llama.cpp Provider",
   "description": "Managed and external llama.cpp servers for GGUF chat, embeddings and local images.",
   "activation": {

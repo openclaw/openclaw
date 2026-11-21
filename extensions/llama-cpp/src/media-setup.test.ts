@@ -221,7 +221,15 @@ it.each(["chat", "embedding-only"])(
     assert(updated?.localService && nextPreset, "Missing replacement router");
     expect(result.configPatch?.agents).toBeUndefined();
     expect(result.configPatch?.tools).toBeUndefined();
-    expect(result.configPatch?.memory).toBeUndefined();
+    expect(result.configPatch?.memory).toEqual({
+      search: {
+        provider: "local",
+        local: {
+          modelPath:
+            "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+        },
+      },
+    });
     expect(result.defaultModel).toBe(chatDefault);
     expect(updated.baseUrl).not.toBe(provider.baseUrl);
     expect(updated.params).toEqual(provider.params);
