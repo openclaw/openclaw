@@ -61,26 +61,16 @@ export async function captureDockerPersistentTarget(): Promise<
 > {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.docker_context");
   const signal = AbortSignal.timeout(30_000);
-  const context = process.env.DOCKER_CONTEXT?.trim();
-  let endpoint = context ? undefined : process.env.DOCKER_HOST?.trim();
-  if (!endpoint) {
-    const inspected = await execContainer(
-      DOCKER_SANDBOX_ENGINE,
-      [
-        "context",
-        "inspect",
-        ...(context ? [context] : []),
-        "--format",
-        "{{json .Endpoints.docker}}",
-      ],
-      { signal },
-    );
-    const parsed: unknown = JSON.parse(inspected.stdout);
-    if (!isRecord(parsed) || typeof parsed.Host !== "string") {
-      throw new Error("Docker did not identify its current endpoint.");
-    }
-    endpoint = parsed.Host;
+  const inspected = await execContainer(
+    DOCKER_SANDBOX_ENGINE,
+    ["context", "inspect", "--format", "{{json .Endpoints.docker}}"],
+    { signal },
+  );
+  const parsed: unknown = JSON.parse(inspected.stdout);
+  if (!isRecord(parsed) || typeof parsed.Host !== "string") {
+    throw new Error("Docker did not identify its current endpoint.");
   }
+  const endpoint = parsed.Host;
   if (!endpoint.startsWith("unix:///")) {
     return undefined;
   }
