@@ -32,6 +32,7 @@ export function loadSessionMcpConfig(params: {
   loaded: LoadedMcpConfig;
   fingerprint: string;
   safeServerNamesByServer: ReadonlyMap<string, string>;
+  policyBlockedServerNames: string[];
 } {
   const loaded =
     params.loaded ??
@@ -57,6 +58,7 @@ export function loadSessionMcpConfig(params: {
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const mcpToolsDeny = normalizeMcpToolDenials(params.toolOverrides?.mcpToolsDeny);
   let mcpServers = loaded.mcpServers;
+  const policyBlockedServerNames: string[] = [];
   const { includeServerNames, excludeServerNames, toolDenylist } = params;
   if (includeServerNames || excludeServerNames || toolDenylist?.length) {
     const filtered: typeof mcpServers = {};
@@ -69,6 +71,7 @@ export function loadSessionMcpConfig(params: {
         continue;
       }
       if (isDenied(safeServerNamesByServer.get(serverName) ?? serverName)) {
+        policyBlockedServerNames.push(serverName);
         continue;
       }
       filtered[serverName] = rawServer;
@@ -85,6 +88,7 @@ export function loadSessionMcpConfig(params: {
     : mcpServers;
   return {
     safeServerNamesByServer,
+    policyBlockedServerNames,
     loaded: {
       ...loaded,
       mcpServers,
@@ -114,8 +118,8 @@ export function resolveSessionMcpConfigSummary(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   toolDenylist?: string[];
-}): { fingerprint: string; serverNames: string[] } {
-  const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
+}): { fingerprint: string; serverNames: string[]; policyBlockedServerNames: string[] } {
+  const { loaded, safeServerNamesByServer, policyBlockedServerNames } = loadSessionMcpConfig({
     ...params,
     logDiagnostics: false,
   });
@@ -134,5 +138,5 @@ export function resolveSessionMcpConfigSummary(params: {
       : {}),
     safeServerNamesByServer,
   });
-  return { fingerprint, serverNames };
+  return { fingerprint, serverNames, policyBlockedServerNames };
 }

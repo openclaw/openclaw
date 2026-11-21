@@ -88,7 +88,7 @@ vi.mock("./agent-bundle-mcp-tools.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.resolveSessionMcpConfigSummary>
     ) =>
       warmMcp.runtime
-        ? { fingerprint: "inventory", serverNames: ["inventory"] }
+        ? { fingerprint: "inventory", serverNames: ["inventory"], policyBlockedServerNames: [] }
         : actual.resolveSessionMcpConfigSummary(...args),
   };
 });
