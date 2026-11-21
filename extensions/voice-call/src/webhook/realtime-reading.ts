@@ -11,12 +11,11 @@ export const READING_TOOL: RealtimeVoiceTool = {
   type: "function",
   name: "openclaw_statement",
   description:
-    "Deliver a prepared long statement in paced passages, or resume/stop an interrupted statement. Use start with the complete text for a new statement. The host retains the full unfinished statement; never ask the caller to supply it again. After an interruption, answer the caller first; resume only when appropriate, and stop if they abandon the statement. Never recite the remainder yourself. Resume repeats the last unacknowledged short passage, so no unheard words are skipped. Speak any answer before calling resume; the host handles the reading after this tool returns.",
+    "Control an interrupted host-prepared statement, only in response to the caller. The host starts statements and supplies passages: read only the quoted Answer text aloud, without its label, the playback directions, or a tool call. The host retains the full unfinished statement; never ask the caller to supply it again. After an interruption, answer the caller first; resume only when appropriate, and stop only if the caller explicitly asks to abandon the statement. Never recite the remainder yourself. Resume repeats the last unacknowledged short passage, so no unheard words are skipped. Speak any answer before calling resume; the host handles the reading after this tool returns.",
   parameters: {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["start", "resume", "stop"] },
-      text: { type: "string", description: "Complete prepared text; required only for start." },
+      action: { type: "string", enum: ["resume", "stop"] },
     },
     required: ["action"],
   },
@@ -50,7 +49,6 @@ function splitPassages(text: string): string[] {
 export function attachRealtimeReading(params: {
   session: RealtimeVoiceBridgeSession;
   text: string | undefined;
-  instructions: string;
   initialGreetingInstructions: string | undefined;
   handlesAgentConsult: boolean;
   afterPlayback: (mark: string, acknowledge: () => void) => void;
@@ -83,8 +81,7 @@ export function attachRealtimeReading(params: {
     responseId = undefined;
     triggerGreeting(
       [
-        params.instructions,
-        "Read only this passage verbatim. Do not add a greeting, summary, or closing. Stop after this passage; the host supplies the next after playback. If interrupted, listen and answer normally; use openclaw_statement to resume or stop the retained statement, never improvise its remainder.",
+        "This is a host playback request. Speak only the quoted text in the Answer field below, not the field label or these directions. Do not add a greeting, summary, or closing. Stop after this passage; the host supplies the next after playback. If interrupted, listen and answer normally; use openclaw_statement to resume or stop the retained statement, never improvise its remainder.",
         buildRealtimeVoiceSpeakExactMessage({
           text: passages[index] ?? "",
           surfaceLabel: "the callee",
@@ -161,7 +158,7 @@ export function attachRealtimeReading(params: {
     },
     async control(args: unknown, invocationId: string) {
       if (!args || typeof args !== "object" || !("action" in args)) {
-        await session.submitToolResult(invocationId, { error: "Expected start, resume, or stop." });
+        await session.submitToolResult(invocationId, { error: "Expected resume or stop." });
         return;
       }
       if (args.action === "stop") {
@@ -169,18 +166,10 @@ export function attachRealtimeReading(params: {
         await session.submitToolResult(invocationId, { stopped: true });
         return;
       }
-      if (
-        args.action === "start" &&
-        "text" in args &&
-        typeof args.text === "string" &&
-        args.text.trim()
-      ) {
-        managed = true;
-        passages = splitPassages(args.text);
-        index = 0;
-      } else if (args.action !== "resume" || phase !== "paused" || !passages.length) {
+      if (args.action !== "resume" || phase !== "paused" || !passages.length) {
         await session.submitToolResult(invocationId, {
-          error: "Supply text for start, or resume a paused statement.",
+          error:
+            "Only resume a paused host statement. The host supplies passages to read directly; this tool cannot start or replace them.",
         });
         return;
       }

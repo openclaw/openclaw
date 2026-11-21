@@ -75,7 +75,6 @@ describe("long reading playback overflow replay", () => {
         ? attachRealtimeReading({
             session,
             text: TEXT,
-            instructions: "Read the supplied text.",
             initialGreetingInstructions: opening,
             handlesAgentConsult: false,
             afterPlayback: (mark, acknowledge) => {

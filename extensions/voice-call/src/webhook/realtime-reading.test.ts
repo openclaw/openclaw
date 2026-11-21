@@ -153,6 +153,19 @@ describe("RealtimeCallHandler long initial readings", () => {
     callbacks.onTranscript?.("user", "Wait, what is this about?", true);
     response("answer");
     ack(marks[1]!); // Twilio can return a cleared mark; it must not skip the interrupted passage.
+    // A model cannot replace the host's retained statement by recursively invoking start.
+    control("start", "A recursive replacement. ".repeat(40));
+    await waitFor(() =>
+      expect(submitToolResult).toHaveBeenLastCalledWith(
+        "start",
+        {
+          error:
+            "Only resume a paused host statement. The host supplies passages to read directly; this tool cannot start or replace them.",
+        },
+        undefined,
+      ),
+    );
+    expect(triggerGreeting).toHaveBeenCalledTimes(2);
     control("resume");
     await waitFor(() => expect(marks).toHaveLength(3));
     expect(triggerGreeting).toHaveBeenCalledTimes(2); // Wait for the answer's playback.
@@ -172,21 +185,19 @@ describe("RealtimeCallHandler long initial readings", () => {
     await waitFor(() =>
       expect(submitToolResult).toHaveBeenLastCalledWith(
         "resume",
-        { error: "Supply text for start, or resume a paused statement." },
+        {
+          error:
+            "Only resume a paused host statement. The host supplies passages to read directly; this tool cannot start or replace them.",
+        },
         undefined,
       ),
     );
     expect(triggerGreeting).toHaveBeenCalledTimes(3);
-    // The same owner can deliver a new prepared statement later in the call.
-    control("start", "A new prepared statement. ".repeat(40));
-    await waitFor(() => expect(marks).toHaveLength(5));
-    ack(marks[4]!);
-    await waitForCalls(triggerGreeting, 4);
-    expect(triggerGreeting.mock.calls[3]?.[0]).toContain("A new prepared statement.");
+    // The host can still supply a new prepared statement later in the call.
     const later = "A host supplied statement. ".repeat(40);
     expect(fixture.handler.speak(fixture.call.callId, later, later)).toEqual({ success: true });
-    await waitForCalls(triggerGreeting, 5);
-    expect(triggerGreeting.mock.calls[4]?.[0]).toContain("A host supplied statement.");
+    await waitForCalls(triggerGreeting, 4);
+    expect(triggerGreeting.mock.calls[3]?.[0]).toContain("A host supplied statement.");
     expect(fixture.endCall).not.toHaveBeenCalled();
   });
 

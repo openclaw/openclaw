@@ -880,7 +880,7 @@ export class RealtimeCallHandler {
       instructions: handlesAgentConsult
         ? `${sessionInstructions}\n\nUse native agent delegation for OpenClaw work. To end the current call, say out loud that you are hanging up and delegate; the OpenClaw agent acts on the transcript. Other custom realtime function tools are unavailable in this session.`
         : supportsStatements
-          ? `${sessionInstructions}\n\nFor prepared statements, use ${READING_TOOL.name}. ${READING_TOOL.description}`
+          ? `${sessionInstructions}\n\n${READING_TOOL.description}`
           : sessionInstructions,
       tools: handlesAgentConsult
         ? []
@@ -1223,7 +1223,6 @@ export class RealtimeCallHandler {
       ? attachRealtimeReading({
           session,
           text: initialGreeting,
-          instructions,
           initialGreetingInstructions,
           handlesAgentConsult,
           afterPlayback: (mark, acknowledge) => {
