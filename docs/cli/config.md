@@ -93,7 +93,9 @@ continues to imply immutable config, even if `OPENCLAW_CONFIG_READONLY` is unset
   Repeatable guided-setup section filter when you run `openclaw config` without a subcommand.
 </ParamField>
 
-Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`.
+Guided sections: `workspace`, `model`, `memory`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`.
+
+For semantic memory search setup, see the [Memory section](/cli/configure#memory-section).
 
 ## Examples
 
@@ -101,6 +103,7 @@ Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `
 openclaw config file
 openclaw config file --json
 openclaw config --section model
+openclaw config --section memory
 openclaw config --section gateway --section daemon
 openclaw config schema
 openclaw config schema --json
