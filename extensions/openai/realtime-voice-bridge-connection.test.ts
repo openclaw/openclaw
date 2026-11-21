@@ -110,6 +110,53 @@ describe("OpenAI realtime voice bridge connection", () => {
     }
   });
 
+  it("sends a configured x-api-key header to custom realtime endpoints", async () => {
+    const bridge = createNativeBridge({
+      providerConfig: {
+        apiKey: "test-realtime-key",
+        baseUrl: "wss://voice.example.test/realtime",
+        apiKeyHeader: "x-api-key",
+      },
+    });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
+    emitSessionUpdated(socket);
+    await connecting;
+    try {
+      const options = socket.args[1] as { headers?: Record<string, string> };
+      expect(options.headers).toMatchObject({ "x-api-key": "test-realtime-key" });
+      expect(options.headers).not.toHaveProperty("Authorization");
+      expect(bridge.isConnected()).toBe(true);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it.each(["authorization", "x-custom-key"])(
+    "rejects unsupported realtime apiKeyHeader %s without opening a socket",
+    (apiKeyHeader) => {
+      expect(() =>
+        createNativeBridge({
+          providerConfig: {
+            apiKey: "test-realtime-key",
+            baseUrl: "wss://voice.example.test/realtime",
+            apiKeyHeader,
+          },
+        }),
+      ).toThrow("Invalid OpenAI realtime apiKeyHeader");
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    },
+  );
+
+  it("requires a custom baseUrl for apiKeyHeader", () => {
+    expect(() =>
+      createNativeBridge({
+        providerConfig: { apiKey: "test-realtime-key", apiKeyHeader: "x-api-key" },
+      }),
+    ).toThrow("requires a custom baseUrl");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it.each([
     "file:///private/voice",
     "https://user@voice.example.test/realtime",

@@ -294,7 +294,9 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       headers: resolveOpenAIRealtimeRequestHeaders(
         this.runtime,
         url,
-        { Authorization: `Bearer ${apiKey}` },
+        cfg.apiKeyHeader === "x-api-key"
+          ? { "x-api-key": apiKey }
+          : { Authorization: `Bearer ${apiKey}` },
         "websocket",
       ),
     };
