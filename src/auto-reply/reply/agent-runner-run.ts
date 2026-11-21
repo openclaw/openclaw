@@ -636,6 +636,7 @@ export async function runReplyAgent(
         resolvedVerboseLevel,
         returnWithQueuedFollowupDrain,
         sessionCtx,
+        senderIsOwner: followupRun.run.senderIsOwner,
       });
       return prependCompactionNotices(result, pendingCompactionNotices, replyOperation);
     } finally {
