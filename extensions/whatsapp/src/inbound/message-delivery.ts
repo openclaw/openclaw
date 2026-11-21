@@ -271,14 +271,14 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
 
     recordAcceptedInboundActivity(options.accountId);
     const chatJid = inbound.remoteJid;
-    const sendComposing = async () => {
+    const sendComposing = async (presence: "composing" | "paused" = "composing") => {
       const currentSock = getCurrentSock();
       if (!currentSock) {
         return;
       }
       try {
         await assertCanSendToJid(chatJid, currentSock);
-        await socketOperations.sendPresenceUpdate("composing", chatJid);
+        await socketOperations.sendPresenceUpdate(presence, chatJid);
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }

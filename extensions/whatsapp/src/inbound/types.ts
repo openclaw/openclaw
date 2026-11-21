@@ -92,7 +92,7 @@ export type WebInboundCallbackMessage = {
     selfLid?: string | null;
     selfE164?: string | null;
     fromMe?: boolean;
-    sendComposing: () => Promise<void>;
+    sendComposing: (presence?: "composing" | "paused") => Promise<void>;
     reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<WhatsAppSendResult>;
     sendMedia: (
       payload: AnyMessageContent,
