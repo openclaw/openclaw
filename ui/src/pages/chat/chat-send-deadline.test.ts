@@ -32,7 +32,12 @@ function requestFixture(id: string, startup = false) {
   );
   const host = makeChatHost({ client, currentSessionId: "deadline-session" });
   // A visible pane retains its outbox owner throughout delivery and discard.
-  onTestFinished(chatOutboxOwner(host).subscribe(host));
+  const unsubscribe = chatOutboxOwner(host).subscribe(host);
+  onTestFinished(() => {
+    // A retired fixture must not drain the next test's outbox through its old client.
+    host.connected = false;
+    unsubscribe();
+  });
   return { pending, wire, issued, host };
 }
 
