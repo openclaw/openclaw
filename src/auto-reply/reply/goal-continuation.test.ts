@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { runEmbeddedAttempt } from "../../agents/embedded-agent-runner/run/attempt.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createOpenClawAgentHarness } from "../../agents/harness/builtin-openclaw.js";
@@ -665,7 +665,7 @@ describe("Goal return from committed child custody", () => {
   it("keeps the original route and independently retained operator restriction until queue handoff", async () => {
     const f = retainedGoal();
     let holds = 1;
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
       assertCurrent() {
@@ -788,7 +788,7 @@ describe("Goal return from committed child custody", () => {
   it("releases an obsolete return when a newer requester owns the same child cohort", async () => {
     const first = retainedGoal();
     const release = vi.fn();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
       assertCurrent() {},
@@ -885,7 +885,7 @@ describe("Goal return from committed child custody", () => {
       const f = retainedGoal();
       const revoked = new AbortController();
       let current = true;
-      f.params.base.operatorAuthority = createAdmittedRunOperatorAuthority({
+      f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "goal-owner",
         scopes: ["operator.write"],
         signal: revoked.signal,

@@ -1,5 +1,5 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
@@ -277,7 +277,7 @@ it.each([
   { match: "sender-e164", enqueuedOwner: true, currentOwner: false },
   { match: "sender-e164", enqueuedOwner: true, currentOwner: true },
 ] as const)(
-  "caps $match owner privileges from enqueue owner=$enqueuedOwner under current owner=$currentOwner",
+  "recomputes $match owner privileges from enqueue owner=$enqueuedOwner under current owner=$currentOwner",
   async ({ match, enqueuedOwner, currentOwner }) => {
     const queued = createRun();
     const channel = match === "sender-e164" ? "whatsapp" : "telegram";
@@ -288,7 +288,7 @@ it.each([
     const originalConfig = {
       commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
     };
-    const admittedOwner = enqueuedOwner && currentOwner;
+    const admittedOwner = currentOwner;
     const admittedConfig = {
       commands: { ownerAllowFrom: [currentOwner ? configuredOwner : otherOwner] },
     };
@@ -397,7 +397,7 @@ it.each([false, true])(
     const queued = createRun();
     const controller = new AbortController();
     const assertCurrent = vi.fn(() => controller.signal.throwIfAborted());
-    queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+    queued.operatorAuthority = createTestOperatorAuthority({
       profileId: revoked ? "alice" : "alice-profile",
       scopes: ["operator.admin"],
       assertCurrent,

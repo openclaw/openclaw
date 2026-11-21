@@ -316,6 +316,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
       if (!principalAuthority && !params.providedReplyOperation) {
         await prepareReplyCommandOwnerAuthority({
           run,
+          queued: params.queued,
           config,
           operation,
           hasOperatorAuthority: operatorAuthority !== undefined,

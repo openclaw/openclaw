@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
@@ -111,7 +111,7 @@ it("keeps same-requester steering independent of session personal-context reassi
     run.run.bootstrapUserProfileId = owner.id;
     run.run.senderId = "first-participant";
     run.run.permissionMode = "full";
-    run.operatorAuthority = createAdmittedRunOperatorAuthority({
+    run.operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.read", "operator.write"],
       source: {},
@@ -150,7 +150,7 @@ it("keeps same-requester steering independent of session personal-context reassi
       { toolOverrides: { webSearch: false } },
       { operatorAuthority: undefined },
       {
-        operatorAuthority: createAdmittedRunOperatorAuthority({
+        operatorAuthority: createTestOperatorAuthority({
           ...run.operatorAuthority,
           scopes: ["operator.admin"],
         }),
@@ -427,7 +427,7 @@ it.each([
         }
         for (const changed of [
           {
-            operatorAuthority: createAdmittedRunOperatorAuthority({
+            operatorAuthority: createTestOperatorAuthority({
               ...reconnectedAuthority,
               scopes: ["operator.read"],
             }),
@@ -439,7 +439,7 @@ it.each([
           { gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId } },
           { gatewayUiCommandTarget: undefined },
           ...["openai/gpt-test", "openai/another-model"].map((model) => ({
-            operatorAuthority: createAdmittedRunOperatorAuthority({
+            operatorAuthority: createTestOperatorAuthority({
               ...reconnectedAuthority,
               modelPolicy: prepareOperatorModelPolicy({
                 cfg: config,

@@ -7,11 +7,11 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import {
-  createAdmittedRunOperatorAuthority,
   bindOperatorModelExecution,
   prepareSystemAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import type { PreparedNativeSessionRuntime } from "../embedded-agent-runner/run/model-setup.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -51,7 +51,7 @@ function createAuthority(
   scopes = ["operator.write"],
 ) {
   const state = { modelPolicy, holds: 0, listeners: new Set<() => void>() };
-  const source = createAdmittedRunOperatorAuthority({
+  const source = createTestOperatorAuthority({
     profileId: "model-policy-fixture",
     scopes,
     rolePolicy,

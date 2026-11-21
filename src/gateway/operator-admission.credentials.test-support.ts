@@ -4,15 +4,9 @@ import https from "node:https";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { assert, expect, vi } from "vitest";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { expectOwnerGated } from "../agents/agent-tools.turn-authority.test-support.js";
 import * as attemptTools from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
-import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
-import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import * as queueLifecycle from "../auto-reply/reply/queue/lifecycle.js";
-import {
-  createHostIngressFixture,
-  ingressInput,
-  ingressMessage,
-} from "../channels/message-access/host-ingress.test-support.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
@@ -30,14 +24,8 @@ import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authori
 import * as tailscale from "../infra/tailscale.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import {
-  changeCanonicalUserChannelIdentity,
-  publishCanonicalUserChannelPolicy,
-} from "../state/user-channel-identity-operations.js";
-import {
-  ensureCanonicalUserProfileForEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
+import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
@@ -51,6 +39,7 @@ import {
   PROXY_USER,
   WRITER,
   proxyHeaders,
+  type Row,
 } from "./operator-admission.contracts.test-support.js";
 import * as admission from "./operator-admission.js";
 import { prepareAdmissionOcidPeer } from "./operator-admission.live.test-support.js";
@@ -65,6 +54,14 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
   const enqueued = vi.spyOn(queueLifecycle, "markFollowupRunEnqueued").mockImplementation((run) => {
     const accepted = enqueue(run);
     const c = fixture.current;
+    if (accepted && c?.scenario === "mixed-owner-group" && run.prompt.includes(c.queuedText)) {
+      c.original ??= run;
+      c.queuedOwners.push(run.run.senderIsOwner === true);
+      if (c.queuedOwners.length === 2) {
+        c.enqueued.resolve();
+      }
+      return accepted;
+    }
     if (accepted && c && !c.original && run.prompt.includes(c.queuedText)) {
       c.original = run;
       const source = run.operatorAuthority;
@@ -231,7 +228,18 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         assert(authority, "Recovered tools must receive their admitted operator authority");
         c.observedRunScopes.push([...authority.scopes]);
       }
-      return await prepareTools(params);
+      const result = await prepareTools(params);
+      if (
+        c?.scenario === "mixed-owner-group" &&
+        c.original &&
+        params.attempt.sessionKey === c.sessionKey
+      ) {
+        expect(params.attempt.senderIsOwner).toBe(false);
+        expect(result.toolsRaw.some((tool) => tool.name === "gateway")).toBe(true);
+        await expectOwnerGated(result.toolsRaw, "gateway", "automations", "nodes", "openclaw");
+        c.ownerToolChecks++;
+      }
+      return result;
     });
   const emit = https.Server.prototype.emit;
   const transport = vi.spyOn(https.Server.prototype, "emit").mockImplementation(function (
@@ -286,10 +294,19 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
   );
 }
 
-export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: AdmissionCase) {
-  const credential = c.row.credential;
+export async function prepareAdmissionOperator(
+  fixture: AdmissionFixture,
+  c: AdmissionCase,
+  connection?: {
+    credential: Row["credential"];
+    scopes: typeof WRITER;
+    ingress?: Row["ingress"];
+    origin?: string;
+  },
+) {
+  const credential = connection?.credential ?? c.row.credential;
   const legacyTailscale = ["legacy-tailscale", "legacy-tailscale-narrowed"].includes(c.scenario);
-  const initialScopes = [...WRITER];
+  const initialScopes = [...(connection?.scopes ?? WRITER)];
   if (
     legacyTailscale ||
     [
@@ -344,12 +361,14 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
       signal: c.consent.signal,
       assertCurrent: () => c.consent.signal.throwIfAborted(),
     };
-    assert(factory.registerPrincipalRecovery);
-    await factory.registerPrincipalRecovery(async () =>
-      c.consentCurrent
-        ? { ...principal, recoveryId: c.id, operatorScopeCeiling: c.ingressScopeCeiling }
-        : undefined,
-    );
+    if (c.row.credential === "principal") {
+      assert(factory.registerPrincipalRecovery);
+      await factory.registerPrincipalRecovery(async () =>
+        c.consentCurrent
+          ? { ...principal, recoveryId: c.id, operatorScopeCeiling: c.ingressScopeCeiling }
+          : undefined,
+      );
+    }
     const binding = await factory.bindPrincipal(principal);
     fixture.bindings.push(binding);
     return binding;
@@ -370,9 +389,17 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
   const options: Omit<GatewayClientOptions, "url"> = {
     deviceIdentity: device ? c.identity : null,
     clientName:
-      c.row.ingress === "control-ui" ? GATEWAY_CLIENT_NAMES.CONTROL_UI : GATEWAY_CLIENT_NAMES.TEST,
-    mode: c.row.ingress === "control-ui" ? GATEWAY_CLIENT_MODES.WEBCHAT : GATEWAY_CLIENT_MODES.TEST,
-    origin: c.row.ingress === "control-ui" ? ORIGIN : undefined,
+      (connection?.ingress ?? c.row.ingress) === "control-ui"
+        ? GATEWAY_CLIENT_NAMES.CONTROL_UI
+        : GATEWAY_CLIENT_NAMES.TEST,
+    mode:
+      (connection?.ingress ?? c.row.ingress) === "control-ui"
+        ? GATEWAY_CLIENT_MODES.WEBCHAT
+        : GATEWAY_CLIENT_MODES.TEST,
+    origin:
+      (connection?.ingress ?? c.row.ingress) === "control-ui"
+        ? (connection?.origin ?? ORIGIN)
+        : undefined,
     scopes: legacyTailscale ? [...initialScopes, "operator.pairing"] : initialScopes,
   };
   const auth = fixture.config.gateway!.auth!;
@@ -411,44 +438,6 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
     options.deviceToken = receipt.token;
   }
   return await fixture.connect(options, c.signal);
-}
-
-export async function prepareNativeSend(fixture: AdmissionFixture, c: AdmissionCase) {
-  const profile = await ensureCanonicalUserProfileForEmail(PROXY_USER);
-  c.profileId = profile.id;
-  await setCanonicalUserProfileRole(profile.id, "operator");
-  await changeCanonicalUserChannelIdentity("link", profile.id, {
-    channelId: "discord",
-    accountId: "default",
-    senderId: "123456789012345678",
-  });
-  await publishCanonicalUserChannelPolicy(fixture.config.gateway);
-  assert(fixture.kernel);
-  const host = createHostIngressFixture(
-    "discord",
-    fixture.config,
-    fixture.kernel.gatewayRequestContext,
-  );
-  return async () => {
-    const message = ingressMessage("discord", c.sessionKey, "123456789012345678", {
-      messageId: c.id,
-      message: { body: c.queuedText, rawBody: c.queuedText },
-    });
-    const channelIngress = await host.ingress.resolveStable(
-      ingressInput(message, { identity: { authentication: "verified" } }),
-    );
-    return await dispatchInboundMessageWithBufferedDispatcher({
-      ctx: host.buildContext({ ...message, channelIngress }),
-      cfg: fixture.config,
-      dispatchReplyFromConfig: dispatchLowLevelChannelReplyFromConfig,
-      dispatcherOptions: {
-        deliver: async (payload) => {
-          c.deliveries.push(payload);
-        },
-      },
-      replyOptions: { queueModeOverride: "followup", disableBlockStreaming: true },
-    });
-  };
 }
 
 export async function revokeAdmissionSource(fixture: AdmissionFixture, c: AdmissionCase) {

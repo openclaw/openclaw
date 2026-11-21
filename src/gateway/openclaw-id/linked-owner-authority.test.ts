@@ -4,7 +4,7 @@
 // Stored-role changes and session skill seeding need the host database broker; they are
 // covered in server-methods/linked-owner-authority.test.ts.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSkillLibraryActorFromProfile } from "../../skills/library/store.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 function dispatchClient(principal?: OpenClawIdTunnelPrincipal) {
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "person",
     ...(principal ? { openclawIdPrincipal: principal } : {}),
     scopes: ["operator.admin"],

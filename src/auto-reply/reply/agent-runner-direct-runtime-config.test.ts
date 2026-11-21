@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -541,7 +541,7 @@ describe("runReplyAgent runtime config", () => {
           },
           target: { ...scope, sessionEntry, cwd: tempDir, config: {} },
         });
-        followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
+        followupRun.operatorAuthority = createTestOperatorAuthority({
           profileId: "linked-admin",
           scopes: ["operator.admin"],
           gatewayAccessGrant: null,

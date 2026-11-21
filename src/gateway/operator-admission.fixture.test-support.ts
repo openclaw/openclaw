@@ -3,8 +3,14 @@ import { createServer } from "node:http";
 import { assert, expect } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
+import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import * as queueLifecycle from "../auto-reply/reply/queue/lifecycle.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "../channels/message-access/host-ingress.test-support.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,7 +19,14 @@ import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-reco
 import type { GatewayIngressPrincipalBindingV1 } from "../plugins/gateway-ingress.types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
+import {
+  changeCanonicalUserChannelIdentity,
+  publishCanonicalUserChannelPolicy,
+} from "../state/user-channel-identity-operations.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  setCanonicalUserProfileRole,
+} from "../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./client.js";
@@ -36,7 +49,6 @@ import {
 import {
   observeAdmissionFixture,
   prepareAdmissionOperator,
-  prepareNativeSend,
   replayAdmissionInput,
   revokeAdmissionSource,
 } from "./operator-admission.credentials.test-support.js";
@@ -52,6 +64,62 @@ type History = {
     items: Array<{ runId: string; state: string; endCause?: string; message: unknown }>;
   };
 };
+async function prepareNativeSend(fixture: AdmissionFixture, c: AdmissionCase) {
+  const profile = await ensureCanonicalUserProfileForEmail(PROXY_USER);
+  c.profileId = profile.id;
+  await setCanonicalUserProfileRole(profile.id, "operator");
+  const mixed = c.scenario === "mixed-owner-group";
+  if (mixed) {
+    const next = structuredClone(fixture.config);
+    next.commands = { ...next.commands, ownerAllowFrom: ["discord:323456789012345678"] };
+    await fixture.publish(next, c.signal);
+  } else {
+    await changeCanonicalUserChannelIdentity("link", profile.id, {
+      channelId: "discord",
+      accountId: "default",
+      senderId: "123456789012345678",
+    });
+  }
+  await publishCanonicalUserChannelPolicy(fixture.config.gateway);
+  assert(fixture.kernel);
+  const host = createHostIngressFixture(
+    "discord",
+    fixture.config,
+    fixture.kernel.gatewayRequestContext,
+  );
+  return async () => {
+    // Keep the owner last: the collector's source carries the command-owner capability.
+    for (const senderId of mixed
+      ? ["423456789012345678", "323456789012345678"]
+      : ["123456789012345678"]) {
+      const message = ingressMessage("discord", c.sessionKey, senderId, {
+        messageId: `${c.id}-${senderId}`,
+        ...(mixed ? { conversation: { kind: "group", id: "admission-group" } } : {}),
+        message: { body: c.queuedText, rawBody: c.queuedText },
+      });
+      const channelIngress = await host.ingress.resolveStable(
+        ingressInput(message, {
+          identity: { authentication: "verified" },
+          ...(mixed ? { groupPolicy: "open" } : {}),
+        }),
+      );
+      await dispatchInboundMessageWithBufferedDispatcher({
+        ctx: host.buildContext({ ...message, channelIngress }),
+        cfg: fixture.config,
+        dispatchReplyFromConfig: dispatchLowLevelChannelReplyFromConfig,
+        dispatcherOptions: {
+          deliver: async (payload) => {
+            c.deliveries.push(payload);
+          },
+        },
+        replyOptions: {
+          queueModeOverride: mixed ? "collect" : "followup",
+          disableBlockStreaming: true,
+        },
+      });
+    }
+  };
+}
 
 export async function createFixture(mode: Mode): Promise<AdmissionFixture> {
   const state = await createOpenClawTestState(kernelGatewayTestStateOptions(`admission-${mode}`));
@@ -259,7 +327,12 @@ export async function runCase(
   fixture.current = c;
   try {
     if (row.ingress === "live") {
-      assert(scenario === "before-start" || scenario === "after-start" || scenario === "stop");
+      assert(
+        scenario === "before-start" ||
+          scenario === "after-start" ||
+          scenario === "stop" ||
+          scenario === "secondary-email-removed",
+      );
       await runLiveAdmissionCase(row.credential, scenario, fixture);
       return;
     }
@@ -274,11 +347,7 @@ export async function runCase(
       ).profile.id;
     }
     assert(c.profileId);
-    await replaceSessionEntry(c.target, {
-      sessionId: c.target.sessionId,
-      updatedAt: Date.now(),
-      createdActor: { type: "human", source: "profile", id: c.profileId },
-    });
+    await fixture.setSessionOwner(c.profileId);
     if (scenario === "goal-agent-excluded") {
       assert(operator && row.credential === "trusted-proxy");
       const allowed = structuredClone(fixture.config);
@@ -355,6 +424,9 @@ export async function runCase(
       ).runId;
     }
     await c.wait(c.enqueued.promise);
+    if (scenario === "mixed-owner-group") {
+      expect(c.queuedOwners).toEqual([false, true]);
+    }
     if (scenario === "live-ocid-grant") {
       const next = structuredClone(fixture.config);
       assert(next.gateway?.auth?.identityScopes);
@@ -434,60 +506,38 @@ export async function runCase(
       expect(c.queuedCalls).toBe(0);
     } else {
       await c.wait(c.recoveredReached.promise);
-      assert(c.latestRunId);
       if (scenario === "live-ocid-grant") {
         expect(c.observedRunScopes).not.toEqual([]);
         for (const scopes of c.observedRunScopes) {
           expect(scopes.toSorted()).toEqual([...WRITER, "operator.approvals"].toSorted());
         }
       }
-      const running = c.latestRunId;
-      if (scenario !== "stop") {
-        if (scenario === "after-start") {
-          await revokeAdmissionSource(fixture, c);
+      if (
+        [
+          "narrowed-grant",
+          "widened-grant",
+          "narrowed-role",
+          "narrowed-token",
+          "narrowed-ingress",
+          "legacy-tailscale-narrowed",
+        ].includes(scenario)
+      ) {
+        expect(c.observedRunScopes).not.toEqual([]);
+        for (const scopes of c.observedRunScopes) {
+          expect(scopes.toSorted()).toEqual([...WRITER].toSorted());
         }
-        if (
-          [
-            "narrowed-grant",
-            "widened-grant",
-            "narrowed-role",
-            "narrowed-token",
-            "narrowed-ingress",
-            "legacy-tailscale-narrowed",
-          ].includes(scenario)
-        ) {
-          expect(c.observedRunScopes).not.toEqual([]);
-          for (const scopes of c.observedRunScopes) {
-            expect(scopes.toSorted()).toEqual([...WRITER].toSorted());
-          }
-        } else if (scenario === "legacy-tailscale") {
-          expect(c.observedRunScopes).not.toEqual([]);
-          for (const scopes of c.observedRunScopes) {
-            expect(scopes.toSorted()).toEqual(
-              [...WRITER, "operator.approvals", "operator.pairing"].toSorted(),
-            );
-          }
+      } else if (scenario === "legacy-tailscale") {
+        expect(c.observedRunScopes).not.toEqual([]);
+        for (const scopes of c.observedRunScopes) {
+          expect(scopes.toSorted()).toEqual(
+            [...WRITER, "operator.approvals", "operator.pairing"].toSorted(),
+          );
         }
-        c.releaseRecovered.resolve();
-        expect(await c.wait(c.terminal(running).promise)).toBe("final");
-      } else {
-        const observer = await fixture.admin(signal);
-        expect(await observer.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
-          aborted: true,
-        });
-        expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
-        c.releaseRecovered.resolve();
       }
-      const observer = await fixture.admin(signal);
-      const history = await observer.request<History>("chat.history", {
-        sessionKey: c.sessionKey,
-      });
-      if (scenario !== "stop") {
-        expect(JSON.stringify(history.messages)).toContain(c.answer);
-      } else {
-        expect(JSON.stringify(history.messages)).not.toContain(c.answer);
+      await fixture.finishQueuedRun(() => revokeAdmissionSource(fixture, c));
+      if (scenario === "mixed-owner-group") {
+        expect(c.ownerToolChecks).toBeGreaterThan(0);
       }
-      expect(c.queuedCalls).toBe(1);
     }
     expect(fixture.providerErrors).toEqual([]);
   } finally {

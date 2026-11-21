@@ -11,7 +11,7 @@ import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
@@ -19,7 +19,12 @@ import { withSessionToolTestCaller } from "./sessions-tool.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tool-self-archive-");
 const authority = (profileId: string, scopes = ["operator.write"], signal?: AbortSignal) =>
-  createAdmittedRunOperatorAuthority({ profileId, scopes, signal, assertCurrent: () => {} });
+  createTestOperatorAuthority({
+    profileId,
+    scopes,
+    signal,
+    assertCurrent: () => {},
+  });
 const patchRequest = (key: string, params: Record<string, unknown>) => ({
   method: "sessions.patch",
   params: { key, ...params },

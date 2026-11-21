@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import * as modelCatalogRuntime from "../agents/model-catalog.runtime.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -412,7 +412,7 @@ async function createCatalogFixture(withCapturedAuthority = false) {
   };
   if (withCapturedAuthority) {
     client.internal = {
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
+      operatorRunAuthority: createTestOperatorAuthority({
         profileId: owner.id,
         scopes: client.connect.scopes ?? [],
         signal: revocation.signal,

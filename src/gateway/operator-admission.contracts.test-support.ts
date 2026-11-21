@@ -93,4 +93,6 @@ export type Scenario =
   | "pairing-unavailable"
   | "live-ocid-grant"
   | "goal-agent-excluded"
+  | "mixed-owner-group"
+  | "secondary-email-removed"
   | "owner-unavailable";

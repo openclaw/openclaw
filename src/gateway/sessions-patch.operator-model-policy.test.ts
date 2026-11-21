@@ -1,5 +1,5 @@
 import { assert, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { configFor } from "../agents/model-auth.fixtures.test-support.js";
 import {
   captureOperatorModelPolicySnapshot,
@@ -54,7 +54,7 @@ function fixture(defaultOnly = false) {
   };
   const source = new AbortController();
   let modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } });
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
     assertCurrent: () => source.signal.throwIfAborted(),
@@ -90,7 +90,7 @@ describe("session model patches under operator policy", () => {
   it("requires explicit Access grants independently of model aliases and keeps clearing safe", async () => {
     const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/fixture" } } };
     const revoked = new AbortController();
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "limited-operator",
       scopes: ["operator.write"],
       assertCurrent: () => revoked.signal.throwIfAborted(),
@@ -180,7 +180,7 @@ describe("session model patches under operator policy", () => {
     assert(snapshot);
     for (const modelPolicy of [prepared, restoreOperatorModelPolicySnapshot(snapshot)]) {
       const source = new AbortController();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "limited-operator",
         scopes: ["operator.write"],
         assertCurrent: () => source.signal.throwIfAborted(),

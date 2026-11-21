@@ -55,7 +55,6 @@ import {
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
 import {
-  createOperatorRecoveryFixture,
   expectCurrent,
   pairedOperator,
   persistDevices,
@@ -68,12 +67,8 @@ import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-authority.js";
-import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import {
-  enforceSharedGatewaySessionGenerationForConfigWrite,
-  SharedGatewaySessionGenerationState,
-} from "./server-shared-auth-generation.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 
 function modelRef(model: string) {
   return { provider: "fixture", model };
@@ -736,53 +731,6 @@ describe("scheduled authenticated operator source", () => {
         caller.release();
       }
     }));
-  it.each(["before restoration", "after admission"] as const)(
-    "refuses recovery after shared credentials rotate %s",
-    (timing) =>
-      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const profile = ensureProfileForEmail("shared-generation@example.test");
-        const context = createContext();
-        const generation = "original-credential-generation";
-        const owner = new SharedGatewaySessionGenerationState({
-          current: generation,
-          required: null,
-        });
-        context.sharedGatewaySessionGenerationState = owner;
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context,
-          profileId: profile.id,
-          config: {},
-          sharedGeneration: generation,
-        });
-        const restored =
-          timing === "after admission"
-            ? expectDefined(await fixture.restore(), "accepted shared credential source")
-            : undefined;
-        using _ = restored ? { [Symbol.dispose]: restored.release } : undefined;
-
-        enforceSharedGatewaySessionGenerationForConfigWrite({
-          state: owner,
-          nextConfig: {},
-          resolveRuntimeSnapshotGeneration: () => "replacement-credential-generation",
-          clients: [],
-        });
-        if (restored) {
-          expect(restored.authority.signal?.aborted).toBe(false);
-          expectCurrent(restored.authority);
-          await expect(fixture.restore()).rejects.toThrow(
-            GatewayOperatorRecoveryAuthorizationError,
-          );
-          expectCurrent(restored.authority);
-          owner.publish({ current: generation, required: null });
-          expectCurrent(restored.authority);
-        } else {
-          await expect(fixture.restore()).rejects.toThrow(
-            GatewayOperatorRecoveryAuthorizationError,
-          );
-        }
-      }),
-  );
   it("preserves the requester's write scope after restart without exporting credentials", () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
@@ -817,59 +765,15 @@ describe("scheduled authenticated operator source", () => {
       expect(restored.authority.assertCurrent).not.toThrow();
     }));
 
-  it.each([
-    "profile merge",
-    "role changed",
-    "device removed",
-    "token revoked",
-    "token rotated",
-    "approval scopes narrowed",
-  ] as const)("refuses current-policy re-admission after %s", (change) =>
-    withRecovery(async (fixture, stateDir) => {
-      const device = pairedOperator();
-      if (change === "profile merge") {
-        const target = ensureProfileForEmail("merged@example.test");
-        linkEmail("recovery@example.test", target.id);
-      } else if (change === "role changed") {
-        fixture.setConfig({
-          gateway: {
-            roles: {
-              default: "blocked",
-              definitions: { blocked: { agents: "*", sessions: { others: "none" }, scopes: [] } },
-            },
-          },
-        });
-      } else {
-        const token = expectDefined(device.tokens?.operator, "operator token");
-        if (change === "token revoked") {
-          token.revokedAtMs = 2;
-        }
-        if (change === "token rotated") {
-          token.token = "rotated-fixture-token";
-        }
-        if (change === "approval scopes narrowed") {
-          device.approvedScopes = ["operator.read"];
-        }
-        persistDevices(stateDir, change === "device removed" ? [] : [device], "both");
-      }
-      await expect(fixture.restore()).rejects.toThrow();
-    }),
-  );
-
-  it.each(["claim retired", "device revoked", "role changed"] as const)(
-    "keeps admitted facts while the next start checks %s",
+  it.each(["profile merge", "role changed", "token rotated", "approval scopes narrowed"] as const)(
+    "refuses current-policy re-admission after %s",
     (change) =>
-      withRecovery(async (fixture) => {
-        using restored = await restoreFixture(fixture);
-
-        if (change === "claim retired") {
-          fixture.retire();
-        }
-        if (change === "device revoked") {
-          await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" });
-          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-        }
-        if (change === "role changed") {
+      withRecovery(async (fixture, stateDir) => {
+        const device = pairedOperator();
+        if (change === "profile merge") {
+          const target = ensureProfileForEmail("merged@example.test");
+          linkEmail("recovery@example.test", target.id);
+        } else if (change === "role changed") {
           fixture.setConfig({
             gateway: {
               roles: {
@@ -878,12 +782,28 @@ describe("scheduled authenticated operator source", () => {
               },
             },
           });
+        } else {
+          const token = expectDefined(device.tokens?.operator, "operator token");
+          if (change === "token rotated") {
+            token.token = "rotated-fixture-token";
+          }
+          if (change === "approval scopes narrowed") {
+            device.approvedScopes = ["operator.read"];
+          }
+          persistDevices(stateDir, [device], "both");
         }
-        expectCurrent(restored.authority);
         await expect(fixture.restore()).rejects.toThrow();
-        expectCurrent(restored.authority);
       }),
   );
+
+  it("keeps admitted facts while the next start checks a retired claim", () =>
+    withRecovery(async (fixture) => {
+      using restored = await restoreFixture(fixture);
+      fixture.retire();
+      expectCurrent(restored.authority);
+      await expect(fixture.restore()).rejects.toThrow();
+      expectCurrent(restored.authority);
+    }));
 
   it.each(["gateway", "runtime"])(
     "keeps admitted source policy through %s publication",

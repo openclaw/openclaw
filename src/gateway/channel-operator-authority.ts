@@ -272,7 +272,7 @@ async function prepareChannelOperatorIdentity(
     recoveryReference,
     operatorProfile: {
       profileId: prepared.linked.profileId,
-      canonicalIdentity: { profileId: prepared.linked.profileId, aliasBindingIds: [] },
+      canonicalIdentity: { profileId: prepared.linked.profileId },
       assignedRole: prepared.linked.role,
       openclawIdAccountIds: prepared.linked.openclawIdAccountIds,
       githubLogin: prepared.linked.githubLogin ?? null,

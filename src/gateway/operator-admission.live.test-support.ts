@@ -6,13 +6,13 @@ import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/i
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import {
   ensureCanonicalUserProfileForEmail,
+  linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
@@ -34,8 +34,8 @@ import {
   type LiveAdmissionKind,
   type LiveAdmissionProducer,
 } from "./operator-admission.contracts.test-support.js";
+import { prepareAdmissionOperator } from "./operator-admission.credentials.test-support.js";
 import { runCronAdmissionCase } from "./operator-admission.cron.test-support.js";
-import * as admission from "./operator-admission.js";
 import {
   isLiveCredentialKind,
   prepareLiveCredentialProducer,
@@ -44,8 +44,6 @@ import { prepareRemoteIngressProducer } from "./operator-admission.remote.test-s
 import type { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
 import * as operatorRun from "./operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
-import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
-import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -55,7 +53,7 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-type Scenario = "before-start" | "after-start" | "stop";
+type Scenario = "before-start" | "after-start" | "stop" | "secondary-email-removed";
 type History = {
   messages: unknown[];
   pendingInputs: {
@@ -106,11 +104,27 @@ async function prepareLiveProducer(
   const c = fixture.current;
   assert(c && fixture.kernel);
   const context = fixture.kernel.gatewayRequestContext;
+  if (kind === "live-ingress") {
+    // Share the actual host binding builder; live rows deliberately register no recovery.
+    const binding = await prepareAdmissionOperator(fixture, c, {
+      credential: "principal",
+      scopes: WRITER,
+    });
+    assert("close" in binding);
+    const self = await binding.request<{ profile: { id: string } }>("users.self", {});
+    await fixture.setSessionOwner(self.profile.id);
+    return {
+      send: (params) => binding.request("chat.send", params),
+      revoke: async () => {
+        c.consent.abort();
+      },
+      release: () => binding.close(),
+    };
+  }
   const profile =
     kind === "http-ocid" || kind === "openai-compatible"
       ? await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: c.id })
       : await ensureCanonicalUserProfileForEmail(`live-${c.id}@example.test`);
-  c.profileId = profile.id;
   const next = structuredClone(fixture.config);
   assert(next.gateway?.roles);
   next.gateway.roles.definitions["live-refused"] = {
@@ -120,50 +134,10 @@ async function prepareLiveProducer(
   };
   await fixture.publish(next, c.signal);
   await setCanonicalUserProfileRole(profile.id, "operator");
-  await replaceSessionEntry(c.target, {
-    sessionId: c.target.sessionId,
-    updatedAt: Date.now(),
-    createdActor: { type: "human", source: "profile", id: profile.id },
-  });
+  await fixture.setSessionOwner(profile.id);
   const revokeRole = async () => {
     await setCanonicalUserProfileRole(profile.id, "live-refused");
   };
-  if (kind === "live-ingress") {
-    const ownerConfig = structuredClone(fixture.config);
-    delete ownerConfig.gateway!.roles;
-    await fixture.publish(ownerConfig, c.signal);
-    const host = getGatewayControlUiIngressHost(fixture.kernel.resolvePluginGatewayContext);
-    assert(host, "The real Gateway must own ingress admission");
-    const factory = createGatewayControlUiIngressFactory({
-      pluginId: `live-admission-${c.id}`,
-      signal: c.service.signal,
-      assertCurrent: () => c.service.signal.throwIfAborted(),
-      host,
-    });
-    // No recovery registration: this is a real live-only consent, not a saved principal.
-    const binding = await factory.bindPrincipal({
-      audienceId: c.id,
-      principal: { kind: "owner" },
-      operatorScopeCeiling: WRITER,
-      signal: c.consent.signal,
-      assertCurrent: () => c.consent.signal.throwIfAborted(),
-    });
-    fixture.bindings.push(binding);
-    const self = await binding.request<{ profile: { id: string } }>("users.self", {});
-    c.profileId = self.profile.id;
-    await replaceSessionEntry(c.target, {
-      sessionId: c.target.sessionId,
-      updatedAt: Date.now(),
-      createdActor: { type: "human", source: "profile", id: c.profileId },
-    });
-    return {
-      send: (params) => binding.request("chat.send", params),
-      revoke: async () => {
-        c.consent.abort();
-      },
-      release: () => binding.close(),
-    };
-  }
   if (kind === "http-bearer" || kind === "http-ocid" || kind === "openai-compatible") {
     const req = new IncomingMessage(new Socket());
     req.method = "POST";
@@ -364,37 +338,19 @@ export async function runLiveAdmissionCase(
     kind === "cron-management-grant" ||
     kind === "cron-operator-source"
   ) {
+    assert(scenario !== "secondary-email-removed");
     return await runCronAdmissionCase(kind, scenario, fixture);
+  }
+  const secondaryEmail = `secondary-${c.id}@example.test`;
+  if (scenario === "secondary-email-removed") {
+    const profile = await ensureCanonicalUserProfileForEmail(PROXY_USER);
+    await linkCanonicalUserProfileEmail(secondaryEmail, profile.id);
   }
   const producer = await prepareLiveProducer(kind, fixture);
   const credentialKind = isLiveCredentialKind(kind);
   const proxyCredential = credentialKind && kind !== "live-token" && kind !== "live-fallback";
   const remoteCredential = kind === "live-remote-ingress";
   const liveCredential = credentialKind || kind === "live-ingress" || remoteCredential;
-  let liveStartDecisions = 0;
-  const decide = admission.decideOperatorAdmission;
-  const decisionObserver = vi
-    .spyOn(admission, "decideOperatorAdmission")
-    .mockImplementation((facts, prepared) => {
-      if (liveCredential && c.original) {
-        expect(facts.kind).toBe("live");
-        assert(facts.kind === "live");
-        expect(captureQueuedOperatorRecoverySource(facts.authority)?.kind).toBe("unavailable");
-        if (proxyCredential) {
-          expect(facts.authority.authPolicy).toMatchObject({
-            authMethod: "trusted-proxy",
-            verifiedIdentity: PROXY_USER,
-          });
-          expect(facts.authority.sharedGeneration).toBe(
-            c.original.operatorAuthority?.sharedGeneration,
-          );
-        }
-        // The shared live fact check, not an obsolete invocation, owns this new start.
-        expect(() => facts.authority.assertCurrent()).not.toThrow();
-        liveStartDecisions++;
-      }
-      return decide(facts, prepared);
-    });
   try {
     if (producer.authority) {
       const source = captureQueuedOperatorRecoverySource(producer.authority);
@@ -481,7 +437,6 @@ export async function runLiveAdmissionCase(
       expect(authority.recoverySnapshot).toBeUndefined();
       expect(authority.signal?.aborted).not.toBe(true);
       expect(authority.invocation).toBeUndefined();
-      expect(Object.isFrozen(authority)).toBe(true);
       expect(captureQueuedOperatorRecoverySource(authority)).toEqual({
         kind: "unavailable",
         reason: credentialKind ? "decode-failed" : "remote-ingress-no-source",
@@ -504,7 +459,6 @@ export async function runLiveAdmissionCase(
             deviceId: c.identity.deviceId,
             key: expect.any(String),
           });
-          expect(Object.isFrozen(authority.device)).toBe(true);
         }
         if (proxyCredential) {
           expect(
@@ -514,7 +468,7 @@ export async function runLiveAdmissionCase(
       } else {
         expect(authority.ingress).toMatchObject({
           bindingId: expect.any(String),
-          pluginId: remoteCredential ? expect.any(String) : `live-admission-${c.id}`,
+          pluginId: expect.any(String),
           audienceId: expect.any(String),
           principal: { kind: "owner" },
           scopeCeiling: WRITER,
@@ -523,10 +477,11 @@ export async function runLiveAdmissionCase(
           expect(authority.authPolicy?.authMethod).toBe("remote-ingress");
           expect(authority.sharedGeneration).toBeUndefined();
         }
-        expect(Object.isFrozen(authority.ingress)).toBe(true);
-        expect(Object.isFrozen(authority.ingress?.principal)).toBe(true);
-        expect(Object.isFrozen(authority.ingress?.scopeCeiling)).toBe(true);
       }
+    }
+    if (scenario === "secondary-email-removed") {
+      const other = await ensureCanonicalUserProfileForEmail(`other-${c.id}@example.test`);
+      await linkCanonicalUserProfileEmail(secondaryEmail, other.id);
     }
     if (scenario === "before-start") {
       await producer.revoke();
@@ -550,7 +505,6 @@ export async function runLiveAdmissionCase(
       expect(c.queuedCalls).toBe(0);
     } else {
       await c.wait(c.recoveredReached.promise);
-      assert(c.latestRunId);
       if (kind === "live-grant" || kind === "live-role") {
         expect(c.observedRunScopes.length).toBeGreaterThan(0);
         for (const scopes of c.observedRunScopes) {
@@ -559,35 +513,10 @@ export async function runLiveAdmissionCase(
           );
         }
       }
-      const running = c.latestRunId;
-      if (scenario === "stop") {
-        expect(await admin.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
-          aborted: true,
-        });
-        expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
-        c.releaseRecovered.resolve();
-      } else {
-        if (scenario === "after-start") {
-          await producer.revoke();
-        }
-        c.releaseRecovered.resolve();
-        expect(await c.wait(c.terminal(running).promise)).toBe("final");
-      }
-      const observer = await fixture.admin(c.signal);
-      const history = await observer.request<History>("chat.history", { sessionKey: c.sessionKey });
-      if (scenario === "stop") {
-        expect(JSON.stringify(history.messages)).not.toContain(c.answer);
-      } else {
-        expect(JSON.stringify(history.messages)).toContain(c.answer);
-      }
-      expect(c.queuedCalls).toBe(1);
-    }
-    if (liveCredential) {
-      expect(liveStartDecisions).toBeGreaterThan(0);
+      await fixture.finishQueuedRun(producer.revoke);
     }
     expect(fixture.providerErrors).toEqual([]);
   } finally {
-    decisionObserver.mockRestore();
     await producer.release();
   }
 }

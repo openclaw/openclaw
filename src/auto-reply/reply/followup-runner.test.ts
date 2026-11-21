@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
@@ -534,7 +534,7 @@ describe("createFollowupRunner", () => {
 
   it("withholds revoked operator input visibly instead of retrying a pre-execution refusal", async () => {
     const failure = new Error("original operator role changed");
-    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+    turn.queued.operatorAuthority = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
       assertCurrent: () => {
@@ -569,7 +569,7 @@ describe("createFollowupRunner", () => {
   it("reports revoked operator input as a visible failure, not an abort", async () => {
     const failure = new Error("original operator role changed");
     turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
-    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+    turn.queued.operatorAuthority = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
       assertCurrent: () => {

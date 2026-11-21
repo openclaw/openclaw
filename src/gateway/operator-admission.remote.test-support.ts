@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { assert } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayControlUiIngressV2 } from "../plugins/gateway-ingress.types.js";
 import { WRITER, type LiveAdmissionProducer } from "./operator-admission.contracts.test-support.js";
+import { prepareAdmissionOperator } from "./operator-admission.credentials.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import {
@@ -13,7 +13,6 @@ import {
   type IngressFrame,
   type Peer,
 } from "./remote-control-ui-ingress.integration.test-support.js";
-import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 
 export async function prepareRemoteIngressProducer(
   fixture: AdmissionFixture,
@@ -21,25 +20,14 @@ export async function prepareRemoteIngressProducer(
   const c = fixture.current;
   assert(c && fixture.kernel);
   assert(fixture.config.gateway?.auth?.mode === "token", "Remote rotation uses the token pool");
-  const ownerConfig = structuredClone(fixture.config);
-  delete ownerConfig.gateway!.roles;
-  await fixture.publish(ownerConfig, c.signal);
+  // Same host-issued owner consent as direct ingress, but exercise the real remote WS adapter.
+  const binding = await prepareAdmissionOperator(fixture, c, {
+    credential: "principal",
+    scopes: WRITER,
+  });
+  assert("openControlUi" in binding);
   const host = getGatewayControlUiIngressHost(fixture.kernel.resolvePluginGatewayContext);
-  assert(host, "The running Gateway must own the remote ingress transport");
-  const factory = createGatewayControlUiIngressFactory({
-    pluginId: `remote-admission-${c.id}`,
-    signal: c.service.signal,
-    assertCurrent: () => c.service.signal.throwIfAborted(),
-    host,
-  });
-  // Deliberately no recovery registration: the queued source must remain live-only.
-  const binding = await factory.bindPrincipal({
-    audienceId: c.id,
-    principal: { kind: "owner" },
-    operatorScopeCeiling: WRITER,
-    signal: c.consent.signal,
-    assertCurrent: () => c.consent.signal.throwIfAborted(),
-  });
+  assert(host);
   let ingress: GatewayControlUiIngressV2 | undefined;
   let peer: Peer | undefined;
   const release = () =>
@@ -89,12 +77,7 @@ export async function prepareRemoteIngressProducer(
       return response.payload as T;
     };
     const self = await rpc<{ profile: { id: string } }>("users.self", {});
-    c.profileId = self.profile.id;
-    await replaceSessionEntry(c.target, {
-      sessionId: c.target.sessionId,
-      updatedAt: Date.now(),
-      createdActor: { type: "human", source: "profile", id: c.profileId },
-    });
+    await fixture.setSessionOwner(self.profile.id);
     return {
       send: (params) => rpc<{ runId: string }>("chat.send", params),
       revoke: async () => {

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../../agents/admitted-run-context.test-support.js";
 import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
   beginSessionControllerSourceInjection,
@@ -16,7 +16,7 @@ import type { FollowupRun } from "./types.js";
 const queue = queueFixture("steer");
 const source = (prompt: string, messageId = prompt) => queue.source(prompt, messageId);
 function authority(isCurrent: () => boolean, message: string) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "fixture",
     scopes: ["operator.write"],
     source: {},

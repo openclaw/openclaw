@@ -41,6 +41,7 @@ import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
 } from "../state/user-profile-list.js";
+import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import type {
   PreparedUserProfileIdentity,
   UserChannelIdentity,
@@ -132,7 +133,10 @@ function admissionError(error: unknown, facts: Facts): never {
   ) {
     throw new GatewayOperatorRecoveryAuthorizationError(undefined, { cause: error });
   }
-  if (error instanceof GatewayOperatorAccessDeniedError) {
+  if (
+    error instanceof GatewayOperatorAccessDeniedError ||
+    error instanceof UserProfileNotFoundError
+  ) {
     throw new GatewayOperatorRecoveryAuthorizationError(error.message, { cause: error });
   }
   throw error;
@@ -270,9 +274,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       }
     }
     const binding = live?.canonicalIdentity;
-    const profile = identity?.readCurrentFacts(
-      binding?.aliasBindingIds ?? gateway?.aliasBindingIds,
-    ).profile;
+    const profile = identity?.readCurrentFacts(gateway?.aliasBindingIds).profile;
     const profileId = profile?.profileId ?? snapshot.profileId;
     const refuse = () => {
       throw new GatewayOperatorRecoveryAuthorizationError();
@@ -490,11 +492,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           : operatorScopeSatisfied("operator.admin", scopes);
     const authority = createAdmittedRunOperatorAuthority({
       profileId,
-      canonicalIdentity: identity && {
-        profileId,
-        aliasBindingIds:
-          binding?.aliasBindingIds ?? gateway?.aliasBindingIds ?? identity.emailBindingIds,
-      },
+      canonicalIdentity: identity ? { profileId } : null,
       openclawIdPrincipal: principal,
       device:
         device && paired && publicKey ? { deviceId: device.deviceId, key: publicKey } : undefined,

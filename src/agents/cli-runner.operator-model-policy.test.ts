@@ -3,10 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
@@ -106,7 +104,7 @@ describe("CLI operator model execution", () => {
     let policy = prepareOperatorModelPolicy({ cfg, policy: {}, manifestPlugins: [] });
     const listeners = new Set<() => void>();
     const sourceAbort = new AbortController();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
       signal: sourceAbort.signal,

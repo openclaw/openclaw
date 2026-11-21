@@ -100,6 +100,7 @@ it.each([false, true])("binds frozen Gateway routing (audit=%s)", async (enabled
 it("allocates once and reuses the first runtime admission across fallback", async () => {
   const sink = installSink();
   const operatorAuthority = run.createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: "operator",
     scopes: ["operator.write"],
     assertCurrent() {},
@@ -241,6 +242,7 @@ it.each([false, true])(
     );
     let failure: Error | undefined;
     const authority = run.createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "queued-person",
       scopes: ["operator.write"],
       ...(withSignal ? { signal: source.signal } : {}),
@@ -291,6 +293,7 @@ it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refus
   const source = prepareRun({
     runId: "native-source-lease",
     operatorAuthority: run.createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "native-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {

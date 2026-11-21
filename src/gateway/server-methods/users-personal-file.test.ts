@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   withGatewayToolCallerIdentity,
   withGatewayPersonalToolUser,
@@ -194,7 +194,7 @@ describe("personal USER.md self-service", () => {
     const sessionKey = "agent:main:dashboard:someone-elses-project";
     let active = true;
     const principal = client.internal?.openclawIdPrincipal;
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "alice-alias",
       scopes,
       openclawIdPrincipal: principal,
@@ -508,7 +508,7 @@ describe("personal USER.md self-service", () => {
     async (kind) => {
       const { identity } = toolTurn();
       if (kind === "different source") {
-        client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
+        client.internal!.operatorRunAuthority = createTestOperatorAuthority({
           profileId: identity.operatorAuthority.profileId,
           scopes: ["operator.read"],
           assertCurrent: () => {},

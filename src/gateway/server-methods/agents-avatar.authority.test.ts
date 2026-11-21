@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   isolatedAssistant,
   isolatedCompletionMocks as completion,
@@ -59,7 +59,7 @@ beforeEach(() => {
 
 function operator() {
   let allowed = true;
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "avatar-operator",
     scopes: ["operator.admin"],
     assertCurrent: () => {},

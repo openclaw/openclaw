@@ -10,10 +10,8 @@ import {
   captureExecRequestOwners,
   withExecRequestTurn,
 } from "../../infra/exec-request-context.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -69,7 +67,7 @@ it("returns no retained source authority without an operator", async () => {
 
 it("records completed turn bookkeeping while revocation blocks the next tool effect", async () => {
   let current = true;
-  const source = createAdmittedRunOperatorAuthority({
+  const source = createTestOperatorAuthority({
     profileId: "bookkeeping-source",
     scopes: ["operator.write"],
     assertCurrent: () => {
@@ -117,7 +115,7 @@ it.each([
     const revoked = new Error("operator access revoked");
     let current = true;
     let duringAssertion: (() => void) | undefined;
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "guest-source",
       scopes: ["operator.write"],
       ...(synchronous ? { signal: controller.signal } : {}),
@@ -182,7 +180,7 @@ it.each([
 it("releases model authority when its retained work closes during acquisition", async () => {
   let sourceHolds = 0;
   const acquisition: { close?: () => void } = {};
-  const source = createAdmittedRunOperatorAuthority({
+  const source = createTestOperatorAuthority({
     profileId: "guest-source",
     scopes: ["operator.write"],
     assertCurrent: () => {},
@@ -210,7 +208,7 @@ it("guards retained unknown-model work through policy introduction and releases 
   const current: { policy?: AdmittedRunOperatorAuthority["modelPolicy"] } = {};
   let holds = 0;
   const listeners = new Set<() => void>();
-  const source = createAdmittedRunOperatorAuthority({
+  const source = createTestOperatorAuthority({
     profileId: "retained-policy",
     scopes: ["operator.write"],
     assertCurrent: () => {},

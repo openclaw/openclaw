@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as modelsConfigState from "../../agents/models-config-state.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type * as CompletionRuntime from "../../agents/simple-completion-runtime.js";
@@ -60,6 +58,7 @@ const cfg: OpenClawConfig = {
 };
 const selection = { provider: "test-provider", modelId: "allowed", agentDir: "/tmp/model-policy" };
 const operatorSource = {
+  canonicalIdentity: null,
   profileId: "model-reader",
   scopes: ["operator.write"],
   assertCurrent() {},
@@ -121,7 +120,7 @@ function waitForWork(started: Promise<unknown>, pending: Promise<unknown>) {
 }
 
 function operator(assertCurrent: () => void = () => {}, retain?: () => () => void) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     ...operatorSource,
     assertCurrent,
     retain,
@@ -547,7 +546,7 @@ describe("operator model policy on plugin completions", () => {
           ? preparePolicy(["test-provider/model-a", "test-provider/model-b"])
           : undefined;
       const observers = new Set<() => void>();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         ...operatorSource,
         get modelPolicy() {
           return policy;
@@ -737,7 +736,7 @@ describe("operator model policy on plugin completions", () => {
       const controller = new AbortController();
       const revocation = new Error("source revoked");
       const started = createDeferredCore();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         ...operatorSource,
         signal: controller.signal,
       });

@@ -14,8 +14,8 @@ export type AdmittedRunOperatorRoleFacts = Readonly<{
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
-  /** Present only when the source was bound by the canonical profile owner. */
-  canonicalIdentity?: Readonly<{ profileId: string; aliasBindingIds: readonly string[] }>;
+  /** Canonical owner binding, or an explicitly host-issued opaque grant. */
+  canonicalIdentity: Readonly<{ profileId: string }> | null;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Plain source evidence for another same-process start; never a lifetime check. */

@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import {
@@ -56,7 +54,7 @@ describe("ACP operator model ceiling", () => {
       manifestPlugins: [],
     });
     const policyListeners = new Set<() => void>();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
       assertCurrent: () => {},

@@ -119,6 +119,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["trusted-proxy:internal", "narrowed-role"],
       ["trusted-proxy:internal", "empty-after-role"],
       ["trusted-proxy:control-ui", "goal-agent-excluded"],
+      ["live-proxy", "secondary-email-removed"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
       await runCase(fixture, rows[kind], scenario, signal);
     });
@@ -138,6 +139,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["tailscale:internal", "legacy-tailscale-narrowed"],
       ["tailscale-device:internal", "narrowed-grant"],
       ["tailscale-device:internal", "widened-grant"],
+      ["channel", "mixed-owner-group"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
       await runCase(fixture, rows[kind], scenario, signal);
     });

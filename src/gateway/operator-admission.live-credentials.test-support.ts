@@ -1,29 +1,20 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { assert, expect } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
-import {
-  removePairedDevice,
-  requestDevicePairing,
-  withPairedDeviceRecords,
-} from "../infra/device-pairing.js";
+import { removePairedDevice, withPairedDeviceRecords } from "../infra/device-pairing.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
-import type { GatewayClientOptions } from "./client.js";
 import {
   ADMIN,
   ORIGIN,
   PROXY_USER,
   WRITER,
-  proxyHeaders,
   type LiveAdmissionProducer,
   type LiveCredentialKind,
 } from "./operator-admission.contracts.test-support.js";
+import { prepareAdmissionOperator } from "./operator-admission.credentials.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 
 export function isLiveCredentialKind(kind: string): kind is LiveCredentialKind {
@@ -92,59 +83,36 @@ export async function prepareLiveCredentialProducer(
   }
   await fixture.publish(next, c.signal);
 
-  if (kind !== "live-grant" && kind !== "live-role") {
-    const pending = await requestDevicePairing({
-      deviceId: c.identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem),
-      role: "operator",
-      scopes: WRITER,
-    });
-    expect(
-      await approveDevicePairing(pending.request.requestId, { callerScopes: ADMIN }),
-    ).toMatchObject({ status: "approved" });
-    if (kind === "live-device-revoked" || kind === "live-device-key-changed") {
-      // This incidental token is not used for proxy authentication. Its real
-      // owner makes the revokedAt guard independently exercisable.
-      assert(
-        await ensureDeviceToken({
-          deviceId: c.identity.deviceId,
-          role: "operator",
-          scopes: WRITER,
-        }),
-      );
-    }
-  }
-
-  const browser = !proxyCredential || kind === "live-grant" || kind === "live-role";
-  const options: Omit<GatewayClientOptions, "url"> = {
-    deviceIdentity: kind === "live-grant" || kind === "live-role" ? null : c.identity,
-    clientName: browser ? GATEWAY_CLIENT_NAMES.CONTROL_UI : GATEWAY_CLIENT_NAMES.TEST,
-    mode: browser ? GATEWAY_CLIENT_MODES.WEBCHAT : GATEWAY_CLIENT_MODES.TEST,
-    origin: browser ? (proxyCredential ? ORIGIN : LIVE_ONLY_ORIGIN) : undefined,
-    scopes:
-      kind === "live-grant" || kind === "live-role" ? [...WRITER, "operator.approvals"] : WRITER,
-  };
-  if (proxyCredential) {
-    options.edgeAuthHeaders = proxyHeaders(PROXY_USER);
-  } else if (kind === "live-token") {
-    assert(typeof fixture.config.gateway?.auth?.token === "string");
-    options.token = fixture.config.gateway.auth.token;
-  } else {
-    assert(fixture.config.gateway?.auth?.password === undefined);
-    options.password = resolveGatewayAuthForConfig({ config: fixture.config }).password;
-    assert(options.password, "Fallback must authenticate with the environment-owned password");
-  }
-  const operator = await fixture.connect(options, c.signal);
-  const self = await operator.request<{ profile: { id: string } }>("users.self", {});
-  c.profileId = self.profile.id;
-  if (proxyCredential) {
-    await setCanonicalUserProfileRole(c.profileId, "operator");
-  }
-  await replaceSessionEntry(c.target, {
-    sessionId: c.target.sessionId,
-    updatedAt: Date.now(),
-    createdActor: { type: "human", source: "profile", id: c.profileId },
+  const deviceLess = kind === "live-grant" || kind === "live-role";
+  const browser = !proxyCredential || deviceLess;
+  const operator = await prepareAdmissionOperator(fixture, c, {
+    credential: proxyCredential
+      ? deviceLess
+        ? "trusted-proxy"
+        : "proxy-device"
+      : kind === "live-token"
+        ? "token"
+        : "fallback",
+    scopes: deviceLess ? [...WRITER, "operator.approvals"] : WRITER,
+    ingress: browser ? "control-ui" : "internal",
+    origin: proxyCredential ? ORIGIN : LIVE_ONLY_ORIGIN,
   });
+  if (kind === "live-device-revoked" || kind === "live-device-key-changed") {
+    // This incidental token is not used for proxy authentication. Its real
+    // owner makes the revokedAt guard independently exercisable.
+    assert(
+      await ensureDeviceToken({
+        deviceId: c.identity.deviceId,
+        role: "operator",
+        scopes: WRITER,
+      }),
+    );
+  }
+  const self = await operator.request<{ profile: { id: string } }>("users.self", {});
+  if (proxyCredential) {
+    await setCanonicalUserProfileRole(self.profile.id, "operator");
+  }
+  await fixture.setSessionOwner(self.profile.id);
   const fallbackEnv =
     kind === "live-fallback" ? captureEnv(["OPENCLAW_GATEWAY_PASSWORD"]) : undefined;
   return {
@@ -227,13 +195,9 @@ export async function prepareLiveCredentialProducer(
       }
     },
     release: async () => {
-      try {
-        await operator.stopAndWait();
-      } finally {
-        fallbackEnv?.restore();
-        if (kind === "live-role") {
-          await setCanonicalUserProfileRole(self.profile.id, "operator");
-        }
+      fallbackEnv?.restore();
+      if (kind === "live-role") {
+        await setCanonicalUserProfileRole(self.profile.id, "operator");
       }
     },
   };

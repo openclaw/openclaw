@@ -31,6 +31,7 @@ const { sessionChanges } = await import("../sessions/session-row-changes.js");
 const PARENT_KEY = "agent:main:dashboard:parent";
 // Restored admission carries the owner decision, not a permission-currentness closure.
 const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
+  canonicalIdentity: null,
   profileId: "requester",
   scopes: ["operator.admin"],
   requesterOwner: true,

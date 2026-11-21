@@ -214,6 +214,7 @@ export async function prepareReplySystemPrincipalAuthority(params: {
 /** Admit a queued command-owner source once, retaining only the execution's lifetime afterward. */
 export async function prepareReplyCommandOwnerAuthority(params: {
   run: FollowupRun["run"];
+  queued: FollowupRun;
   config: OpenClawConfig;
   operation: ReplyOperation;
   hasOperatorAuthority: boolean;
@@ -271,7 +272,9 @@ export async function prepareReplyCommandOwnerAuthority(params: {
         },
     );
     params.assertCurrent();
-    const senderIsOwner = owner.isCurrent(config);
+    const claim = params.queued.controllerClaim;
+    const collected = claim && (claim.summary || claim.sources.length > 1);
+    const senderIsOwner = (!collected || run.senderIsOwner === true) && owner.isCurrent(config);
     run.senderIsOwner = senderIsOwner;
     run.traceAuthorized = senderIsOwner;
     bindCommandOwnerAuthority(run, {

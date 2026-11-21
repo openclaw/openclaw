@@ -256,6 +256,7 @@ it("keeps gateway and channel role facts immutable while honoring explicit lifec
     using _ = { [Symbol.dispose]: captured.release };
     const channel = captureChannelOperatorRunAuthority({
       profileId: profile.id,
+      canonicalIdentity: null,
       assignedRole: null,
       scopes: ["operator.read"],
       gatewayAccessGrant: null,
@@ -293,6 +294,7 @@ it("admits channel role and model policy once while retaining explicit cancellat
     let permitted = true;
     const input = {
       profileId: profile.id,
+      canonicalIdentity: null,
       assignedRole: "reader",
       scopes: ["operator.read"],
       gatewayAccessGrant: null,

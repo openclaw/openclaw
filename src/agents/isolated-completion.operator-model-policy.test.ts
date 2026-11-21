@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent as runRealCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
@@ -22,8 +23,7 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext: cli.pr
 vi.mock("./cli-runner/execute.runtime.js", () => ({ executePreparedCliRun: cli.execute }));
 
 const { attachProviderAuthAuthority } = await import("../plugins/provider-auth-authority.js");
-const { createAdmittedRunOperatorAuthority, readRunOperatorAuthority } =
-  await import("./admitted-run-context.js");
+const { readRunOperatorAuthority } = await import("./admitted-run-context.js");
 const { prepareOperatorModelPolicy } = await import("./operator-model-policy.js");
 const { withGatewayToolCallerIdentity } = await import("./tools/gateway-caller-context.js");
 const { AsyncWorkScope } = await import("../shared/async-work-scope.js");
@@ -42,7 +42,7 @@ function operator(initial?: Partial<ModelPolicy>) {
     });
   let policy = prepare(initial ?? {});
   const listeners = new Set<() => void>();
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "isolated-reader",
     scopes: ["operator.write"],
     assertCurrent: () => {},

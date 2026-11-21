@@ -6,23 +6,19 @@ import * as cronCreator from "../agents/cron-creator-authority-context.js";
 import * as attemptTools from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as cronRun from "../cron/run-admission.js";
 import type { CronStandingGrantAuthority } from "../cron/standing-grant-authority.types.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { publicKeyRawBase64UrlFromPem } from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { removePairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { removePairedDevice } from "../infra/device-pairing.js";
 import { createAgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
-import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "./cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityRunScope } from "./cron-creator-authority-grant.types.js";
-import { ORIGIN, WRITER } from "./operator-admission.contracts.test-support.js";
+import { WRITER } from "./operator-admission.contracts.test-support.js";
+import { prepareAdmissionOperator } from "./operator-admission.credentials.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import {
@@ -40,34 +36,13 @@ export async function runCronAdmissionCase(
   const c = fixture.current;
   assert(c && fixture.kernel);
   const context = fixture.kernel.gatewayRequestContext;
-  const operatorScopes = kind === "cron-operator-source" ? WRITER : ["operator.admin"];
-  const pending = await requestDevicePairing({
-    deviceId: c.identity.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem),
-    role: "operator",
-    scopes: operatorScopes,
+  const operator = await prepareAdmissionOperator(fixture, c, {
+    credential: "token",
+    scopes: kind === "cron-operator-source" ? WRITER : ["operator.admin"],
+    ingress: "control-ui",
   });
-  await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-  const auth = resolveGatewayAuthForConfig({ config: fixture.config });
-  const operator = await fixture.connect(
-    {
-      token: auth.token,
-      password: auth.password,
-      deviceIdentity: c.identity,
-      clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      origin: ORIGIN,
-      scopes: operatorScopes,
-    },
-    c.signal,
-  );
   const self = await operator.request<{ profile: { id: string } }>("users.self", {});
-  c.profileId = self.profile.id;
-  await replaceSessionEntry(c.target, {
-    sessionId: c.target.sessionId,
-    updatedAt: Date.now(),
-    createdActor: { type: "human", source: "profile", id: c.profileId },
-  });
+  await fixture.setSessionOwner(self.profile.id);
   const admin = await fixture.admin(c.signal);
   const creatorSessionKey = `${c.sessionKey}:creator`;
   let creatorScope: CronCreatorAuthorityRunScope | undefined;

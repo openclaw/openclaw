@@ -13,6 +13,7 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../plugins/gateway-ingress.types.js";
@@ -65,6 +66,8 @@ export class AdmissionCase {
   readonly deliveries: unknown[] = [];
   readonly terminals = new Map<string, Deferred<string>>();
   readonly observedRunScopes: string[][] = [];
+  readonly queuedOwners: boolean[] = [];
+  ownerToolChecks = 0;
   ingressScopeCeiling = [...WRITER];
   readonly identity: DeviceIdentity;
   original?: FollowupRun;
@@ -212,6 +215,45 @@ export class AdmissionFixture {
       "applied",
     );
     this.config = next;
+  }
+  async setSessionOwner(profileId: string) {
+    const c = this.current;
+    assert(c);
+    c.profileId = profileId;
+    await replaceSessionEntry(c.target, {
+      sessionId: c.target.sessionId,
+      updatedAt: Date.now(),
+      createdActor: { type: "human", source: "profile", id: profileId },
+    });
+  }
+  async finishQueuedRun(revoke: () => Promise<void>) {
+    const c = this.current;
+    assert(c?.latestRunId);
+    const running = c.latestRunId;
+    const admin = await this.admin(c.signal);
+    if (c.scenario === "stop") {
+      expect(await admin.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
+        aborted: true,
+      });
+      expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
+      c.releaseRecovered.resolve();
+    } else {
+      if (c.scenario === "after-start") {
+        await revoke();
+      }
+      c.releaseRecovered.resolve();
+      expect(await c.wait(c.terminal(running).promise)).toBe("final");
+    }
+    const observer = await this.admin(c.signal);
+    const history = await observer.request<{ messages: unknown[] }>("chat.history", {
+      sessionKey: c.sessionKey,
+    });
+    if (c.scenario === "stop") {
+      expect(JSON.stringify(history.messages)).not.toContain(c.answer);
+    } else {
+      expect(JSON.stringify(history.messages)).toContain(c.answer);
+    }
+    expect(c.queuedCalls).toBe(1);
   }
 
   async closeClients() {

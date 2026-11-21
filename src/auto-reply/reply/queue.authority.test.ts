@@ -2,12 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   readPreparedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
@@ -53,7 +53,7 @@ const webchatRun = (prompt: string, execution: Partial<FollowupRun["run"]> = {})
 function createOperatorAuthority() {
   let references = 1;
   const controller = new AbortController();
-  const authority: AdmittedRunOperatorAuthority = createAdmittedRunOperatorAuthority({
+  const authority: AdmittedRunOperatorAuthority = createTestOperatorAuthority({
     profileId: "guest",
     scopes: ["operator.read", "operator.write"],
     source: {},
@@ -194,14 +194,14 @@ describe("followup queue authority", () => {
     const authority = source.authority;
     const variants = [
       authority,
-      createAdmittedRunOperatorAuthority({
+      createTestOperatorAuthority({
         ...authority,
         scopes: ["operator.write", "operator.read", "operator.write"],
       }),
-      createAdmittedRunOperatorAuthority({ ...authority, signal: new AbortController().signal }),
-      createAdmittedRunOperatorAuthority({ ...authority, profileId: "maintainer" }),
-      createAdmittedRunOperatorAuthority({ ...authority, scopes: ["operator.admin"] }),
-      createAdmittedRunOperatorAuthority({ ...authority, source: {} }),
+      createTestOperatorAuthority({ ...authority, signal: new AbortController().signal }),
+      createTestOperatorAuthority({ ...authority, profileId: "maintainer" }),
+      createTestOperatorAuthority({ ...authority, scopes: ["operator.admin"] }),
+      createTestOperatorAuthority({ ...authority, source: {} }),
       undefined,
       authority,
     ];

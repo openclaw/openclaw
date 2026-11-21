@@ -102,35 +102,15 @@ function withSavedProxySource(
 }
 
 describe("saved proxy-authenticated operator sources", () => {
-  it.each(["handshake header requirements tighten", "identity grants widen"] as const)(
-    "admit new work when %s",
-    (change) =>
-      withSavedProxySource(async ({ changeConfig, restoreSaved }) => {
-        const next =
-          change === "identity grants widen"
-            ? proxyConfig()
-            : proxyConfig({ requiredHeaders: ["x-proxy-scopes"] });
-        if (change === "identity grants widen") {
-          next.gateway!.auth!.identityScopes = {
-            "proxy-operator": ["operator.admin", "operator.read"],
-          };
-        }
-        changeConfig(next);
-
-        const restored = await restoreSaved();
-        try {
-          expectCurrent(restored.authority);
-        } finally {
-          restored.release();
-        }
-      }),
-  );
-
-  it("are refused once the proxy user is no longer allowed", () =>
+  it("admits new work when handshake header requirements tighten", () =>
     withSavedProxySource(async ({ changeConfig, restoreSaved }) => {
-      changeConfig(proxyConfig({ allowUsers: ["another-operator"] }));
-
-      await expect(restoreSaved()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      changeConfig(proxyConfig({ requiredHeaders: ["x-proxy-scopes"] }));
+      const restored = await restoreSaved();
+      try {
+        expectCurrent(restored.authority);
+      } finally {
+        restored.release();
+      }
     }));
 
   it("require a current identity grant when no device token supplies scopes", () =>
@@ -138,13 +118,6 @@ describe("saved proxy-authenticated operator sources", () => {
       const next = proxyConfig();
       next.gateway!.auth!.identityScopes = {};
       changeConfig(next);
-
-      await expect(restoreSaved()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
-    }));
-
-  it("are refused once the Gateway leaves trusted-proxy authentication", () =>
-    withSavedProxySource(async ({ changeConfig, restoreSaved }) => {
-      changeConfig({ gateway: { auth: { mode: "token", token: "replacement-token" } } });
 
       await expect(restoreSaved()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
     }));

@@ -74,6 +74,7 @@ it.each<{
       );
       using _ = { [Symbol.dispose]: captured.release };
       const channel = captureChannelOperatorRunAuthority({
+        canonicalIdentity: null,
         profileId: profile.id,
         assignedRole: null,
         scopes,

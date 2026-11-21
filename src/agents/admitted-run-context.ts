@@ -91,7 +91,6 @@ export function createAdmittedRunOperatorAuthority(
       source.canonicalIdentity &&
       Object.freeze({
         profileId: source.canonicalIdentity.profileId,
-        aliasBindingIds: Object.freeze([...source.canonicalIdentity.aliasBindingIds]),
       }),
     openclawIdPrincipal: source.openclawIdPrincipal
       ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
