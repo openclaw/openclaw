@@ -352,8 +352,39 @@ describe("push.web.test handler", () => {
 });
 
 describe("push.web.send handler", () => {
+  const agentsConfig = { agents: { list: [{ id: "main", default: true }, { id: "research" }] } };
+  const rolesConfig = {
+    ...agentsConfig,
+    gateway: {
+      roles: {
+        default: "member",
+        definitions: { member: { scopes: ["operator.write"], sessions: { others: "none" } } },
+      },
+    },
+  };
+  const counts = { sent: 1, failed: 0, skipped: 0, pruned: 0 };
+  const sendAs = (
+    params: Record<string, unknown>,
+    options: { config?: object; userProfileId?: string; scopes?: string[] } = {},
+  ) =>
+    request(
+      "push.web.send",
+      params,
+      { getRuntimeConfig: () => (options.config ?? agentsConfig) as never },
+      {
+        connect: { role: "operator", scopes: options.scopes ?? ["operator.write"] },
+        ...(options.userProfileId
+          ? { authenticatedUserProfile: { profileId: options.userProfileId } }
+          : {}),
+      } as never,
+    );
+
   beforeEach(() => {
     mocks.sendProfileWebPush.mockReset();
+    mocks.sendProfileWebPush.mockResolvedValue(counts);
+    mocks.resolveProfileId.mockImplementation((profileId) =>
+      profileId === "alice-old" ? "alice" : profileId,
+    );
   });
 
   it("requires operator.write", () => {
@@ -369,6 +400,7 @@ describe("push.web.send handler", () => {
     ["missing profile", { category: "agent-finished" }],
     ["missing category", { profileId: "bob" }],
     ["approval category", { profileId: "bob", category: "approval-requested" }],
+    ["human-mention category", { profileId: "bob", category: "human-mentioned" }],
     ["unknown category", { profileId: "bob", category: "marketing" }],
     ["absolute URL path", { profileId: "bob", category: "agent-finished", path: "https://x.test" }],
     ["protocol-relative path", { profileId: "bob", category: "agent-finished", path: "//x.test" }],
@@ -387,14 +419,22 @@ describe("push.web.send handler", () => {
     ["invalid TTL", { profileId: "bob", category: "agent-finished", ttlSeconds: 86_401 }],
     ["unknown field", { profileId: "bob", category: "agent-finished", icon: "x" }],
   ])("rejects %s before delivery", async (_name, params) => {
-    const respond = await request("push.web.send", params, {});
+    const respond = await sendAs(params);
     expectErrorResponse(respond, "invalid push.web.send params");
     expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
   });
 
-  it("returns delivery counts, including zero counts without subscriptions", async () => {
-    const counts = { sent: 0, failed: 0, skipped: 0, pruned: 0 };
-    mocks.sendProfileWebPush.mockResolvedValue(counts);
+  it("rejects an agent that is not configured", async () => {
+    const respond = await sendAs({
+      profileId: "bob",
+      category: "agent-finished",
+      agentId: "ghost",
+    });
+    expectErrorResponse(respond, 'agent "ghost" not found');
+    expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
+  });
+
+  it("returns delivery counts with the normalized agent id", async () => {
     const params = {
       profileId: "bob",
       category: "agent-question",
@@ -402,23 +442,54 @@ describe("push.web.send handler", () => {
       path: "chat/research/thread%2E1",
       title: "Ticket assigned",
       body: "Review ticket 42",
-      agentId: "research",
+      agentId: "Research",
       urgency: "high",
       ttlSeconds: 60,
     };
-    const getRuntimeConfig = () => ({});
-    const respond = await request("push.web.send", params, { getRuntimeConfig });
+    const respond = await sendAs(params);
     expectSuccess(respond, counts);
-    expect(mocks.sendProfileWebPush).toHaveBeenCalledWith(expect.any(Function), params);
+    expect(mocks.sendProfileWebPush).toHaveBeenCalledWith(expect.any(Function), {
+      ...params,
+      agentId: "research",
+    });
+  });
+
+  it.each<
+    [string, { config?: object; userProfileId?: string; scopes?: string[] }, string, boolean]
+  >([
+    ["no roles, another profile", {}, "bob", true],
+    ["roles, own profile", { config: rolesConfig, userProfileId: "alice" }, "alice", true],
+    ["roles, own merged alias", { config: rolesConfig, userProfileId: "alice" }, "alice-old", true],
+    ["roles, another profile", { config: rolesConfig, userProfileId: "alice" }, "bob", false],
+    ["roles, unknown profile", { config: rolesConfig, userProfileId: "alice" }, "ghost", false],
+    ["roles, no caller profile", { config: rolesConfig }, "alice", false],
+    [
+      "roles, admin to another profile",
+      { config: rolesConfig, userProfileId: "alice", scopes: ["operator.admin"] },
+      "bob",
+      true,
+    ],
+  ])("authorizes the recipient: %s", async (_name, options, profileId, allowed) => {
+    if (profileId === "ghost") {
+      mocks.resolveProfileId.mockImplementation((id) => (id === "ghost" ? undefined : id));
+    }
+    const respond = await sendAs({ profileId, category: "agent-finished" }, options);
+    if (allowed) {
+      expectSuccess(respond, counts);
+      expect(mocks.sendProfileWebPush).toHaveBeenCalledOnce();
+    } else {
+      expect(firstRespondCall(respond)).toMatchObject([
+        false,
+        undefined,
+        { code: ErrorCodes.FORBIDDEN, message: expect.stringContaining("operator.admin") },
+      ]);
+      expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
+    }
   });
 
   it("reports transport preparation failures as unavailable", async () => {
     mocks.sendProfileWebPush.mockRejectedValue(new Error("invalid VAPID key"));
-    const respond = await request(
-      "push.web.send",
-      { profileId: "bob", category: "agent-finished" },
-      {},
-    );
+    const respond = await sendAs({ profileId: "bob", category: "agent-finished" });
     expect(firstRespondCall(respond)).toMatchObject([
       false,
       undefined,

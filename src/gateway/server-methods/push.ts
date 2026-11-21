@@ -46,6 +46,8 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { sendProfileWebPush } from "../event-web-push.js";
 import { prepareDeviceTokenBindingLookup } from "../openclaw-id/device-token-binding.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -112,6 +114,32 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
       };
     },
   };
+}
+
+/**
+ * With named operator roles, a caller may notify only its own (canonical) profile unless
+ * it holds `operator.admin`. Without roles, `operator.write` keeps the installation-wide
+ * model that `push.web.test` already uses.
+ */
+async function mayTargetWebPushProfile(
+  options: Pick<GatewayRequestHandlerOptions, "client">,
+  cfg: Parameters<typeof isNamedOperatorRoleEnforcementEnabled>[0],
+  profileId: string,
+): Promise<boolean> {
+  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || hasGatewayAdminScope(options.client)) {
+    return true;
+  }
+  const ownReference = options.client?.authenticatedUserProfile?.profileId;
+  if (!ownReference) {
+    return false;
+  }
+  const profiles = await prepareUserProfileCatalog();
+  try {
+    const own = profiles.readCurrentIdentity(ownReference)?.profileId;
+    return Boolean(own && own === profiles.readCurrentIdentity(profileId)?.profileId);
+  } finally {
+    profiles.release();
+  }
 }
 
 type AuthorizedWebPushSubscription = {
@@ -443,9 +471,22 @@ export const pushHandlers = {
   "push.web.send": defineValidatedGatewayHandler(
     "push.web.send",
     validateWebPushSendParams,
-    async ({ params, respond, context }) => {
+    async ({ params, respond, context, client }) => {
+      const cfg = context.getRuntimeConfig();
+      const agentId =
+        params.agentId === undefined
+          ? undefined
+          : resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
+      if (agentId === null) {
+        return;
+      }
       await respondUnavailableOnThrow(respond, async () => {
-        respond(true, await sendProfileWebPush(context.getRuntimeConfig, params), undefined);
+        if (!(await mayTargetWebPushProfile({ client }, cfg, params.profileId))) {
+          respondWebPushForbidden(respond, "sending to another profile requires operator.admin");
+          return;
+        }
+        const request = agentId === undefined ? params : { ...params, agentId };
+        respond(true, await sendProfileWebPush(context.getRuntimeConfig, request), undefined);
       });
     },
   ),
