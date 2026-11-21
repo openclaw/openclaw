@@ -23,6 +23,8 @@ const describeLive = LIVE ? describe : describe.skip;
 const TEST_TIMEOUT_MS = 120_000;
 const PROVIDER_TIMEOUT_MS = 30_000;
 const DEFAULT_MODEL_ID = "claude-haiku-4-5";
+// Turn-prefix summaries receive half the reserve; leave room for the required sections.
+const LIVE_OUTPUT_TOKENS = 2_048;
 
 const sessions: AgentSession[] = [];
 const tempRoots: string[] = [];
@@ -67,7 +69,7 @@ async function resolveLiveModel(
     throw new Error(`No Anthropic Haiku model found for ${requestedModelId}`);
   }
   return {
-    model: { ...model, maxTokens: Math.min(model.maxTokens, 128) },
+    model: { ...model, maxTokens: Math.min(model.maxTokens, LIVE_OUTPUT_TOKENS) },
     modelRegistry,
   };
 }
@@ -89,7 +91,7 @@ async function createLiveSession(
   const sessionManager = SessionManager.inMemory();
   const settingsManager = SettingsManager.inMemory({
     defaultThinkingLevel: "off",
-    compaction: { enabled: true, reserveTokens: 128, keepRecentTokens: 0 },
+    compaction: { enabled: true, reserveTokens: LIVE_OUTPUT_TOKENS, keepRecentTokens: 0 },
     retry: {
       enabled: false,
       provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
