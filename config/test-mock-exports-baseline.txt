@@ -4651,7 +4651,6 @@
 ["src/gateway/server-methods/tools-github.test.ts","../github-tool-identity-config.js","9e411b69ad0431b40d588fa0015bd45ab4d772c3f7d9b0ea1688f843f67cf919",1]
 ["src/gateway/server-methods/tts.test.ts","../../config/config.js","e4b286164359773ef7798666792420cda5278740400ce1cdb842f5eb1d8d9cbd",1]
 ["src/gateway/server-methods/tts.test.ts","../../tts/provider-registry.js","e6f5d05533c82a023985d8529a22afdc6b3f86e9926e144b4cf0a44ff786c5be",1]
-["src/gateway/server-methods/update-admission-freshness.test.ts","../../infra/update-managed-service-handoff.js","a5640007caa1a42eca21712c3c3a68794de7792a6f17d42faa9e98cf5417ffa8",1]
 ["src/gateway/server-methods/update-effective-channel.test.ts","../../infra/update-startup.js","02f09fed1f355f17c818478ff0c70ece6e80384ac87cb45089c97508aed49677",1]
 ["src/gateway/server-methods/update-effective-channel.test.ts","../../infra/update-status-schedule.js","479d33c0f6a004bbaba558867aa8eb804786481beb4913070feb44659520b038",1]
 ["src/gateway/server-methods/update-effective-channel.test.ts","../../infra/update-status-state.js","ba45d94acc7f72e0aae4b6d11dc3886f1512da4a1f88b1099f117a7ac7e3945b",1]

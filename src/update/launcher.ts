@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ROOT_VALUE_FLAGS } from "../../cli-root-options.mjs";
 import { GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
+import { hasErrnoCode } from "../infra/errno.js";
 import { LINK_SOURCE } from "./link-source.js";
 import { ROLLBACK_SOURCE } from "./rollback-source.js";
 
@@ -230,8 +231,8 @@ if (!gatewayRun) {
 export async function writeLauncher(prefix: string): Promise<string> {
   await fs.mkdir(prefix, { recursive: true });
   const launcher = path.resolve(prefix, "openclaw-launcher.mjs");
-  const current = await fs.readFile(launcher, "utf8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== "ENOENT") {
+  const current = await fs.readFile(launcher, "utf8").catch((error: unknown) => {
+    if (!hasErrnoCode(error, "ENOENT")) {
       throw error;
     }
     return null;

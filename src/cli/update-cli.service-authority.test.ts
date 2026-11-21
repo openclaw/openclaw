@@ -24,7 +24,6 @@ import {
   probePortUsage,
   serviceFixtureState,
   serviceLoaded,
-  serviceReadCommand,
   serviceReadRuntime,
   serviceRestart,
   serviceStart,

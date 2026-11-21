@@ -14,7 +14,8 @@ import { settleRunFromTrial } from "./gateway-trial.js";
 import { readTrial, resolvePrefix, writeTrial, type Trial } from "./store.js";
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
-vi.mock("../gateway/update-run-notice.runtime.js", () => ({
+vi.mock("../gateway/update-run-notice.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/update-run-notice.runtime.js")>()),
   createUpdateRunNotifier:
     async () => async (run: { runId: string; status: string }, kind: string) => {
       notices.push({ runId: run.runId, kind, status: run.status });

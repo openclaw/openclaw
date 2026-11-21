@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { validateUpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 
 const sent = vi.hoisted(() => [] as unknown[]);
-vi.mock("../infra/update-install-status.js", () => ({
+vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: async () => ({
     root: "/tmp/openclaw-checkout",
     status: {
@@ -15,8 +16,8 @@ vi.mock("../infra/update-install-status.js", () => ({
   }),
 }));
 const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
-vi.mock("../gateway/call.js", () => ({
-  isGatewayTransportError: () => false,
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: async (request: { method: string; params: unknown }) => {
     if (request.method === "update.run") {
       sent.push(request.params);
