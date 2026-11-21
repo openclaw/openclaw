@@ -82,3 +82,16 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["google-generative-ai", "Q2lNAQ==", "silent"],
+  ["openai-responses", "msg_final", "empty"],
+] as const)("selects %s answer text around a signed empty part", (api, signature, disposition) => {
+  const content = [
+    { type: "text", text: "NO_REPLY" },
+    { type: "text", text: "", textSignature: signature },
+  ];
+  expect(
+    prepareReply({ rawText: rawText({ role: "assistant", api, content }) }).terminalReply,
+  ).toMatchObject({ disposition });
+});
