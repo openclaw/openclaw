@@ -42,7 +42,10 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
-import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
+import {
+  getSubagentRunIdentity,
+  isSameSubagentRunOwner,
+} from "../subagents/registry/subagent-run-generation.js";
 import {
   jsonResult,
   readNonNegativeIntegerParam,
@@ -52,6 +55,11 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./common.js";
+import {
+  matchesSubagentCorrelationSelection,
+  projectSubagentCorrelation,
+  type SubagentCorrelationSelection,
+} from "./subagent-correlation.js";
 
 const SUBAGENT_ACTIONS = ["list", "wait", "cancel"] as const;
 const SubagentsToolSchema = Type.Object({
@@ -59,6 +67,21 @@ const SubagentsToolSchema = Type.Object({
   recentMinutes: optionalPositiveIntegerSchema(),
   runId: Type.Optional(Type.String()),
   runIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 })),
+  metadataOnly: Type.Optional(
+    Type.Boolean({
+      description: "Wait only: content-free correlation and recorded completion evidence.",
+    }),
+  ),
+  expectedGenerations: Type.Optional(
+    Type.Array(
+      Type.Object({
+        runId: Type.String({ minLength: 1 }),
+        generation: Type.Integer({ minimum: 1 }),
+        rearmGeneration: Type.Optional(Type.Integer({ minimum: 0 })),
+      }),
+      { minItems: 1, maxItems: 32 },
+    ),
+  ),
   timeoutSeconds: Type.Optional(
     Type.Integer({
       minimum: 0,
@@ -111,6 +134,7 @@ function waitForSelectedRuns(params: {
   timeoutMs: number;
   signal?: AbortSignal;
   pendingInput?: AgentToolPendingInput;
+  metadataOnly?: boolean;
 }) {
   // A publisher's temporary scope must not own preparation started by its wake.
   const inWaitContext = AsyncLocalStorage.snapshot();
@@ -138,7 +162,9 @@ function waitForSelectedRuns(params: {
           : completed.length
             ? "completed"
             : undefined,
-      runs: tasks.map((task) => mapRun(task, now, snapshot)),
+      runs: tasks.map((task) =>
+        params.metadataOnly ? projectSubagentCorrelation(task) : mapRun(task, now, snapshot),
+      ),
       completed: completed.map((task) => task.runId),
       attention: attention.map((task) => task.runId),
       ...(unavailable.length ? { unavailable } : {}),
@@ -303,6 +329,13 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action") ?? "list";
+      const metadataOnly = params.metadataOnly === true;
+      if ((metadataOnly || params.expectedGenerations !== undefined) && action !== "wait") {
+        throw new ToolInputError("Correlation options are only supported by wait");
+      }
+      if (params.expectedGenerations !== undefined && !metadataOnly) {
+        throw new ToolInputError("expectedGenerations requires metadataOnly");
+      }
       const requestedRunId =
         action === "cancel" ? readToolStringParam(params, "runId", { required: true }) : undefined;
       const source = action === "cancel" ? captureOpenClawStateWorkerContext() : undefined;
@@ -363,19 +396,78 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           if (runIds.length > 32) {
             throw new ToolInputError("At most 32 runIds may be waited for");
           }
+          const expected = new Map<string, SubagentCorrelationSelection>();
+          if (params.expectedGenerations !== undefined) {
+            if (
+              !Array.isArray(params.expectedGenerations) ||
+              params.expectedGenerations.length > 32
+            ) {
+              throw new ToolInputError("expectedGenerations must select at most 32 runs");
+            }
+            for (const value of params.expectedGenerations) {
+              if (!value || typeof value !== "object") {
+                throw new ToolInputError("Invalid expected generation");
+              }
+              const item = value as Record<string, unknown>;
+              const runId = readToolStringParam(item, "runId", { required: true });
+              const generation = readPositiveIntegerParam(item, "generation");
+              const rearmGeneration = readNonNegativeIntegerParam(item, "rearmGeneration");
+              if (!runId || !generation || !runIds.includes(runId) || expected.has(runId)) {
+                throw new ToolInputError(
+                  "Expected generations must uniquely select requested runIds",
+                );
+              }
+              expected.set(runId, { runId, generation, rearmGeneration });
+            }
+          }
+          // This wait observes its initial owner/cohort, never an in-place replacement.
+          const selected = new Map<string, string>();
           return jsonResult({
             status: "ok",
             action,
             ...(await waitForSelectedRuns({
               runIds,
               readRuns: (snapshot) => {
-                const visible = new Set(readCurrentScope().readable.map((entry) => entry.runId));
-                return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
+                const visible = new Map(
+                  readCurrentScope().readable.map((entry) => [entry.runId, entry]),
+                );
+                return [...snapshot.values()].filter((entry) => {
+                  const authorized = visible.get(entry.runId);
+                  if (!authorized) {
+                    return false;
+                  }
+                  if (!metadataOnly) {
+                    return true;
+                  }
+                  if (
+                    getSubagentRunIdentity(entry) !== getSubagentRunIdentity(authorized) ||
+                    entry.controllerSessionKey !== authorized.controllerSessionKey ||
+                    !matchesSubagentCorrelationSelection(entry, expected.get(entry.runId))
+                  ) {
+                    return false;
+                  }
+                  const identity = JSON.stringify([
+                    getSubagentRunIdentity(entry),
+                    entry.generation,
+                    entry.controllerSessionKey,
+                    entry.requesterTurnRunId,
+                    entry.requesterSettleWake?.requesterRunId,
+                    entry.requesterSettleWake?.rearmGeneration,
+                    entry.requesterSettleWake?.batchRunIds,
+                  ]);
+                  const initial = selected.get(entry.runId);
+                  if (initial === undefined) {
+                    selected.set(entry.runId, identity);
+                    return true;
+                  }
+                  return initial === identity;
+                });
               },
               timeoutMs:
                 Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
               signal,
               pendingInput: getAgentToolExecutionContext()?.pendingInput,
+              metadataOnly,
             })),
           });
         }
