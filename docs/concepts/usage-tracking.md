@@ -89,6 +89,17 @@ lineage includes retained earlier instances of a session; the date range still
 controls which activity appears in the chart. Totals and daily charts come from
 the same session report, including sessions beyond the visible list limit.
 
+Session rows in `sessions.usage`, including the Usage page and exports, preserve
+stored `modelProvider` and `model` values. Missing fields come from the measured
+`usage.modelUsage` entry with the most total tokens; ties keep the first entry.
+When one field is stored, only entries matching that provider or model are
+eligible, so the filled field stays consistent with the stored one. If both
+fields are missing, they come from the same entry. Missing fields stay empty
+when there is no consistent measured entry.
+For mixed-provider sessions, these fields are representative metadata, not an
+attribution of every token or cost. Provider breakdowns, totals, and filters
+continue to use the measured usage independently.
+
 A recorded zero-dollar cost is valid cost data. The average-cost hint warns
 about missing prices only when the selected report contains unpriced usage;
 filtering to sessions with known zero cost clears that warning.

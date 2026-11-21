@@ -21,6 +21,7 @@ import type {
   UsageOverviewOptions,
   UsageOverviewSlice,
 } from "../../shared/usage-types.js";
+import { withUsageRowAttribution } from "./usage-row-attribution.js";
 
 /** Packed overview usage of one loaded snapshot; rows reference it by agent and key. */
 export type UsageOverviewUsage = {
@@ -247,7 +248,9 @@ export function withVisibleUsageOverviewRows(
     }
   }
   const restore = (row: SessionUsageEntry): SessionUsageEntry =>
-    Object.assign({}, byKey.get(usageOverviewRowKey(row)) ?? row, { usage: row.usage });
+    withUsageRowAttribution(
+      Object.assign({}, byKey.get(usageOverviewRowKey(row)) ?? row, { usage: row.usage }),
+    );
   slice.sessions = slice.sessions.map(restore);
   slice.overview.selectedRows = slice.overview.selectedRows.map(restore);
   return slice;
