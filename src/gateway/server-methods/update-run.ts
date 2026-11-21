@@ -165,7 +165,7 @@ async function readInstallStatus() {
 }
 
 /** The update handlers with `update.run` routed by install kind. */
-export const updateHandlers: GatewayRequestHandlers = {
+export const routedUpdateHandlers: GatewayRequestHandlers = {
   ...legacyUpdateHandlers,
   "update.run": updateRunHandler,
 };
