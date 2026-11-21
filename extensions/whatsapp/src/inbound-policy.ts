@@ -92,7 +92,8 @@ export async function resolveWhatsAppIngressAccess(params: {
     accountId: params.policy.account.accountId,
     identity: {
       key: "whatsapp-sender-phone",
-      kind: "phone",
+      // The socket-resolved phone is the authenticated primary, not a phone alias.
+      authentication: "verified",
       normalize: normalizeWhatsAppIngressPhone,
       sensitivity: "pii",
       entryIdPrefix: "whatsapp-entry",
