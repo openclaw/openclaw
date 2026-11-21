@@ -1,3 +1,5 @@
+import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subagent-lifecycle-events.js";
+import { completeSubagentRunWithRecovery } from "../agents/subagents/registry/subagent-registry.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessageWithCode, readErrorName } from "../infra/errors.js";
@@ -9,7 +11,7 @@ import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 /** A recorded wait with no surviving source ends through its exact lifecycle owner. */
-export async function recordRestartYieldFailure(params: {
+export async function recordUnreachableYieldFailure(params: {
   sessionKey: string;
   agentId: string;
   entry: InternalSessionEntry;
@@ -21,7 +23,7 @@ export async function recordRestartYieldFailure(params: {
     return;
   }
   const error =
-    "The Gateway restarted, but the child completion this run was waiting for can no longer arrive. Inspect the saved child work, then send a new message to continue.";
+    "This turn yielded, but no registered continuation can resume it. The run has ended. Inspect its saved work, then send a message to continue.";
   await persistGatewaySessionLifecycleEvent({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -39,6 +41,20 @@ export async function recordRestartYieldFailure(params: {
       data: { phase: "error", error, errorNotice: error },
     },
   });
+  signal.throwIfAborted();
+  await completeSubagentRunWithRecovery(
+    {
+      runId,
+      endedAt: entry.endedAt,
+      outcome: { status: "error", error },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      settleYielded: true,
+      // The exact session lifecycle above already owns the visible failure.
+      suppressSessionEffects: true,
+      triggerCleanup: true,
+    },
+    "yield-source-unavailable",
+  );
 }
 
 /** Admission can fail before a reply owner exists to record its terminal outcome. */
@@ -52,6 +68,9 @@ export async function recordRestartResumeFailure(params: {
   log: { warn: (message: string) => void };
 }): Promise<void> {
   const { target, entry, runId, admissionStage, error, signal, log } = params;
+  const operatorSource = entry.resumeAfterRestart?.operatorSource;
+  const operatorRecoveryUnavailableReason =
+    operatorSource?.kind === "unavailable" ? operatorSource.reason : undefined;
   const diagnostic = truncateSessionRunError(
     sanitizeSessionRunError(
       `${readErrorName(error) ?? "Error"}: ${formatErrorMessageWithCode(error)}`,
@@ -61,7 +80,7 @@ export async function recordRestartResumeFailure(params: {
   log.warn(
     truncateSessionRunError(
       sanitizeSessionRunError(
-        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage })}`,
+        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage, operatorRecoveryUnavailableReason })}`,
       ),
       2048,
     ),

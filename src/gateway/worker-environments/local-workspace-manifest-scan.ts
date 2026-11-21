@@ -37,15 +37,17 @@ import {
 } from "./local-workspace-manifest-tree.js";
 import { prepareLocalWorkspaceUpdate } from "./local-workspace-publication.js";
 import type {
-  LocalWorkspaceBaselineDocument,
   LocalWorkspaceCheckpointReceipt,
-  LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestAction,
+  LocalWorkspaceManifestCheckpoint,
+  LocalWorkspaceManifestInput,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
+  LocalWorkspacePreparedEntry,
 } from "./local-workspace-store.types.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
+import { workspaceCtimeIsReusable, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
@@ -53,39 +55,6 @@ import {
   buildCacheInputPaths,
   isIgnoredWorkspaceBuildOutput,
 } from "./workspace-path-exclusions.js";
-
-export type LocalWorkspaceManifestAction =
-  | {
-      kind: "scan" | "probe";
-      target: "canonical" | "projection";
-      canonicalRoot: string;
-      capture?: LocalWorkspaceCapture;
-    }
-  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
-  | { kind: "materialize" }
-  | { kind: "convert" }
-  | { kind: "repair"; canonicalRoot: string }
-  | {
-      kind: "prepare";
-      manifest: LocalWorkspaceManifestMutation;
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    }
-  | (LocalWorkspaceBaselineDocument & {
-      kind: "replace";
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    });
-
-export type LocalWorkspaceManifestCheckpoint = Omit<
-  LocalWorkspaceManifestScan,
-  "observation" | "preparations"
->;
-
-export type LocalWorkspaceManifestInput = {
-  id: string;
-  revision: number;
-  action: LocalWorkspaceManifestAction;
-  knownTreeRoot?: string;
-};
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
 export function readLocalWorkspaceManifestRows(
@@ -568,6 +537,11 @@ export async function executeLocalWorkspaceManifestRead(
     capture,
   );
   const changedDuringProbe = new Error("Workspace changed during reuse probe");
+  const prepared = new Map(
+    action.kind === "scan" ? action.preparedEntries?.map((file) => [file.entry.path, file]) : [],
+  );
+  const preparedEntries: LocalWorkspacePreparedEntry[] = [];
+  const existingObjects: Array<[string, string]> = [];
   try {
     await scanActualWorkspaceManifest({
       root,
@@ -576,10 +550,21 @@ export async function executeLocalWorkspaceManifestRead(
       gitIgnore,
       preserveDirectories,
       buildCacheInputs: new Set(retained),
-      reuseFile: fingerprintScan.reuseFile,
+      reuseFile: (entryPath, stats) => {
+        const file = prepared.get(entryPath);
+        if (
+          file?.entry.type === "file" &&
+          file.identity === workspaceStatIdentity("gateway", stats) &&
+          workspaceCtimeIsReusable(stats.ctimeNs, scanStartedAtMs)
+        ) {
+          fingerprintScan.observe(entryPath, file.identity);
+          return file.entry;
+        }
+        return fingerprintScan.reuseFile(entryPath, stats);
+      },
       unchangedProbe: action.kind === "probe",
       btrfsSnapshot: capture !== undefined,
-      onEntry(node, identity) {
+      onEntry(node, identity, reusable) {
         seen.add(node.path);
         const previous = records.get(node.path);
         if (!sameEntry(previous?.node, node)) {
@@ -587,6 +572,16 @@ export async function executeLocalWorkspaceManifestRead(
             throw changedDuringProbe;
           }
           changes.push({ path: node.path, node });
+          if (node.type !== "directory") {
+            if (action.kind === "scan" && action.prehash) {
+              // A recent observation cannot become trustworthy just by aging during preparation.
+              preparedEntries.push({ entry: node, identity: reusable ? identity : undefined });
+            }
+            const preparedEntry = prepared.get(node.path);
+            if (preparedEntry?.objectId && sameEntry(preparedEntry.entry, node)) {
+              existingObjects.push([node.path, preparedEntry.objectId]);
+            }
+          }
         }
         if (identity !== undefined) {
           fingerprintScan.observe(node.path, identity);
@@ -720,6 +715,8 @@ export async function executeLocalWorkspaceManifestRead(
   return {
     version: 1,
     kind: "scan",
+    ...(action.kind === "scan" && action.prehash ? { preparedEntries } : {}),
+    ...(existingObjects.length ? { existingObjects } : {}),
     previousRoot: row.baseline_ref,
     resultingRoot,
     treeRoot,

@@ -86,7 +86,7 @@ it("classifies regional API hosts as public OpenAI endpoints", () => {
 it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
   expect(manifest.mediaUnderstandingProviderMetadata?.openai).toMatchObject({
     capabilities: ["image", "audio"],
-    defaultModels: { image: "gpt-6-astra", audio: "gpt-4o-transcribe" },
+    defaultModels: { image: "gpt-6-astra", audio: "gpt-transcribe" },
     autoPriority: { image: 20, audio: 20 },
   });
 });
@@ -107,7 +107,7 @@ it("labels and orders OpenAI authentication choices", () => {
   const group = {
     groupId: "openai",
     groupLabel: "OpenAI",
-    groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
+    groupHint: "Codex login, Sign in with ChatGPT, or API key",
   };
   for (const [id, choiceLabel, choiceHint] of [
     ["openai", "Codex login (browser)", "Sign in to Codex locally with your ChatGPT account"],
@@ -119,8 +119,8 @@ it("labels and orders OpenAI authentication choices", () => {
     ["openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly"],
     [
       "openai-token-sharing",
-      "Sign in with ChatGPT (Beta)",
-      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+      "Sign in with ChatGPT",
+      "Use your ChatGPT plan for eligible Responses API requests",
     ],
   ] as const) {
     expect(choice(id)).toMatchObject({ choiceLabel, choiceHint, ...group });

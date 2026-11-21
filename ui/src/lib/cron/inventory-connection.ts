@@ -104,6 +104,28 @@ function invalidateCronInventory(client: GatewayBrowserClient): void {
   }
 }
 
+/** Only the authenticated cron publisher supplies runtime state; it cannot change membership. */
+export function readCronRuntimeEvent(payload: unknown): Omit<Runtime, "revision"> | undefined {
+  if (
+    !isRecord(payload) ||
+    !["started", "finished", "scheduled"].includes(String(payload.action)) ||
+    !isRecord(payload.job) ||
+    !isRecord(payload.job.state) ||
+    typeof payload.job.id !== "string" ||
+    payload.jobId !== payload.job.id ||
+    typeof payload.job.updatedAtMs !== "number"
+  ) {
+    return undefined;
+  }
+  // SAFETY: The authenticated cron publisher owns these bounded runtime fields.
+  const event = payload as Omit<Runtime, "revision">;
+  return {
+    ...event,
+    error: typeof event.error === "string" ? event.error : undefined,
+    durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined,
+  };
+}
+
 /** Called once by the Gateway event owner, before events reach view subscribers. */
 export function receiveCronInventoryEvent(client: GatewayBrowserClient, event: GatewayEventFrame) {
   const owner = inventories.get(client);
@@ -113,21 +135,11 @@ export function receiveCronInventoryEvent(client: GatewayBrowserClient, event: G
   if (isCronInventoryInvalidation(event, { hello: owner.hello })) {
     invalidateCronInventory(client);
   } else if (owner.supported && event.event === "cron") {
-    const payload = event.payload;
-    if (
-      !isRecord(payload) ||
-      !["started", "finished", "scheduled"].includes(String(payload.action)) ||
-      !isRecord(payload.job) ||
-      !isRecord(payload.job.state) ||
-      payload.jobId !== payload.job.id
-    ) {
+    const parsed = readCronRuntimeEvent(event.payload);
+    if (!parsed) {
       return;
     }
-    const runtime = {
-      // SAFETY: The authenticated cron publisher owns this bounded runtime projection.
-      ...(payload as Omit<Runtime, "revision">),
-      revision: ++owner.runtimeRevision,
-    };
+    const runtime = { ...parsed, revision: ++owner.runtimeRevision };
     owner.runtime.delete(runtime.jobId);
     owner.runtime.set(runtime.jobId, runtime);
     // Keep only recent run facts for responses crossing an event; definitions retire them.

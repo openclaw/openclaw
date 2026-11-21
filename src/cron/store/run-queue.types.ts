@@ -52,6 +52,8 @@ export type CronRunQueueOperations = {
       nowMs: number;
       defaultAgentId?: string;
       maxConcurrentRuns: number;
+      /** At least 1 GiB was free when the host read memory: see `cronMemoryAllowsExtraRun`. */
+      memoryAllowsExtraRun?: boolean;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];

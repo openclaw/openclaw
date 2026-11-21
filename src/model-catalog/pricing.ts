@@ -9,7 +9,7 @@ import {
 } from "../agents/model-ref-shared.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
+import { createInstalledPluginEnabledPredicate } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
@@ -86,11 +86,10 @@ function activeManifestRegistry(
   if (config.plugins?.enabled === false) {
     return { plugins: [], diagnostics: [] };
   }
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
   return {
     diagnostics: snapshot.manifestRegistry.diagnostics,
-    plugins: snapshot.manifestRegistry.plugins.filter((plugin) =>
-      isInstalledPluginEnabled(snapshot.index, plugin.id, config),
-    ),
+    plugins: snapshot.manifestRegistry.plugins.filter((plugin) => isEnabled(plugin.id)),
   };
 }
 
@@ -166,7 +165,16 @@ function buildPricingContext(
   // Hosted aliases are policy-resolved against installed manifests. If that metadata is
   // unavailable, fail closed instead of treating every provider as policy-free.
   const remoteCatalog = snapshot ? getActiveRemoteModelCatalog(config) : undefined;
-  const hosted = remoteCatalog?.pricing ?? {};
+  // A provider without static rows (a refreshable gateway such as Vercel) admits no hosted row, so
+  // its row prices count as its own standalone prices rather than as refused rows.
+  const plannedProviders = new Set([...rowKeys].map((key) => key.slice(0, key.indexOf("/"))));
+  const hosted = Object.fromEntries(
+    Object.entries(remoteCatalog?.pricing ?? {}).map(([key, price]) =>
+      price.explicit && !plannedProviders.has(key.slice(0, key.indexOf("/")))
+        ? [key, { ...price, explicit: false }]
+        : [key, price],
+    ),
+  );
   const upstream = remoteCatalog?.upstreamPricing ?? {};
   // Policy-free providers read both tables like v1's merged map; stable sort keeps hosted first.
   const policyFree: Array<[string, RemoteModelCatalogPrice]> = [

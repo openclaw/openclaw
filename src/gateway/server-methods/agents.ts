@@ -38,6 +38,7 @@ import {
 } from "../../config/runtime-write-application.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { redactToolDetail } from "../../logging/redact.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   runWithGatewayDetachedWorkContinuation,
@@ -107,11 +108,30 @@ function createAgentConfigApplication(respond: RespondFn) {
       if (outcome === "applied") {
         return true;
       }
-      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${typeof outcome === "object" ? outcome.status : outcome}); run config.get, then apply the saved config or restart the Gateway.`;
-      if (onUnconfirmed) {
-        onUnconfirmed(message);
+      // A busy plugin reload holds every saved change, including ones that need no reload.
+      // The reloader retries on its own, so name the wait instead of asking for a restart.
+      let failure;
+      if (typeof outcome === "object") {
+        const deferred = {
+          ...outcome,
+          reason: redactToolDetail(outcome.reason),
+          appliesWhen: redactToolDetail(outcome.appliesWhen),
+        };
+        failure = errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Agent configuration saved but deferred: ${deferred.reason} ${deferred.appliesWhen}`,
+          { details: { application: deferred } },
+        );
       } else {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+        failure = errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
+        );
+      }
+      if (onUnconfirmed) {
+        onUnconfirmed(failure.message);
+      } else {
+        respond(false, undefined, failure);
       }
       return false;
     },

@@ -137,11 +137,6 @@ export function createWorkerTaskHost(
           retiring: false,
         };
         admissions.set(worker, admission);
-        const retained = admission;
-        worker.once("exit", () => {
-          retained.owner.finish();
-          admissions.delete(worker);
-        });
       }
       // The retained relay supplies current facts on demand; global snapshots grow with sessions.
       const selection = getDatabaseEngineSelection();
@@ -193,11 +188,17 @@ export function createWorkerTaskHost(
     receiveMessage: receiveWorkerMemoryPort,
     observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     captureWorkerStartObserver,
-    workerStarted(worker, pool) {
+    workerStarted(worker, pool, cap, options, policyOwner) {
       if (owner.databaseAccess !== "read-only") {
         trackSqliteDatabaseAdmissionWorker(worker);
       }
-      attributeWorkerToPool(worker, pool, workerClass);
+      attributeWorkerToPool(worker, pool, workerClass, {
+        floor: policyOwner.retainOneIdleWorker ? 1 : 0,
+        cap,
+        pointReadCap: cap + 1,
+        idleTimeoutMs: options.idleTimeoutMs ?? 60_000,
+        burstIdleTimeoutMs: options.burstIdleTimeoutMs,
+      });
     },
     workerRetiring(worker, reason) {
       const admission = admissions.get(worker);
@@ -206,6 +207,20 @@ export function createWorkerTaskHost(
         admission.retiring = true;
       }
       markWorkerRetirement(worker, reason);
+    },
+    workerStopped(worker) {
+      const admission = admissions.get(worker);
+      if (admission) {
+        admission.retiring = true;
+        const finishing = admission.owner.finish();
+        if (finishing) {
+          return finishing.then(() => {
+            admissions.delete(worker);
+          });
+        }
+        admissions.delete(worker);
+      }
+      return undefined;
     },
     flushWorkerDiagnostics,
     computeCapacity: getWorkerComputeCapacity(),

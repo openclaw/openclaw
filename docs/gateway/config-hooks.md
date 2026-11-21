@@ -88,7 +88,9 @@ authentication attempts from that client are throttled with `429` and
 `Retry-After`; valid authentication resets the counter. Loopback is not exempt.
 Configure trusted proxy attribution correctly before exposing a proxy route.
 
-The normal body limit is **256 KiB**, with a **30-second** body-read timeout.
+The normal body limit is **1 MiB**, with a **30-second** body-read timeout.
+A rejected body (`413`, `408` or `400`) logs a `hook request rejected` warning
+with the path and limit.
 Gmail-path mappings receive a larger derived allowance described below. Generic
 hooks parse JSON but do not require the JSON content-type header.
 
@@ -353,7 +355,7 @@ example and must be available to the reader. Gmail fields:
 | `allowUnsafeExternalContent` | `false`                      | Dangerous: disable email safety wrapping for Gmail agent turns. Leave off for untrusted inboxes.                                                              |
 
 Gmail-path mappings use a request-body allowance of
-`max(256 KiB, min(32 MiB, 100 × (3 × maxBytes + 8192)))`. The multiplier reserves
+`max(1 MiB, min(32 MiB, 100 × (3 × maxBytes + 8192)))`. The multiplier reserves
 space for escaped content and message metadata; it is not a guarantee that every
 upstream backlog fits. The upstream history page size counts history records,
 which can contain multiple messages. Fan-out still processes only the first 200

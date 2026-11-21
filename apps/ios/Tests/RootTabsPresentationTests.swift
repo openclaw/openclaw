@@ -295,6 +295,19 @@ struct RootTabsPresentationTests {
         #expect(route == .none)
     }
 
+    @Test func `first gateway help requires a loaded empty registry and no configured route`() {
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: nil, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: true, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: true))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: true, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+    }
+
     @Test func `fresh install presents onboarding`() {
         let route = RootTabs.startupPresentationRoute(
             gatewayConnected: false,
@@ -967,23 +980,12 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
-    @Test func `destination headers own hidden sidebar reveal control`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
+    @Test func `destination header control hides only a visible split sidebar`() {
+        // A drawer opening must not change the destination toolbar, so its control stays Show.
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .split))
+        #expect(RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .split))
     }
 
     private static func sessionEntry(

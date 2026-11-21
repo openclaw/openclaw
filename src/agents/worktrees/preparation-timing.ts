@@ -5,7 +5,7 @@ import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-event
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { LocalWorkspacePausePhase } from "../sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../sandbox/types.js";
 
 type PreparationPhase =
   | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`
@@ -64,6 +64,7 @@ type PreparationPhase =
   | "workspaceLayout";
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
+  identity?: string;
   reason?: string;
   missReason?:
     | "no-generation"
@@ -75,6 +76,9 @@ type TemplateDetails = {
   requestedSourceCommit?: string;
   backend?: string;
   cloneBytes?: number;
+  nativeCloneCount?: number;
+  nativeCloneWriteBytes?: number;
+  nativeCloneUnmeasuredCount?: number;
   errorCode?: string;
 };
 type PreparationTimingState = {
@@ -129,6 +133,18 @@ export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails)
   }
 }
 
+export function recordWorktreeNativeClone(writeBytes: number | undefined) {
+  const details = preparation.getStore()?.templateDetails;
+  if (details) {
+    details.nativeCloneCount = (details.nativeCloneCount ?? 0) + 1;
+    if (writeBytes === undefined) {
+      details.nativeCloneUnmeasuredCount = (details.nativeCloneUnmeasuredCount ?? 0) + 1;
+    } else {
+      details.nativeCloneWriteBytes = (details.nativeCloneWriteBytes ?? 0) + writeBytes;
+    }
+  }
+}
+
 /** Nested phases are inclusive; only total measures the complete preparation once. */
 export function startWorktreePreparationPhase(phase: PreparationPhase) {
   const current = preparation.getStore();
@@ -165,14 +181,14 @@ export async function timeWorktreePreparationPhase<T>(
 }
 
 export async function withWorktreePreparationTiming<T>(
-  kind: "managed" | "sandbox",
+  kind: "managed" | "managed-prewarm" | "sandbox",
   run: () => Promise<T>,
 ): Promise<T> {
   const startedAt = Date.now();
   const start = performance.now();
   const emit = createQueuedDiagnosticPhaseEmitter();
   const current: PreparationTimingState = {
-    enabled: kind === "managed",
+    enabled: kind !== "sandbox",
     template: "unavailable",
     templateDetails: { reason: "not-requested" },
     phases: {},

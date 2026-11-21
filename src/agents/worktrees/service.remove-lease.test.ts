@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -55,18 +55,26 @@ it.each([false, true])("rejects removal with a live lease (snapshot retry: %s)",
     await expect(remove()).rejects.toThrow(snapshotFailure);
   }
   const lease = await acquireWorktreeRunLease(created.id, { env });
-  const removalError = await remove(retry || undefined)
-    .then(() => undefined)
-    .catch((error: unknown) => error);
-  expect(removalError).toBeInstanceOf(Error);
-  expect((removalError as Error).message).toContain("worktree is busy");
-  expect(classifyWorktreeRemovalError(removalError)).toBe("busy");
-  expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-  expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
-  expect(await fs.stat(created.path)).toBeTruthy();
-
-  await lease.release();
+  try {
+    const removalError = await service
+      .remove({
+        id: created.id,
+        reason: "manual-delete",
+        allowSnapshotLoss: retry,
+        retryPreserved: retry,
+      })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    expect(removalError).toBeInstanceOf(Error);
+    expect((removalError as Error).message).toContain("worktree is busy");
+    expect(classifyWorktreeRemovalError(removalError)).toBe("busy");
+    expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+    expect(await fs.stat(created.path)).toBeTruthy();
+  } finally {
+    await lease.release();
+  }
   if (!retry) {
     expect((await remove()).removed).toBe(true);
     await expectGone();
@@ -81,19 +89,19 @@ it("does not let snapshot-loss permission bypass a foreign Git lock", async () =
   expect(await fs.stat(created.path)).toBeTruthy();
 });
 
-it("continues after snapshot failure when snapshot loss is allowed", async () => {
+it("preserves nested repositories even when snapshot loss is allowed", async () => {
   await createNestedRepository(created.path);
+  const valuable = path.join(created.path, "nested", "valuable.txt");
+  await fs.writeFile(valuable, "uncommitted nested work\n");
 
-  const started = Date.now();
-  const result = await remove(true);
-
-  expect(result).toEqual({
-    removed: true,
-    snapshotError: expect.stringContaining(snapshotFailure),
+  await expect(remove(true)).rejects.toThrow(snapshotFailure);
+  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+  expect(getRegistryWorktree(env, created.id)?.gcRetry).toMatchObject({
+    stage: "nested-repository",
+    attempts: 1,
+    retryAt: null,
   });
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeGreaterThanOrEqual(started);
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeLessThanOrEqual(Date.now());
-  await expectGone();
+  expect(await fs.readFile(valuable, "utf8")).toBe("uncommitted nested work\n");
 });
 
 it("allows only one concurrent remover to own the claim", async () => {
@@ -117,6 +125,34 @@ it("skips idle garbage collection for a worktree with a live run lease", async (
   expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
 
   await lease.release();
+  expect((await service.gc()).removed).toEqual([]);
+  await updateRegistryWorktree(env, created.id, {
+    lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+  });
   const collected = await service.gc();
   expect(collected.removed).toContain(created.id);
+});
+
+it("retains an old checkout used yesterday after its run lease has ended", async () => {
+  const yesterday = Date.now() - 24 * 60 * 60 * 1000;
+  await updateRegistryWorktree(env, created.id, {
+    lastActiveAt: yesterday - IDLE_GC_MS,
+  });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(yesterday);
+  try {
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    await lease.release();
+    expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday);
+    clock.mockReturnValue(yesterday + 60_000);
+    const next = await acquireWorktreeRunLease(created.id, { env });
+    expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday);
+    // A long-running use refreshes activity when its last holder releases custody.
+    clock.mockReturnValue(yesterday + 10 * 60_000);
+    await next.release();
+  } finally {
+    clock.mockRestore();
+  }
+  expect((await service.gc()).removed).not.toContain(created.id);
+  expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday + 10 * 60_000);
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
 });

@@ -104,7 +104,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
         fallback={
           <div class="board-widget__error" role="alert">
             {read().error}
-            <Show when={!read().accessDenied}>
+            <Show when={!read().accessDenied && !read().unavailable}>
               <button class="btn btn--small" onClick={retry}>
                 {t("common.retry")}
               </button>

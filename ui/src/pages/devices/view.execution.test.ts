@@ -204,6 +204,9 @@ describe("devices execution settings", () => {
     };
     const container = renderDevicesContainer(props);
     const select = container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')!;
+    expect(select.querySelector('option[value="__gateway__"]')?.textContent).toBe(
+      "Computer running OpenClaw",
+    );
     selectValue(select, "second", true);
 
     expect(onExecApprovalsTargetChange).toHaveBeenCalledWith("node", "second");
@@ -262,6 +265,21 @@ describe("devices execution settings", () => {
     const section = getSection(container, "Device binding");
     expect(section.querySelector("select")).toBeNull();
     expect(section.textContent).toContain("No devices can run commands yet.");
+  });
+
+  it("waits for the first node inventory before saying no device can run commands", () => {
+    const container = renderDevicesContainer({
+      loading: true,
+      nodes: [],
+      configForm: agentsConfig({ main: {} }),
+      execApprovalsSnapshot: approvalSnapshot(),
+    });
+    expect(getSection(container, "Device binding").textContent).not.toContain(
+      "No devices can run commands yet.",
+    );
+    expect(approvalSection(container).textContent).not.toContain(
+      "No devices support command approvals yet.",
+    );
   });
 
   it("offers no Save for bindings and names what an agent inherits", () => {

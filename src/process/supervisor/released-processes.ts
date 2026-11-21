@@ -1,6 +1,8 @@
 import { readProcessIdentity, isSupported } from "@openclaw/proc-safe/identity";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { isPidDefinitelyDead, isPidDefinitelyDeadAsync } from "../../shared/pid-alive.js";
+import { sleep } from "../../utils/sleep.js";
+import { readCommandProcessStartTime } from "../command-process-identity.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import type { ReleasedProcess } from "./types.js";
 
@@ -9,21 +11,27 @@ const REAP_INTERVAL_MS = 5_000;
 /** A process a command left running, pinned to its start time so a reused PID is never signalled. */
 type AdoptedProcess = ReleasedProcess & {
   scopeKey: string;
-  startTime?: number;
+  startTime?: number | Promise<number | undefined>;
   onExit: () => void;
   stopping?: Promise<StopOutcome>;
 };
 
-const state = resolveGlobalSingleton(Symbol.for("openclaw.adoptedProcesses"), () => ({
+const state = resolveGlobalSingleton<{
+  adopted: Set<AdoptedProcess>;
+  reaping: Promise<void> | undefined;
+  reaper: NodeJS.Timeout | undefined;
+}>(Symbol.for("openclaw.adoptedProcesses"), () => ({
   adopted: new Set<AdoptedProcess>(),
-  // SAFETY: the reaper slot starts empty; only trackers below assign it.
-  reaper: undefined as NodeJS.Timeout | undefined,
+  reaping: undefined,
+  reaper: undefined,
 }));
 
-function startTimeOf(pid: number): number | undefined {
+function startTimeOf(pid: number): number | undefined | Promise<number | undefined> {
+  if (process.platform === "linux" || process.platform === "android") {
+    return Promise.resolve(readCommandProcessStartTime(pid)).then((birth) => birth ?? undefined);
+  }
   try {
     const identity = isSupported() ? readProcessIdentity(pid) : null;
-    // Linux wall-clock start estimates drift; the since-boot birth is stable.
     return identity && !identity.exited
       ? (identity.startTimeSinceBootMicros ?? identity.startTimeMicros)
       : undefined;
@@ -32,34 +40,45 @@ function startTimeOf(pid: number): number | undefined {
   }
 }
 
-/** Unknown identity reads neither prove exit nor make a recorded PID safe to signal. */
-function isSameLiveProcess(entry: { pid: number; startTime?: number }): boolean | undefined {
-  if (isPidDefinitelyDead(entry.pid)) {
+/** Undefined means inspection could not prove either the recorded process or its exit. */
+async function isSameLiveProcess(
+  entry: Pick<AdoptedProcess, "pid" | "startTime">,
+): Promise<boolean | undefined> {
+  const startTime = await entry.startTime;
+  if (await isPidDefinitelyDeadAsync(entry.pid)) {
     return false;
   }
-  if (entry.startTime === undefined) {
-    return true;
+  if (startTime === undefined) {
+    return undefined;
   }
-  const startTime = startTimeOf(entry.pid);
-  return startTime === undefined ? undefined : startTime === entry.startTime;
+  const current = await startTimeOf(entry.pid);
+  return current === undefined ? undefined : current === startTime;
 }
 
 function settle(entry: AdoptedProcess): void {
   if (state.adopted.delete(entry)) {
     entry.onExit();
   }
+  clearIdleReaper();
+}
+
+function clearIdleReaper(): void {
   if (state.adopted.size === 0 && state.reaper) {
     clearInterval(state.reaper);
     state.reaper = undefined;
   }
 }
 
-function reap(): void {
-  for (const entry of state.adopted) {
-    if (!entry.stopping && isSameLiveProcess(entry) === false) {
-      settle(entry);
+function reap(): Promise<void> {
+  return (state.reaping ??= (async () => {
+    for (const entry of state.adopted) {
+      if (!entry.stopping && (await isSameLiveProcess(entry)) === false && !entry.stopping) {
+        settle(entry);
+      }
     }
-  }
+  })().finally(() => {
+    state.reaping = undefined;
+  }));
 }
 
 /** Stopping is confirmed only by observing that the recorded process identity is gone. */
@@ -67,26 +86,26 @@ export type StopOutcome = { status: "stopped" } | { status: "uncertain"; reason:
 
 const KILL_CONFIRM_TIMEOUT_MS = 2_000;
 
-async function waitForExit(entry: { pid: number; startTime?: number }, timeoutMs: number) {
+async function waitForExit(entry: Pick<AdoptedProcess, "pid" | "startTime">, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
-  while (isSameLiveProcess(entry) !== false && Date.now() < deadline) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
+  while ((await isSameLiveProcess(entry)) !== false && Date.now() < deadline) {
+    await sleep(100);
   }
-  return isSameLiveProcess(entry) === false;
+  return (await isSameLiveProcess(entry)) === false;
 }
 
 /** SIGTERM, then SIGKILL after the cancel grace; each signal re-checks process identity. */
-async function terminate(entry: { pid: number; startTime?: number }): Promise<StopOutcome> {
+async function terminate(entry: Pick<AdoptedProcess, "pid" | "startTime">): Promise<StopOutcome> {
   // "sent", "gone", or the reason the signal failed.
-  const signal = (name: NodeJS.Signals): { result: "sent" | "gone" } | { failed: string } => {
-    const same = isSameLiveProcess(entry);
-    if (same === false) {
+  const signal = async (
+    name: NodeJS.Signals,
+  ): Promise<{ result: "sent" | "gone" } | { failed: string }> => {
+    const live = await isSameLiveProcess(entry);
+    if (live === false) {
       return { result: "gone" };
     }
-    if (same === undefined) {
-      return { failed: "process identity could not be read" };
+    if (live === undefined) {
+      return { failed: "process identity unavailable" };
     }
     try {
       process.kill(entry.pid, name);
@@ -96,14 +115,14 @@ async function terminate(entry: { pid: number; startTime?: number }): Promise<St
       return code === "ESRCH" ? { result: "gone" } : { failed: `${name} failed (${code})` };
     }
   };
-  const term = signal("SIGTERM");
+  const term = await signal("SIGTERM");
   if ("result" in term && term.result === "gone") {
     return { status: "stopped" };
   }
   if ("result" in term && (await waitForExit(entry, GRACEFUL_CANCEL_TIMEOUT_MS))) {
     return { status: "stopped" };
   }
-  const kill = signal("SIGKILL");
+  const kill = await signal("SIGKILL");
   if (
     ("result" in kill && kill.result === "gone") ||
     (await waitForExit(entry, KILL_CONFIRM_TIMEOUT_MS))
@@ -131,11 +150,6 @@ function stopEntry(entry: AdoptedProcess): Promise<StopOutcome> {
   }));
 }
 
-/** Stop a process that cannot be adopted (over the cap) by its observed identity. */
-export async function killReleasedProcess(survivor: ReleasedProcess): Promise<StopOutcome> {
-  return await terminate({ pid: survivor.pid, startTime: startTimeOf(survivor.pid) });
-}
-
 /**
  * Take custody of a handed-off process: it is reaped when it exits and stopped on
  * request, session reset, or host stop. Undefined when it already exited.
@@ -149,19 +163,28 @@ export function adoptReleasedProcess(
   if (startTime === undefined && isPidDefinitelyDead(survivor.pid)) {
     return undefined;
   }
+  // Publish custody before Linux birth I/O settles; shutdown and Stop join the same capture.
+  // An already-exited Linux survivor may remain visible until the next reap confirms it.
   const entry: AdoptedProcess = Object.assign({}, survivor, { scopeKey, startTime, onExit });
   state.adopted.add(entry);
-  state.reaper ??= setInterval(reap, REAP_INTERVAL_MS);
+  state.reaper ??= setInterval(() => {
+    void reap();
+  }, REAP_INTERVAL_MS);
   state.reaper.unref();
   return { stop: () => stopEntry(entry) };
 }
 
 /** A one-shot run ends: its processes keep running without OpenClaw. */
-export function forgetReleasedProcesses(scopeKey: string): ReleasedProcess[] {
+export async function forgetReleasedProcesses(scopeKey: string): Promise<ReleasedProcess[]> {
   const handedOff: ReleasedProcess[] = [];
   for (const entry of state.adopted) {
-    if (entry.scopeKey === scopeKey && isSameLiveProcess(entry) !== false) {
-      state.adopted.delete(entry);
+    if (
+      entry.scopeKey === scopeKey &&
+      !entry.stopping &&
+      (await isSameLiveProcess(entry)) !== false &&
+      !entry.stopping &&
+      state.adopted.delete(entry)
+    ) {
       handedOff.push(
         entry.command === undefined
           ? { pid: entry.pid }
@@ -169,6 +192,7 @@ export function forgetReleasedProcesses(scopeKey: string): ReleasedProcess[] {
       );
     }
   }
+  clearIdleReaper();
   return handedOff;
 }
 

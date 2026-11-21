@@ -171,8 +171,9 @@ async function readRegularFileFingerprint(params: {
 async function listPackageFiles(params: {
   rootPath: string;
   signal?: AbortSignal;
-}): Promise<string[]> {
+}): Promise<{ files: string[]; standaloneLink?: BigIntStats }> {
   const files: string[] = [];
+  let standaloneLink: BigIntStats | undefined;
   let entryCount = 0;
   const visit = async (directory: string, depth: number): Promise<void> => {
     throwIfAborted(params.signal);
@@ -193,6 +194,25 @@ async function listPackageFiles(params: {
         await visit(entryPath, depth + 1);
         continue;
       }
+      if (entry.isSymbolicLink() && directory === params.rootPath && entry.name === "codex") {
+        // The standalone installer creates exactly codex -> bin/codex. Do not
+        // follow arbitrary package links or directories; bin/codex is hashed below.
+        const before = await fs.lstat(entryPath, { bigint: true });
+        const targetPath = path.join(params.rootPath, "bin", "codex");
+        if (
+          !before.isSymbolicLink() ||
+          (await fs.readlink(entryPath)) !== "bin/codex" ||
+          (await fs.realpath(entryPath)) !== targetPath ||
+          !(await fs.lstat(targetPath)).isFile()
+        ) {
+          throw new Error(`Codex runtime artifact contains an unsupported entry: ${entryPath}`);
+        }
+        standaloneLink = await fs.lstat(entryPath, { bigint: true });
+        if (!sameOpenedFile(before, standaloneLink)) {
+          throw new Error(`Codex runtime artifact changed while reading: ${entryPath}`);
+        }
+        continue;
+      }
       if (!entry.isFile()) {
         throw new Error(`Codex runtime artifact contains an unsupported entry: ${entryPath}`);
       }
@@ -200,7 +220,7 @@ async function listPackageFiles(params: {
     }
   };
   await visit(params.rootPath, 0);
-  return files;
+  return { files, standaloneLink };
 }
 
 function assertSafeNodeOptions(env: NodeJS.ProcessEnv): void {
@@ -357,7 +377,11 @@ async function hashSelectedArtifactFiles(
   }
   if (packageRoot) {
     const beforeFiles = await listPackageFiles({ rootPath: packageRoot, signal });
-    for (const relativePath of beforeFiles) {
+    if (beforeFiles.standaloneLink) {
+      hash.update(JSON.stringify(["package-symlink", "codex", "bin/codex"]));
+      hash.update("\n");
+    }
+    for (const relativePath of beforeFiles.files) {
       const filePath = path.join(packageRoot, ...relativePath.split("/"));
       const file = await readRegularFileFingerprint({ filePath, budget, signal });
       hash.update(
@@ -367,8 +391,11 @@ async function hashSelectedArtifactFiles(
     }
     const afterFiles = await listPackageFiles({ rootPath: packageRoot, signal });
     if (
-      beforeFiles.length !== afterFiles.length ||
-      beforeFiles.some((filePath, index) => filePath !== afterFiles[index])
+      beforeFiles.files.length !== afterFiles.files.length ||
+      beforeFiles.files.some((filePath, index) => filePath !== afterFiles.files[index]) ||
+      (beforeFiles.standaloneLink && afterFiles.standaloneLink
+        ? !sameOpenedFile(beforeFiles.standaloneLink, afterFiles.standaloneLink)
+        : beforeFiles.standaloneLink !== afterFiles.standaloneLink)
     ) {
       throw new Error("Codex runtime package changed while reading");
     }

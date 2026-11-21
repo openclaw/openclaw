@@ -20,6 +20,7 @@ const frozenToolAllowPolicies = new WeakSet<object>();
 type PreparedTemplateToolPolicy =
   | { kind: "current" }
   | { kind: "legacy" }
+  | { kind: "changed" }
   | { kind: "state-error"; error: unknown };
 const preparedTemplateToolPolicies = new WeakMap<object, PreparedTemplateToolPolicy>();
 let preparedCandidates: TemplateToolPolicyCandidate[] = [];
@@ -73,25 +74,9 @@ function applyPreparedTemplateToolPolicyConsent(
       });
       continue;
     }
-    const adopted =
-      schemaVersionRead.schemaVersion === TEMPLATE_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION;
-    const current =
-      adopted || schemaVersionRead.schemaVersion === TEMPLATE_INSTALL_RECORD_SCHEMA_VERSION;
+    let consent: TemplateConsentMatch;
     try {
-      if (current) {
-        const accepted = adopted
-          ? candidate.adoptedAgentConfigDigests(stateOptions.env)
-          : {
-              owned: candidate.agentConfigDigest,
-              legacy: candidate.legacyAgentConfigDigest,
-            };
-        if (
-          schemaVersionRead.agentConfigDigest !== accepted.owned &&
-          schemaVersionRead.agentConfigDigest !== accepted.legacy
-        ) {
-          throw new Error("Template agent configuration does not match its consent provenance.");
-        }
-      }
+      consent = matchTemplateConsent(candidate, schemaVersionRead, stateOptions.env);
     } catch (error) {
       preparedTemplateToolPolicies.set(candidate.tools, {
         kind: "state-error",
@@ -99,10 +84,28 @@ function applyPreparedTemplateToolPolicyConsent(
       });
       continue;
     }
-    preparedTemplateToolPolicies.set(candidate.tools, {
-      kind: current ? "current" : "legacy",
-    });
+    preparedTemplateToolPolicies.set(candidate.tools, { kind: consent });
   }
+}
+
+type TemplateConsentMatch = "current" | "legacy" | "changed";
+
+/** Compare live agent config with the digest its legacy install record consented to. */
+export function matchTemplateConsent(
+  candidate: TemplateToolPolicyCandidate,
+  record: { schemaVersion: string; agentConfigDigest: string },
+  env?: NodeJS.ProcessEnv,
+): TemplateConsentMatch {
+  const adopted = record.schemaVersion === TEMPLATE_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION;
+  if (!adopted && record.schemaVersion !== TEMPLATE_INSTALL_RECORD_SCHEMA_VERSION) {
+    return "legacy";
+  }
+  const accepted = adopted
+    ? candidate.adoptedAgentConfigDigests(env)
+    : { owned: candidate.agentConfigDigest, legacy: candidate.legacyAgentConfigDigest };
+  return record.agentConfigDigest === accepted.owned || record.agentConfigDigest === accepted.legacy
+    ? "current"
+    : "changed";
 }
 
 /** Bind a captured construction config to the owner's prepared provenance facts. */
@@ -153,15 +156,20 @@ registerRuntimeConfigSnapshotPreparer(prepareTemplateToolPolicyConsent, {
 });
 
 class TemplateToolProfileConsentError extends Error {
-  constructor(agentId: string, options: { unboundedFullProfile?: boolean } = {}) {
+  constructor(agentId: string, reason: "changed" | "unbounded-full-profile" | "dynamic-policy") {
+    const subject = `Template-managed agent ${JSON.stringify(agentId)}`;
+    const release =
+      `stop the Gateway and run \`openclaw templates release ${agentId}\` to review its tool ` +
+      "authority and keep it as an ordinary agent.";
     super(
-      options.unboundedFullProfile
-        ? `Template-managed agent ${JSON.stringify(agentId)} uses the legacy unbounded full tool profile. ` +
-            "Its tool consent cannot be refreshed in place. Add the Template again to create an " +
-            "ordinary agent with an explicit tool allowlist, then move your work before deleting this agent."
-        : `Template-managed agent ${JSON.stringify(agentId)} uses a legacy dynamic tool policy. ` +
-            "Its tool consent cannot be refreshed in place. Add the Template again to create an " +
-            "ordinary agent, then move your work before deleting this agent.",
+      reason === "changed"
+        ? `${subject} was edited after its Template consent was recorded, so it will not run ` +
+            `with the changed settings. Undo the change, or ${release}`
+        : `${subject} uses ${
+            reason === "unbounded-full-profile"
+              ? "the legacy unbounded full tool profile"
+              : "a legacy dynamic tool policy"
+          }, which its Template consent cannot refresh. To keep it, ${release}`,
     );
     this.name = "TemplateToolProfileConsentError";
   }
@@ -197,14 +205,19 @@ export function resolveTemplateToolPolicyConsent(params: {
   if (prepared.kind === "state-error") {
     throw new TemplateToolProfileConsentStateError(params.agentId, prepared.error);
   }
+  if (prepared.kind === "changed") {
+    throw new TemplateToolProfileConsentError(params.agentId, "changed");
+  }
   if (
     prepared.kind === "legacy" ||
     (params.ownsProfile && (params.profile !== "full" || !params.hasAgentAllowlist))
   ) {
-    throw new TemplateToolProfileConsentError(params.agentId, {
-      unboundedFullProfile:
-        prepared.kind === "legacy" && params.profile === "full" && !params.hasAgentAllowlist,
-    });
+    throw new TemplateToolProfileConsentError(
+      params.agentId,
+      prepared.kind === "legacy" && params.profile === "full" && !params.hasAgentAllowlist
+        ? "unbounded-full-profile"
+        : "dynamic-policy",
+    );
   }
   return { frozen: params.hasAgentAllowlist };
 }

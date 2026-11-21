@@ -568,6 +568,7 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
   if (steps.length > 0) {
     await runNodeStepsWithConcurrency(steps, concurrency);
     const after = new BoundaryInputSnapshot(repoRoot, metadataInputs);
+    after.prepareConfigs(completed.map((unit) => unit.config));
     const records = completed.map((unit) =>
       Object.assign(unit, {
         record: after.record(unit.config, unit.args, unit.inputReceipt, [
@@ -695,7 +696,8 @@ async function runBoundaryCheck(argv: string[]) {
         summary,
         await runCompileCheck(
           selection.selected.map((row) => row.package),
-          selection.mode === "affected",
+          // A complete inventory uses full preparation, not per-consumer graph discovery.
+          selection.mode === "affected" && selection.selected.length < optInExtensionIds.length,
         ),
       );
     }

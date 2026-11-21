@@ -1906,7 +1906,7 @@ describe("buildGatewayCronService", () => {
         const announceRequest = callRecord(mocks.announce);
         const announce = requireRecord(announceRequest.payload, "script failure announce");
         expect(announce.text).toContain(
-          'Automation "script failure detail" failed\nCause: automation script failed internally',
+          'Automation "script failure detail" was auto-disabled after 1 consecutive run failures.\nCause: automation script failed internally',
         );
         expect(announce.text).not.toContain(rawError);
 

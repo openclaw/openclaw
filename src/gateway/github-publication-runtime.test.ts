@@ -6,6 +6,7 @@ import {
   mixedAgentConnection,
   useMixedAgentPair,
 } from "../infra/database-engine/mixed-agent.conformance.test-support.js";
+import * as hostMemory from "../infra/host-memory.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { repositoryRow } from "../state/github-publication.worker.test-support.js";
 import {
@@ -449,8 +450,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     );
     const runtime = createRecoveryRuntime();
     await runtime.ready;
-    vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 ** 3);
-    const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
+    const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(true);
     const shared = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
     const repository = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
     const transport = githubPublicationTestMocks().runCommand;
@@ -465,7 +465,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     expect(transport).not.toHaveBeenCalled();
     expect(readStatus()).toBe("requested");
 
-    available.mockReturnValue(512 * 1024 ** 2);
+    lowMemory.mockReturnValue(false);
     await runtime.reconcilePublications();
     expect(repository).toHaveBeenCalledTimes(4);
     // The normal recovery path settles the receipt whose synthetic workspace is absent.

@@ -38,7 +38,13 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
-Opening a transcript image or video shows a shared viewer for supported media in
+Uploaded videos show a thumbnail or a compact Play card in chat. Choose **Play**
+to load the player in place; scrolling past a video does not prepare or convert
+it for playback. The player’s expand action opens the larger media viewer and
+pauses inline playback. Leaving the conversation releases the player. If your
+browser blocks automatic playback after conversion, use the player’s Play control.
+
+Opening a transcript image or expanding a video shows a shared viewer for supported media in
 the loaded thread, including inline Markdown images, your own attachments, and
 earlier response turns.
 When more than one item is available, use the visible previous/next buttons,
@@ -168,6 +174,12 @@ Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. Long lists show the search field immediately; search remains
 available from the magnifying-glass button on shorter lists and stays visible
 while you scroll.
+
+For a new worktree, type part of a branch name in **From** to filter the loaded
+repository branches. The menu lists the default and current branches first,
+then the most recently committed ones, and shows up to eight matches; names
+that start with your text come first. You can still enter a custom branch, tag,
+or commit, or leave it blank for the Gateway default.
 
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
@@ -562,6 +574,12 @@ Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
 Once the Gateway confirms a rename, the saved name stays visible while the session
 list refreshes, even if an older snapshot arrives late.
+
+Choose **Archive all** from a shared sidebar group’s options to archive its
+unarchived sessions, including nested sessions that still belong to the group.
+The confirmation shows how many sessions will be archived, even when the
+sidebar hasn’t loaded them all. The group stays in place, and **Undo** cancels
+the archive before it is saved.
 
 Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes

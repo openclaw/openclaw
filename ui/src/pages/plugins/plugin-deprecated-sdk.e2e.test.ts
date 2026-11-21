@@ -93,9 +93,9 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
       notice.message,
     );
     await capture("plugin-detail.png", page.locator(".plugin-catalog-detail"));
-    expect(await page.getByRole("button", { name: "Disable SDK Demo", exact: true }).count()).toBe(
-      1,
-    );
+    expect(
+      await page.getByRole("switch", { name: "SDK Demo", checked: true, exact: true }).count(),
+    ).toBe(1);
     expect(await gateway.getRequests("plugins.setEnabled")).toEqual([]);
   });
 });

@@ -205,9 +205,6 @@ export function promoteGoalContinuationYield(params: {
       (entry) =>
         entry.requesterSessionKey !== sessionKey ||
         entry.requesterAgentId !== base.run.agentId ||
-        (entry.completionRequesterSessionId !== undefined &&
-          (entry.completionRequesterSessionId !== continuation.sessionId ||
-            entry.completionRequesterLifecycleRevision !== continuation.lifecycleRevision)) ||
         entry.requesterSettleWake?.rearmGeneration !== params.rearmGeneration ||
         entry.requesterSettleWake?.requesterYieldBatch !== true,
     )
@@ -368,11 +365,6 @@ export async function finishGoalContinuationSettlement(
     }
   } catch (error) {
     if (owner.closed) {
-      return;
-    }
-    try {
-      owner.params.base.operatorAuthority?.assertCurrent();
-    } catch {
       return;
     }
     throw error;

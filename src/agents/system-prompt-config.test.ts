@@ -147,9 +147,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
             "Full Access or a tool allowlist does not resolve this collision",
           );
         }
-        expect(prompt).toContain("not a free-form substitute for the missing setup tool");
-        expect(prompt).toContain("setup or repair on another host");
-        expect(prompt).toContain("remote task on local agent-ID migration");
+        expect(prompt).toContain("never instruct users to send free-form setup");
+        expect(prompt).toContain("Remote hosts: verify it is not this Gateway");
+        expect(prompt).toContain("do not block on local agent-ID migration");
       }
     },
   );
@@ -195,39 +195,74 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     { toolNames: ["exec", "openclaw"] },
     { toolNames: ["exec", "gateway", "openclaw"] },
     { toolNames: ["gateway", "openclaw"] },
-  ])(
-    "distinguishes component work from supervised maintenance with tools $toolNames",
+  ])("scopes the in-place Git update exception with tools $toolNames", async ({ toolNames }) => {
+    const config: OpenClawConfig = { commands: { restart: false } };
+    const prompts = [
+      await buildPrompt({ config, toolNames }),
+      buildAgentHarnessBasePrompt({ config, toolNames }),
+    ];
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
+      expect(prompt).not.toContain("perform the work with `gateway`");
+      expect(prompt).not.toContain("restart, config, channels");
+      expect(prompt).not.toContain("For an update request, use the Control UI");
+      expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+      expect(prompt).toContain("Use the built-in updater for standard installs.");
+      expect(prompt).toContain(
+        "For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure.",
+      );
+      expect(prompt).toContain(
+        "Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization.",
+      );
+      expect(prompt).toContain(
+        "If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing.",
+      );
+      expect(prompt).toContain(
+        "Shell access is not update authority. Change installation methods only on explicit operator request.",
+      );
+      expect(prompt).toContain("Keep a working restart path before stopping");
+      expect(prompt).toContain(
+        "if runtime admission refuses, report the blocker and never bypass via `exec`",
+      );
+      expect(
+        prompt.includes(
+          "`gateway`: use update.run only when the installation uses the built-in updater",
+        ),
+      ).toBe(toolNames.includes("gateway"));
+    }
+  });
+
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "keeps bounded local config recovery available with tools $toolNames",
     async ({ toolNames }) => {
-      const config: OpenClawConfig = { commands: { restart: false } };
-      const prompts = [
-        await buildPrompt({ config, toolNames }),
-        buildAgentHarnessBasePrompt({ config, toolNames }),
-      ];
-      for (const prompt of prompts) {
+      for (const prompt of [
+        await buildPrompt({ toolNames }),
+        buildAgentHarnessBasePrompt({ toolNames }),
+      ]) {
+        expect(prompt).toContain("blocks an explicit local repair");
+        expect(prompt).toContain("use existing file/exec permissions");
+        expect(prompt).toContain("save a rollback copy");
+        expect(prompt).toContain("validate, and read back");
         expect(prompt).toContain(
-          "maintenance tools, not exec or detached jobs, for updates, installation replacement, or service stop/restart",
+          "Never override approvals, readonly config, containment, or disabled tools",
         );
-        expect(prompt).not.toContain("for installation changes or service control");
-        expect(prompt).toContain("the Gateway must retain a working restart path before it stops");
-        expect(prompt).toContain(
-          "If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec",
-        );
-        expect(prompt.includes("perform the work with `gateway`: update.run")).toBe(
-          toolNames.includes("gateway"),
-        );
-        if (toolNames.includes("exec")) {
-          expect(prompt).toContain(
-            "For explicitly authorized non-disruptive component builds (such as `pnpm build:iroh`), dependency work, or repairs with no dedicated maintenance action, use exec under normal permissions and approvals",
-          );
-          expect(prompt).toContain(
-            "Do not refuse solely because the work is on the Gateway host or no maintenance action exists",
-          );
-        } else {
-          expect(prompt).not.toContain("use exec under normal permissions and approvals");
-        }
+        expect(prompt).toContain("or edit access/approval/ownership policies");
+        expect(prompt).not.toContain("Exact commands need no helper inference");
       }
     },
   );
+
+  it("teaches exact config recovery on regular and native harness surfaces", async () => {
+    const toolNames = ["openclaw", "exec"];
+    for (const prompt of [
+      await buildPrompt({ toolNames }),
+      buildAgentHarnessBasePrompt({ toolNames }),
+    ]) {
+      expect(prompt).toContain("config set <path> <value>");
+      expect(prompt).toContain("Exact commands need no helper inference");
+      expect(prompt).toContain("normal approval/write checks apply");
+    }
+  });
 
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "does not recommend disabled update or restart commands with tools $toolNames",
@@ -238,7 +273,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("maintenance tools, not exec or detached jobs");
+      expect(disabled).toContain("Keep a working restart path before stopping");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
       const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");
@@ -498,6 +533,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "subagents"],
     });
     expect(prompt.includes("## Delegation")).toBe(expected);
-    expect(prompt.includes("- Subagents: `sessions_spawn`")).toBe(!expected);
+    // The child brief has one owner: `## Delegation` when it renders, otherwise Tooling.
+    expect(prompt.includes("objective/output/write-scope/verification")).toBe(!expected);
   });
 });

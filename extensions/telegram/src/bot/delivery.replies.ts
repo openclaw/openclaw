@@ -14,6 +14,7 @@ import {
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { appendReplyMediaFailures, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -260,6 +261,7 @@ function createReplyDeliverer(
         mediaUrl,
         buildOutboundMediaLoadOptions({
           mediaLocalRoots: config.mediaLocalRoots,
+          mediaAccess: resolveOutboundMediaAccessForConfig(config.cfg),
           maxBytes: config.mediaMaxBytes,
         }),
       );

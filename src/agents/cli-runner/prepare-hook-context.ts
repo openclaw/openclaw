@@ -1,4 +1,7 @@
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
@@ -38,6 +41,7 @@ export async function prepareCliTurnHookContext(
   },
 ) {
   const turnAudience = await resolveCliTurnMemoryAudience(run, facts);
+  const { requesterDeviceId } = buildAgentHookContextIdentityFields(run);
   return {
     turnAudience,
     promptBuildHookContext: {
@@ -53,6 +57,7 @@ export async function prepareCliTurnHookContext(
       inputProvenance: run.inputProvenance,
       ...buildAgentHookMemoryAudienceFields(turnAudience.memoryAudience, run.sessionKey),
       ...buildAgentHookContextChannelFields(run),
+      ...(requesterDeviceId ? { requesterDeviceId } : {}),
     },
   };
 }

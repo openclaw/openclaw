@@ -6,37 +6,31 @@ import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import type {
-  SessionGenerationEntry,
-  SessionGenerationFacts,
-} from "./session-delivery-generation.types.js";
+import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
 
 /**
- * A stored reference names its conversation by key, plus its incarnation when it carries a
- * lifecycle revision, so it follows message edits and branch switches to the current
- * transcript. Live-writer fences (`exactTranscript`) also pin the transcript id. A null
- * session id leases the row's absence.
+ * A chat lease follows the key to the current transcript. A transcript lease holds the
+ * writer's transcript, or a scheduled occurrence's incarnation. A null session id leases
+ * the row's absence.
  */
 export function matchesSessionGeneration(
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
 ): boolean {
   if (!entry || input.sessionId === null) {
     return Boolean(entry) !== (input.sessionId === null);
   }
-  if (input.exactTranscript && entry.sessionId !== input.sessionId) {
-    return false;
-  }
   return (
-    (!input.exactTranscript && input.lifecycleRevision === null) ||
-    (entry.lifecycleRevision ?? null) === input.lifecycleRevision
+    !input.exact ||
+    ((input.exact === "lifecycle" || entry.sessionId === input.sessionId) &&
+      (entry.lifecycleRevision ?? null) === (input.lifecycleRevision ?? null))
   );
 }
 
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
 export async function prepareMemorySessionGeneration(
   source: CapturedSessionActorStorageOwner,
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
 ) {
   const selected = source.binding;
@@ -99,6 +93,7 @@ export async function prepareMemorySessionGeneration(
   };
   return {
     assertCurrent,
+    assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
     assertDeliveryCurrent() {
       if (isSessionMutationActive(source.path, [input.sessionKey, initial?.sessionId])) {
         throw new SessionDeliveryGenerationUnavailableError();
@@ -107,7 +102,14 @@ export async function prepareMemorySessionGeneration(
     },
     readSessionSettings() {
       const entry = readCurrent();
-      return { permissionMode: entry?.permissionMode, toolOverrides: entry?.toolOverrides };
+      return (
+        entry && {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          permissionMode: entry.permissionMode,
+          toolOverrides: entry.toolOverrides,
+        }
+      );
     },
     prepareRead: () => undefined,
     release() {

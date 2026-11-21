@@ -15,6 +15,10 @@ import {
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 import { resolveInstalledNativeTypeScriptCompiler } from "./native-typescript.mts";
 import { isRecord } from "./record-shared.mjs";
+import {
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./tsdown-heap-budget.mts";
 
 export type NativeDeclaration = {
   code: string;
@@ -283,10 +287,25 @@ export async function compileNativeProject({
 }
 
 /**
+ * The parallel pass's Go memory is outside --max-old-space-size: its cgroup peaked at 8.4 GiB
+ * against 6.1 GiB for the single-threaded pass, and it was OOM-killed in an 8 GiB container
+ * that the single-threaded pass completes in. The build's memory owner (tsdown-build, frozen
+ * by build-all) hands every build child its admitted heap in OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB
+ * and grants its uncapped default only when memory is ample, the same fact it uses to run two
+ * runtime builds at once. Its Windows default and a run without that budget (a bare tsdown)
+ * emit single-threaded; an operator's explicit budget at or above it asserts ample memory.
+ */
+function hostAdmitsParallelEmit() {
+  const budgetMb = Number(process.env[TSDOWN_MAX_OLD_SPACE_MB_ENV]);
+  return Number.isSafeInteger(budgetMb) && tsdownBudgetAdmitsParallelNativeWork(budgetMb);
+}
+
+/**
  * Emit declarations in one compiler command-line pass. The compiler reads the checkout
  * directly, which is several times faster than routing each read through the API
  * filesystem callbacks, and it may check and emit in parallel: repeated parallel emits
- * are byte-identical. Inputs come from --listFiles and must stay inside the checkout.
+ * are byte-identical. Inputs come from --listFiles and must stay inside the checkout;
+ * returns undefined when the compiler read a path outside it.
  * Failed resolution probes are not reported; callers key caches on the namespace
  * topology and every manifest and tsconfig instead.
  */
@@ -370,19 +389,30 @@ async function compileDeclarationsWithCompilerCli({
           composite: false,
           // Parallel emit can give shared inferred properties different readonly modifiers.
           // Stable type ordering removes that race: parallel emits are byte-identical.
-          ...(compilerOptions?.stableTypeOrdering === true ? {} : { singleThreaded: true }),
+          ...(compilerOptions?.stableTypeOrdering === true && hostAdmitsParallelEmit()
+            ? {}
+            : { singleThreaded: true }),
         },
       }),
     );
     const compiled = await run(["-p", leaf, "--listFiles"]);
-    // --listFiles prints one absolute path per line after any diagnostics; a checkout
-    // path may itself contain a line break. Admit read files before reporting errors so
-    // an escaped input fails as an escape, not as the type error it causes.
-    const separator = root.includes("\n")
-      ? new RegExp(`\\r?\\n(?=${root.replaceAll(/[\\^$.*+?()[\]{}|/]/gu, "\\$&")})`, "u")
-      : /\r?\n/u;
-    const lines = compiled.output.replace(/\r?\n$/u, "").split(separator);
+    // --listFiles prints one absolute path per line after any diagnostics. Admit read files
+    // before reporting errors so an escaped input fails as an escape, not as the type error
+    // it causes.
+    const lines = compiled.output.replace(/\r?\n$/u, "").split(/\r?\n/u);
     const read = lines.filter((line) => path.isAbsolute(line) && fs.existsSync(line));
+    // Published SDK declarations probe `../`-relative node_modules paths several levels up.
+    // In a checkout nested inside another install (an updater's preflight worktree) they
+    // reach the outer install, which an isolated checkout would not see. Discard the pass;
+    // the bounded compile treats outside paths as absent. In-checkout links that escape
+    // still fail at admission there and below.
+    const outside = read.some((file) => {
+      const relative = path.relative(root, boundary.resolve(file));
+      return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    });
+    if (outside) {
+      return undefined;
+    }
     const inputs = [...new Set(read.map((file) => admit(file)))].toSorted();
     if (compiled.failure) {
       const diagnostics = lines.filter((line) => !read.includes(line)).join("\n");
@@ -414,19 +444,25 @@ export async function emitNativeDeclarations(
   if (!options.roots.length) {
     return { inputs: [], declarations };
   }
+  const root = fs.realpathSync.native(options.cwd);
+  const api = (assertInput = options.assertInput) =>
+    compileNativeProject({
+      ...options,
+      assertInput,
+      compilerOptions: { ...options.compilerOptions, rootDir: root, declarationMap: true },
+    });
+  // The command line always applies the checkout boundary; its API replacement must too.
+  const bounded = () => api(options.assertInput ?? ((file) => file));
   // API baselines check only declaration diagnostics, sometimes with a historical
   // compiler; the command line reports every diagnostic, so they keep the API path.
+  // A checkout path with a line break cannot be framed in --listFiles output. A pass that
+  // read outside the checkout is redone behind the bounded API filesystem.
   const compilation =
     options.diagnostics === "declarations"
-      ? await compileNativeProject({
-          ...options,
-          compilerOptions: {
-            ...options.compilerOptions,
-            rootDir: fs.realpathSync.native(options.cwd),
-            declarationMap: true,
-          },
-        })
-      : await compileDeclarationsWithCompilerCli(options);
+      ? await api()
+      : root.includes("\n")
+        ? await bounded()
+        : ((await compileDeclarationsWithCompilerCli(options)) ?? (await bounded()));
   const inputs = new Set(compilation.inputs);
   for (const [file, output] of compilation.outputFiles) {
     if (!/\.d\.[cm]?ts$/u.test(file)) {

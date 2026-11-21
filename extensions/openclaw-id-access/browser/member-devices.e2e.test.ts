@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { normalizeControlUiBuildInfo } from "../../../ui/src/build-info-normalizers.ts";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import { evaluateControlUiContext } from "../../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../../ui/src/test-helpers/control-ui-e2e-screenshot.ts";
 import { startBuiltControlUiE2eServer } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import { installNativePluginMockGateway } from "../../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
@@ -102,7 +103,7 @@ suite.define(() => {
             peerKey: peers[3],
             deviceFp: fingerprints[3],
             label: "Device (44444444)",
-            approvedBy: { kind: "owner", by: "root" },
+            approvedBy: { kind: "member_recovery_kit", device_fp: `fp:${"5".repeat(64)}` },
           },
         ].map((device) =>
           Object.assign(device, {
@@ -114,6 +115,7 @@ suite.define(() => {
         );
         const member = {
           accountId: "member-mira",
+          recoveryKit: true,
           displayName: "Mira Example",
           email: "mira@example.test",
           role: "operator",
@@ -138,6 +140,21 @@ suite.define(() => {
         expect(await row.textContent()).toContain("Approved by Chrome on Linux (22222222)");
         expect(await row.textContent()).toContain("Approved via invite team-invite");
         expect(await row.textContent()).toContain("last seen 5 min ago");
+        expect(await row.textContent()).toContain("Recovery kit saved");
+        expect(await row.textContent()).toContain("Added with a recovery kit");
+        for (const mode of ["light", "dark"] as const) {
+          await evaluateControlUiContext(
+            page,
+            (context, next) => context.theme.setMode(next),
+            mode,
+          );
+          await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+          const frame = await takeControlUiScreenshotFrame(page, row, [row], {
+            animations: "disabled",
+            scrollTo: row,
+          });
+          writeFileSync(path.join(suite.artifactDir, `member-kit-${mode}.png`), frame.png);
+        }
         const first = row.locator(".ocid-access__device").first();
         for (const width of [1280, 400, 820]) {
           await page.setViewportSize({ width, height: 1000 });

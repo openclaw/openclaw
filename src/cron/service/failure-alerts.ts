@@ -198,6 +198,11 @@ export function resolveFailureAlert(
     job.delivery?.failureDestination?.to !== undefined ||
     globalConfig?.channel !== undefined ||
     globalConfig?.to !== undefined;
+  const hasAlertRouteSelector =
+    hasAnnounceRouteSelector ||
+    jobConfig?.accountId !== undefined ||
+    job.delivery?.failureDestination?.accountId !== undefined ||
+    globalConfig?.accountId !== undefined;
   const channel =
     mode === "announce" && !hasAnnounceRouteSelector && primaryChannel
       ? primaryChannel
@@ -237,6 +242,7 @@ export function resolveFailureAlert(
     accountId === primaryAnnounceRoute?.accountId &&
     normalizeOptionalStringifiedId(threadId) ===
       normalizeOptionalStringifiedId(primaryAnnounceRoute?.threadId);
+  const inheritsPrimaryTarget = primaryRouteMatches && !hasAlertRouteSelector;
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -248,6 +254,8 @@ export function resolveFailureAlert(
     to,
     mode,
     accountId,
+    target: inheritsPrimaryTarget ? primaryAnnounceRoute?.target : undefined,
+    directPolicy: inheritsPrimaryTarget ? primaryAnnounceRoute?.directPolicy : undefined,
     threadId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
     alternateRoute: alternateRoute !== null && !primaryRouteMatches,
@@ -267,49 +275,50 @@ function buildFailureAlertPayload(params: {
   route: ResolvedFailureAlert;
   status: "error" | "skipped";
   localProviderUnavailable?: boolean;
-  /** The failure auto-disabled the recurring job: lead with the safety notice and recovery command. */
+  /** The failure auto-disabled the job: lead with the safety notice and recovery command. */
   autoDisabled?: boolean;
 }) {
   const safeJobName = params.job.name || params.job.id;
   const errorReason = params.status === "error" ? params.errorReason : undefined;
+  let text: string;
   if (params.autoDisabled) {
     const notice = buildCronAutoDisableNotice({
       job: params.job,
       reason: "consecutive-failures",
       consecutiveErrors: params.consecutiveErrors,
+      failureNotificationDetail: params.failureNotificationDetail,
     });
-    return {
-      text:
-        params.route.mode === "webhook"
-          ? `${notice}\nLast error: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`
-          : notice,
-    } satisfies ReplyPayload;
-  }
-  // Keep alert bodies compact because they may route through chat channels
-  // with notification previews and provider-specific message limits.
-  const statusVerb = params.status === "skipped" ? "skipped" : "failed";
-  const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
-  const detailLines =
-    params.route.mode === "webhook"
-      ? [
-          ...(errorReason ? [`Cause: ${errorReason}`] : []),
-          `${detailLabel}: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`,
-        ]
-      : params.localProviderUnavailable
+    text =
+      params.route.mode === "webhook"
+        ? `${notice}\nLast error: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`
+        : notice;
+  } else {
+    // Keep alert bodies compact because they may route through chat channels
+    // with notification previews and provider-specific message limits.
+    const statusVerb = params.status === "skipped" ? "skipped" : "failed";
+    const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
+    const detailLines =
+      params.route.mode === "webhook"
         ? [
-            "Cause: the local model provider is unreachable.",
-            "Start the provider or check its configured endpoint in automation history.",
-            isJobEnabled(params.job) && params.job.state.nextRunAtMs !== undefined
-              ? "OpenClaw will check again on a later scheduled run."
-              : "After restoring the provider, use Run Now or reschedule this automation.",
+            ...(errorReason ? [`Cause: ${errorReason}`] : []),
+            `${detailLabel}: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`,
           ]
-        : cronFailureDetailLines(errorReason, params.failureNotificationDetail);
-  const text = [
-    params.consecutiveErrors > 1
-      ? `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times in a row`
-      : `Automation "${safeJobName}" ${statusVerb}`,
-    ...detailLines,
-  ].join("\n");
+        : params.localProviderUnavailable
+          ? [
+              "Cause: the local model provider is unreachable.",
+              "Start the provider or check its configured endpoint in automation history.",
+              isJobEnabled(params.job) && params.job.state.nextRunAtMs !== undefined
+                ? "OpenClaw will check again on a later scheduled run."
+                : "After restoring the provider, use Run Now or reschedule this automation.",
+            ]
+          : cronFailureDetailLines(errorReason, params.failureNotificationDetail);
+    text = [
+      params.consecutiveErrors > 1
+        ? `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times in a row`
+        : `Automation "${safeJobName}" ${statusVerb}`,
+      ...detailLines,
+    ].join("\n");
+  }
   const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
   const providerLoginRecovery =
     params.status === "error" && (errorReason === "auth" || errorReason === "auth_permanent")
@@ -401,6 +410,7 @@ function failureIncident(params: {
         params.route.to,
         params.route.accountId,
         params.route.threadId,
+        ...(params.route.target !== undefined ? [params.route.target] : []),
       ]),
     ),
     scope,
@@ -456,7 +466,7 @@ function maybeEmitFailureAlert(
     return "unavailable";
   }
   const incident = failureIncident({ ...params, route: alertConfig });
-  if (terminalRecurring) {
+  if (terminal) {
     // The streak's earlier notice shares this incident signature; the disable is still news.
     startFailureAlertCycle(params.job, incident, state.deps.nowMs());
   } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
@@ -475,7 +485,7 @@ function maybeEmitFailureAlert(
       route: alertConfig,
       status: params.status,
       localProviderUnavailable,
-      autoDisabled: terminalRecurring,
+      autoDisabled: terminal,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,

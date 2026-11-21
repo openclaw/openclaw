@@ -23,7 +23,7 @@ const enBoard = {
       rejectedDetail: "This widget stays inactive until it is removed or replaced.",
       appLoading: "Loading app…",
       appStaleTitle: "This pinned app is stale",
-      appStaleDetail: "Its server, resource, or originating transcript is no longer available.",
+      appStaleDetail: "Its server, resource, or originating chat is no longer available.",
       retry: "Retry",
       frameResolverMissing: "Widget content is unavailable.",
       sandboxUnavailable: "The widget sandbox is unavailable.",
