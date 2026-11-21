@@ -22,6 +22,7 @@ import "./agent.reset-and-identity.test-utils.js";
 import "./agent.abort-integration.test-utils.js";
 import "./agent.caller-authority.test-utils.js";
 import "./agent.dispatch-clock.test-utils.js";
+import "./agent.prompt-cache-key.test-utils.js";
 
 let metadataOwner: GatewayPluginMetadataOwner | undefined;
 beforeAll(() => {
