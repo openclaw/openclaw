@@ -5,7 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   readInstalledTerminalDependencyTree,
   readInstalledTerminalMetadata,
@@ -4028,6 +4028,17 @@ it.each([
   [true, 38, 39, "valid"],
   [true, 39, 38, "valid"],
   [true, 39, 39, "native-input-errors"],
+  [true, 39, 39, "destroyed-input"],
+  [true, 39, 39, "malformed-input"],
+  [true, 39, 39, "wrong-root-input"],
+  [true, 39, 39, "file-url"],
+  [true, 39, 39, "cleared-loader"],
+  [true, 39, 39, "wrong-spec"],
+  [true, 39, 39, "public-result"],
+  [true, 39, 39, "public-count-history"],
+  [true, 39, 39, "public-byte-history"],
+  [true, 39, 39, "public-identity"],
+  [true, 39, 39, "public-maintenance"],
   [true, 39, 39, "handoff-window"],
   [true, 39, 39, "typed-view"],
   [true, 39, 39, "held-open"],
@@ -4046,14 +4057,136 @@ it.each([
   [true, 39, 39, "dangling-escrow"],
 ] as const)(
   "changes only the launcher after a drained successful worker: success=%s header=%s metadata=%s mode=%s",
-  (successful, headerVersion, metadataVersion, mode) => {
+  async (successful, headerVersion, metadataVersion, mode) => {
     const f = fixture();
     const admitted =
       successful &&
       headerVersion === 39 &&
       metadataVersion === 39 &&
-      ["valid", "native-input-errors", "handoff-window", "delegated", "historical"].includes(mode);
+      [
+        "valid",
+        "native-input-errors",
+        "handoff-window",
+        "delegated",
+        "historical",
+        "file-url",
+        "public-result",
+        "public-count-history",
+        "public-byte-history",
+      ].includes(mode);
     const selected = !["foreign-entry", "foreign-runtime", "shell"].includes(mode);
+    const observesInput = selected && !["cleared-loader", "wrong-spec"].includes(mode);
+    const rejectedInput = ["malformed-input", "wrong-root-input", "destroyed-input"].includes(mode);
+    if (mode === "wrong-spec") {
+      fs.mkdirSync(path.join(f.root, "other-events"));
+      writeJson(path.join(f.root, "other-spec.json"), {
+        ...f.spec,
+        directory: path.join(f.root, "other-events"),
+      });
+    }
+    const cleanup = {
+      name: "recovery-artifact-cleanup",
+      command: "openclaw update cleanup",
+      cwd: "",
+      durationMs: 0,
+      exitCode: 0,
+      advisory: { kind: "recoverable-maintenance" as const, message: "retained recovery" },
+      ...(mode === "public-byte-history" ? { diagnostics: ["d".repeat(1024)] } : {}),
+    };
+    const produced = mode.endsWith("-history")
+      ? await (async () => {
+          const { updateRunFixture } =
+            await import("../../src/infra/update-run-fixture.test-support.js");
+          const { captureCompletedUpdateRun } =
+            await import("../../src/infra/update-run-terminal-record.js");
+          const { recordAutomaticRecoveryCleanup } =
+            await import("../../src/infra/update-automatic-cleanup-result.js");
+          const { prepareResult } = await import("../../src/cli/update-cli/progress.js");
+          const state = await import("../../src/state/openclaw-state-db.js");
+          const { defaultRuntime } = await import("../../src/runtime.js");
+          const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+          try {
+            const env = { OPENCLAW_STATE_DIR: path.join(f.root, "ledger") };
+            const run = updateRunFixture({ env });
+            for (let index = 0; index < 128; index++) {
+              run.step({
+                step: `fixture-${index}`,
+                status: "completed",
+                ...(mode === "public-byte-history" ? { detail: "d".repeat(1024) } : {}),
+              });
+            }
+            run.finish({ status: "succeeded" });
+            const captured = captureCompletedUpdateRun(run.id, () => {}, { env });
+            assert(captured);
+            const original = structuredClone(captured);
+            if (mode === "public-count-history") {
+              expect(captured.steps).toHaveLength(128);
+            } else {
+              expect(captured.steps.length).toBeLessThan(128);
+              expect(Buffer.byteLength(JSON.stringify(captured.steps))).toBeLessThanOrEqual(
+                16 * 1024,
+              );
+            }
+            const privateResult = {
+              root: f.root,
+              runId: run.id,
+              status: "ok" as const,
+              mode: "npm" as const,
+              steps: [],
+              durationMs: 0,
+            };
+            const emit = await prepareResult(
+              privateResult,
+              { json: true, run: { runId: run.id, env } },
+              { record: captured, writeArtifacts: false },
+            );
+            const expectedCleanup = structuredClone(cleanup);
+            await recordAutomaticRecoveryCleanup(run.id, cleanup, env, () => {});
+            expect(cleanup).toEqual(expectedCleanup);
+            const record = run.read();
+            assert(record);
+            expect(captured).toEqual(original);
+            expect(
+              captured.steps.some(({ step }) => !record.steps.some((row) => row.step === step)),
+            ).toBe(true);
+            emit([cleanup]);
+            expect(writeJson).toHaveBeenCalledOnce();
+            const publicResult = writeJson.mock.calls[0]![0];
+            expect(publicResult).toMatchObject({
+              steps: [cleanup],
+              run: { steps: expect.arrayContaining(captured.steps) },
+            });
+            return { privateResult, publicResult, record };
+          } finally {
+            writeJson.mockRestore();
+            await state.closeOpenClawStateDatabaseAsync();
+            state.closeOpenClawStateDatabaseForTest();
+          }
+        })()
+      : undefined;
+    const runId = produced?.record.runId ?? "run";
+    const publicRun = {
+      runId: "run",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      trigger: "cli",
+      phase: "finished",
+      status: "succeeded",
+      reason: null,
+      confirmedAtMs: null,
+      finishedAtMs: 2,
+      downtimeMs: null,
+      origin: {},
+      target: {},
+      before: {},
+      after: {},
+      verification: {},
+      repair: [],
+      steps: [
+        { step: cleanup.name, status: "completed", exitCode: 0 },
+        { step: `warning:${cleanup.name}`, status: "completed", detail: cleanup.advisory.message },
+      ],
+    };
     const worker = path.join(
       f.root,
       mode === "foreign-entry" ? "foreign" : "dist/infra",
@@ -4073,10 +4206,15 @@ it.each([
     import fs from 'node:fs';
     if (process.argv[2]) { process.stdin.resume(); } else {
     let input = ''; for await (const chunk of process.stdin) input += chunk;
-    const request = JSON.parse(input);
-    const response = { result: { root: request.params.result.root, runId: 'run', status: ${JSON.stringify(successful ? "ok" : "error")} }, terminalRunId: 'run', exitCode: ${successful ? 0 : 1}, ${mode === "delegated" ? "executorDelegation:'pid-start-v1'," : mode === "wrong-delegation" ? "executorDelegation:'unqualified'," : ""} };
+    ${rejectedInput ? `fs.writeFileSync(${JSON.stringify(path.join(f.root, "native-input"))}, input);` : ""}
+    const request = ${["malformed-input", "destroyed-input"].includes(mode) ? JSON.stringify({ resultPath: path.join(f.root, "result.json"), params: { result: { root: f.root } } }) : "JSON.parse(input)"};
+    const response = { result: ${produced ? JSON.stringify(produced.privateResult) : `{ root: ${rejectedInput ? JSON.stringify(f.root) : "request.params.result.root"}, runId: 'run', status: ${JSON.stringify(successful ? "ok" : "error")}, steps: [] }`}, terminalRunId: ${JSON.stringify(runId)}, exitCode: ${successful ? 0 : 1}, ${mode === "delegated" ? "executorDelegation:'pid-start-v1'," : mode === "wrong-delegation" ? "executorDelegation:'unqualified'," : ""} };
     fs.writeFileSync(request.resultPath, JSON.stringify(response));
-    process.stdout.write(JSON.stringify(${mode === "changed-stdout" ? "{...response.result, runId:'another-run'}" : "response.result"}));
+    const published = ${mode === "changed-stdout" ? "{...response.result, runId:'another-run'}" : "{...response.result}"};
+    ${produced ? `Object.assign(published, ${JSON.stringify(produced.publicResult)});` : mode.startsWith("public-") ? `published.steps = ${JSON.stringify([cleanup])}; published.run = ${JSON.stringify(publicRun)}; published.reportPath = ${JSON.stringify(path.join(f.root, "update-reports/run.md"))};` : ""}
+    ${mode === "public-identity" ? "published.run.runId = 'another-run';" : ""}
+    ${mode === "public-maintenance" ? "published.run.steps[1].detail = 'changed maintenance';" : ""}
+    process.stdout.write(JSON.stringify(published));
     ${mode === "held-open" ? "process.send('ready'); process.once('message', () => process.disconnect());" : ""}
     ${mode === "native-nonzero" ? "process.exitCode = 7;" : ""}
     }
@@ -4094,7 +4232,21 @@ it.each([
     const identity = file => { const s = fs.lstatSync(file, { bigint: true }); return s.dev + ':' + s.ino; };
     const original = identity(spec.bin);
     const state = new DatabaseSync(spec.stateDatabase);
-    state.exec("CREATE TABLE update_runs(run_id TEXT, status TEXT, phase TEXT); INSERT INTO update_runs VALUES('run','succeeded','finished')"); state.close();
+    state.exec("CREATE TABLE update_runs(run_id TEXT, status TEXT, phase TEXT)");
+    state.prepare("INSERT INTO update_runs VALUES(?, 'succeeded', 'finished')").run(${JSON.stringify(runId)});
+    ${
+      mode.startsWith("public-")
+        ? `
+    const record = ${JSON.stringify(produced?.record ?? publicRun)};
+    for (const [column, value] of Object.entries({
+      created_at_ms:record.createdAtMs, updated_at_ms:record.updatedAtMs, trigger:record.trigger,
+      reason:record.reason, confirmed_at_ms:record.confirmedAtMs, finished_at_ms:record.finishedAtMs, downtime_ms:record.downtimeMs,
+      ...Object.fromEntries(['origin','target','before','after','verification','repair','steps'].map(key => [key+'_json',JSON.stringify(record[key])]))
+    })) {state.exec('ALTER TABLE update_runs ADD COLUMN '+column);state.prepare('UPDATE update_runs SET '+column+' = ?').run(value);}
+    `
+        : ""
+    }
+    state.close();
     const agent = new DatabaseSync(spec.agentDatabase);
     agent.exec("PRAGMA user_version=${headerVersion}; CREATE TABLE schema_meta(meta_key TEXT,schema_version INTEGER); INSERT INTO schema_meta VALUES('primary',${metadataVersion}); CREATE TABLE cache_entries(scope TEXT,key TEXT,value_json TEXT)");
     agent.prepare('INSERT INTO cache_entries VALUES(?,?,?)').run('installed-terminal','retained','"preserve-me"'); agent.close();
@@ -4107,11 +4259,12 @@ it.each([
         const exited = once(probe, 'close'); probe.stdin.end('{}'); assert.equal((await exited)[0], 0);
       }
       const resultPath = spec.root + '/result.json';
-      const child = spawn(${mode === "foreign-runtime" ? JSON.stringify(runtime) : "process.execPath"}, [${JSON.stringify(worker)}], { env: {...process.env}, stdio: ['pipe','pipe','pipe'${mode === "held-open" ? ",'ipc'" : ""}], shell: ${mode === "shell"} });
+      const child = spawn(${mode === "foreign-runtime" ? JSON.stringify(runtime) : "process.execPath"}, [${JSON.stringify(worker)}], { env: {...process.env${mode === "cleared-loader" ? ",NODE_OPTIONS:'--max-old-space-size=256'" : mode === "wrong-spec" ? `,OPENCLAW_INSTALLED_TERMINAL_OBSERVER:${JSON.stringify(path.join(f.root, "other-spec.json"))}` : ""}}, stdio: ['pipe','pipe','pipe'${mode === "held-open" ? ",'ipc'" : ""}], shell: ${mode === "shell"} });
+      const closed = new Promise(resolve => child.once('close', (code, signal) => resolve([code, signal])));
+      try {
       child.stdout.resume(); child.stderr.resume();
-      const closed = once(child, 'close');
       ${mode === "held-open" ? "const ready = once(child, 'message');" : ""}
-      const request = JSON.stringify({ resultPath, ${["delegated", "missing-delegation", "wrong-delegation"].includes(mode) ? "executor:{scope:'fixture'}," : ""} params: { opts:{run:{runId:'run',env:{SENTINEL:'private-request-sentinel'}}},ownedManagedUpdateEnv:{SENTINEL:'private-request-sentinel'},rollbackBlockedReason:'state-migrated-no-rollback',schemaVersions:[{path:spec.stateDatabase,userVersion:39},{path:spec.agentDatabase,userVersion:25,contentVersion:25}],result:{root:spec.root} } });
+      const request = ${mode === "malformed-input" ? "'private-rejected-input-sentinel{'" : `JSON.stringify({ resultPath, ${["delegated", "missing-delegation", "wrong-delegation"].includes(mode) ? "executor:{scope:'fixture'}," : ""} params: { opts:{run:{runId:${JSON.stringify(runId)},env:{SENTINEL:'private-request-sentinel'}}},ownedManagedUpdateEnv:{SENTINEL:'private-request-sentinel'},rollbackBlockedReason:'state-migrated-no-rollback',schemaVersions:[{path:spec.stateDatabase,userVersion:39},{path:spec.agentDatabase,userVersion:25,contentVersion:25}],result:{root:${mode === "wrong-root-input" ? "'/private-rejected-input-sentinel'" : "spec.root"}} } })`};
       ${
         mode === "native-input-errors"
           ? `
@@ -4125,8 +4278,17 @@ it.each([
           : ""
       }
       ${
-        mode === "handoff-window"
+        mode === "destroyed-input"
           ? `
+      child.stdin.destroy();
+      child.stdin.on('error', error => assert.equal(error.code, 'ERR_STREAM_DESTROYED'));
+      const callback = new Promise(resolve => {
+        assert.equal(child.stdin.end(request, error => {assert.equal(error.code, 'ERR_STREAM_DESTROYED'); resolve();}), child.stdin);
+      });
+      await callback;
+      `
+          : mode === "handoff-window"
+            ? `
       await once(child, 'spawn');
       const nativeWrite = child.stdin._write;
       let releaseTime;
@@ -4142,7 +4304,7 @@ it.each([
       assert(BigInt(handoff.time) < releaseTime);
       fs.writeFileSync(spec.root + '/release-time.json', JSON.stringify(String(releaseTime)));
       `
-          : `
+            : `
       let writeCallbacks = 0, endCallbacks = 0;
       ${
         mode === "typed-view"
@@ -4163,18 +4325,27 @@ it.each([
       ${
         mode === "held-open"
           ? `
-      try {
-        await ready;
-        assert.equal(JSON.parse(await fsp.readFile(resultPath, 'utf8')).result.status, 'ok');
-        assert.equal(identity(spec.bin), original); assert(!fs.existsSync(spec.escrow));
-      } finally {
-        child.send('release'); await closed;
-      }
+      await ready;
+      assert.equal(JSON.parse(await fsp.readFile(resultPath, 'utf8')).result.status, 'ok');
+      assert.equal(identity(spec.bin), original); assert(!fs.existsSync(spec.escrow));
+      child.send('release'); await closed;
       `
           : ""
       }
       assert.equal((await closed)[0], ${mode === "native-nonzero" ? 7 : 0});
-      ${mode === "handoff-window" ? "" : `assert.equal(writeCallbacks, ${mode === "typed-view" ? 0 : 1}); assert.equal(endCallbacks, 1);`}
+      ${["handoff-window", "destroyed-input"].includes(mode) ? "" : `assert.equal(writeCallbacks, ${mode === "typed-view" ? 0 : 1}); assert.equal(endCallbacks, 1);`}
+      ${rejectedInput ? `assert.equal(fs.readFileSync(spec.root+'/native-input', 'utf8'), ${mode === "destroyed-input" ? "''" : "request"});` : ""}
+      ${
+        mode === "file-url"
+          ? `
+      let coerced = 0;
+      const unrelated = require('node:url').pathToFileURL(${JSON.stringify(worker)});
+      unrelated.toString = () => {coerced++; return resultPath;};
+      await fsp.readFile(unrelated, 'utf8'); assert.equal(coerced, 0);
+      assert.equal(identity(spec.bin), original);
+      `
+          : ""
+      }
       ${mode.startsWith("isolate-failure") ? `fs.writeFileSync(require('node:path').join(spec.directory, '99-1.failure.json${mode.endsWith("-temp") ? ".tmp" : ""}'), '{"status":"unqualified"}');` : ""}
       ${mode === "shared-failure" ? "fs.writeFileSync(require('node:path').join(spec.directory, 'observer-failed.json'), '{\"status\":\"unqualified\"}');" : ""}
       ${mode === "dangling-escrow" ? "fs.symlinkSync('missing-original', spec.escrow);" : ""}
@@ -4195,6 +4366,10 @@ it.each([
       `
           : ""
       }
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        await closed;
+      }
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `,
     );
@@ -4202,6 +4377,7 @@ it.each([
     expect(result.status, result.stderr).toBe(mode === "historical" ? 1 : 0);
     const rows = f.records();
     expect(JSON.stringify(rows)).not.toContain("private-request-sentinel");
+    expect(JSON.stringify(rows)).not.toContain("private-rejected-input-sentinel");
     if (mode === "historical") {
       assertInstalledTerminalOutput(
         rows,
@@ -4215,13 +4391,56 @@ it.each([
       );
     }
     const closed = rows.findIndex((row) => row.event === "worker-closed");
-    if (selected && !["typed-view", "held-open"].includes(mode)) {
+    if (
+      observesInput &&
+      ![
+        "typed-view",
+        "held-open",
+        "malformed-input",
+        "wrong-root-input",
+        "destroyed-input",
+      ].includes(mode)
+    ) {
       expect(closed).toBeGreaterThanOrEqual(0);
     } else {
       expect(closed).toBe(-1);
     }
-    if (!selected) {
+    if (!observesInput || rejectedInput) {
       expect(rows.some((row) => row.event === "handoff")).toBe(false);
+    }
+    if (rejectedInput) {
+      const failure = JSON.parse(
+        fs.readFileSync(path.join(f.spec.directory, "observer-failed.json"), "utf8"),
+      );
+      expect(failure.error).toBe(
+        mode === "destroyed-input"
+          ? "AssertionError [ERR_ASSERTION]: Migrated input was not accepted"
+          : "Error: Migrated handoff input could not be qualified",
+      );
+      for (const name of [
+        "candidate-package-identity",
+        "package-hasher-contract",
+        "package-heartbeat-contracts",
+        "installed-terminal-contracts",
+        "healthy-dependencies",
+      ]) {
+        writeJson(path.join(f.root, `${name}.json`), {});
+      }
+      fs.cpSync(f.spec.directory, path.join(f.root, "healthy"), { recursive: true });
+      publishInstalledTerminalEvidence(f.root, {
+        status: "failed",
+        commands: [],
+        cells: [{ name: "healthy" }],
+      });
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(f.root, "export/manifest.json"), "utf8"),
+      );
+      for (const file of manifest.files) {
+        const bytes = fs.readFileSync(path.join(f.root, "export", file.name));
+        const text = (file.name.endsWith(".gz") ? gunzipSync(bytes) : bytes).toString();
+        expect(text).not.toContain("private-request-sentinel");
+        expect(text).not.toContain("private-rejected-input-sentinel");
+      }
     }
     if (admitted) {
       const passed = rows.findIndex((row) => row.event === "candidate-success");

@@ -642,6 +642,7 @@ function install(spec) {
   const failureFile = path.join(spec.directory, `${process.pid}-${thread}.failure.json`);
   const sharedFailure = path.join(spec.directory, "observer-failed.json");
   const scopeFile = path.join(spec.directory, "handoff.json");
+  const specHash = digest(JSON.stringify(spec));
   let scope;
   const persistFailure = () => {
     if (!failure) {
@@ -1359,6 +1360,14 @@ function install(spec) {
         assert(fs.lstatSync(argv[0]).isFile() && fs.realpathSync(argv[0]) === argv[0]);
         assert(!selected, "Multiple migrated finalizers in one predecessor");
         assert(child.pid && child.stdin && child.stdout && child.stderr);
+        // Service environment normalization may strip the loader. Observe that
+        // refusal without changing the native child's selected environment.
+        assert(
+          launch.options.env.OPENCLAW_INSTALLED_TERMINAL_OBSERVER === specPath &&
+            launch.options.env.NODE_OPTIONS === process.env.NODE_OPTIONS &&
+            process.env.NODE_OPTIONS?.includes(`--import=${fileURLToPath(import.meta.url)}`),
+          "Migrated finalizer does not retain the observer preload and specification",
+        );
         selected = { child: child.pid, input: [], inputBytes: 0, output: [], outputBytes: 0 };
         const state = Object.getOwnPropertyDescriptor(child.stdin, "_writableState").value;
         const prepareInput = (receiver, args, final) => {
@@ -1404,8 +1413,10 @@ function install(spec) {
               prepared.scope = { time, child: child.pid, databases };
             }
             return prepared;
-          } catch (error) {
-            return { error };
+          } catch {
+            // Input can contain private environment values. Neither parser
+            // excerpts nor assertion diffs belong in exported observation errors.
+            return { error: new Error("Migrated handoff input could not be qualified") };
           }
         };
         const acceptInput = (prepared, final) => {
@@ -1495,13 +1506,18 @@ function install(spec) {
   fsp.readFile = async function (...args) {
     const result = await Reflect.apply(original.readFile, this, args);
     observe("candidate-response", () => {
-      if (!selected?.request || String(args[0]) !== selected.request.resultPath) {
+      if (!selected?.request || args[0] !== selected.request.resultPath) {
         return;
       }
       assert(!selected.observed, "Migrated response was read twice");
       selected.observed = true;
       assert(selected.closed && selected.stdoutEnded && selected.stderrEnded);
       assert.deepEqual(selected.exit, { code: 0, signal: null });
+      const startups = readIsolates(spec.directory)
+        .isolates.flat()
+        .filter((row) => row.event === "startup" && row.pid === selected.child && row.thread === 0);
+      assert.equal(startups.length, 1, "Missing selected finalizer observer startup");
+      assert.equal(startups[0].specHash, specHash, "Finalizer observer specification changed");
       assert(Buffer.byteLength(result) <= maxInputBytes);
       const response = JSON.parse(result.toString());
       const params = selected.request.params;
@@ -1518,15 +1534,123 @@ function install(spec) {
       if (selected.request.executor) {
         assert.equal(response.executorDelegation, "pid-start-v1");
       }
-      assert.deepEqual(
-        JSON.parse(Buffer.concat(selected.output).toString("utf8")),
-        response.result,
-      );
       const candidate = readOnly(spec.stateDatabase, (db) => ({
         ...db.prepare("SELECT * FROM update_runs WHERE run_id = ?").get(runId),
       }));
       assert.equal(candidate.status, "succeeded");
       assert.equal(candidate.phase, "finished");
+      const {
+        run,
+        reportPath,
+        steps: publishedSteps,
+        ...published
+      } = JSON.parse(Buffer.concat(selected.output).toString("utf8"));
+      const { steps: privateSteps, ...privateResult } = response.result;
+      assert.deepEqual(published, privateResult, "Published candidate outcome changed");
+      assert.deepEqual(publishedSteps.slice(0, privateSteps.length), privateSteps);
+      const cleanup = publishedSteps.slice(privateSteps.length);
+      assert(cleanup.length <= 1, "Unexpected candidate publication steps");
+      for (const step of cleanup) {
+        const { durationMs, advisory, diagnostics, ...operation } = step;
+        assert.deepEqual(operation, {
+          name: "recovery-artifact-cleanup",
+          command: "openclaw update cleanup",
+          cwd: "",
+          exitCode: 0,
+        });
+        assert(Number.isFinite(durationMs) && durationMs >= 0);
+        if (advisory !== undefined) {
+          assert.equal(typeof advisory.message, "string");
+          assert.deepEqual(advisory, {
+            kind: "recoverable-maintenance",
+            message: advisory.message,
+          });
+        }
+        if (diagnostics !== undefined) {
+          assert(
+            Array.isArray(diagnostics) &&
+              diagnostics.length <= 1 &&
+              diagnostics.every((detail) => typeof detail === "string"),
+          );
+        }
+      }
+      if (reportPath !== undefined) {
+        assert(
+          typeof reportPath === "string" &&
+            path.isAbsolute(reportPath) &&
+            path.dirname(reportPath).endsWith("/update-reports") &&
+            path.basename(reportPath) === `${runId}.md`,
+          "Unexpected candidate report path",
+        );
+      }
+      if (run !== undefined) {
+        // Publication uses a captured ledger. Later cleanup can compact its
+        // persisted steps, so bind stable outcome facts, not historical steps.
+        // The appended maintenance still follows the canonical projection.
+        const expected = Object.fromEntries(
+          ["origin", "target", "before", "after", "verification", "repair"].map((key) => [
+            key,
+            JSON.parse(candidate[`${key}_json`]),
+          ]),
+        );
+        for (const [key, column] of Object.entries({
+          runId: "run_id",
+          createdAtMs: "created_at_ms",
+          trigger: "trigger",
+          phase: "phase",
+          status: "status",
+          reason: "reason",
+          confirmedAtMs: "confirmed_at_ms",
+          finishedAtMs: "finished_at_ms",
+          downtimeMs: "downtime_ms",
+        }))
+          expected[key] = candidate[column];
+        if (expected.origin.admission) expected.admission = expected.origin.admission;
+        for (const key of [
+          "updateRecoveryCapture",
+          "windowsUserSid",
+          "managedHandoff",
+          "packageStage",
+        ]) {
+          delete expected.origin[key];
+        }
+        if (expected.verification.recovery?.serviceRestartSafe === false) {
+          delete expected.verification.recovery.dataAtRisk;
+        }
+        const { updatedAtMs, steps, ...captured } = run;
+        const maintenance = (step) =>
+          /^(?:(?:warning|diagnostic):)?recovery-artifact-cleanup(?::\d+)?$/u.test(step.step);
+        assert.deepEqual(captured, expected, "Published run identity or outcome changed");
+        assert(
+          Number.isSafeInteger(updatedAtMs) &&
+            updatedAtMs >= candidate.created_at_ms &&
+            updatedAtMs <= candidate.updated_at_ms,
+        );
+        assert(Array.isArray(steps));
+        if (cleanup.length) {
+          const step = cleanup[0];
+          const projected = [{ step: step.name, status: "completed", exitCode: 0 }];
+          for (const [kind, messages] of [
+            ["warning", step.advisory ? [step.advisory.message] : []],
+            ["diagnostic", step.diagnostics ?? []],
+          ]) {
+            for (const [index, detail] of messages.slice(0, 32).entries()) {
+              // update-run-step uses truncateUtf16Safe at the ledger text cap.
+              const end =
+                detail.length > 1024 &&
+                /[\uD800-\uDBFF][\uDC00-\uDFFF]/u.test(detail.slice(1023, 1025))
+                  ? 1023
+                  : 1024;
+              projected.push({
+                step: `${kind}:${step.name}${index ? `:${index + 1}` : ""}`,
+                status: "completed",
+                detail: detail.slice(0, end),
+              });
+            }
+          }
+          assert.deepEqual(steps.filter(maintenance), projected, "Published maintenance changed");
+        }
+      }
       const agent = readOnly(spec.agentDatabase, (db) => ({
         userVersion: db.prepare("PRAGMA user_version").get().user_version,
         metadataVersion: db
@@ -1614,6 +1738,7 @@ function install(spec) {
     node: process.version,
     executableIdentity: fileIdentity(process.execPath),
     entry: process.argv[1],
+    specHash,
   });
   observe("heartbeat-package", qualifyHeartbeatPackage);
   process.once("exit", (code) => {
@@ -1864,7 +1989,7 @@ function nativeLifetimeReader(rows, onEnclosing = () => {}) {
           (row) => row.event === "startup" && row.pid === created.pid && row.thread === thread,
         ).length,
         1,
-        "Enclosing bound requires unique Worker startup",
+        "Child has no unique native exit: enclosing bound requires unique Worker startup",
       );
     }
     const owners = rows.filter((row) =>
