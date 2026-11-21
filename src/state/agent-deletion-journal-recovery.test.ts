@@ -51,6 +51,29 @@ function expectHolds(held: ReturnType<typeof holds>, missing = held) {
   expect(missingHolds(database)).toEqual(missing);
 }
 
+it("ignores auxiliary recovery holds without altering receipt evidence or durable holds", () => {
+  const auxiliary = ["generation-lock", "generation-writer", "reindex-lock"].map((kind) => ({
+    agentId: "main",
+    path: `${main.path}.${kind}.sqlite`,
+  }));
+  const custom = { agentId: "custom", path: path.join(root, "plugins", "cache.lock.sqlite") };
+  const all = [...auxiliary, other, custom];
+  transaction(() => record(database, all, { missingJournal: all }));
+  const receipt = () =>
+    database.db
+      .prepare("SELECT report_json FROM migration_sources WHERE source_key = ?")
+      .get(SOURCE_KEY);
+  const originalReceipt = receipt();
+  const originalReport = readReport(database);
+  const runs = () => database.db.prepare("SELECT * FROM migration_runs ORDER BY id").all();
+  const originalRuns = runs();
+
+  expectHolds([other, custom]);
+  expect(readReport(database)).toEqual(originalReport);
+  expect(receipt()).toEqual(originalReceipt);
+  expect(runs()).toEqual(originalRuns);
+});
+
 it("records and revokes missing-journal provenance", () => {
   database.db.exec("DROP TABLE agent_deletion_journal");
   transaction(() => reconstruct(database, [main]));

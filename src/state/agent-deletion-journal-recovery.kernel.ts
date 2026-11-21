@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
+import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
 import { readLegacyMigrationReceiptFromDatabase } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
@@ -74,10 +75,12 @@ export function readReport(database: RecoveryDatabase): RecoveryReport | undefin
 }
 
 export function decodeHolds(database: RecoveryDatabase, held: readonly HeldAgentDatabase[]) {
-  return held.map((entry) => ({
-    agentId: entry.agentId,
-    path: resolveOpenClawRegisteredAgentDatabasePath(database.path, entry.path),
-  }));
+  return held
+    .map((entry) => ({
+      agentId: entry.agentId,
+      path: resolveOpenClawRegisteredAgentDatabasePath(database.path, entry.path),
+    }))
+    .filter((entry) => !isTransientSqliteBackupPath(entry.path));
 }
 
 /** Read recovery facts from this exact shared-state generation without opening another database. */
