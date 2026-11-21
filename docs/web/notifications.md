@@ -100,8 +100,8 @@ enabled block them.
 Only browsers bound to your profile can receive them. With **Private** detail
 (the default) you see the category's generic text. With **Names only** or
 **Detailed**, you see the sender's sanitized title and body on one line. When
-named operator roles are on, only you or an operator with `operator.admin` can
-send to your profile.
+named operator roles apply to the sender, only you or an operator with
+`operator.admin` can send to your profile.
 
 ### Use more than one Gateway on one phone
 
