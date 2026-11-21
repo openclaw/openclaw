@@ -1,7 +1,7 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
-import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.asObjectOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
