@@ -840,16 +840,44 @@ connection SecretRef before restoring; point that secret at the recovery server
 when recovering to another server. The live installation's selections do not
 override the archive. Restore publishes the recovered configuration last, after
 all stores and their matching anchors pass verification.
-`openclaw backup restore <archive> --target <dir> --postgres-connection-env <name>`
-imports into the server named by the DSN in that environment variable instead,
-for restore drills against a staging database; the restored configuration keeps
-the archived connection.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
 plugin or additional-root identities. Use the identity recorded under `stores/`
 in the Git repository. Each restore creates a fresh namespace and publishes its
 matching local anchor after verification.
+
+#### Run an isolated restore drill
+
+To rehearse a full archive restore while the source Gateway runs, give the
+restore CLI its own state directory and config path. The CLI needs offline
+ownership of its selected state directory even when the import uses a separate
+PostgreSQL database.
+
+1. [Provision a dedicated staging database and role](#provision-a-database-and-runtime-role)
+   with the extensions required by the captured stores. Export its DSN as
+   `STAGING_PG_DSN` using your secret manager. If the archived config's default
+   environment secret provider has an allowlist, it must include that name.
+2. From a shell with that variable set, use a trusted backup archive. Use a
+   temporary directory outside the source installation's state, config, and
+   agent directories. The example creates a fresh CLI directory and a separate
+   restore target under that temporary directory.
+
+   ```bash
+   archive=/path/to/trusted-backup.tar.gz
+   drill_dir="$(mktemp -d)"
+   mkdir -m 700 "$drill_dir/cli"
+
+   OPENCLAW_STATE_DIR="$drill_dir/cli" \
+     OPENCLAW_CONFIG_PATH="$drill_dir/cli/openclaw.json" \
+     openclaw backup restore "$archive" --target "$drill_dir/restored" \
+       --postgres-connection-env STAGING_PG_DSN
+   ```
+
+3. Check that restore reports success and inspect the staged files and restored
+   stores in the staging database. Keep the restored installation offline during
+   the drill. The DSN override applies only to the import, and the restored
+   config still points to the archived connection.
 
 ### Recover a retained agent store
 

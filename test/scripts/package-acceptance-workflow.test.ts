@@ -5742,7 +5742,11 @@ require_clawhub_dispatch_available "$WORKFLOW_REF" plugin-clawhub-release.yml &&
         join(bin, "node"),
         `#!/bin/sh
 case "$1" in
-  --input-type=module) exec "$REAL_NODE" "$@" ;;
+  --input-type=module)
+    shift
+    cat > "$SUMMARY_MODULE"
+    exec "$REAL_NODE" "$SUMMARY_MODULE" "$@"
+    ;;
   *.mjs) cp "$MOCK_MATRIX" .local/clawhub-matrix.json ;;
   *) cat "$MOCK_PLUGIN_PLAN" ;;
 esac
@@ -5790,6 +5794,7 @@ esac
         env: {
           PATH: `${bin}:${process.env.PATH}`,
           REAL_NODE: process.execPath,
+          SUMMARY_MODULE: join(root, "summary.mjs"),
           MOCK_PLUGIN_PLAN: planPath,
           MOCK_MATRIX: matrixPath,
           GITHUB_OUTPUT: join(root, "output"),
