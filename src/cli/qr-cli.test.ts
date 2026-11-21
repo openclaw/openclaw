@@ -247,6 +247,24 @@ describe("registerQrCli", () => {
     },
   );
 
+  it("issues only the node role in setup-code-only mode using the configured URL", async () => {
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
+    await runQr(["--node-only", "--setup-code-only"]);
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ profile: { roles: ["node"], scopes: [] } }),
+    );
+    expect(runtimeLog).toHaveBeenCalledTimes(1);
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("shows node pairing instructions in human mode", async () => {
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
+    await runQr(["--node-only", "--no-ascii"]);
+    const output = readRuntimeCallText(runtimeLog.mock.calls.at(-1));
+    expect(output.includes("Use this setup code to pair the node with the Gateway.")).toBe(true);
+    expect(output.includes("OpenClaw mobile app")).toBe(false);
+  });
+
   it("uses the bounded bootstrap profile with --limited", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig());
 
@@ -274,6 +292,11 @@ describe("registerQrCli", () => {
       args: ["--limited", "--voice-node"],
       message: "Use either --limited or --voice-node, not both.",
     },
+    ...["--limited", "--voice-node"].map((flag) => ({
+      name: `node-only and ${flag}`,
+      args: ["--node-only", flag],
+      message: "Use --node-only without --limited or --voice-node.",
+    })),
     {
       name: "authentication overrides",
       args: ["--token", "test-token", "--password", "test-password"],
