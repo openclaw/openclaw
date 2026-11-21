@@ -34,7 +34,7 @@ struct TailscaleServeGatewayDiscoveryTests {
         """
 
         let context = TailscaleServeGatewayDiscovery.DiscoveryContext(
-            tailscaleStatus: { statusJson },
+            run: { _, _, _ in statusJson },
             probeHost: { host, _ in
                 host == "gateway-host.tailnet-example.ts.net"
             })
@@ -47,10 +47,14 @@ struct TailscaleServeGatewayDiscoveryTests {
         #expect(beacons.first?.port == 443)
     }
 
-    @Test func `returns empty when status unavailable`() async {
+    @Test(arguments: [nil, "not-json", "{}", #"{"Peer":{}}"#] as [String?])
+    func `unusable status does not probe gateways`(status: String?) async {
         let context = TailscaleServeGatewayDiscovery.DiscoveryContext(
-            tailscaleStatus: { nil },
-            probeHost: { _, _ in true })
+            run: { _, _, _ in status },
+            probeHost: { _, _ in
+                Issue.record("Unexpected gateway probe without usable status")
+                return true
+            })
 
         let beacons = await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.0, context: context)
         #expect(beacons.isEmpty)

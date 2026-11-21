@@ -32,8 +32,8 @@ struct WideAreaGatewayDiscoveryTests {
         """
 
         let context = WideAreaGatewayDiscovery.DiscoveryContext(
-            tailscaleStatus: { statusJson },
-            dig: { args, _ in
+            run: { path, args, _ in
+                if path != "/usr/bin/dig" { return statusJson }
                 let recordType = args.last ?? ""
                 let nameserver = args.first(where: { $0.hasPrefix("@") }) ?? ""
                 if recordType == "PTR" {
@@ -83,8 +83,8 @@ struct WideAreaGatewayDiscoveryTests {
 
         let queriedNameservers = NameserverQueryLog()
         let context = WideAreaGatewayDiscovery.DiscoveryContext(
-            tailscaleStatus: { statusJson },
-            dig: { args, _ in
+            run: { path, args, _ in
+                if path != "/usr/bin/dig" { return statusJson }
                 let nameserver = args.first(where: { $0.hasPrefix("@") }) ?? ""
                 queriedNameservers.record(nameserver)
 
@@ -114,6 +114,21 @@ struct WideAreaGatewayDiscoveryTests {
 
         #expect(queriedNameservers.count(matching: "@100.64.0.2") == 0)
         #expect(queriedNameservers.count(matching: "@100.100.100.100") == 1)
+        #expect(beacons.isEmpty)
+    }
+
+    @Test(arguments: [nil, "not-json", "{}"] as [String?])
+    func `unusable status does not issue DNS queries`(status: String?) async {
+        let context = WideAreaGatewayDiscovery.DiscoveryContext(
+            run: { path, _, _ in
+                if path == "/usr/bin/dig" {
+                    Issue.record("Unexpected DNS query without usable status")
+                }
+                return status
+            },
+            serviceDomain: { "example.test." })
+
+        let beacons = await WideAreaGatewayDiscovery.discover(context: context)
         #expect(beacons.isEmpty)
     }
 }
