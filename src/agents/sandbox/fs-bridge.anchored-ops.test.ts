@@ -149,6 +149,24 @@ describe("sandbox fs bridge anchored ops", () => {
     ).resolves.toBeNull();
   });
 
+  it("stats parent/basename without cd so dash missing-parent wording never appears", async () => {
+    let observedScript = "";
+    mockStat((script) => {
+      observedScript = script;
+      return {
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from(
+          "stat: cannot statx '/workspace/nonexistent_dir_xyz/file.txt': No such file or directory\n",
+        ),
+        code: 1,
+      };
+    });
+
+    await expect(bridge.stat({ filePath: "nonexistent_dir_xyz/file.txt" })).resolves.toBeNull();
+    expect(observedScript).toContain('LC_ALL=C stat -c "%F|%s|%y" -- "$1/$2"');
+    expect(observedScript).not.toMatch(/\bcd --/);
+  });
+
   it("keeps non-missing stat failures as errors", async () => {
     mockStat(() => ({
       stdout: Buffer.alloc(0),
