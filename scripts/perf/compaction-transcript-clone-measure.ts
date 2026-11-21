@@ -9,6 +9,8 @@
  * --owner-file then replaces server-endpoint-compaction.ts. Prepare/commit CPU is
  * also reported; allocation samples cover the entire endpoint operation. Generated
  * IDs and ISO timestamps are fixed so persistedDigests compare raw stored event bytes.
+ * --initial-context measures publication alone and replaces immutable-data.ts with
+ * --owner-file. Require lower initial CPU/allocation and no >20% pooled p95 regression.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -35,6 +37,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     "owner-file": { type: "string" },
     endpoint: { type: "boolean", default: false },
+    "initial-context": { type: "boolean", default: false },
     allocation: { type: "boolean", default: false },
     operations: { type: "string", default: "5" },
   },
@@ -52,7 +55,9 @@ process.env.OPENCLAW_AGENT_DIR = path.join(directory, "agents/main/agent");
 const ownerUrl = new URL(
   values.endpoint
     ? "../../src/agents/embedded-agent-runner/server-endpoint-compaction.ts"
-    : "../../src/agents/embedded-agent-runner/transcript-rewrite.ts",
+    : values["initial-context"]
+      ? "../../src/shared/immutable-data.ts"
+      : "../../src/agents/embedded-agent-runner/transcript-rewrite.ts",
   import.meta.url,
 );
 const replaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
@@ -214,6 +219,20 @@ try {
     const before = await measure("initial-context", iteration, () =>
       manager[sessionContext.sessionManagerReadInitialContext](),
     );
+    if (values["initial-context"]) {
+      const expected = events.flatMap((entry) => {
+        if (!("message" in entry)) {
+          return [];
+        }
+        const { details: _details, ...message } = entry.message;
+        return [message];
+      });
+      assert.equal(JSON.stringify(before.messages), JSON.stringify(expected));
+      if (iteration >= 0) {
+        digests.push(hash("sha256", JSON.stringify(before)));
+      }
+      continue;
+    }
     const branch = manager[sessionManagerReadTranscriptBranch]();
     const entry = branch.at(-2);
     assert(entry?.type === "message" && entry.message.role === "toolResult");
