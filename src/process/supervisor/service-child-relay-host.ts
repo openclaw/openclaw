@@ -372,7 +372,9 @@ export async function createServiceChildRelayAdapter(
       }
       if (!closingReceipt) {
         state = "closing";
-        if (!rootResult) {
+        // Certified cancellation keeps the existing requested-signal result;
+        // unexpected anchor loss must not invent a successful command result.
+        if (!rootResult && !requestedSignal) {
           resultError ??= new Error("service child anchor exited before its command result");
           startup.reject(resultError);
           settleWait();

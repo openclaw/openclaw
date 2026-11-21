@@ -41,7 +41,7 @@ it.skipIf(process.platform !== "linux")(
       process.kill(anchor!, "SIGKILL");
       // The root result can be lost, but cleanup must independently adopt,
       // stop and reap every descendant before permitting another stream.
-      await run.wait().catch(() => {});
+      await expect(run.wait()).rejects.toThrow("anchor exited before its command result");
       await expect(run.waitForExtinction!()).resolves.toBeUndefined();
       expect(existsSync(`/proc/${run.pid}`)).toBe(false);
       expect(existsSync(`/proc/${descendant}`)).toBe(false);
@@ -49,6 +49,44 @@ it.skipIf(process.platform !== "linux")(
     } finally {
       killPidIfAlive(run.pid);
       killPidIfAlive(descendant);
+      await closeScope().catch(() => {});
+      await supervisor.shutdown().catch(() => {});
+    }
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "returns the requested cancellation after forced native cleanup loses the anchor result",
+  async () => {
+    const supervisor = createProcessSupervisor();
+    const closeScope = supervisor.acquireScopeCleanup("forced-cancel", {
+      processTree: "required-all",
+    });
+    let output = "";
+    const run = await supervisor.spawn({
+      mode: "child",
+      scopeKey: "forced-cancel",
+      argv: [
+        process.execPath,
+        "-e",
+        'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); process.stdout.write("ready");',
+      ],
+      stdinMode: "pipe-closed",
+      onStdout: (chunk) => (output += chunk),
+    });
+    try {
+      await expect.poll(() => output).toBe("ready");
+      await runWithProcessCleanupBudget(
+        { deadline: performance.now() + 500, warn() {} },
+        closeScope,
+      );
+      await expect(run.wait()).resolves.toMatchObject({
+        reason: "manual-cancel",
+        exitSignal: "SIGKILL",
+      });
+      await expect(run.waitForExtinction!()).resolves.toBeUndefined();
+      expect(existsSync(`/proc/${run.pid}`)).toBe(false);
+    } finally {
       await closeScope().catch(() => {});
       await supervisor.shutdown().catch(() => {});
     }
