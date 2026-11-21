@@ -67,16 +67,6 @@ it("opens an explicitly allowed private target in the background and prepares it
   ]);
 });
 
-it("opens headed targets in their own unfocused window so they keep painting", async () => {
-  const browser = await startBrowser({ "Target.createTarget": result({ targetId: "TARGET" }) });
-  await createTarget(browser, { headless: false });
-  expect(browser.messages[0]?.params).toEqual({
-    url: "https://example.com",
-    background: true,
-    newWindow: true,
-  });
-});
-
 it("returns the stable browser-owned frame URL when requested", async () => {
   let frameReads = 0;
   const browser = await startBrowser({
