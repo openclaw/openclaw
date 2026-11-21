@@ -2,6 +2,8 @@ import { StringDecoder } from "node:string_decoder";
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+export const NODE_WORKSPACE_READ_TIMEOUT_MS = 60_000;
+
 export type NodeWorkspaceWorkerOptions = {
   nodeId: string;
   workspaceDir: string;
@@ -28,7 +30,8 @@ export async function runNodeWorkspaceWorker(
     signal,
     assertCurrent: options.assertCurrent,
     // The existing node transport supplies liveness heartbeats for subscriptions.
-    timeoutMs: onLine || params.operation === "installDependencies" ? 0 : 60_000,
+    timeoutMs:
+      onLine || params.operation === "installDependencies" ? 0 : NODE_WORKSPACE_READ_TIMEOUT_MS,
   });
   void channel.closed.catch(() => {});
   const decoder = new StringDecoder("utf8");
