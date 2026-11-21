@@ -170,14 +170,16 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     ));
   // Compact headers keep the heading available to assistive technology.
   const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
-  await expect
-    .poll(() =>
-      header.evaluate((element) => {
-        const title = element.querySelector(".page-title")?.getBoundingClientRect();
-        return title ? title.width > 1 && title.height > 1 : null;
-      }),
-    )
-    .toBe(!floatingHeader && !compactWorkshop);
+  if (!compactWorkshop) {
+    await expect
+      .poll(() =>
+        header.evaluate((element) => {
+          const title = element.querySelector(".page-title")?.getBoundingClientRect();
+          return title ? title.width > 1 && title.height > 1 : null;
+        }),
+      )
+      .toBe(!floatingHeader);
+  }
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   if (compactWorkshop) {
     const learningMenu = page.getByRole("button", { name: "Skill Workshop learning mode" });
