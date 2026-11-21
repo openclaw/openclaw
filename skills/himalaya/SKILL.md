@@ -45,7 +45,7 @@ Prefer password managers/keyrings for credentials; do not paste secrets into cha
 ## Read/search
 
 ```bash
-himalaya folder list
+himalaya mailbox list
 himalaya envelope list
 himalaya message read <id>
 himalaya envelope list from alice@example.com subject invoice
