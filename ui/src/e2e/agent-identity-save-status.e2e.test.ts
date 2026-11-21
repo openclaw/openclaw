@@ -130,9 +130,9 @@ suite.define(() => {
       expect(await name.inputValue()).toBe("Garden guide");
       await gateway.setMethodResponse("config.get", {
         ...snapshot,
-        hash: "saved",
-        configRevisionHash: "saved",
-        appliedConfigHash: "saved",
+        hash: "applied",
+        configRevisionHash: "applied",
+        appliedConfigHash: "applied",
       });
       await expect
         .poll(() => status.textContent(), { timeout: 15000 })
