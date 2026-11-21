@@ -305,10 +305,19 @@ suite.define(() => {
       const { textarea } = await open(page);
       const plus = page.getByRole("button", { name: "Add attachment" });
       const group = page.getByRole("menuitem", { name: "Composer fixture", exact: true });
+      await page.route("**/__openclaw__/plugin-icon/composer-fixture", (route) =>
+        route.fulfill({ path: "extensions/knowledge/assets/icon.png", contentType: "image/png" }),
+      );
       await textarea.fill("");
       await page.mouse.click(100, 80);
       await page.locator('.agent-chat__composer-shell[data-composer-resting="true"]').waitFor();
       await plus.click();
+      const artwork = group.locator("img");
+      await expect
+        .poll(() =>
+          artwork.evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth > 0),
+        )
+        .toBe(true);
       await group.click();
       expect(
         await page.getByRole("menuitem", { name: "Insert rewrite", exact: true }).isDisabled(),

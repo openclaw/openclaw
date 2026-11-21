@@ -1,4 +1,5 @@
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
+import PluginArtwork from "../../../components/plugin-artwork.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { registerChatComposerMenuEnglish } from "../../../i18n/locales/en-chat-composer-menu.ts";
@@ -70,7 +71,13 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     ([id, label]): MenuItem => ({
       id: `plugin:${id}`,
       label,
-      icon: <Icon name="plug" />,
+      icon: (
+        <PluginArtwork
+          pluginId={id}
+          fallback={<Icon name="plug" />}
+          class="agent-chat__plugin-menu-icon"
+        />
+      ),
       details: menuChevron(),
       class: "agent-chat__capability-menu-item",
       closeOnSelect: false,

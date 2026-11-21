@@ -254,6 +254,12 @@
   overflow-y: auto;
 }
 
+.agent-chat__plugin-menu-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
 /* Plugin lists shrink to their rows when drilling in, but still scroll at the panel limit. */
 .agent-chat__plugin-menu-scroll {
   flex: 0 1 auto;
