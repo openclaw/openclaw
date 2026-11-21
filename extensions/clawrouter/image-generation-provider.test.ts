@@ -8,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { acquireTestPortBlock, useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
 const MODEL = "openai/gpt-image-2.5-flare";
@@ -163,6 +163,10 @@ describe("registered ClawRouter image generation over HTTP", () => {
     await releasePort();
   });
   beforeEach(() => {
+    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
+      vi.stubEnv(key, undefined);
+      vi.stubEnv(key.toLowerCase(), undefined);
+    }
     calls.length = 0;
     payload = { data: [{ b64_json: PNG.toString("base64") }] };
     inventory = catalog();
@@ -180,6 +184,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
       },
     };
   });
+  afterEach(() => vi.unstubAllEnvs());
   const generate = (overrides: Partial<Parameters<typeof generateImage>[0]> = {}) =>
     generateImage(
       {
@@ -220,6 +225,8 @@ describe("registered ClawRouter image generation over HTTP", () => {
     const granted = catalog(snapshot);
     inventory = granted;
     const result = await generate({
+      // Cold source loading and auth are included; this is a functional HTTP contract, not a latency budget.
+      timeoutMs: 10_000,
       modelOverride: "clawrouter/" + snapshot,
       size: "1024x1024",
       quality: "medium",

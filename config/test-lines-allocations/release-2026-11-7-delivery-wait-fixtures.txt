@@ -1,0 +1,3 @@
+# Exercise elapsed child reply budgets and join the existing terminal hook wake before retry assertions.
+# Net test growth: child coordination 9 lines, hook retry observation 5 lines. No production growth.
+14

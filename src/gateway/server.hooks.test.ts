@@ -112,7 +112,8 @@ async function postWithDeferredHookWake(
   post: HookPost,
   route: Parameters<HookPost>[0],
   body: Parameters<HookPost>[1],
-): Promise<void> {
+  options?: Parameters<HookPost>[2],
+): Promise<Response> {
   const previous = terminalWakeObserver.observe;
   const terminalWake = Promise.withResolvers<Awaited<DeferredHookWakePromise>>();
   terminalWakeObserver.observe = (result) => {
@@ -122,11 +123,15 @@ async function postWithDeferredHookWake(
   try {
     // HTTP acceptance precedes terminal preparation. This owner settles after enqueueing,
     // without waiting for the ordinary scheduled receiver's future turn.
-    const [, result] = await Promise.all([post(route, body), terminalWake.promise]);
+    const [response, result] = await Promise.all([
+      post(route, body, options),
+      terminalWake.promise,
+    ]);
     expect(result).toMatchObject({
       ok: true,
       eventOutcome: expect.stringMatching(/^(queued|coalesced)$/),
     });
+    return response;
   } finally {
     terminalWakeObserver.observe = previous;
   }
@@ -520,15 +525,15 @@ test("dedupes hook retries even when trusted-proxy client IP changes", async () 
 
   await withHooksServer(async (post) => {
     mockIsolatedRunOk();
-    const send = async (clientIp: string) =>
+    const send = async (clientIp: string, sendHook: HookPost = post) =>
       (await (
-        await post(
+        await sendHook(
           "agent",
           { message: "Do it", name: "Email", wakeMode: "next-heartbeat" },
           { headers: { "Idempotency-Key": "hook-idem-forwarded", "X-Forwarded-For": clientIp } },
         )
       ).json()) as { runId?: string };
-    const firstBody = await send("198.51.100.10");
+    const firstBody = await send("198.51.100.10", postWithDeferredHookWake.bind(undefined, post));
     requireNonEmptyString(firstBody.runId, "first hook run id");
     await waitForSystemEvent(5_000);
     drainSystemEvents(resolveMainKey());

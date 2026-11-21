@@ -424,6 +424,11 @@ describe("child followups", () => {
   const runId = "coordination-followup";
   const terminalReply = { disposition: "visible", text: "Follow-up result" } as const;
 
+  function isInlineWait(request: GatewayCall) {
+    const timeoutMs = request.params?.timeoutMs;
+    return typeof timeoutMs === "number" && timeoutMs > 0 && timeoutMs <= 1000;
+  }
+
   async function setupFollowup(
     wait: (request: GatewayCall) => Promise<unknown>,
     requesterKey = requesterSessionKey,
@@ -455,12 +460,16 @@ describe("child followups", () => {
     await writeFinal(childSessionKey, runId, terminalReply.text);
     return { runId, status: "ok", startedAt: 1, endedAt: Date.now(), terminalReply };
   }
-  function followup(
+  async function followup(
     timeoutSeconds: number,
     options: { watch?: boolean } = {},
     requesterKey = requesterSessionKey,
   ) {
-    return sendTool(requesterKey, requesterTurnRunId).execute("followup", {
+    // A real reply budget loses time between admission and the inline wait.
+    let now = Date.now();
+    using clock = vi.spyOn(Date, "now");
+    clock.mockImplementation(() => now++);
+    return await sendTool(requesterKey, requesterTurnRunId).execute("followup", {
       sessionKey: childSessionKey,
       mode: "followup",
       message: "Continue the child task",
@@ -481,7 +490,7 @@ describe("child followups", () => {
       let inlineObserved = false;
       await setupFollowup(
         async (request) => {
-          if (!inlineObserved && request.params?.timeoutMs === 1000) {
+          if (!inlineObserved && isInlineWait(request)) {
             inlineObserved = true;
             return observation === "yielded"
               ? { status: "ok", yielded: true }
@@ -566,7 +575,7 @@ describe("child followups", () => {
       // the test can observe what it settles, never alongside registry teardown.
       const registryWait = createDeferredCore();
       await setupFollowup(async (request) => {
-        if (request.params?.timeoutMs !== 1000) {
+        if (!isInlineWait(request)) {
           await registryWait.promise;
           return { ...result, endedAt: Date.now() };
         }
