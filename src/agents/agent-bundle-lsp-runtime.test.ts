@@ -222,6 +222,51 @@ describe("bundle LSP runtime", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["initialize", 1, "window/showMessageRequest"],
+    ["initialize", "server-request", "window/showMessageRequest"],
+    ["textDocument/hover", 2, "window/showMessageRequest"],
+    ["textDocument/hover", "server-request", "window/showMessageRequest"],
+    ["textDocument/hover", 2, "workspace/configuration"],
+    ["textDocument/hover", "server-request", "workspace/configuration"],
+  ] as const)(
+    "preserves %s when the server requests id %s (%s)",
+    async (phase, serverId, serverMethod) => {
+      const child = new MockChildProcess("", undefined, (body, method) => {
+        const response = encodeLspMessage(
+          method === "textDocument/hover"
+            ? { ...body, result: { contents: "actual hover" } }
+            : body,
+        );
+        return method === phase
+          ? [
+              encodeLspMessage({
+                jsonrpc: "2.0",
+                id: serverId,
+                method: serverMethod,
+                params: { type: 3, message: "server prompt" },
+              }),
+              response,
+            ]
+          : response;
+      });
+      const { tool } = await startTool(child);
+
+      const result = await tool.execute("test", position);
+
+      expect(result.content).toEqual([{ type: "text", text: '{"contents":"actual hover"}' }]);
+      expect(
+        child.receivedMessages.find((message) => message.id === serverId && !("method" in message)),
+      ).toEqual({
+        jsonrpc: "2.0",
+        id: serverId,
+        ...(serverMethod === "window/showMessageRequest"
+          ? { result: null }
+          : { error: { code: -32601, message: "Method not found" } }),
+      });
+    },
+  );
+
   it.each(["pending", "response-ready", "siblings"] as const)(
     "joins initialization abort cleanup (%s)",
     async (phase) => {
