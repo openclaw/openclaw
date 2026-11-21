@@ -63,25 +63,27 @@ async function confirmSavedConfig(requestOwner: OwnerRequest, error: unknown): P
 }
 
 // Arrays the patch replaces, or removes with a deleted or replaced subtree, are explicit intent.
-function collectReplacePaths(patch: unknown, base: unknown, parentPath?: string): string[] {
+// The bases are the authored config and, when routed, the Gateway's runtime view: its array
+// guard also counts arrays that exist there only as defaults (a provider's `models: []`).
+function collectReplacePaths(patch: unknown, bases: unknown[], parentPath?: string): string[] {
   if (!isPlainObject(patch)) {
     return [];
   }
   return Object.entries(patch).flatMap(([key, value]) => {
     const path = formatConfigPatchPath(parentPath, key);
-    const baseValue = isPlainObject(base) ? base[key] : undefined;
+    const baseValues = bases.map((base) => (isPlainObject(base) ? base[key] : undefined));
     if (isPlainObject(value)) {
-      return collectReplacePaths(value, baseValue, path);
+      return collectReplacePaths(value, baseValues, path);
     }
     // Any non-object value (null, scalar or array) also removes the base arrays below it.
-    const removed = collectBaseArrayPaths(baseValue, path);
-    return Array.isArray(value) && !removed.includes(path) ? [path].concat(removed) : removed;
+    const removed = baseValues.flatMap((baseValue) => collectBaseArrayPaths(baseValue, path));
+    return Array.from(new Set(Array.isArray(value) ? [path].concat(removed) : removed));
   });
 }
 
-function createOwnerMergePatch(previous: OpenClawConfig, next: OpenClawConfig) {
+function createOwnerMergePatch(previous: OpenClawConfig, next: OpenClawConfig, gateway?: unknown) {
   const patch = createMergePatch(previous, next);
-  const replacePaths = collectReplacePaths(patch, previous);
+  const replacePaths = collectReplacePaths(patch, [previous, gateway]);
   const apply = (base: OpenClawConfig): OpenClawConfig => {
     const merged = applyMergePatch(base, patch, {
       mergeObjectArraysById: true,
@@ -149,9 +151,13 @@ export async function prepareConfigOwnerChange(
  */
 function buildConfigOwnerPatch(
   change: { previous: OpenClawConfig; next: OpenClawConfig },
-  baseHash: unknown,
+  owner: { hash?: unknown; config?: unknown },
 ) {
-  const { patch, replacePaths, apply } = createOwnerMergePatch(change.previous, change.next);
+  const { patch, replacePaths, apply } = createOwnerMergePatch(
+    change.previous,
+    change.next,
+    owner.config,
+  );
   if (
     replacePaths.length > MAX_REPLACE_PATHS ||
     !isDeepStrictEqual(apply(change.previous), change.next)
@@ -164,7 +170,7 @@ function buildConfigOwnerPatch(
   // such as `response`, and an updated CLI routes to whichever Gateway is still running.
   return {
     raw: JSON.stringify(patch),
-    ...(typeof baseHash === "string" ? { baseHash } : {}),
+    ...(typeof owner.hash === "string" ? { baseHash: owner.hash } : {}),
     ...(replacePaths.length > 0 ? { replacePaths } : {}),
   };
 }
@@ -175,7 +181,10 @@ function buildConfigOwnerPatch(
  * owner's revision and returns the restart hint, if any, plus the owner's billing-route warnings.
  */
 export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.ProcessEnv) {
-  const current = await requestOwner<{ hash?: unknown; path?: unknown }>("config.get", {});
+  const current = await requestOwner<{ hash?: unknown; path?: unknown; config?: unknown }>(
+    "config.get",
+    {},
+  );
   const selected = resolveConfigPath(env);
   if (typeof current.path !== "string" || identity(current.path) !== identity(selected)) {
     throw new Error(
@@ -194,14 +203,12 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
       restartPending?: unknown;
       billingRouteWarnings?: unknown;
       warnings?: unknown;
-    }>("config.patch", buildConfigOwnerPatch(change, current.hash)).catch(
-      async (error: unknown) => {
-        if (!(await confirmSavedConfig(requestOwner, error))) {
-          throw error;
-        }
-        return null;
-      },
-    );
+    }>("config.patch", buildConfigOwnerPatch(change, current)).catch(async (error: unknown) => {
+      if (!(await confirmSavedConfig(requestOwner, error))) {
+        throw error;
+      }
+      return null;
+    });
     if (result === null) {
       return { hint: "The Gateway applied the change.", warnings: [] };
     }

@@ -33,9 +33,11 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import * as gitExec from "../../infra/git-exec.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
@@ -341,6 +343,9 @@ it("refreshes source and lockfile changes without rewriting unchanged files", as
     "template.identity": `${selected.backend}:${selected.cacheKey}:${selected.contentKey}`,
     "template.reason": "ready",
     "template.missReason": "commit-changed",
+    "template.refreshRejectReason": undefined,
+    "template.validationFailure": undefined,
+    "template.refreshErrorClass": undefined,
     "template.priorSourceCommit": sourceCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
@@ -399,10 +404,66 @@ it("refreshes source and lockfile changes without rewriting unchanged files", as
   expect(mocks.install).toHaveBeenCalledTimes(3);
   expect(await read(template.path, "pnpm-lock.yaml")).toBe(firstLock);
   expect(await read(template.path, "source.ts")).toBe(sourceText);
-  const attributes = await clone("attributes", attributeCommit);
+  const attributes = await withWorktreePreparationTiming("sandbox", () => {
+    markManagedWorktreePreparation();
+    return clone("attributes", attributeCommit);
+  });
   expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
+    template: "cold",
+    "template.reason": "ready",
+    "template.missReason": "commit-changed",
+    "template.refreshRejectReason": "attributes-changed",
+  });
 });
+
+it.for(["exit-nonzero", "timeout", "no-output-timeout", "signal", "output-truncated"] as const)(
+  "reports a sandbox cold rebuild after a failed diff probe (%s)",
+  async (errorClass, { signal }) => {
+    const clone = await fixture(signal);
+    await clone("seed");
+    const execute = gitExec.executeGitCommand;
+    let failedProbes = 0;
+    using _ = vi.spyOn(gitExec, "executeGitCommand").mockImplementation((cwd, args, options) => {
+      if (args.includes("diff-tree")) {
+        failedProbes++;
+        return Promise.resolve({
+          ...createCommandResult({
+            code: errorClass === "output-truncated" ? 0 : 128,
+            termination:
+              errorClass === "exit-nonzero" || errorClass === "output-truncated"
+                ? "exit"
+                : errorClass,
+            stdoutTruncatedBytes: errorClass === "output-truncated" ? 1 : undefined,
+            stderr: "synthetic private diff detail",
+          }),
+          timeoutMs: 0,
+        });
+      }
+      return execute(cwd, args, options);
+    });
+    const result = await withWorktreePreparationTiming("sandbox", () => {
+      markManagedWorktreePreparation();
+      return clone("advanced", sourceCommit);
+    });
+    expect(await git(result, "rev-parse", "HEAD")).toBe(sourceCommit);
+    expect(await read(result, "node_modules/source-derived.txt")).toBe(
+      "export const version = 'updated';\n",
+    );
+    expect(failedProbes).toBe(1);
+    const details = mocks.preparation.mock.lastCall?.[0].details;
+    expect(details).toMatchObject({
+      kind: "sandbox",
+      template: "cold",
+      "template.reason": "ready",
+      "template.missReason": "commit-changed",
+      "template.refreshRejectReason": "diff-probe-failed",
+      "template.refreshErrorClass": errorClass,
+    });
+    expect(JSON.stringify(details)).not.toContain("synthetic private diff detail");
+  },
+);
 
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
   const rm = fs.rm;

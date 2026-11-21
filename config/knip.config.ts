@@ -279,6 +279,7 @@ const repositoryScriptEntries = [
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
+  "scripts/perf/github-detail-retention.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
   "scripts/perf/workspace-snapshot-read-measure.ts!",
   "scripts/perf/workspace-git-main-thread-measure.mjs!",
@@ -511,6 +512,7 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   // Standalone Linux workload compares pinned boundary-reference initialization.
   "scripts/perf/boundary-reference-measure.mts!",
+  "scripts/perf/extension-boundary-compile-measure.mts!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.

@@ -17,23 +17,24 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction, normalizeLineMessage } from "./actions.js";
+import { normalizeLineMessage } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { normalizeLineMessagingTarget } from "./messaging-target.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
 import { applyLineQuoteToken, withoutLineQuoteTokens } from "./quote-tokens.js";
 import { findLineHttpError, runLinePushWithRetries } from "./send-retry.js";
-import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
+import {
+  createFlexMessage,
+  createLocationMessage,
+  createQuickReplyItems,
+} from "./template-messages.js";
+import type { LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
-type TextMessage = messagingApi.TextMessage;
-type LocationMessage = messagingApi.LocationMessage;
 type FlexContainer = messagingApi.FlexContainer;
 type TemplateMessage = messagingApi.TemplateMessage;
-type QuickReply = messagingApi.QuickReply;
-type QuickReplyItem = messagingApi.QuickReplyItem;
-type LineLocation = NonNullable<LineChannelData["location"]>;
+type LineLocation = Parameters<typeof createLocationMessage>[0];
 
 type LineUserProfile = { displayName: string; pictureUrl?: string };
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -46,8 +47,6 @@ const groupNameCache = createStaleWhileRevalidateCache<string | undefined>({
   maxEntries: PROFILE_CACHE_MAX_ENTRIES,
   ttlMs: PROFILE_CACHE_TTL_MS,
 });
-const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
-const LINE_LOCATION_LABEL_LIMIT = 100;
 // This cap bounds receipts and diagnostics: overflow after acceptance becomes no-retry partial
 // delivery, while rejected responses keep their status with prefix-only diagnostics.
 const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
@@ -239,27 +238,6 @@ async function postLineProviderMessages(
   }
 }
 
-export function createLocationMessage(location: LineLocation): LocationMessage | TextMessage {
-  // LINE rejects blank labels atomically. Keep the authored text and coordinates,
-  // bounded by the same label cap, when the location cannot render as a pin.
-  if (!location.title.trim() || !location.address.trim()) {
-    const authored = [location.title, location.address]
-      .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
-      .filter(Boolean);
-    return {
-      type: "text",
-      text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
-    };
-  }
-  return {
-    type: "location",
-    title: truncateUtf16Safe(location.title, LINE_LOCATION_LABEL_LIMIT),
-    address: truncateUtf16Safe(location.address, LINE_LOCATION_LABEL_LIMIT),
-    latitude: location.latitude,
-    longitude: location.longitude,
-  };
-}
-
 function recordLineOutboundActivity(
   accountId: string,
   delivery: { messageIds: string[]; receipt?: LineSendResult["receipt"] },
@@ -412,17 +390,6 @@ export async function pushMessagesLine(
   return pushLineMessages(to, messages, opts);
 }
 
-export function createFlexMessage(
-  altText: string,
-  contents: messagingApi.FlexContainer,
-): messagingApi.FlexMessage {
-  return {
-    type: "flex",
-    altText: truncateUtf16Safe(altText, LINE_FLEX_ALT_TEXT_LIMIT),
-    contents,
-  };
-}
-
 export async function pushLocationMessage(
   to: string,
   location: LineLocation,
@@ -459,18 +426,6 @@ export async function pushTextMessageWithQuickReplies(
     [{ type: "text", text, quickReply: createQuickReplyItems(quickReplyLabels) }],
     opts,
   );
-}
-
-export function createQuickReplyItems(labels: string[]): QuickReply {
-  const items: QuickReplyItem[] = labels
-    .map((label) => label.trim())
-    .filter(Boolean)
-    .slice(0, 13)
-    .map((label) => ({
-      type: "action",
-      action: messageAction(label, label),
-    }));
-  return { items };
 }
 
 export async function showLoadingAnimation(chatId: string, opts: LineClientOpts): Promise<void> {
