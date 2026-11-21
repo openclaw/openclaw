@@ -69,7 +69,7 @@ const enChatToolLabels = {
       listSubagents: "List subagents",
       readChat: "Read chat",
       readingChat: "Reading chat",
-      waitingForAgents: "Wait for subagents",
+      waitingForAgents: "Waiting for subagents",
       waitedForAgents: "Waited for agents",
       waitForAgents: "Wait for subagents",
       waitingForNamedAgents: "Waiting for {names}",
