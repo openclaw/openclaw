@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import { isProvenPreConnectFetchFailure } from "../infra/net/pre-connect-error.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
@@ -225,19 +226,22 @@ async function postGitHubOAuthForm(
     if (surface !== "token refresh") {
       throw error;
     }
+    // A failed DNS lookup or connect never wrote the request, so GitHub cannot
+    // have consumed the single-use refresh token.
+    const notDispatched = !dispatched || (!received && isProvenPreConnectFetchFailure(error));
     throw createOAuthRefreshError(
       "GitHub OAuth token refresh failed",
-      dispatched
+      notDispatched
         ? {
-            version: 1,
-            phase: received ? "after-token-response" : "token-response",
-            outcome: "unknown",
-          }
-        : {
             version: 1,
             phase: "before-dispatch",
             outcome: "not-attempted",
             recovery: { kind: "later", evidence: "dispatch-not-started" },
+          }
+        : {
+            version: 1,
+            phase: received ? "after-token-response" : "token-response",
+            outcome: "unknown",
           },
     );
   }
