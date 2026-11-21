@@ -169,8 +169,13 @@ artifacts. The archive format and compression settings are unchanged.
 
 Archive members live beneath a timestamped root and `payload/`, with source paths
 encoded below it. Counting entries beginning `.openclaw/agents/` therefore returns
-zero even when the agent databases are present. Inspect the root `manifest.json`
-and its `sqliteSnapshots` inventory, then run `openclaw backup verify <archive>`.
+zero even when the agent databases are present. Run
+`openclaw backup verify <archive> --inventory` to see which asset kinds and
+SQLite snapshot owners the archive records. This also works with `--from` for
+offsite archives. Add `--json` to read `inventory.assetKinds` and
+`inventory.sqliteSnapshots`. An empty snapshot list means the archive recorded
+zero SQLite snapshots. A value of `null` means the legacy manifest did not
+record a SQLite inventory.
 A path reported as `covered by` another asset is included through that parent;
 it has not been excluded from the archive.
 
