@@ -226,7 +226,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           catalogId: key.catalogId,
           hostId: key.hostId,
           threadId: key.threadId,
-          ...(profileRelation ? { profileRelation } : {}),
+          profileRelation,
           ...(this.history.catalogSession?.sourceHomeId
             ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
             : {}),

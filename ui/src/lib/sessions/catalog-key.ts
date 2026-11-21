@@ -58,7 +58,7 @@ export async function lookupCatalogSession(params: {
         agentId,
         catalogId: key.catalogId,
         hostIds: [key.hostId],
-        ...(params.profileRelation ? { profileRelation: params.profileRelation } : {}),
+        profileRelation: params.profileRelation,
         limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
         ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
       },

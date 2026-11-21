@@ -78,9 +78,7 @@ export function prepareSessionNavigationHandoff(
     sessionKey,
     client,
     hello,
-    ...(catalogProfileRelation
-      ? { catalogProfileRelation: structuredClone(catalogProfileRelation) }
-      : {}),
+    catalogProfileRelation: structuredClone(catalogProfileRelation),
   };
   sessionNavigationHandoffs.set(owner, handoff);
   globalThis.setTimeout(() => {

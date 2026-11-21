@@ -379,7 +379,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: routedSessionKey,
-      ...(catalogProfileRelation ? { catalogProfileRelation } : {}),
+      catalogProfileRelation,
       agentId: target.agentId,
       ...sessionRouteHints(routeLocation),
       face: resolvedFace,

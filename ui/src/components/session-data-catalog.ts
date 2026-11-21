@@ -496,9 +496,7 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
-      ...(owner.sessionCatalogProfileRelation
-        ? { profileRelation: owner.sessionCatalogProfileRelation }
-        : {}),
+      profileRelation: owner.sessionCatalogProfileRelation,
       hostIds: Object.keys(cursors),
       cursors,
     });
