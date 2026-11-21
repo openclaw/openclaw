@@ -1,9 +1,12 @@
 // Retained raw update artifacts never enter sanitized backup or support exports.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
+import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { root as safeRoot } from "./fs-safe.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
@@ -60,10 +63,38 @@ function hasPrivacyMarker(directory: string): boolean {
   }
 }
 
+export async function markPrivateCapture(directory: string): Promise<void> {
+  const marker = path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER);
+  try {
+    await using output = await fsp.open(marker, "wx", 0o600);
+    await output.writeFile(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
+    await output.sync();
+  } catch (error) {
+    if (!hasErrnoCode(error, "EEXIST")) {
+      throw error;
+    }
+    const root = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
+    if (
+      (await root.readText(UPDATE_CAPTURE_PRIVACY_MARKER, { maxBytes: 128 })) !==
+      UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT
+    ) {
+      throw new Error(`Private update capture marker changed: ${directory}`, { cause: error });
+    }
+  }
+  requireDirectorySync(await syncDirectory(directory), "Private update capture marker");
+}
+
 const CAPTURE_SUFFIX = ".update-captures";
 
 export function resolveUpdateCaptureRoot(stateDir: string): string {
   return `${path.resolve(stateDir)}${CAPTURE_SUFFIX}`;
+}
+
+export const ONLINE_UPDATE_CAPTURE_NAME =
+  /^online-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.databases$/u;
+
+export function resolveGitUpdateArtifactRoot(packageRoot: string): string {
+  return path.join(packageRoot, ".artifacts");
 }
 
 type CapturePath = { path: string; directory: boolean };

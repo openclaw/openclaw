@@ -836,7 +836,9 @@ transient rows, and allocation facts; ordinary sanitized user backups cannot
 replace them. Recovery receipts record the physical engine and store identity.
 
 For updates that take a pre-migration image, the updater first captures each
-PostgreSQL store while the Gateway serves. The capture, store generation, and
+PostgreSQL store while the Gateway serves when its portable export fits with
+space reserved for the serving Gateway. Server-side schema captures and
+exports with insufficient or unknown capacity wait for the stop. The capture, store generation, and
 reuse digest come from the same `REPEATABLE READ` snapshot. The digest covers
 the catalog, sequence allocations, and each table's row count and sum of
 64-bit row hashes.

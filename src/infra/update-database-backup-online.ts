@@ -2,15 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PostgresCapturePrune } from "../snapshot/database-backup-core.worker.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
+import { formatErrorMessageWithCode } from "./errors.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { measureUpdateStateFiles } from "./update-candidate-io.js";
+import { markPrivateCapture, ONLINE_UPDATE_CAPTURE_NAME } from "./update-capture-paths.js";
+import { findUpdateCaptureSpaceError } from "./update-capture-space.js";
+import {
+  checkOnlinePostgresExportSpace,
+  checkUpdateDatabaseBackupSpace,
+} from "./update-database-backup-space.js";
+import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 
-type CaptureEntry = {
-  path: string;
-  snapshotPath: string;
-  engine?: "postgres";
-  exportDirectory?: string;
-};
+type CaptureEntry = UpdateDatabaseBackup["databases"][number];
 type OnlineCapture = {
   directory: string;
   databases: CaptureEntry[];
@@ -32,13 +37,8 @@ export type OnlineCaptureInput = {
 };
 
 /** Both capture passes share the online root that protects their server copies. */
-export function resolveOnlineCapturePrune(
-  input: OnlineCaptureInput & { backupRoot: string },
-  directory: string,
-): PostgresCapturePrune | undefined {
-  const captureId =
-    (input.postgresOnline || input.reuse) &&
-    /^online-([a-f0-9-]+)$/u.exec(path.basename(input.backupRoot))?.[1];
+export function resolveOnlineCapturePrune(directory: string): PostgresCapturePrune | undefined {
+  const captureId = ONLINE_UPDATE_CAPTURE_NAME.exec(path.basename(directory))?.[1];
   return captureId
     ? {
         directoryPrefix: path.join(path.dirname(directory), "online-"),
@@ -57,6 +57,9 @@ export async function prepareUpdateDatabaseBackupDirectory(
     await createPrivateSqliteDirectory(directory);
   } else if (path.resolve(reuse.directory) !== (await fs.realpath(directory))) {
     throw new Error("An online capture is reused only in its own directory.");
+  }
+  if (ONLINE_UPDATE_CAPTURE_NAME.test(path.basename(directory))) {
+    await markPrivateCapture(directory);
   }
 }
 
@@ -78,9 +81,8 @@ async function discardOnlineCaptureEntry(entry: CaptureEntry, config: OpenClawCo
  * matches; any other store's online capture is dropped and the store is captured again, so no
  * acknowledged write is lost.
  */
-export function createOnlineUpdateCapture(
+function createOnlineUpdateCapture(
   input: OnlineCaptureInput & { config: OpenClawConfig; pluginOwners?: DatabasePortPluginOwners },
-  engines: ReadonlyMap<string, { engine: string }>,
 ) {
   const digests: Record<string, string> = {};
   const unclaimed = new Map(input.reuse?.databases.map((entry) => [entry.path, entry] as const));
@@ -99,7 +101,7 @@ export function createOnlineUpdateCapture(
       generations[sourcePath] = observed.generation;
       digests[sourcePath] = observed.digest;
     },
-    /** True when this pass leaves the store alone: SQLite while serving, or a kept capture. */
+    /** Reuse an unchanged online capture under ownership. */
     async keep(
       sourcePath: string,
       backup: {
@@ -108,9 +110,6 @@ export function createOnlineUpdateCapture(
         warnings: string[];
       },
     ) {
-      if (input.postgresOnline) {
-        return engines.get(sourcePath)?.engine !== "postgres";
-      }
       const entry = unclaimed.get(sourcePath);
       if (!entry) {
         return false;
@@ -142,4 +141,82 @@ export function createOnlineUpdateCapture(
       return input.postgresOnline ? { sourceDigests: digests } : {};
     },
   };
+}
+
+/** Account for reused captures before admitting the remaining writes. */
+export async function planUpdateCaptureStores(
+  input: Parameters<typeof createOnlineUpdateCapture>[0] & {
+    postgresOffline?: boolean;
+    stopped?: boolean;
+  },
+  directory: string,
+  { present, missing }: { present: string[]; missing: string[] },
+) {
+  const online = createOnlineUpdateCapture(input);
+  const databases: CaptureEntry[] = [];
+  const warnings: string[] = [];
+  const sourceGenerations: Record<string, string | null> = Object.fromEntries(
+    missing.map((file) => [file, null]),
+  );
+  const pending: string[] = input.reuse ? [] : present;
+  if (input.reuse) {
+    if (!input.postgresOffline && !input.stopped) {
+      throw new Error("Reusing PostgreSQL update captures requires exclusive ownership.");
+    }
+    for (const file of present) {
+      if (!(await online.keep(file, { databases, sourceGenerations, warnings }))) {
+        pending.push(file);
+      }
+    }
+    await online.finish();
+  }
+  if (!input.postgresOnline) {
+    const space = await checkUpdateDatabaseBackupSpace(
+      directory,
+      await measureUpdateStateFiles(present),
+      input.reuse ? new Set(pending) : undefined,
+    );
+    warnings.push(...space.warnings);
+  }
+  return { online, databases, sourceGenerations, warnings, pending };
+}
+
+export async function planOnlinePostgresCapture(
+  input: OnlineCaptureInput & {
+    config: OpenClawConfig;
+    stateDir: string;
+    postgresSchemaCaptures?: boolean;
+  },
+  directory: string,
+  sourcePath: string,
+  warnings: string[],
+): Promise<{ server: boolean; onlineExportByteLimit?: number } | undefined> {
+  // Client credential rollback reads the shared state family's portable image.
+  const server = Boolean(
+    input.postgresSchemaCaptures &&
+    resolvePathViaExistingAncestorSync(sourcePath) !==
+      resolvePathViaExistingAncestorSync(path.join(input.stateDir, "state", "openclaw.sqlite")),
+  );
+  if (!input.postgresOnline) {
+    return { server };
+  }
+  if (server) {
+    warnings.push(
+      `Deferred PostgreSQL server capture until the Gateway stops (server free space is unknown): ${sourcePath}`,
+    );
+    return undefined;
+  }
+  const { estimatePostgresBackupExport } = await import("../snapshot/database-backup.js");
+  const bytes = await estimatePostgresBackupExport(sourcePath, input.config);
+  try {
+    return { server, onlineExportByteLimit: checkOnlinePostgresExportSpace(directory, bytes) };
+  } catch (error) {
+    if (!findUpdateCaptureSpaceError(error)) {
+      throw error;
+    }
+    warnings.push(
+      `Deferred PostgreSQL capture until the Gateway stops: ${formatErrorMessageWithCode(error)}`,
+    );
+    return undefined;
+  }
 }

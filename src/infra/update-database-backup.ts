@@ -31,7 +31,6 @@ import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
-import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import { UpdateStateDatabaseOwnerSchema, recoveryOwner } from "./update-candidate-paths.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
 import {
@@ -51,12 +50,12 @@ import {
   prepareRestorableDatabaseFiles,
 } from "./update-database-backup-files.js";
 import {
-  createOnlineUpdateCapture,
+  planUpdateCaptureStores,
+  planOnlinePostgresCapture,
   prepareUpdateDatabaseBackupDirectory,
   resolveOnlineCapturePrune,
   type OnlineCaptureInput,
 } from "./update-database-backup-online.js";
-import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
   readUpdatePhysicalDatabaseObservation,
@@ -255,10 +254,10 @@ export async function createUpdateDatabaseBackupInProcess(
       input.excludedDatabasePaths,
     );
   const inventory = await inventoryFor(inspectionPlan);
-  // Preflight reserves no space; admit the complete family before checkpointing.
-  const { warnings } = await checkUpdateDatabaseBackupSpace(
+  const { online, databases, sourceGenerations, warnings, pending } = await planUpdateCaptureStores(
+    input,
     directory,
-    await measureUpdateStateFiles(inventory.present),
+    inventory,
   );
   const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
     inventory.present,
@@ -268,10 +267,6 @@ export async function createUpdateDatabaseBackupInProcess(
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
     await import("./sqlite-snapshot.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
-  const databases: UpdateDatabaseBackup["databases"] = [];
-  const sourceGenerations: UpdateDatabaseBackup["sourceGenerations"] = Object.fromEntries(
-    inventory.missing.map((file) => [file, null]),
-  );
   const readGeneration = async (
     file: string,
     observation?: ReturnType<typeof readUpdatePhysicalDatabaseObservation>,
@@ -357,8 +352,7 @@ export async function createUpdateDatabaseBackupInProcess(
             (file) => engines.get(file)?.engine === "sqlite",
           ),
         );
-        const online = createOnlineUpdateCapture(input, engines);
-        const prune = resolveOnlineCapturePrune(input, directory);
+        const prune = resolveOnlineCapturePrune(directory);
         if (
           [...engines.values()].some((engine) => engine.engine === "postgres") &&
           !(input.postgresOffline || input.postgresOnline) &&
@@ -368,9 +362,13 @@ export async function createUpdateDatabaseBackupInProcess(
             "PostgreSQL update capture requires exclusive ownership; stop through the service owner, then rerun.",
           );
         }
-        for (const sourcePath of inventory.present) {
+        for (const sourcePath of pending) {
           input.onProgress?.({ phase: "pre-migration database backup", path: sourcePath });
-          if (await online.keep(sourcePath, { databases, sourceGenerations, warnings })) {
+          if (input.postgresOnline && engines.get(sourcePath)?.engine !== "postgres") {
+            continue;
+          }
+          const capture = await planOnlinePostgresCapture(input, directory, sourcePath, warnings);
+          if (!capture) {
             continue;
           }
           const archivePath = buildBackupArchivePath("", sourcePath);
@@ -438,13 +436,6 @@ export async function createUpdateDatabaseBackupInProcess(
           if (engine.engine === "postgres") {
             const { capturePostgresBackup } = await import("../snapshot/database-backup.js");
             const exportDirectory = `${snapshotPath}.postgres`;
-            // Client credential rollback reads the shared state family's portable image.
-            const schemaCapture =
-              input.postgresSchemaCaptures &&
-              resolvePathViaExistingAncestorSync(sourcePath) !==
-                resolvePathViaExistingAncestorSync(
-                  path.join(input.stateDir, "state", "openclaw.sqlite"),
-                );
             const captured = await capturePostgresBackup({
               sourcePath,
               directory: exportDirectory,
@@ -452,8 +443,9 @@ export async function createUpdateDatabaseBackupInProcess(
               config: input.config,
               pluginOwners: input.pluginOwners,
               assertCurrent: () => {},
-              ...(schemaCapture ? { carrier: "postgres-schema" as const, prune } : {}),
+              ...(capture.server ? { carrier: "postgres-schema" as const, prune } : {}),
               observe: input.postgresOnline,
+              onlineExportByteLimit: capture.onlineExportByteLimit,
             });
             postgres = { ...engine, exportDirectory };
             online.record(sourcePath, captured.observed, sourceGenerations);
@@ -513,7 +505,7 @@ export async function createUpdateDatabaseBackupInProcess(
           missingPaths: inventory.missing,
           sourcePaths: inventory.sourcePaths,
           sourceGenerations,
-          ...(await online.finish()),
+          ...(input.postgresOnline ? await online.finish() : {}),
           ...(input.originalCaptureSourcePaths
             ? { originalCaptureSourcePaths: [...originalCaptureSources] }
             : {}),

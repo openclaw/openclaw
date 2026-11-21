@@ -7,6 +7,7 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import {
   discardPostgresNamespace,
   fingerprintPostgresDatabase,
+  estimatePostgresExportBytes,
   pruneOrphanedPostgresCaptures,
 } from "./database-backup-core.worker.js";
 import {
@@ -27,9 +28,17 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
       }),
     );
   }
+  if (task.operation === "retire-update") {
+    return control.runNativeSection(() =>
+      withDatabasePortConnection(task.params.config, (client) =>
+        pruneOrphanedPostgresCaptures(client, task.params.prune),
+      ),
+    );
+  }
   if (
     task.operation === "fingerprint" ||
     task.operation === "family" ||
+    task.operation === "estimate" ||
     task.operation === "prune"
   ) {
     const anchor = readBackupEngine(task.params.sourcePath);
@@ -40,6 +49,11 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
       const { directoryPrefix } = task.params;
       return withDatabasePortConnection(task.params.config, (client) =>
         pruneOrphanedPostgresCaptures(client, { storeId: anchor.storeId, directoryPrefix }),
+      );
+    }
+    if (task.operation === "estimate") {
+      return withDatabasePortConnection(task.params.config, (client) =>
+        estimatePostgresExportBytes(client, anchor),
       );
     }
     if (task.operation === "fingerprint") {

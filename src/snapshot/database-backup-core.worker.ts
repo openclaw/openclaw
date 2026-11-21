@@ -13,6 +13,7 @@ import {
 import { sha256File } from "../infra/directory-durability.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { quoteSqliteIdentifier as quote } from "../infra/sqlite-schema-sql.js";
 import { writePostgresExportEnvelope, type PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity } from "./git-backup-codec.js";
 import { createGitBackupRowTransform } from "./git-backup-sanitizer.js";
@@ -62,6 +63,7 @@ export async function exportPostgresBackup(params: {
   profile: PostgresExportEnvelope["profile"];
   assertCurrent: () => void;
   gitIdentity?: GitBackupIdentity;
+  onlineExportByteLimit?: number;
   observeSource?: Parameters<typeof materializeDatabasePort>[0]["observeSource"];
 }): Promise<PostgresExportEnvelope> {
   const { client, descriptor, anchor } = params;
@@ -70,10 +72,15 @@ export async function exportPostgresBackup(params: {
   const anchorPath = path.join(params.directory, "anchor.sqlite");
   let verification;
   {
+    let observedAllocations: Awaited<ReturnType<typeof readDatabasePortAllocations>> | undefined;
     params.assertCurrent();
     // The private artifact must exist before the host admits a worker's native open.
     await fs.writeFile(raw, "", { flag: "wx", mode: 0o600 });
     using db = openNodeSqliteDatabase(raw, { readBigInts: true });
+    if (params.onlineExportByteLimit !== undefined) {
+      const pageSize = Number(db.prepare("PRAGMA page_size").get()!.page_size);
+      db.exec(`PRAGMA max_page_count = ${Math.floor(params.onlineExportByteLimit / pageSize)}`);
+    }
     const source = { engine: "postgres" as const, db: client, namespace: anchor.namespace };
     // Allocations are read inside the export snapshot so they cover every captured row ID.
     verification = await materializeDatabasePort({
@@ -82,7 +89,9 @@ export async function exportPostgresBackup(params: {
       descriptor,
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
-      observeSource: params.observeSource,
+      observeSource: params.observeSource
+        ? async (endpoint) => (observedAllocations = await params.observeSource!(endpoint))
+        : undefined,
       transformRow: params.gitIdentity
         ? createGitBackupRowTransform(
             params.gitIdentity,
@@ -92,8 +101,9 @@ export async function exportPostgresBackup(params: {
         : undefined,
     });
     // The portable image uses SQLite allocation, while a matched PG restore retains its sequence.
-    // Sequences are not transactional; a later read can only leave gaps above captured rows.
-    verification.allocations = await readDatabasePortAllocations(source, descriptor);
+    // Online capture reuses the observation that also supplies its generation and digest.
+    verification.allocations =
+      observedAllocations ?? (await readDatabasePortAllocations(source, descriptor));
   }
   const sanitizedDifferences: string[] = [];
   params.assertCurrent();
@@ -299,7 +309,8 @@ export async function discardPostgresNamespace(client: Client, namespace: string
 /** Drop marked captures of this store whose directory under the prefix is gone. */
 export async function pruneOrphanedPostgresCaptures(
   client: Client,
-  params: { storeId: string } & Pick<PostgresCapturePrune, "directoryPrefix" | "directorySuffix">,
+  params: Pick<PostgresCapturePrune, "directoryPrefix" | "directorySuffix"> &
+    ({ storeId: string } | { captureId: string }),
 ) {
   // Installs sharing a database may run as separate roles; only schemas this role may drop are read.
   const marked = await client.query<{ schema: string; note: string }>(
@@ -323,20 +334,48 @@ export async function pruneOrphanedPostgresCaptures(
     ) {
       continue;
     }
-    // Only a generated ID may extend the trusted local prefix; comments never select a path.
-    const directory = `${params.directoryPrefix}${capture.captureId}${params.directorySuffix ?? ".postgres.bak"}`;
-    if (await fs.lstat(directory).catch(ignoreMissingPath)) {
-      continue;
+    if ("captureId" in params) {
+      if (capture.captureId !== params.captureId) {
+        continue;
+      }
+    } else {
+      // Only a generated ID may extend the trusted local prefix; comments never select a path.
+      const directory = `${params.directoryPrefix}${capture.captureId}${params.directorySuffix ?? ".postgres.bak"}`;
+      if (await fs.lstat(directory).catch(ignoreMissingPath)) {
+        continue;
+      }
     }
     const meta = await client.query<{ store_id: string }>(
       `SELECT store_id FROM "${schema}".openclaw_schema_meta`,
     );
-    if (meta.rows.length === 1 && meta.rows[0]!.store_id === params.storeId) {
+    if (
+      meta.rows.length === 1 &&
+      ("captureId" in params || meta.rows[0]!.store_id === params.storeId)
+    ) {
       await discardPostgresNamespace(client, schema);
       dropped.push(schema);
     }
   }
   return dropped;
+}
+
+export async function estimatePostgresExportBytes(client: Client, anchor: Anchor) {
+  const { rows } = await client.query<{ name: string; bytes: string }>(
+    `SELECT c.relname AS name, pg_total_relation_size(c.oid)::text AS bytes
+     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname=$1 AND c.relkind IN ('r','m')`,
+    [anchor.namespace],
+  );
+  let estimate = 0;
+  for (const { name, bytes } of rows) {
+    // Physical size includes indexes, but TOAST can compress values the SQLite export expands.
+    const logical = await client.query<{ bytes: string }>(
+      `SELECT coalesce(sum(octet_length(row_to_json(t)::text)::bigint + 128), 0)::text AS bytes
+       FROM ONLY ${quote(anchor.namespace)}.${quote(name)} t`,
+    );
+    estimate += Number(bytes) + Number(logical.rows[0]!.bytes);
+  }
+  return estimate;
 }
 
 export async function fingerprintPostgresDatabase(params: {
@@ -361,12 +400,11 @@ export async function observePostgresSnapshot(client: Client, anchor: Anchor) {
     "SELECT current_setting('search_path') AS path",
   );
   try {
+    const observed = await inspectPostgresGeneration(client, anchor);
     return {
-      generation: fingerprintPostgresGeneration(
-        anchor,
-        await inspectPostgresGeneration(client, anchor),
-      ),
-      digest: await digestPostgresGeneration(client, anchor),
+      generation: fingerprintPostgresGeneration(anchor, observed),
+      digest: await digestPostgresGeneration(client, anchor, observed),
+      allocations: observed.allocations,
     };
   } finally {
     await client.query("SELECT set_config('search_path',$1,true)", [rows[0]!.path]);

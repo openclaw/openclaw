@@ -488,8 +488,15 @@ For an update that takes a pre-migration image, the installed updater starts
 capturing PostgreSQL stores before it stops the Gateway. Each capture uses a
 consistent snapshot of one store. Under exclusive ownership, the updater reuses
 captures of unchanged stores and captures changed or unreadable stores again.
-SQLite stores are captured under exclusive ownership. If the online stage
-fails, the updater attempts the full capture under exclusive ownership.
+SQLite stores are captured under exclusive ownership. Before writing a portable
+PostgreSQL export, the updater estimates its size and checks available space
+with room for the export, its rollback journal, and a serving reserve. It
+defers an export that cannot fit or whose volume cannot be measured.
+Server-side schema captures wait for the stop because PostgreSQL does not report
+free disk space to the updater. If the online stage fails, the updater attempts
+the full capture under exclusive ownership. If the remaining captures do not
+fit alongside retained online copies, it removes those copies and tries the full
+stopped capture once before skipping the image.
 
 The updater needs exclusive ownership before activation. For a custom service
 or foreground Gateway on a PostgreSQL install, pass

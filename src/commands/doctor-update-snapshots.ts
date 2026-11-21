@@ -5,15 +5,17 @@ import { resolveStateDir } from "../config/paths.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
+import {
+  ONLINE_UPDATE_CAPTURE_NAME,
+  resolveGitUpdateArtifactRoot,
+  resolveUpdateCaptureRoot,
+} from "../infra/update-capture-paths.js";
 import { formatUpdateCleanupCommand } from "../infra/update-maintenance.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "../infra/update-npm-prefix.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 // Cleanup I/O failures retire snapshots under npm's dashed disposable-name form.
 const SNAPSHOT_NAME = /^\.openclaw[.-]package-backup-.*\.databases$/u;
-// Package installs keep PostgreSQL captures taken while the Gateway served under the capture root.
-const ONLINE_SNAPSHOT_NAME = /^online-.*\.databases$/u;
 const MAX_ROOT_ENTRIES = 1024;
 const MAX_SIZE_ENTRIES = 4096;
 const MAX_DEPTH = 32;
@@ -35,8 +37,11 @@ export async function collectUpdateSnapshotHealthFindings(
     ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(path.dirname(packageRoot))
     : null;
   const roots: [string, RegExp][] = [
-    [resolveUpdateCaptureRoot(resolveStateDir(env)), ONLINE_SNAPSHOT_NAME],
+    [resolveUpdateCaptureRoot(resolveStateDir(env)), ONLINE_UPDATE_CAPTURE_NAME],
   ];
+  if (packageRoot && !layout) {
+    roots.push([resolveGitUpdateArtifactRoot(packageRoot), ONLINE_UPDATE_CAPTURE_NAME]);
+  }
   if (layout) {
     roots.unshift([layout.globalRoot, SNAPSHOT_NAME]);
   }

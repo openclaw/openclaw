@@ -136,8 +136,12 @@ async function readGenerationSequences(
  * multisets with an equal count and hash sum (about 2^-64) read as unchanged.
  */
 // Callers must hold REPEATABLE READ, like inspectPostgresGeneration.
-export async function digestPostgresGeneration(client: Client, anchor: Anchor): Promise<string> {
-  const { store, version, catalog } = await readGenerationCatalog(client, anchor);
+export async function digestPostgresGeneration(
+  client: Client,
+  anchor: Anchor,
+  observed?: Omit<PostgresGeneration, "tables">,
+): Promise<string> {
+  const { store, version, catalog } = observed ?? (await readGenerationCatalog(client, anchor));
   const relations = await client.query<{ name: string }>(
     `SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
      WHERE n.nspname=$1 AND c.relkind IN ('r','p','m') ORDER BY c.relname COLLATE "C"`,
@@ -152,7 +156,8 @@ export async function digestPostgresGeneration(client: Client, anchor: Anchor): 
     );
     tables[name] = digest.rows[0]!;
   }
-  const allocations = await readGenerationSequences(client, anchor, catalog);
+  const allocations =
+    observed?.allocations ?? (await readGenerationSequences(client, anchor, catalog));
   return createHash("sha256")
     .update(
       JSON.stringify({

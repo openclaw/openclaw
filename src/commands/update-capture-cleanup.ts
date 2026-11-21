@@ -2,12 +2,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readRootStructuredFileSync } from "@openclaw/fs-safe/json";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { collectStandaloneDoctorCaptures } from "../infra/doctor-capture-retention.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
-import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
+import {
+  ONLINE_UPDATE_CAPTURE_NAME,
+  resolveGitUpdateArtifactRoot,
+  resolveUpdateCaptureRoot,
+} from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
 import { captureScopes } from "../infra/update-recovery-backup-reader.js";
 import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js";
+import { inspectUpdateRunAbandonment, needsPostCoreRepair } from "../infra/update-run-activity.js";
 import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
@@ -148,11 +156,19 @@ export function collectUpdateCaptureInventory(params: {
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
   const scopes = new Set([params.stateDir, ...captureScopes(params.env).keys()]);
-  for (const stateDir of scopes) {
+  const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  const roots = [...scopes].map((stateDir) => ({
+    stateDir,
+    root: resolveUpdateCaptureRoot(stateDir),
+  }));
+  if (packageRoot) {
+    roots.push({ stateDir: params.stateDir, root: resolveGitUpdateArtifactRoot(packageRoot) });
+  }
+  for (const { stateDir, root } of roots) {
     if (params.scan && !params.scan.available()) {
       break;
     }
-    const inventory = collectCaptureRootInventory({ ...params, stateDir });
+    const inventory = collectCaptureRootInventory({ ...params, stateDir, root });
     artifacts.push(...inventory.artifacts);
     for (const [directory, identity] of inventory.identities) {
       identities.set(directory, identity);
@@ -162,13 +178,14 @@ export function collectUpdateCaptureInventory(params: {
 }
 
 function collectCaptureRootInventory(params: {
+  root: string;
   stateDir: string;
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
   measureBytes?: boolean;
 }) {
-  const root = resolveUpdateCaptureRoot(params.stateDir);
+  const { root } = params;
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
   const rootStat = fs.lstatSync(root, { throwIfNoEntry: false });
@@ -191,17 +208,23 @@ function collectCaptureRootInventory(params: {
   const rootEntries = params.scan
     ? [...params.scan.directory(root)]
     : fs.readdirSync(root, { withFileTypes: true });
+  const gitArtifacts = root !== resolveUpdateCaptureRoot(params.stateDir);
   const doctorMetadataComplete =
-    !params.scan ||
-    rootEntries
-      .filter((entry) => entry.name.startsWith("doctor-"))
-      .every((entry) => params.scan!.metadata(path.join(root, entry.name, "manifest.json")));
+    !gitArtifacts &&
+    (!params.scan ||
+      rootEntries
+        .filter((entry) => entry.name.startsWith("doctor-"))
+        .every((entry) => params.scan!.metadata(path.join(root, entry.name, "manifest.json"))));
   const standalone =
     params.readHistory === false || !doctorMetadataComplete || params.scan?.incomplete
       ? new Map<string, { eligible: boolean; reason: string }>()
       : collectStandaloneDoctorCaptures(params).captures;
   const entries = rootEntries
-    .filter((entry) => entry.name !== UPDATE_CAPTURE_PRIVACY_MARKER)
+    .filter((entry) =>
+      gitArtifacts
+        ? ONLINE_UPDATE_CAPTURE_NAME.test(entry.name)
+        : entry.name !== UPDATE_CAPTURE_PRIVACY_MARKER,
+    )
     .toSorted((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
     if (params.scan && !params.scan.available()) {
@@ -227,6 +250,36 @@ function collectCaptureRootInventory(params: {
         : params.scan
           ? params.scan.logicalBytes(directory)
           : logicalBytes(directory);
+    const onlineId = ONLINE_UPDATE_CAPTURE_NAME.exec(entry.name)?.[1];
+    if (onlineId) {
+      // Older online captures lack the privacy marker. Their exact UUID and run history
+      // identify them. Keep unknown runs and any capture that could have reached activation.
+      try {
+        const run =
+          history?.runs.find((candidate) => candidate.runId === onlineId) ??
+          (history ? getUpdateRun(onlineId, { env: params.env }) : undefined);
+        item.runs = run ? [onlineId] : [];
+        item.captureSource = "update";
+        if (
+          !run ||
+          history?.hasPendingRecovery ||
+          needsPostCoreRepair(run) ||
+          !run.steps.some(({ step }) => step === "requested") ||
+          !(run.status === "failed" || inspectUpdateRunAbandonment(run))
+        ) {
+          continue;
+        }
+        item.outcome = "candidate";
+        item.reason = "never-activated-update-capture";
+        item.consequence = "Permanently deletes this abandoned capture and its PostgreSQL copies.";
+        const stat = fs.lstatSync(directory, { bigint: true });
+        identities.set(directory, { dev: stat.dev, ino: stat.ino });
+      } catch (error) {
+        item.reason = "unreadable-update-history";
+        item.detail = String(error);
+      }
+      continue;
+    }
     // The producer names each capture by run id and marks it before staging any payload.
     if (
       !/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
@@ -321,6 +374,7 @@ function collectCaptureRootInventory(params: {
 /** Caller holds the cleanup maintenance lock and passes identities from the confirmed selection. */
 export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
+  config: OpenClawConfig;
   identities: ReadonlyMap<string, CaptureIdentity>;
   assertCurrent: () => void;
   onProgress?: (item: RecoveryCleanupArtifact, index: number) => void;
@@ -339,6 +393,20 @@ export async function retireUpdateCaptures(params: {
         current.ino !== expected.ino
       ) {
         throw new Error("update capture changed after selection");
+      }
+      const captureId = ONLINE_UPDATE_CAPTURE_NAME.exec(path.basename(item.path))?.[1];
+      if (
+        captureId &&
+        listDirectoryTreeStrictSync(item.path).some(
+          ({ relativePath, dirent }) => dirent.isDirectory() && relativePath.endsWith(".postgres"),
+        )
+      ) {
+        const { retirePostgresUpdateCapture } = await import("../snapshot/database-backup.js");
+        await retirePostgresUpdateCapture(params.config, {
+          directoryPrefix: path.join(fs.realpathSync(path.dirname(item.path)), "online-"),
+          directorySuffix: ".databases",
+          captureId,
+        });
       }
       // The marker goes last: an interrupted removal stays attributed, so a rerun finishes it.
       for (const name of fs.readdirSync(item.path)) {

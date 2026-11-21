@@ -12,7 +12,10 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { readUpdateDatabaseGenerationsIsolated } from "../../infra/update-candidate-state.inspection.js";
-import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
+import {
+  resolveGitUpdateArtifactRoot,
+  resolveUpdateCaptureRoot,
+} from "../../infra/update-capture-paths.js";
 import { findUpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import { formatUpdateDatabaseImageSkip } from "../../infra/update-database-backup-space.js";
 import {
@@ -144,7 +147,7 @@ export async function captureUpdateDatabasesOnline(params: {
   // or the Git checkout's artifact directory that Git updates already use for their snapshots.
   const parent =
     execution.updateInstallKind === "git" && !execution.switchToGit
-      ? path.join(execution.root, ".artifacts")
+      ? resolveGitUpdateArtifactRoot(execution.root)
       : resolveUpdateCaptureRoot(resolveStateDir(env));
   let backupRoot: string | undefined;
   let online: OnlineUpdateDatabaseCapture | undefined;
@@ -226,7 +229,14 @@ export async function discardOnlineUpdateDatabaseCapture(
           )
           .map(({ relativePath }) => path.join(directory, relativePath));
     for (const exportDirectory of entries) {
-      if (await fs.stat(path.join(exportDirectory, ".pending")).catch(() => undefined)) {
+      if (
+        !(await fs.lstat(exportDirectory).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+        })) ||
+        (await fs.stat(path.join(exportDirectory, ".pending")).catch(() => undefined))
+      ) {
         continue;
       }
       // Each store on its own: one unreadable manifest must not strand the others' schemas.
@@ -272,6 +282,17 @@ export async function assertUpdatePostgresOwnerReleasable(params: {
   await assertUpdatePostgresCaptureOwnership({ config: params.config, env: params.env });
 }
 
+function measuredCaptureShortfall(error: unknown) {
+  if (
+    collectErrorGraphCandidates(error, (current) => [current.cause]).some(
+      (candidate) => candidate instanceof AggregateError,
+    )
+  ) {
+    return undefined;
+  }
+  return findUpdateCaptureSpaceError(error)?.capacity;
+}
+
 /**
  * Owner decision: an image that does not fit is skipped and the update continues.
  * Migrations commit in one SQLite transaction each, so nothing is lost; what is
@@ -286,26 +307,18 @@ async function skipUpdateDatabaseImageForSpace(
   directory: string | undefined,
   env: NodeJS.ProcessEnv,
   assertCurrent: () => void,
-  online?: OnlineUpdateDatabaseCapture,
+  onlineCleanupFailure?: string,
 ): Promise<{ step: UpdateStepResult; retained: boolean } | undefined> {
-  const space = findUpdateCaptureSpaceError(error)?.capacity;
-  if (
-    !space ||
-    collectErrorGraphCandidates(error, (current) => [current.cause]).some(
-      (candidate) => candidate instanceof AggregateError,
-    )
-  ) {
+  const space = measuredCaptureShortfall(error);
+  if (!space) {
     return undefined;
   }
   let retained = "";
   if (directory) {
     try {
       assertCurrent();
-      if (online) {
-        const failure = await discardOnlineUpdateDatabaseCapture(online);
-        if (failure) {
-          retained = ` Its online capture remains at ${directory} (${failure}).`;
-        }
+      if (onlineCleanupFailure) {
+        retained = ` Its online capture remains at ${directory} (${onlineCleanupFailure}).`;
       } else {
         // This pass exclusively created the directory and has copied nothing.
         await fs.rm(directory, { recursive: true, force: true });
@@ -360,6 +373,7 @@ export async function captureUpdateDatabases(params: {
   const ownership = await acquireUpdateCaptureOwnership(env);
   const maintenance = ownership.maintenance;
   let unavailable = ownership.unavailable;
+  let retryCleanupFailure: string | undefined;
   let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
   let backupDirectory: string | undefined;
   try {
@@ -397,7 +411,7 @@ export async function captureUpdateDatabases(params: {
         params.online?.backupRoot ?? transaction.databaseBackupRoot ?? transaction.backupRoot;
       if (!params.online && execution.updateInstallKind === "git" && !execution.switchToGit) {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
-        const artifactRoot = path.join(execution.root, ".artifacts");
+        const artifactRoot = resolveGitUpdateArtifactRoot(execution.root);
         await fs.mkdir(artifactRoot, { recursive: true });
         const physicalArtifactRoot = await fs.realpath(artifactRoot);
         params.assertCurrent();
@@ -407,7 +421,7 @@ export async function captureUpdateDatabases(params: {
       // From this point the worker can replace captures. Its partial results
       // follow the normal recovery retention path if the capture fails.
       params.onOnlineAdopted?.();
-      const captured = await createUpdateDatabaseBackup({
+      const backupInput = {
         backupRoot,
         stateDir: resolveStateDir(env),
         config: source.config,
@@ -427,8 +441,27 @@ export async function captureUpdateDatabases(params: {
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
         postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
-        ...(params.online ? { reuse: params.online.backup } : {}),
-      });
+      } satisfies Parameters<typeof createUpdateDatabaseBackup>[0];
+      let captured: UpdateDatabaseBackup;
+      try {
+        captured = await createUpdateDatabaseBackup({
+          ...backupInput,
+          ...(params.online ? { reuse: params.online.backup } : {}),
+        });
+      } catch (error) {
+        if (!params.online || !measuredCaptureShortfall(error)) {
+          throw error;
+        }
+        params.assertCurrent();
+        maintenance?.assertCurrent();
+        retryCleanupFailure = await discardOnlineUpdateDatabaseCapture(params.online);
+        if (retryCleanupFailure) {
+          throw error;
+        }
+        params.assertCurrent();
+        maintenance?.assertCurrent();
+        captured = await createUpdateDatabaseBackup(backupInput);
+      }
       if (execution.updateInstallKind === "git" || params.online) {
         // Retire these captures with the runtime, including online copies outside the package root.
         transaction.databaseBackupRoot = backupRoot;
@@ -462,7 +495,7 @@ export async function captureUpdateDatabases(params: {
       backupDirectory,
       env,
       assertCurrent,
-      params.online,
+      retryCleanupFailure,
     );
     if (!skipped) {
       throw outcome.error;

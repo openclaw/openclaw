@@ -312,6 +312,22 @@ export function prunePostgresSchemaCaptures(
   );
 }
 
+/** Retire only the marked schemas of a capture that update cleanup has qualified. */
+export function retirePostgresUpdateCapture(
+  config: OpenClawConfig,
+  prune: import("./database-backup-core.worker.js").PostgresCapturePrune,
+) {
+  return runBackupTask<string[]>(
+    { operation: "retire-update", params: { config, prune } },
+    () => {},
+  );
+}
+
+/** Estimate the local SQLite carrier before a serving update starts writing it. */
+export function estimatePostgresBackupExport(sourcePath: string, config: OpenClawConfig) {
+  return runBackupTask<number>({ operation: "estimate", params: { sourcePath, config } }, () => {});
+}
+
 /** Resolve physical family identity through the same provider admission as capture. */
 export function readPostgresBackupFamily(sourcePath: string, config: OpenClawConfig) {
   return runBackupTask<string>({ operation: "family", params: { sourcePath, config } }, () => {});

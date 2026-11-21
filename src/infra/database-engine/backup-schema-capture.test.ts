@@ -11,6 +11,10 @@ import {
   updateMigrateCommand,
 } from "../../cli/update-cli/update-command-migrate.js";
 import { backupDoctorPostgresMigration } from "../../commands/doctor-postgres-migration.js";
+import {
+  collectUpdateCaptureInventory,
+  retireUpdateCaptures,
+} from "../../commands/update-capture-cleanup.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as doctor from "../../flows/doctor-health.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -33,7 +37,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import * as packageRoots from "../openclaw-root.js";
+import { resolveUpdateCaptureRoot } from "../update-capture-paths.js";
 import * as updateDatabaseBackup from "../update-database-backup.js";
+import { createUpdateRun, finishUpdateRun } from "../update-run-ledger.js";
 import { agentPortProvider } from "./agent-port.js";
 import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture.test-support.js";
 import { crashCaptureAtCommit } from "./backup-schema-capture-crash.test-support.js";
@@ -293,6 +300,71 @@ it.skipIf(!connection).each(["before", "after"] as const)(
       ).toEqual([gate.namespace]);
       expect(await schemaExists(client, namespace)).toBe(true);
     }),
+  60_000,
+);
+
+it.skipIf(!connection).each(["npm", "git"] as const)(
+  "retires a %s pre-activation capture killed after COMMIT but before its manifest",
+  (install) =>
+    withSeededWorkboard(
+      async ({ client, config, state, namespace, namespaces, anchorPath, storeId }) => {
+        const run = createUpdateRun({ trigger: "cli", origin: {} }, { env: state.env });
+        const checkout = state.path("checkout");
+        const root =
+          install === "git"
+            ? path.join(checkout, ".artifacts")
+            : resolveUpdateCaptureRoot(state.stateDir);
+        const prefix = path.join(root, "online-");
+        const directory = `${prefix}${run.runId}.databases`;
+        const exportDirectory = path.join(directory, "store.sqlite.postgres");
+        await fs.mkdir(exportDirectory, { recursive: true });
+        await fs.copyFile(anchorPath, path.join(exportDirectory, "anchor.sqlite"));
+        await fs.writeFile(path.join(exportDirectory, ".pending"), "");
+        const gate = await crashCaptureAtCommit(
+          {
+            connection: connection!,
+            namespace,
+            storeId,
+            directory: exportDirectory,
+            phase: "after",
+            prune: { directoryPrefix: prefix, captureId: run.runId, directorySuffix: ".databases" },
+          },
+          state.env,
+        );
+        namespaces.add(gate.namespace);
+        expect(await schemaExists(client, gate.namespace)).toBe(true);
+        await expect(fs.stat(path.join(exportDirectory, "manifest.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        const packageRoot = vi
+          .spyOn(packageRoots, "resolveOpenClawPackageRootSync")
+          .mockReturnValue(checkout);
+        try {
+          const collect = () =>
+            collectUpdateCaptureInventory({ stateDir: state.stateDir, env: state.env });
+          expect(collect().artifacts.find((item) => item.path === directory)?.outcome).toBe(
+            "protected",
+          );
+          finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" }, { env: state.env });
+          const inventory = collect();
+          const item = inventory.artifacts.find((artifact) => artifact.path === directory);
+          expect(item?.outcome).toBe("candidate");
+          assert(item);
+          await retireUpdateCaptures({
+            selected: [item],
+            config,
+            identities: inventory.identities,
+            assertCurrent() {},
+          });
+          expect(item.outcome).toBe("removed");
+          expect(await schemaExists(client, gate.namespace)).toBe(false);
+          expect(await schemaExists(client, namespace)).toBe(true);
+          await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          packageRoot.mockRestore();
+        }
+      },
+    ),
   60_000,
 );
 

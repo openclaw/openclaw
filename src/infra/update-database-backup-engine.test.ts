@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configIo from "../config/io.js";
 import * as databaseBackup from "../snapshot/database-backup.js";
+import * as disk from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import * as fileGeneration from "./sqlite-file-generation.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
@@ -681,6 +682,7 @@ it("retains only engine classification after settlement fails and preserves the 
 });
 
 function mockObservedPostgresCaptures(events: string[], digests: Map<string, string>) {
+  vi.spyOn(databaseBackup, "estimatePostgresBackupExport").mockResolvedValue(4096);
   return vi.spyOn(databaseBackup, "capturePostgresBackup").mockImplementation(async (params) => {
     if (!("config" in params)) {
       throw new Error("expected an update capture");
@@ -736,6 +738,24 @@ it("captures each PostgreSQL store while the Gateway serves, from its own captur
   expect(online.sourceDigests).toEqual({ [postgres]: "store-digest" });
 });
 
+it("defers a portable PostgreSQL export that would exceed the serving volume reserve", async () => {
+  const f = await fixture();
+  const postgres = path.join(f.root, "large-postgres.sqlite");
+  writePostgresAnchor(postgres);
+  const capture = mockObservedPostgresCaptures([], new Map());
+  vi.mocked(databaseBackup.estimatePostgresBackupExport).mockResolvedValue(100 * 1024 ** 2);
+  vi.spyOn(disk, "tryReadDiskSpace").mockReturnValue({
+    targetPath: f.directory,
+    checkedPath: f.directory,
+    totalBytes: null,
+    availableBytes: 100 * 1024 ** 2,
+  });
+  const backup = await f.capture({ additionalPaths: [postgres], postgresOnline: true });
+  expect(backup.databases).toEqual([]);
+  expect(backup.warnings).toContainEqual(expect.stringContaining("Deferred PostgreSQL capture"));
+  expect(capture).not.toHaveBeenCalled();
+});
+
 it("keeps an unchanged online capture and captures a written store again under ownership", async () => {
   const f = await fixture();
   const idle = path.join(f.root, "a-idle.sqlite");
@@ -767,6 +787,14 @@ it("keeps an unchanged online capture and captures a written store again under o
   vi.spyOn(databaseBackup, "fingerprintPostgresBackup").mockResolvedValue("live generation");
   const discard = vi.spyOn(databaseBackup, "discardPostgresSchemaCaptures").mockResolvedValue();
   const onlineWritten = online.databases.find((entry) => entry.path === written)!;
+  // Leave room for the shared family and changed anchor, with the same migration reserve.
+  const additionalBytes = fs.statSync(f.shared).size + fs.statSync(written).size;
+  vi.spyOn(disk, "tryReadDiskSpace").mockReturnValue({
+    targetPath: f.directory,
+    checkedPath: f.directory,
+    totalBytes: null,
+    availableBytes: 64 * 1024 ** 2 + additionalBytes + fs.statSync(written).size,
+  });
   const backup = await f.capture({
     additionalPaths: [idle, written],
     postgresOffline: true,

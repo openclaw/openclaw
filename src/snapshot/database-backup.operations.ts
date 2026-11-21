@@ -9,7 +9,10 @@ import {
   withDatabasePortPostgres,
   withDatabasePortConnection,
 } from "../infra/database-engine/port-provider.js";
-import { admitDatabasePortDescriptor } from "../infra/database-engine/port.worker.js";
+import {
+  admitDatabasePortDescriptor,
+  readDatabasePortAllocations,
+} from "../infra/database-engine/port.worker.js";
 import {
   assertPostgresCatalog,
   postgresCatalogQuery,
@@ -103,6 +106,7 @@ export async function capturePostgresBackupInWorker(params: {
   prune?: PostgresCapturePrune;
   /** Also return the generation and reuse digest read inside the capture's own snapshot. */
   observe?: boolean;
+  onlineExportByteLimit?: number;
 }): Promise<CapturedPostgresBackup> {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   params.assertCurrent();
@@ -123,9 +127,8 @@ export async function capturePostgresBackupInWorker(params: {
     params.config,
     anchor,
     async (client, baseDescriptor) => {
-      // Online update directories protect running captures and retained recovery points alike.
-      // Sweep earlier online captures before copying, outside the stopped window.
-      if (params.observe && params.prune?.directorySuffix) {
+      // The update directory protects each marked copy until its owner retires it.
+      if (params.prune?.directorySuffix) {
         await pruneOrphanedPostgresCaptures(client, {
           storeId: anchor.storeId,
           directoryPrefix: params.prune.directoryPrefix,
@@ -139,11 +142,13 @@ export async function capturePostgresBackupInWorker(params: {
       params.assertCurrent();
       let observed: CapturedPostgresBackup["observed"];
       const observeSource = params.observe
-        ? async (source: { engine: string; db: unknown }) => {
+        ? async (source: Parameters<typeof readDatabasePortAllocations>[0]) => {
             if (source.engine !== "postgres" || source.db !== client) {
               throw new Error("PostgreSQL capture observed an unexpected source.");
             }
-            observed = await observePostgresSnapshot(client, anchor);
+            const { allocations, ...snapshot } = await observePostgresSnapshot(client, anchor);
+            observed = snapshot;
+            return readDatabasePortAllocations(source, descriptor, allocations);
           }
         : undefined;
       const manifest = params.carrier
@@ -352,6 +357,8 @@ export type Capture = Parameters<typeof capturePostgresBackupInWorker>[0];
 export type Restore = Parameters<typeof preparePostgresRestoreInWorker>[0];
 export type BackupTask =
   | { operation: "discard"; params: { config: OpenClawConfig; namespaces: string[] } }
+  | { operation: "retire-update"; params: { config: OpenClawConfig; prune: PostgresCapturePrune } }
+  | { operation: "estimate"; params: { sourcePath: string; config: OpenClawConfig } }
   | { operation: "capture"; params: Omit<Capture, "assertCurrent"> }
   | { operation: "restore"; params: Omit<Restore, "assertCurrent"> }
   | {
@@ -381,4 +388,5 @@ export type BackupReply =
   | PostgresExportEnvelope
   | string
   | string[]
+  | number
   | Awaited<ReturnType<typeof preparePostgresRestoreInWorker>>;

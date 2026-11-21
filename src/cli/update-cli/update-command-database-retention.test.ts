@@ -177,9 +177,9 @@ it("skips the pre-migration image and continues when the owner measures a shortf
   await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it.each([false, true])(
-  "settles an online capture on a low-disk skip before removing its manifest (drop fails: %s)",
-  async (dropFails) => {
+it.each(["recovered", "still-short", "drop-failed"] as const)(
+  "retries a low-space capture after retiring the online copy (%s)",
+  async (outcome) => {
     const base = await fs.realpath(dirs.make("update-online-database-skip-"));
     const root = path.join(base, "install");
     await fs.mkdir(root);
@@ -210,12 +210,24 @@ it.each([false, true])(
       sourceGenerations: { [source]: "observed generation" },
       warnings: [],
     };
-    vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockRejectedValue(shortfall());
+    const offline = { ...backup, databases: [], sourceGenerations: {} };
+    const create = vi
+      .spyOn(databaseBackup, "createUpdateDatabaseBackup")
+      .mockRejectedValueOnce(shortfall())
+      .mockImplementation(async (input) => {
+        expect(input.reuse).toBeUndefined();
+        await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+        if (outcome === "still-short") {
+          await fs.mkdir(directory);
+          throw shortfall();
+        }
+        return offline;
+      });
     const discard = vi
       .spyOn(snapshotBackup, "discardPostgresSchemaCaptures")
       .mockImplementation(async () => {
         expect(await fs.readFile(manifest, "utf8")).toBe("server capture manifest");
-        if (dropFails) {
+        if (outcome === "drop-failed") {
           throw new Error("server unavailable");
         }
       });
@@ -223,9 +235,10 @@ it.each([false, true])(
     const capture = await captureWith(base, root, env, { backupRoot, backup, config });
 
     expect(discard).toHaveBeenCalledExactlyOnceWith(config, [exportDirectory]);
-    expect(capture.backup).toBeUndefined();
+    expect(create).toHaveBeenCalledTimes(outcome === "drop-failed" ? 1 : 2);
+    expect(capture.backup).toBe(outcome === "recovered" ? offline : undefined);
     expect(capture.step.exitCode).toBe(0);
-    if (dropFails) {
+    if (outcome === "drop-failed") {
       expect(capture.step.warnings?.[0]).toContain(`Its online capture remains at ${directory}`);
       expect(await fs.readFile(manifest, "utf8")).toBe("server capture manifest");
     } else {

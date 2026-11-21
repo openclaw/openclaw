@@ -593,6 +593,24 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             expectedToken: null,
           });
           runClientCredentialOperation(env, { kind: "socket.ensure", fallback: socket });
+          const backupRoot = path.join(root, "rollback");
+          const online = await createUpdateDatabaseBackup({
+            backupRoot,
+            stateDir,
+            config,
+            env,
+            postgresOnline: true,
+          });
+          const logbook = stores.find((store) => store.provider.id === "logbook")!;
+          expect(online.sourceDigests?.[logbook.pathname]).toEqual(expect.any(String));
+          await client.query("BEGIN");
+          try {
+            await client.query(
+              `INSERT INTO "${logbook.namespace}".batches (day, start_ms, end_ms, created_ms, updated_ms) VALUES ('2026-11-20', 1, 2, 1, 2)`,
+            );
+          } finally {
+            await client.query("ROLLBACK");
+          }
           const owner = await acquireGatewayLock({
             env,
             role: "sqlite-maintenance",
@@ -603,14 +621,18 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           try {
             backup = await owner!.run(() =>
               createUpdateDatabaseBackup({
-                backupRoot: path.join(root, "rollback"),
+                backupRoot,
+                reuse: online,
+                postgresOffline: true,
                 stateDir,
                 config,
                 env,
                 acquisition: { mode: "maintenance-owner" },
               }),
             );
-            expect(backup.warnings).toEqual([]);
+            expect(backup.sourceGenerations[logbook.pathname]).not.toBe(
+              online.sourceGenerations[logbook.pathname],
+            );
             const baseline = backup;
             await owner!.run(async () => {
               await recordUpdateRunStepAsync(

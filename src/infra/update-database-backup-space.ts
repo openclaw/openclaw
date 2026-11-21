@@ -30,17 +30,23 @@ async function readDevice(directory: string): Promise<bigint> {
  * Restore checks its own writable output before it moves a live database
  * (`update-database-restore.ts`), so capture reserves nothing for it.
  */
-async function planUpdateDatabaseSpace(directory: string, { families }: MeasuredFamilies) {
+async function planUpdateDatabaseSpace(
+  directory: string,
+  { families }: MeasuredFamilies,
+  pending?: ReadonlySet<string>,
+) {
   const backupDevice = await readDevice(directory);
   let imageBytes = 0;
   let largest = 0;
   const migration = new Map<bigint | string, { directory: string; bytes: number }>();
   for (const family of families) {
+    if (!pending || pending.has(family.path)) {
+      imageBytes += family.bytes;
+      largest = Math.max(largest, family.bytes);
+    }
     if (family.bytes === 0) {
       continue;
     }
-    imageBytes += family.bytes;
-    largest = Math.max(largest, family.bytes);
     const sourceDirectory = path.dirname(family.path);
     const device = await readDevice(sourceDirectory);
     // A schema migration is one SQLite transaction per database. Its WAL holds
@@ -82,8 +88,13 @@ function describeSpace(label: string, directory: string, requiredBytes: number) 
 export async function checkUpdateDatabaseBackupSpace(
   directory: string,
   measured: MeasuredFamilies,
+  pending?: ReadonlySet<string>,
 ) {
-  const { imageRequiredBytes: requiredBytes } = await planUpdateDatabaseSpace(directory, measured);
+  const { imageRequiredBytes: requiredBytes } = await planUpdateDatabaseSpace(
+    directory,
+    measured,
+    pending,
+  );
   const { space, diagnostic } = describeSpace(
     "Pre-migration database image",
     directory,
@@ -154,4 +165,18 @@ export function formatUpdateDatabaseImageSkip(
   directory: string,
 ): string {
   return `No pre-migration database image: it needs ${formatDiskSpaceBytes(requiredBytes)} near ${directory} and ${formatDiskSpaceBytes(availableBytes)} is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward.`;
+}
+
+/** While serving, unknown capacity defers the export as well as a measured shortfall. */
+export function checkOnlinePostgresExportSpace(directory: string, exportBytes: number) {
+  const availableBytes = tryReadDiskSpace(directory)?.availableBytes;
+  // SQLite can write its database pages and a rollback journal at the same time.
+  const requiredBytes = 2 * exportBytes + RESERVE_BYTES;
+  if (availableBytes === undefined || availableBytes < requiredBytes) {
+    throw new UpdateCaptureSpaceError(
+      `Online PostgreSQL export needs ${formatDiskSpaceBytes(requiredBytes)} near ${directory}; ${availableBytes === undefined ? "free space is unknown" : `only ${formatDiskSpaceBytes(availableBytes)} is free`}.`,
+      { requiredBytes, availableBytes: availableBytes ?? 0, volume: "backup" },
+    );
+  }
+  return Math.floor((availableBytes - RESERVE_BYTES) / 2);
 }

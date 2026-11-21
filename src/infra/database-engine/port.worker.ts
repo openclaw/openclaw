@@ -219,23 +219,31 @@ async function* readBatches(
 export async function readDatabasePortAllocations(
   endpoint: Endpoint,
   descriptor: PortDescriptor,
+  observed?: PortVerification["allocations"],
 ): Promise<PortVerification["allocations"]> {
   const result: PortVerification["allocations"] = {};
   for (const table of copiedTables(descriptor)) {
     for (const identity of table.identities) {
       const key = `${table.name}.${identity.column}`;
       if (endpoint.engine === "postgres") {
-        const sequence = await endpoint.db.query("SELECT pg_get_serial_sequence($1, $2) AS name", [
-          qualified(endpoint, table.name),
-          identity.column,
-        ]);
-        // Matched backups retain resets and uncalled sequences, even below existing row IDs.
-        const row = (
-          await endpoint.db.query(
-            `SELECT last_value::text AS value, is_called AS called FROM ${sequence.rows[0].name}`,
-          )
-        ).rows[0];
-        result[key] = { value: row.value, called: row.called };
+        const sequence = await endpoint.db.query<{ qualified: string; name: string }>(
+          `SELECT c.oid::regclass::text AS qualified, c.relname AS name FROM pg_class c
+           WHERE c.oid = pg_get_serial_sequence($1, $2)::regclass`,
+          [qualified(endpoint, table.name), identity.column],
+        );
+        const { qualified: sequencePath, name } = sequence.rows[0]!;
+        // Retain resets and uncalled sequences, even below existing row IDs.
+        const row = observed
+          ? observed[name]
+          : (
+              await endpoint.db.query<{ value: string; called: boolean }>(
+                `SELECT last_value::text AS value, is_called AS called FROM ${sequencePath}`,
+              )
+            ).rows[0];
+        if (!row) {
+          throw new DatabasePortDataError(`Port sequence observation missing for ${key}`);
+        }
+        result[key] = row;
       } else {
         result[key] = readSqlitePortAllocation(
           endpoint.db,
@@ -569,7 +577,7 @@ export async function materializeDatabasePort(params: {
   /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
   transformRow?: (table: string, row: PortRow) => PortRow | undefined;
   /** Reads the source inside the copy's own snapshot, before any row is read. */
-  observeSource?: (source: Endpoint) => Promise<void>;
+  observeSource?: (source: Endpoint) => Promise<PortVerification["allocations"]>;
   /** Hash rows as builds before typed row digests did, to check a proof that omits `digest`. */
   legacyDigest?: boolean;
 }): Promise<PortVerification> {
@@ -644,10 +652,10 @@ export async function materializeDatabasePort(params: {
         destination.db.exec(`DROP TRIGGER ${quote(trigger.name)}`);
       }
     }
-    // Both BEGINs above have run, so this reads the snapshot the copy reads.
-    await params.observeSource?.(source);
     const facts =
-      params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
+      (await params.observeSource?.(source)) ??
+      params.sourceAllocations ??
+      (await readDatabasePortAllocations(source, descriptor));
     // Same-server rows are copied on the server, then hashed from a separate source read
     // in the same snapshot so the copy is checked against its source, not against itself.
     const copied = sameServer
