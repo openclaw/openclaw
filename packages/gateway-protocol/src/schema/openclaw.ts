@@ -412,6 +412,8 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
   workspace: Type.Optional(Type.String()),
   /** Fresh-install opt-in for native provider conversation discovery. */
   nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
+  /** `codex-cli` only: use the native Codex login and home instead of a separate sign-in. */
+  shareCodexLogin: Type.Optional(Type.Literal(true)),
 });
 
 /** Starts interactive activation without moving artifact consent into the client. */

@@ -34,6 +34,7 @@ import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
+import "../../styles/custodian-setup-card.css";
 import {
   adjustTextareaHeight,
   handleTextareaOverflowInteraction,
