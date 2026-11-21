@@ -2252,13 +2252,13 @@ function Install-OpenClawFromGit {
         }
     }
 
-    $entryPath = Join-Path $RepoDir "dist\\entry.js"
+    $entryPath = Join-Path $RepoDir "dist\entry.js"
     if (-not (Test-Path $entryPath)) {
         Write-Host "[!] OpenClaw build did not produce $entryPath" -ForegroundColor Red
         return $false
     }
 
-    $binDir = Join-Path $env:USERPROFILE ".local\\bin"
+    $binDir = Join-Path $env:USERPROFILE ".local\bin"
     if (-not (Test-Path $binDir)) {
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     }
@@ -2338,7 +2338,7 @@ function Test-PreviousGitWrapper {
     $wrapper = Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"
     if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { return $false }
     # `openclaw update` points a Git install's wrapper at the release launcher.
-    return ([System.IO.File]::ReadAllText($wrapper) -match '^@echo off\r?\nnode ".+([\\/]dist[\\/]entry\.js|[\\/]git-install[\\/]openclaw-launcher\.mjs)" %\*\r?\n?$')
+    return ([System.IO.File]::ReadAllText($wrapper) -match '^@echo off\r?\nnode ".+([\\/]dist[\\/]+entry\.js|[\\/]git-install[\\/]openclaw-launcher\.mjs)" %\*\r?\n?$')
 }
 
 function Remove-PreviousGitWrapper {

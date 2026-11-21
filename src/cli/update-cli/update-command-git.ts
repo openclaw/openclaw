@@ -105,11 +105,17 @@ export async function retireStandaloneGitWrapper(params: {
       return { error: `Could not inspect ${wrapperPath}: ${String(error)}` };
     }
     const lines = contents.trimEnd().split(/\r?\n/u);
+    // install.ps1 wrote `dist\\entry.js` (a literal double backslash) before this fix; Windows
+    // resolves that and differently-cased spellings to the same file.
+    const windowsEntry =
+      platform === "win32" && lines.length === 2 && lines[0] === "@echo off"
+        ? /^node "(?<entry>[^"]+)" %\*$/u.exec(lines[1] ?? "")?.groups?.entry
+        : undefined;
+    const sameWindowsPath = (left: string, right: string) =>
+      path.win32.normalize(left).toLowerCase() === path.win32.normalize(right).toLowerCase();
     const matchesWindows =
-      platform === "win32" &&
-      lines.length === 2 &&
-      lines[0] === "@echo off" &&
-      expectedEntries.some((entry) => lines[1] === `node "${entry}" %*`);
+      windowsEntry !== undefined &&
+      expectedEntries.some((entry) => sameWindowsPath(windowsEntry, entry));
     const execArgs =
       platform === "win32" || lines.length !== 3 ? null : splitShellArgs(lines[2] ?? "");
     const matchesPosix =

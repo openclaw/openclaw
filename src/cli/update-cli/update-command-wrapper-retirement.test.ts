@@ -137,6 +137,24 @@ describe("retireStandaloneGitWrapper", () => {
     await expect(fs.readFile(wrapper, "utf8")).resolves.toContain("unrelated");
   });
 
+  it("points the wrapper install.ps1 wrote, with its doubled backslash, at the release launcher", async () => {
+    const { wrapper, write, root } = await fixture("win32");
+    await write(`@echo off\r\nnode "${root}\\dist\\\\entry.js" %*\r\n`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", "C:\\Users\\me\\.openclaw");
+    await expect(
+      retireStandaloneGitWrapper({
+        previousRoot: root,
+        replacementRoot: "C:\\Users\\me\\.openclaw\\git-install\\openclaw",
+        platform: "win32",
+        searchDirs: [path.dirname(wrapper)],
+      }),
+    ).resolves.toEqual({});
+    await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
+      '@echo off\r\nnode "C:\\Users\\me\\.openclaw\\git-install\\openclaw-launcher.mjs" %*\r\n',
+    );
+    vi.unstubAllEnvs();
+  });
+
   it("points the installer wrapper at the release launcher, so `openclaw gateway` on PATH starts a pending release", async () => {
     const base = dirs.make("openclaw-wrapper-release-");
     const checkout = path.join(base, "checkout");
