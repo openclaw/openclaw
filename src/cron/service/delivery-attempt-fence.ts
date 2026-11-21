@@ -5,10 +5,13 @@ import {
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
-import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
-import { CronRunReceiptRevisionError } from "../store/run-receipt-store.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import {
+  CronDeliveryAuthorityError,
+  type CronCompletionDeliveryFence,
+} from "../delivery-attempt-fence.js";
+import { CronRunReceiptRevisionError, type CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
+import { finishCronRun } from "./run-history.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import type { CronServiceState } from "./state.js";
 
@@ -30,9 +33,11 @@ export function createCronCompletionDeliveryFence(params: {
     context.admission.assertCurrent();
     signal.throwIfAborted();
     if (state.deps.isAgentAvailable?.(handle.agentId, { deletionBlocked: false }) === false) {
-      throw new CronRunReceiptRevisionError(
+      throw new CronDeliveryAuthorityError(
         handle.receiptId,
         describeUnavailableCronAgent(handle.agentId),
+        handle.jobId,
+        fence,
         "owner-unavailable",
       );
     }
@@ -44,10 +49,15 @@ export function createCronCompletionDeliveryFence(params: {
       (activeJobMarker?.jobRemoved && !allowMissingJob()) ||
       (!params.job.agentId?.trim() && defaultAgentId() !== admittedDefaultAgentId)
     ) {
-      throw new CronRunReceiptRevisionError(handle.receiptId, "cron delivery owner retired");
+      throw new CronDeliveryAuthorityError(
+        handle.receiptId,
+        "cron delivery owner retired",
+        handle.jobId,
+        fence,
+      );
     }
   };
-  return {
+  const fence: CronCompletionDeliveryFence = {
     standingGrantAuthority: {
       context,
       handle,
@@ -59,6 +69,28 @@ export function createCronCompletionDeliveryFence(params: {
       },
     },
     assertCurrent,
+    async recordWithheld({ runId, sessionKey, error }) {
+      // A continuation may outlive its completed occurrence. Keep that result and
+      // record the refused continuation separately, without changing the job or receipt.
+      await finishCronRun(state, {
+        taskRunId: `${handle.receiptId}:followup:${runId}`,
+        historySource: { context, storeKey: handle.storeKey, defaultAgentId: handle.agentId },
+        job: params.job,
+        event: {
+          action: "finished",
+          jobId: handle.jobId,
+          runId,
+          runAtMs: handle.startedAtMs,
+          status: "error",
+          completionStatus: "failed",
+          error,
+          delivered: false,
+          deliveryStatus: "not-delivered",
+          deliveryError: error,
+          sessionKey,
+        },
+      });
+    },
     async beforeAttempt() {
       assertCurrent();
       let committed = false;
@@ -82,4 +114,5 @@ export function createCronCompletionDeliveryFence(params: {
       assertCurrent();
     },
   };
+  return fence;
 }

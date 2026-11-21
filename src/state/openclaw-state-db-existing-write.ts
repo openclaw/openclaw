@@ -240,6 +240,11 @@ function createExistingOpenClawStateWriter(
         currentOptions.busyTimeoutMs ?? contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
       setSqliteBusyTimeout(db, busyTimeoutMs);
       admitStateSchemaFacts(db, pathname);
+      // Cold bookkeeping must not reserve the live writer during a whole-file scan.
+      // Explicit maintenance/recovery keeps its transaction-local validation below.
+      if (!contract.recoverTaskDeliveryOrphans && contract.integrityCheck === undefined) {
+        assertStateDatabaseIntegrityOnce(db, pathname);
+      }
       const write = () =>
         runManagedStateTransaction(
           db,

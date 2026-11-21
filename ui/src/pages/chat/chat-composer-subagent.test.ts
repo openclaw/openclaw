@@ -286,7 +286,7 @@ it.each([
   { draft: "/models", allowed: true, restricted: true },
 ])(
   "admits $draft with no default (restricted: $restricted): $allowed",
-  ({ draft, allowed, restricted }) => {
+  async ({ draft, allowed, restricted }) => {
     const { pane, state, context } = createRefreshChatPane(
       createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
     );
@@ -313,8 +313,10 @@ it.each([
       expect(pane.chatProps.modelRequiredReason).toBe("No models are permitted by your admin.");
       const container = createComposerContainer();
       renderComposerInto(container, pane.chatProps);
-      expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
-        "No models are permitted by your admin.",
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
+          "No models are permitted by your admin.",
+        ),
       );
       expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
       disposeComposer(container);
@@ -574,7 +576,7 @@ describe("subagent composer", () => {
     { lineage: null, parentLoaded: false },
   ] satisfies { lineage: Partial<GatewaySessionRow> | null; parentLoaded: boolean }[])(
     "replaces subagent input with parent navigation for %j",
-    ({ lineage, parentLoaded }) => {
+    async ({ lineage, parentLoaded }) => {
       const { pane, state } = createRefreshChatPane();
       const parent: GatewaySessionRow = {
         key: "agent:main:parent",
@@ -607,8 +609,12 @@ describe("subagent composer", () => {
       expect(
         container.querySelector('[aria-label="Stop"], [aria-label="Stop generating"]'),
       ).toBeNull();
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
+          "View-only subagent",
+        ),
+      );
       const banner = container.querySelector(".agent-chat__disabled-banner");
-      expect(banner?.textContent).toContain("View-only subagent");
       const navigate = banner?.querySelector<HTMLButtonElement>("button");
       expect(navigate?.disabled).toBe(lineage === null);
       if (parentLoaded) {

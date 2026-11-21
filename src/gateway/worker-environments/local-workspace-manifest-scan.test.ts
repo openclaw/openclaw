@@ -363,16 +363,15 @@ it.each(["probe", "scan"] as const)(
   },
 );
 
-const agpPaths = [
-  "m/build/intermediates/x",
-  "m/build/outputs/apk/x.apk",
-  "m/build/outputs/bundle/x.aab",
-];
+const agpPaths = ["intermediates", "outputs/apk", "outputs/bundle"].map((p) => `m/build/${p}/x`);
+const dotnetPaths = ["bin/Debug", "bin/Release", "obj/Debug", "obj/Release"].map((p) => `m/${p}/x`);
 const pnpmPaths = [".openclaw/.pnpm-store/cache"];
 it.each([
   ...["projection", "canonical", "checkpoint"].map((matching) => [matching, []] as const),
   ...["projection", "checkpoint"].map((matching) => [matching, pnpmPaths] as const),
   ...["projection", "canonical", "checkpoint"].map((matching) => [matching, agpPaths] as const),
+  ...["projection", "canonical", "checkpoint"].map((matching) => [matching, dotnetPaths] as const),
+  ["projection", dotnetPaths, [...pnpmPaths, ...agpPaths]],
   ["projection", agpPaths, pnpmPaths],
   ["projection", pnpmPaths, agpPaths],
   ["projection", [...pnpmPaths, ...agpPaths]],

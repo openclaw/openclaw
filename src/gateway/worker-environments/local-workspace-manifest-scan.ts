@@ -29,6 +29,7 @@ import {
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
+  createLocalWorkspaceBaselineTree,
   localWorkspaceManifestRootReference,
   updateLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestChange,
@@ -54,9 +55,8 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   buildCacheInputPaths,
   isIgnoredWorkspaceBuildOutput,
+  LEGACY_DERIVED_ELIGIBILITY_SUBSETS,
 } from "./workspace-path-exclusions.js";
-
-const LEGACY_DERIVED_ELIGIBILITY_SUBSETS = [[], ["agp"], ["pnpm"], ["pnpm", "agp"]] as const;
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
 export function readLocalWorkspaceManifestRows(
@@ -349,13 +349,7 @@ export async function executeLocalWorkspaceManifestRead(
       action.manifestRef,
       action.buildCacheInputs,
     );
-    const records = createLocalWorkspaceManifestTree([
-      ...manifest.entries,
-      ...(manifest.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
+    const records = createLocalWorkspaceBaselineTree(manifest, action.preparedDirectories);
     const resultingRoot = localWorkspaceManifestRootReference(records, manifest.baseCommit);
     const mutation: LocalWorkspaceMutation = {
       kind: "update",
@@ -398,13 +392,7 @@ export async function executeLocalWorkspaceManifestRead(
       undefined,
       "stored",
     );
-    records = createLocalWorkspaceManifestTree([
-      ...baseline.entries,
-      ...(baseline.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
+    records = createLocalWorkspaceBaselineTree(baseline);
   } else if (records.size === 0) {
     if (row.baseline_ref) {
       throw new Error("Local workspace baseline nodes are missing");

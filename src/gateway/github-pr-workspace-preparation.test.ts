@@ -498,7 +498,7 @@ describe("existing PR preparation through the registered agent action", () => {
   it.each(["clean", "authored directory", "cache-only directory"] as const)(
     "admits only pristine source after native managed sandbox layout (%s)",
     async (contents) => {
-      const f = await fixture({ empty: true, fork: true });
+      const f = await fixture({ empty: true, fork: true, sandboxLayout: true });
       f.config.agents ??= {};
       f.config.agents.defaults ??= {};
       f.config.agents.defaults.sandbox = {
@@ -526,7 +526,7 @@ describe("existing PR preparation through the registered agent action", () => {
           },
         });
         expect(sandbox?.workspaceSource).toBe("managed-worktree");
-        expect(captures.observations).toEqual(["scan:canonical"]);
+        expect(captures.observations).toEqual([]);
         if (contents === "authored directory") {
           await fs.mkdir(path.join(f.projection, "saved-empty"));
           await expect(f.invoke({}, sandbox)).rejects.toThrow(

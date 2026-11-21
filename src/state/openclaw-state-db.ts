@@ -13,7 +13,6 @@ import {
   setSqliteBusyTimeout,
   type SqliteLockFailureReporting,
 } from "../infra/sqlite-busy-timeout.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
@@ -24,7 +23,6 @@ import {
 import {
   openSqliteReadOnlyDatabase,
   prepareArtifactPreservingSqliteRead,
-  prepareSqliteReadOnlyLocation,
 } from "../infra/sqlite-snapshot-source.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -57,10 +55,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import { assertStateFileSnapshotAllowed, isStatePostgres } from "./openclaw-state-db-engine.js";
-import {
-  assertExistingOpenClawStateRuntimeSchema,
-  assertStateDatabaseSchemaAdmission,
-} from "./openclaw-state-db-existing-schema.js";
+import { assertStateDatabaseSchemaAdmission } from "./openclaw-state-db-existing-schema.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "./openclaw-state-db-fast-path.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -73,10 +68,7 @@ import {
   runStateOpenStepsAsync,
 } from "./openclaw-state-db-open.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
-import {
-  openOpenClawStateReadConnection,
-  readOnlyStateDatabase,
-} from "./openclaw-state-db-read-connection.js";
+import { readOnlyStateDatabase } from "./openclaw-state-db-read-connection.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   repairStateSchema,
@@ -302,47 +294,7 @@ export function initializeNativeOpenClawStateDatabase(
   );
 }
 
-/** Open existing shared state without creating, migrating, chmodding, or configuring it. */
-export async function openExistingOpenClawStateDatabaseReadOnly(
-  options: OpenClawStateDatabaseOptions & {
-    requireCanonicalSchema?: boolean;
-    integrityCheck?: "quick" | "full";
-  } = {},
-): Promise<OpenClawStateDatabase | undefined> {
-  const pathname = resolveDatabasePath(options);
-  isExistingOpenClawStateSchema(pathname);
-  if (!existsSync(pathname)) {
-    return undefined;
-  }
-  stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
-    pathname,
-    options.env ?? process.env,
-  );
-  const prepared = isStatePostgres() ? pathname : await prepareSqliteReadOnlyLocation(pathname);
-  const connection = openOpenClawStateReadConnection(pathname, prepared);
-  const { db } = connection.database;
-  try {
-    if (isPostgresSqlConnection(db)) {
-      assertSupportedStateSchemaVersion(db, pathname);
-    } else if (isExistingOpenClawStateSchema(pathname, db) || options.requireCanonicalSchema) {
-      assertExistingOpenClawStateRuntimeSchema(db, pathname);
-    } else {
-      assertSupportedStateSchemaVersion(db, pathname);
-      assertSqliteIntegrity(db, pathname, { check: options.integrityCheck });
-      if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
-        assertOpenClawStateDatabaseForMaintenance(db, { pathname });
-      }
-    }
-  } catch (error) {
-    try {
-      connection.close();
-    } catch {
-      // Preserve the verification failure that explains why the database was refused.
-    }
-    throw error;
-  }
-  return readOnlyStateDatabase(connection.database, connection.close);
-}
+export { openExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 
 type StateDatabaseOpenStep = {
   run(): OpenClawStateDatabase;

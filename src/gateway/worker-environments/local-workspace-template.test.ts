@@ -39,9 +39,11 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
+import { createLocalWorkspaceBaselineTree } from "./local-workspace-manifest-tree.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
@@ -128,6 +130,7 @@ beforeAll(async () => {
   await write(source, "pnpm-lock.yaml", firstLock);
   await write(source, "package.json", '{"name":"fixture","private":true}\n');
   await write(source, "packages/tool/package.json", '{"name":"fixture-tool"}\n');
+  await write(source, ".agents/.DS_Store", "synthetic metadata\n");
   await write(source, ".gitignore", "node_modules/\n.env*\n.npmrc\nbuild/\n");
   await git(source, "add", ".");
   await git(source, "commit", "--quiet", "-m", "fixture");
@@ -402,6 +405,13 @@ it("refreshes source and lockfile changes without rewriting unchanged files", as
 });
 
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
+  const rm = fs.rm;
+  using _ = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+    if (path.basename(String(target)) === "build" && options?.recursive) {
+      throw new Error("Bulk template cleanup entered the Gateway libuv pool");
+    }
+    return rm(target, options);
+  });
   mocks.install.mockImplementation(async ({ directory }) => {
     await expectMissing(directory, ...hostSecrets);
     return installFiles(directory, {
@@ -442,7 +452,7 @@ it.for(["none", "same", "previous"])(
     );
     try {
       const projectionPath = path.join(path.dirname(seed), "templates", "fetch-proof", "workspace");
-      await withWorktreeAllocationLease({ env, signal }, (allocation) =>
+      const initial = await withWorktreeAllocationLease({ env, signal }, (allocation) =>
         initializeLocalWorkspaceProjection({
           owner: {
             agentId: "main",
@@ -462,6 +472,22 @@ it.for(["none", "same", "previous"])(
         }),
       );
       expect(mocks.install).toHaveBeenCalledOnce();
+      expect(await read(projectionPath, ".agents/.DS_Store")).toBe("synthetic metadata\n");
+      expect(initial.preparedDirectories).toContain(".agents/skills");
+      expect(initial.preparedDirectories).not.toContain(".agents");
+      const cached = parseWorkerWorkspaceManifest(initial.rawManifest, initial.manifestRef);
+      expect(cached.directories).not.toContain(".agents");
+      const fresh = await captureWorkspaceManifestDocument({
+        root: projectionPath,
+        baseCommit,
+        buildCacheInputs: new Set(),
+        signal,
+      });
+      expect(createLocalWorkspaceBaselineTree(cached, initial.preparedDirectories)).toEqual(
+        createLocalWorkspaceBaselineTree(
+          parseWorkerWorkspaceManifest(fresh.rawManifest, fresh.manifestRef),
+        ),
+      );
       vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
       expect(await git(projectionPath, "config", "--get-all", "openclaw.projection")).toBe("true");
