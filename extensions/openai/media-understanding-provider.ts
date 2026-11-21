@@ -6,6 +6,10 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   capabilities: ["image", "audio"],
   defaultModels: { image: "gpt-6-astra", audio: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL },
   autoPriority: { image: 20, audio: 20 },
+  async analyzePdf(req) {
+    const { analyzeOpenAiPdf } = await import("./pdf-analysis.js");
+    return analyzeOpenAiPdf(req);
+  },
   async describeImage(req) {
     const { describeImageWithModel } = await import("openclaw/plugin-sdk/media-understanding");
     return describeImageWithModel(req);

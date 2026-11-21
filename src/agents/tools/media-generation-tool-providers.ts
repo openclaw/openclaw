@@ -8,6 +8,7 @@ import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.typ
 import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 
 type MediaProviderKey =
+  | "mediaUnderstandingProviders"
   | "imageGenerationProviders"
   | "musicGenerationProviders"
   | "videoGenerationProviders";
@@ -18,6 +19,7 @@ export async function acquireMediaGenerationToolProviders<K extends MediaProvide
   params: MediaProviderOptions,
 ) {
   const label = {
+    mediaUnderstandingProviders: "Media understanding",
     imageGenerationProviders: "Image",
     musicGenerationProviders: "Music",
     videoGenerationProviders: "Video",
