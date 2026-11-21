@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -16,6 +17,7 @@ import {
   rowDemandsVisibility,
   RowVisibilityReason,
   SIDEBAR_SESSION_PAGE_SIZE,
+  type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -24,6 +26,9 @@ export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
   personHeaders: PersonHeaders | undefined;
+  renderAgentAvatar?: (session: () => SidebarRecentSession) => JSX.Element;
+  headerAction?: JSX.Element;
+  empty?: JSX.Element;
 }) {
   const host = createMemo(() => params.host),
     section = createMemo(() => params.section),
@@ -72,7 +77,11 @@ export function renderSessionSection(params: {
   const collapsed = createMemo(
     () => section().renderHeader && host().collapsedSessionSections.has(section().id),
   );
+  const rosterSessions = createMemo(() => section().id === "roster-sessions");
   const label = createMemo(() => {
+    if (rosterSessions()) {
+      return t("tabs.sessions");
+    }
     const personOwnerValue = personOwner();
     const personIdentityValue = personIdentity();
     const sectionValue = section();
@@ -136,10 +145,10 @@ export function renderSessionSection(params: {
   // Pinned holds personal pins: it accepts session drops without group write
   // access and is never reordered among the stored sections.
   const pinned = createMemo(() => section().id === "pinned");
-  // Person/project/agent sections are derived, not stored: dropping a session on
+  // Person/project/roster sections are derived, not stored: dropping a session on
   // them cannot persist anything, so they take no drags at all.
   const derivedSection = createMemo(() =>
-    Boolean(pinned() || personOwner() || section().project || section().id.startsWith("agent:")),
+    Boolean(pinned() || personOwner() || section().project || rosterSessions()),
   );
   const sectionDropEnabled = createMemo(
     () => pinned() || (groupWriteAccess().allowed && !derivedSection()),
@@ -330,6 +339,7 @@ export function renderSessionSection(params: {
                   {labelText()}
                 </button>
               )}
+              {params.headerAction}
               {group() || section().id === "ungrouped" ? (
                 <NewSessionLink
                   basePath={host().basePath}
@@ -411,6 +421,7 @@ export function renderSessionSection(params: {
                       host={host()}
                       session={session()}
                       pinReorder={pinned()}
+                      renderAgentAvatar={params.renderAgentAvatar}
                       window={sessionWindow}
                       listPosition={{
                         index: section().rows.indexOf(session()),
@@ -421,7 +432,9 @@ export function renderSessionSection(params: {
                 </For>
               </div>
             </div>
-          ) : undefined}
+          ) : (
+            params.empty
+          )}
           <SessionPagination host={host()} section={section()} />
         </>
       )}

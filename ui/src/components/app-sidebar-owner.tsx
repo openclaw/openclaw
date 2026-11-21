@@ -199,6 +199,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   captureSidebarSnapshot(): SidebarSnapshotModel | null {
+    // Do not save a narrowed section as the next reload’s unfiltered first paint.
+    if (this.rosterSessionAgentFilterId) {
+      return null;
+    }
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     return captureSidebarSnapshotModel(
       this,
@@ -325,6 +329,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     ).sections;
     const disclosure = this.sessionProjection.children;
     for (const section of sections) {
+      if (!section.renderHeader) {
+        continue;
+      }
       for (const row of section.rows) {
         if (row.key !== disclosure.selectedRootKey || row.visuallyActive) {
           continue;
@@ -364,18 +371,42 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sessionOrganizer.toggleSection(sectionId);
   }
 
+  private rosterSessionAgentFilter: {
+    context: AppSidebarOwner["context"];
+    agentId: string;
+  } | null = null;
+
+  get rosterSessionAgentFilterId(): string | null {
+    const filter = this.rosterSessionAgentFilter;
+    return filter?.context === this.context &&
+      this.rosterSessionSource?.agentIds.includes(filter.agentId)
+      ? filter.agentId
+      : null;
+  }
+
+  setRosterSessionAgentFilter(agentId: string | null): void {
+    if (agentId !== this.rosterSessionAgentFilterId) {
+      this.rosterSessionAgentFilter = agentId ? { context: this.context, agentId } : null;
+      this.sessionProjection.resetMembership("roster-sessions");
+      if (this.collapsedSessionSections.has("roster-sessions")) {
+        this.sessionOrganizer.toggleSection("roster-sessions");
+      } else {
+        this.invalidate();
+      }
+    }
+  }
+
   setVisibleSessionLimit(sectionId: string, limit: number): void {
-    const grouped = this.sidebarAgentsMode === "roster" && sectionId.startsWith("agent:");
+    const roster = this.sidebarAgentsMode === "roster" && sectionId === "roster-sessions";
     const grouping = this.effectiveSessionsGrouping();
     const { key, initialLimit } = sidebarSessionPagination(grouping, sectionId);
     const previousLimit =
-      (grouped ? this.rosterVisibleSessionLimits : this.sessionData.visibleSessionLimits).get(
-        key,
-      ) ?? initialLimit;
+      (roster ? this.rosterVisibleSessionLimits : this.sessionData.visibleSessionLimits).get(key) ??
+      initialLimit;
     if (limit < previousLimit) {
       this.sessionProjection.resetMembership(sectionId);
     }
-    if (grouped) {
+    if (roster) {
       this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(key, limit);
       this.invalidate();
     } else {

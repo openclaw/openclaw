@@ -22,6 +22,7 @@ import type {
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
 import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
+import { filterSidebarSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   isListedInPinnedSection,
   type SidebarEmptyGroupsMode,
@@ -41,6 +42,7 @@ export type SidebarProjectionHost = {
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionProjection: SidebarSessionProjection;
   readonly sidebarAgentsMode: "chip" | "roster";
+  readonly rosterSessionAgentFilterId?: string | null;
   readonly rosterSessionSource: {
     result: SessionsListResult | null;
     agentIds: readonly string[];
@@ -133,6 +135,7 @@ export function memoizedSidebarSections(
 ): SidebarVisibleSections {
   const context = host.sessionDataContext;
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+  const rosterFilter = roster ? host.rosterSessionAgentFilterId : null;
   const groups = context?.navigation.snapshot.personalSessionGroups;
   const references = groups?.length ? host.personalGroupSessionReferences() : [];
   const catalogRows = host.catalogSessionRows();
@@ -145,6 +148,7 @@ export function memoizedSidebarSections(
       catalogs,
       catalogRows,
       roster,
+      rosterFilter,
       host.collapsedSessionSections,
       host.effectiveSessionsGrouping(),
       host.sessionsEmptyGroupsMode,
@@ -162,14 +166,27 @@ export function memoizedSidebarSections(
     () => {
       const grouping = host.effectiveSessionsGrouping();
       const pinnedKeys = personalSessionPinKeys(host.sidebarEntries);
-      const sections = roster?.agentIds.map((agentId) => ({
-        id: `agent:${agentId}:recent` as const,
-        rows: rows.filter(
-          (row) =>
-            !isListedInPinnedSection(row, pinnedKeys) &&
-            host.sessionNavigationAgentId(row) === agentId,
-        ),
-      }));
+      const unpinned = roster
+        ? rows.filter((row) => !isListedInPinnedSection(row, pinnedKeys))
+        : [];
+      const sections = roster
+        ? [
+            // Agent sections supply their status summaries; only the common list renders rows.
+            ...roster.agentIds.map((agentId) => ({
+              id: `agent:${agentId}:recent` as const,
+              rows: unpinned.filter((row) => host.sessionNavigationAgentId(row) === agentId),
+            })),
+            {
+              id: "roster-sessions" as const,
+              rows: rosterFilter
+                ? filterSidebarSessionTree(
+                    unpinned,
+                    (row) => host.sessionNavigationAgentId(row) === rosterFilter,
+                  )
+                : unpinned,
+            },
+          ]
+        : undefined;
       const collapsedSections = new Set(host.collapsedSessionSections);
       for (const agentId of roster?.collapsedAgentIds ?? []) {
         collapsedSections.add(`agent:${agentId}:recent`);

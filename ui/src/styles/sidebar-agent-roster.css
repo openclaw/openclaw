@@ -43,6 +43,57 @@ openclaw-sidebar-agent-roster {
   font-size: 17px;
 }
 
+.sidebar-roster-session-avatar {
+  width: 20px;
+  height: 20px;
+  font-size: 13px;
+}
+
+.sidebar-roster-session-filter {
+  min-width: 0;
+  max-width: 50%;
+  margin-inline-start: auto;
+}
+
+.sidebar-session-group-actions.sidebar-roster-session-filter__trigger {
+  width: auto;
+  min-width: var(--sidebar-session-group-action-size);
+  max-width: 100%;
+  padding-inline: 4px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-roster-session-filter__trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-roster-session-filter__trigger--active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-roster-session-filter__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-roster-session-filter__name:empty {
+  display: none;
+}
+
+.sidebar-roster-session-filter .oc-menu {
+  min-width: 156px;
+}
+
+.sidebar-roster-session-filter .oc-menu-item__icon {
+  width: 20px;
+  height: 20px;
+}
+
 /* Session rows in the roster keep the list's grid and stay on one line. */
 .sidebar-recent-session.sidebar-recent-session--team {
   gap: 0;

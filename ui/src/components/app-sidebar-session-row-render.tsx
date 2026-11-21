@@ -48,6 +48,7 @@ type RecentSessionParams = {
   pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
+  renderAgentAvatar?: (session: () => SidebarRecentSession) => JSX.Element;
 };
 function renderRecentSession(params: RecentSessionParams) {
   return (
@@ -65,6 +66,8 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     display = createMemo(() => params.display),
     listItem = createMemo(() => params.listItem ?? true),
     icon = createMemo(() => params.icon);
+  const AgentAvatar = () => params.renderAgentAvatar?.(session);
+  const avatar = createMemo(() => (params.renderAgentAvatar ? <AgentAvatar /> : undefined));
   const personallyPinned = createMemo(() =>
     host().sessionOrganizer.isPersonalSessionPin(session().key),
   );
@@ -133,7 +136,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const subtitle = createMemo(() => subtitleState().subtitle),
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
-  const indicators = renderSidebarSessionIndicators(host, session, display, icon);
+  const indicators = renderSidebarSessionIndicators(host, session, display, icon, avatar);
   const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
   const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
@@ -472,6 +475,7 @@ export function renderSessionTree(params: {
   pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
+  renderAgentAvatar?: RecentSessionParams["renderAgentAvatar"];
   listPosition?: { index: number; count: number };
   window?: Pick<ReturnType<typeof createSidebarSessionWindow>, "rowRef" | "item" | "focus">;
 }): JSX.Element {
@@ -518,6 +522,7 @@ export function renderSessionTree(params: {
         display={params.display}
         listItem={false}
         icon={icon()}
+        renderAgentAvatar={params.renderAgentAvatar}
       />
       {expanded() ? (
         <div class="sidebar-session-tree__children">
@@ -528,7 +533,14 @@ export function renderSessionTree(params: {
               aria-label={listItem() ? t("sessionsView.childSessions") : undefined}
             >
               <For each={visibleChildren()} keyed={(child) => child.key}>
-                {(child) => <SessionTree host={host()} session={child()} listItem={listItem()} />}
+                {(child) => (
+                  <SessionTree
+                    host={host()}
+                    session={child()}
+                    listItem={listItem()}
+                    renderAgentAvatar={params.renderAgentAvatar}
+                  />
+                )}
               </For>
             </div>
           ) : undefined}

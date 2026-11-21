@@ -198,10 +198,10 @@ button shows the current reason below the composer until preparation finishes.
 Your draft stays editable; press Enter or **Start session** again when it is ready.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-A temporary selected row appears at the top of the sidebar session list
-immediately, clearing the previous chat’s highlight without changing the saved
-session until creation is accepted. The agent roster (**Show all**) lists agents
-rather than sessions, so it shows no temporary row.
+In chip mode, a temporary selected row appears at the top of the sidebar session
+list immediately, clearing the previous chat’s highlight without changing the
+saved session until creation is accepted. In roster mode (**Show all**), the
+conversation appears in **Sessions** after creation is accepted, with no temporary row.
 The temporary row has no session actions; a failed creation restores the draft.
 Sessions created by another client or an agent appear through the sidebar's batched
 refresh, normally within five seconds. A busy Gateway can extend the refresh interval
@@ -549,7 +549,13 @@ move or duplicate its conversations. In **Show all agents**, each roster row
 represents one agent rather than an expandable session tree. Its latest
 available assistant reply appears beneath the name, and an activity ring
 surrounds the avatar while the agent or one of its sessions is working. Select
-an agent to open its main chat. The agent menu offers **Pin/Unpin**, **Sessions**,
+an agent to open its main chat. The collapsible **Sessions** section below the
+roster lists recent conversations across agents, with the conversation agent’s
+avatar on the left. Use the filter in the **Sessions** heading to show one
+agent’s conversations, or choose **All agents** to clear it. This only changes
+the list below the heading; sidebar filters and sorting still apply. Main chats stay
+on the agent rows, and personal pins stay in **Pinned** without a second copy
+in **Sessions**. The agent menu offers **Pin/Unpin**, **Sessions**,
 **Settings**, and a confirmed **Delete** action when permitted. **Sessions**
 opens the Sessions page filtered to that agent, where you can browse and create
 conversations. Select the separate **Users** view in the rail to see who is

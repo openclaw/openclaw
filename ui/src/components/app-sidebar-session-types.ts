@@ -365,7 +365,7 @@ export function sidebarSessionPagination(grouping: SidebarSessionsGrouping, sect
   return {
     initialLimit: grouping === "none" && sectionId === "ungrouped" ? 30 : SIDEBAR_SESSION_PAGE_SIZE,
     key:
-      sectionId.startsWith("agent:") || sectionId.startsWith("catalog")
+      sectionId === "roster-sessions" || sectionId.startsWith("catalog")
         ? sectionId
         : `${grouping}:${sectionId}`,
   };

@@ -91,7 +91,9 @@ const session: json.SnapshotReader<SidebarSnapshotSession> = json.refine(
 const sectionId = json.checked(
   (value): value is SidebarSessionSection<unknown>["id"] =>
     typeof value === "string" &&
-    /^(agent:|category:|person:|project:|catalog:|pinned$|ungrouped$|groups$|work$)/.test(value),
+    /^(agent:|category:|person:|project:|catalog:|pinned$|roster-sessions$|ungrouped$|groups$|work$)/.test(
+      value,
+    ),
 );
 export const sidebarSnapshotSchema = json.object({
   routingDefaults: json.object({

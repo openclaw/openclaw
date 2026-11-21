@@ -119,7 +119,7 @@ describe("AppSidebar session attention details", () => {
       sidebar.sidebarAgentsMode = mode;
       if (mode === "roster") {
         await waitForFast(() => expect(dom.query('[data-agent-group="main"]')).not.toBeNull());
-        expect(dom.query(`[data-session-key="${key}"]`)).toBeNull();
+        expect(dom.query(`[data-agent-group="main"] [data-session-key="${key}"]`)).toBeNull();
       } else {
         await waitForFast(() => expect(dom.query(`[data-session-key="${key}"]`)).not.toBeNull());
       }
@@ -199,7 +199,7 @@ describe("AppSidebar session attention details", () => {
     const dom = domProbe(sidebar);
     sidebar.sidebarAgentsMode = "roster";
     await waitForFast(() => expect(dom.query('[data-agent-group="main"]')).not.toBeNull());
-    expect(dom.query(`[data-session-key="${parentKey}"]`)).toBeNull();
+    expect(dom.query(`[data-agent-group="main"] [data-session-key="${parentKey}"]`)).toBeNull();
     for (const [id, key, createdAtMs, question] of [
       ["parent-question", parentKey, now, "Which deployment region?"],
       ["child-question", childKey, now - 1, "Which environment?"],
