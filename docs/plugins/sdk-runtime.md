@@ -49,25 +49,18 @@ containment. The same ID is advertised in Gateway `hello-ok.features.capabilitie
 ## Resource profile
 
 `openclaw/plugin-sdk/resource-profile` exposes the host's read-only resource
-policy as `ResourceProfile` (`"standard" | "lean"`):
+policy as `"standard" | "lean"`:
 
 ```typescript
-import { getResourceProfile, onResourceProfileChange } from "openclaw/plugin-sdk/resource-profile";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 
 const profile = getResourceProfile();
-const unsubscribe = onResourceProfileChange((nextProfile) => {
-  // Update plugin-owned resource policy; let admitted work settle first.
-  applyResourcePolicy(nextProfile);
-});
-api.lifecycle.onDispose(unsubscribe);
 ```
 
 Reads return the Gateway owner's resolved decision, without inspecting config,
 memory or CPUs again. Before Gateway initialization and in standalone commands,
-the default is `standard`. The subscription observes future changes only; it
-does not immediately call the listener. Listeners run synchronously after the
-new value is visible, and one listener throwing does not stop the others.
-Unsubscribe on plugin disposal; Gateway shutdown also clears subscriptions.
+the default is `standard`. The decision is fixed for the life of the Gateway
+process, so read it where the plugin applies its policy.
 
 `gateway.resources.profile` still requires a Gateway restart. This signal does
 not enable hot configuration changes or grant execution authority. Plugins own

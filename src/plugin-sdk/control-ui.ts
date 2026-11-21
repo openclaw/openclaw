@@ -202,7 +202,7 @@ export type ControlUiPanel = {
 };
 
 /** A draft offered to the user beside the composer; nothing changes until they accept it. */
-export type ControlUiDraftProposal = {
+type ControlUiDraftProposal = {
   /** Short heading for the proposal card. */
   title: string;
   /**
@@ -221,10 +221,10 @@ export type ControlUiDraftProposal = {
 };
 
 /** The user's choice; `"dismissed"` also covers the pane, chat, or action retiring first. */
-export type ControlUiDraftProposalOutcome = "accepted" | "dismissed";
+type ControlUiDraftProposalOutcome = "accepted" | "dismissed";
 
 /** One line of a running composer task's progress, such as a tool call. */
-export type ControlUiComposerTaskStep = {
+type ControlUiComposerTaskStep = {
   label: string;
   state: "running" | "done" | "failed";
 };
@@ -234,7 +234,7 @@ export type ControlUiComposerTaskStep = {
  * working, then a proposal or a failure, without moving the composer. The card leaves when the
  * task settles, the user cancels, the chat changes, or the action's `signal` aborts.
  */
-export type ControlUiComposerTask = {
+type ControlUiComposerTask = {
   /** Aborts when the user cancels the task or the action retires. */
   readonly signal: AbortSignal;
   /** Replace the working card's progress: the newest steps and an optional summary. */
@@ -248,7 +248,7 @@ export type ControlUiComposerTask = {
   fail: (message: string) => void;
 };
 
-export type ControlUiComposerHandle = {
+type ControlUiComposerHandle = {
   readonly draft: string;
   setDraft: (text: string) => void;
   /**

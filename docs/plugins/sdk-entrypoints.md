@@ -587,11 +587,10 @@ capability declarations do not confer account entitlement.
 
 ## Resource profile
 
-`openclaw/plugin-sdk/resource-profile` exports `getResourceProfile`,
-`onResourceProfileChange`, and the `ResourceProfile` type. It reads the existing
-Gateway decision without selecting another profile or exposing a setter.
-See [Resource profile](/plugins/sdk-runtime#resource-profile) for lifecycle and
-subscription semantics.
+`openclaw/plugin-sdk/resource-profile` exports `getResourceProfile`. It reads the
+existing Gateway decision without selecting another profile or exposing a setter.
+See [Resource profile](/plugins/sdk-runtime#resource-profile) for lifecycle
+semantics.
 
 ## Runtime request headers
 

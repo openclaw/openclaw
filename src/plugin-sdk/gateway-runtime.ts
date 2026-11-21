@@ -86,8 +86,6 @@ export {
 
 export { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 
-export type { GatewayPublicationReaderV1 } from "../gateway/publication-reader.js";
-
 /** Attest a closed publication-reader device without impersonating a human profile. */
 export async function prepareGatewayPublicationReaderV1(
   ...args: Parameters<

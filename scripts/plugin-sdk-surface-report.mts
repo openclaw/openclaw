@@ -239,7 +239,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: reconcile the accepted public entrypoint inventory after the cron budget update.
       // +1: settled execution lifecycle classifiers for plugin subscribers (#192413).
       // +1: shared Decisions HTTP execution subpath (#195641), captured in the feature cut.
-      163,
+      // +1: read-only resource-profile subpath for lean-mode plugin policy (#202478).
+      164,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -325,7 +326,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // Gateway person principal and access-refresh classifier: +2 (#196276, #176886).
       // +6: expose the existing model-request hook (#193550) and metric (#198455) types through plugin-entry.
       // +2: owner-approved stored-session Control UI path resolver and parser on session-discussion (#203044).
-      3896,
+      // +9: bundled-plugin exports merged without a budget update, reconciled 2026-11-21.
+      // reply-runtime isReplySessionInitConflictError (#201363); interactive-runtime agentControlText,
+      // stampAgentControlValue, and stampAgentControls (#201764); gateway-runtime
+      // prepareGatewayPublicationReaderV1 (#201073) and loadGatewayReaderIdentityV1 (#201075);
+      // agent-harness-runtime AgentHarnessRuntimeUpdateRequiredError (#201130);
+      // native-command-registry loadCommandArgMenuModelCatalog (#201254);
+      // resource-profile getResourceProfile (#202478).
+      3905,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -383,7 +391,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7 net: the callable subset of the same source-audited feature-cut exports.
       // Harness +2, transcript replay +1, binding inspection +1, Decisions +1 net, Gateway +2.
       // +2: the same stored-session Control UI path resolver and parser (#203044).
-      2245,
+      // +8: the callable subset of the same reconciled bundled-plugin exports;
+      // AgentHarnessRuntimeUpdateRequiredError is construct-only.
+      2253,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
