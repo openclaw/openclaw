@@ -602,6 +602,12 @@ export async function runCase(
       expect(c.queuedCalls).toBe(0);
     } else {
       await c.wait(c.recoveredReached.promise);
+      if (scenario === "live-ocid-grant") {
+        expect(c.observedRunScopes).not.toEqual([]);
+        for (const scopes of c.observedRunScopes) {
+          expect(scopes.toSorted()).toEqual([...WRITER, "operator.approvals"].toSorted());
+        }
+      }
       if (
         row.credential === "plugin-grant" ||
         [
@@ -648,7 +654,9 @@ export async function runCase(
       setDeviceTokenBindingOwner(undefined);
       if (
         c.profileId &&
-        ["narrowed-role", "empty-after-role", "goal-agent-excluded"].includes(scenario)
+        ["narrowed-role", "empty-after-role", "goal-agent-excluded", "live-ocid-grant"].includes(
+          scenario,
+        )
       ) {
         await setCanonicalUserProfileRole(c.profileId, "operator");
       }

@@ -74,7 +74,10 @@ export async function prepareAdmissionOcidPeer(c: AdmissionCase) {
       ),
     ).toMatchObject({ ok: true });
     const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: c.id });
-    await setCanonicalUserProfileRole(profile.id, "operator");
+    await setCanonicalUserProfileRole(
+      profile.id,
+      c.scenario === "live-ocid-grant" ? "ocid-grant" : "operator",
+    );
   }
   const authority = c.claw.authority;
   setDeviceTokenBindingOwner({
@@ -204,6 +207,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
             "narrowed-role",
             "legacy-tailscale",
             "legacy-tailscale-narrowed",
+            "live-ocid-grant",
           ].includes(c.scenario)) &&
         params.attempt.sessionKey === c.sessionKey
       ) {
@@ -316,8 +320,12 @@ export async function prepareAdmissionOperator(
       "operator.approvals",
       "operator.questions",
     ];
-    next.gateway.roles.definitions.operator.modelPolicy = {
-      deny: Array.from({ length: 257 }, (_, index) => `unrelated-${index}/*`),
+    next.gateway.roles.definitions["ocid-grant"] = {
+      ...next.gateway.roles.definitions.operator,
+      scopes: [...WRITER, "operator.approvals"],
+      modelPolicy: {
+        deny: Array.from({ length: 257 }, (_, index) => `unrelated-${index}/*`),
+      },
     };
     await fixture.publish(next, c.signal);
   }
