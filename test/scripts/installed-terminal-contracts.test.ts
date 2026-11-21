@@ -8,6 +8,8 @@ import { capturePackageTree } from "../../scripts/e2e/lib/upgrade-survivor/insta
 import {
   assertInstalledTerminalApplication,
   assertInstalledTerminalDependencyTree,
+  collectInstalledTerminalApplication,
+  prepareInstalledTerminalApplication,
   readInstalledTerminalDependencyTree,
   readInstalledTerminalMetadata,
   readInstalledTerminalReference,
@@ -17,8 +19,9 @@ import {
   inspectInstalledTerminalDependencyNodes,
   type InstalledTerminalDependencyReference,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { writeJson } from "./upgrade-survivor-shard.test-support.js";
+import { runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -140,22 +143,167 @@ it("binds the fixed historical allowed closure independently of diagnostic overr
   );
 });
 
-it("rejects a freshly self-certified application closure", () => {
-  expect(() =>
-    assertInstalledTerminalApplication(
-      { version: "1.0.0", buildInfo: {}, files: {} },
-      {
-        roles: {
-          "sqlite-session": {
-            sha256: "929c3976791a8deb2e3942663d8f90f2cdf1c97f6bbeb2c8dc15e16dc30764c5",
-            files: [],
-          },
-        },
-        assets: [],
-        metadata: { version: "1.0.0", build: {}, files: {} },
+it("binds the current CLI's complete reference including reviewed and source-locked alternatives", () => {
+  const output = path.join(dirs.make("installed-current-reference-"), "reference.json");
+  const result = runProcess(
+    resolveTestNodeExecPath(),
+    ["scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts", "current", output],
+    { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: process.cwd() },
+    10_000,
+  );
+  expect(result.status, result.stderr).toBe(0);
+  const report = JSON.parse(fs.readFileSync(output, "utf8"));
+  const encoded = stableStringify(report.reference);
+  expect(report.sha256).toBe(hash(Buffer.from(encoded)));
+  const reference = readInstalledTerminalReference("current", encoded);
+  expect(reference.packages).toMatchObject({
+    "brace-expansion@5.0.13": {
+      resolution: {
+        integrity:
+          "sha512-Vh3dmFbc4wZeox7M9I/0L9GfFd83Su4+yCck/OF9Gi/P/dAHn0RT7X4K9R7gMNMhDck3DvhR6QXsnQdjjgwNvQ==",
       },
-    ),
-  ).toThrow("Unreviewed sqlite-session closure");
+    },
+    "@acemir/cssom@0.9.33": {
+      resolution: {
+        integrity:
+          "sha512-52IMmrBsIsDZLp/KFM+KmaMLJ8GTj113K+iFGFCoOjstZSZbsAxMJE8KYtwao7bz1LsEG810ts1m5wvkVEqPlg==",
+      },
+    },
+  });
+  for (const key of ["brace-expansion@5.0.12", "@acemir/cssom@0.9.32"]) {
+    expect(reference.packages[key]?.resolution.integrity).toMatch(/^sha512-/u);
+  }
+  for (const relative of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+    const bytes = fs.readFileSync(relative);
+    expect(report.inputs[relative]).toEqual({ bytes: bytes.length, sha256: hash(bytes) });
+  }
+});
+
+function applicationRootsFixture() {
+  const roots: Array<[string, number, string]> = [
+    [
+      "dist/infra/sqlite-readonly-location.worker.js",
+      153814,
+      "cc5b8b1224664334efd99d859c6bfb23de3f3078f2a56764758d5a4a3591087c",
+    ],
+    [
+      "dist/logging/logger-file.worker.js",
+      56642,
+      "f1a637023f9baf6e4246997c09dcf7f0b6b9f9939c694a28871adef3ba3685e9",
+    ],
+  ];
+  return {
+    identity: {
+      version: "1.0.0",
+      buildInfo: {},
+      files: Object.fromEntries(roots.map(([file, size, sha256]) => [file, { size, sha256 }])),
+    },
+    prepared: {
+      roles: {
+        "sqlite-session": {
+          sha256: "3aaba32291b3a62634df8d3ced331b77e80ea5db085226672b1010930aa44460",
+          files: roots,
+        },
+      },
+      assets: [],
+      metadata: {
+        version: "1.0.0",
+        build: {},
+        files: {},
+        schemaVersions: { state: 40, agent: 42 },
+      },
+    },
+  };
+}
+
+it("rejects a freshly self-certified or omitted application closure", () => {
+  const fixture = applicationRootsFixture();
+  // Valid root identities do not let a caller certify an empty or partial closure.
+  for (const files of [[], fixture.prepared.roles["sqlite-session"].files.slice(0, 1)]) {
+    fixture.prepared.roles["sqlite-session"].files = files;
+    fixture.prepared.roles["sqlite-session"].sha256 = hash(Buffer.from(JSON.stringify(files)));
+    expect(() => assertInstalledTerminalApplication(fixture.identity, fixture.prepared)).toThrow(
+      "Unreviewed sqlite-session closure",
+    );
+  }
+});
+
+it.each(["missing", "changed"])("refuses a %s manifest-launched worker root", async (change) => {
+  const fixture = applicationRootsFixture();
+  const root = "dist/logging/logger-file.worker.js";
+  if (change === "missing") {
+    delete fixture.identity.files[root];
+  } else {
+    fixture.identity.files[root] = { size: 56642, sha256: "0".repeat(64) };
+  }
+  expect(() => assertInstalledTerminalApplication(fixture.identity, fixture.prepared)).toThrow(
+    "Additional application root changed",
+  );
+  await expect(
+    prepareInstalledTerminalApplication(dirs.make("installed-contract-roots-"), fixture.identity),
+  ).rejects.toThrow("Additional application root changed");
+});
+
+it("traverses the additional worker's real static closure under its verified package scope", async () => {
+  const root = path.join(fs.realpathSync(dirs.make("installed-contract-closure-")), "prefix/app");
+  const sources: Record<string, string> = {
+    "package.json": JSON.stringify({
+      name: "openclaw",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { schemaVersions: { state: 40, agent: 42 } },
+    }),
+    "dist/build-info.json": JSON.stringify({ version: "1.0.0", commit: "1".repeat(40) }),
+    "dist/infra/entry.js": "export {};\n",
+    "dist/logging/logger-file.worker.js":
+      "import { write } from './writer.js'; export { write };\n",
+    "dist/logging/writer.js": "export const write = () => {};\n",
+  };
+  const files: Record<string, { size: number; sha256: string }> = {};
+  const put = (relative: string, source: string) => {
+    fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+    fs.writeFileSync(path.join(root, relative), source);
+    files[relative] = { size: Buffer.byteLength(source), sha256: hash(Buffer.from(source)) };
+  };
+  for (const [relative, source] of Object.entries(sources)) put(relative, source);
+  const identity = {
+    version: "1.0.0",
+    buildInfo: JSON.parse(sources["dist/build-info.json"]!),
+    files,
+  };
+  const selected = [
+    "dist/infra/entry.js",
+    "dist/logging/logger-file.worker.js",
+    "dist/logging/writer.js",
+  ];
+  const expectedFiles = selected.map((file) => [file, files[file]!.size, files[file]!.sha256]);
+  const contract = {
+    entry: selected[0]!,
+    entrySha256: files[selected[0]!]!.sha256,
+    additionalRoots: { [selected[1]!]: files[selected[1]!]!.sha256 },
+    dynamic: {},
+    sha256: hash(Buffer.from(JSON.stringify(expectedFiles))),
+  };
+  const collect = () =>
+    collectInstalledTerminalApplication(root, identity, { fixture: contract }, {});
+  expect((await collect()).roles.fixture?.files).toEqual(expectedFiles);
+  // Fixture contracts exercise the same physical traversal; the public admission
+  // still rejects them because its production roots and digests are fixed.
+  await expect(prepareInstalledTerminalApplication(root, identity)).rejects.toThrow();
+  fs.unlinkSync(path.join(root, selected[2]!));
+  await expect(collect()).rejects.toThrow();
+  put(selected[2]!, sources[selected[2]!]! + "export const changed = true;\n");
+  await expect(collect()).rejects.toThrow("Unreviewed fixture closure");
+  put(selected[2]!, sources[selected[2]!]!);
+  expect((await collect()).roles.fixture?.files).toEqual(expectedFiles);
+  put("dist/logging/package.json", JSON.stringify({ type: "commonjs" }));
+  await expect(collect()).rejects.toThrow(SyntaxError);
+  for (const manifest of [{ type: "module" }, {}]) {
+    put("dist/logging/package.json", JSON.stringify(manifest));
+    expect((await collect()).roles.fixture?.files).toEqual(expectedFiles);
+  }
+  fs.writeFileSync(path.join(root, "dist/logging/package.json"), '{"type":"commonjs"}');
+  await expect(collect()).rejects.toThrow();
 });
 
 it("binds finite initialization metadata and refuses foreign, changed or oversized candidates", () => {
@@ -164,7 +312,12 @@ it("binds finite initialization metadata and refuses foreign, changed or oversiz
   const root = path.join(parent, "app");
   fs.mkdirSync(path.join(root, "dist/infra"), { recursive: true });
   const build = { version: "1.0.0", commit: "1".repeat(40), buildId: "fixture" };
-  writeJson(path.join(root, "package.json"), { name: "openclaw", version: "1.0.0" });
+  const manifest = {
+    name: "openclaw",
+    version: "1.0.0",
+    openclaw: { schemaVersions: { state: 40, agent: 42 } },
+  };
+  writeJson(path.join(root, "package.json"), manifest);
   writeJson(path.join(root, "dist/build-info.json"), build);
   const files: Record<string, { size: number; sha256: string }> = {};
   for (const file of ["package.json", "dist/build-info.json"]) {
@@ -174,16 +327,46 @@ it("binds finite initialization metadata and refuses foreign, changed or oversiz
   const identity = { version: "1.0.0", buildInfo: build, files };
   const result = readInstalledTerminalMetadata(root, identity);
   expect(result.build).toEqual(build);
+  expect(result.schemaVersions).toEqual({ state: 40, agent: 42 });
+  for (const schemaVersions of [
+    { state: 20, agent: 25 },
+    { state: 41, agent: 43 },
+  ]) {
+    writeJson(path.join(root, "package.json"), { ...manifest, openclaw: { schemaVersions } });
+    expect(() => readInstalledTerminalMetadata(root, identity)).toThrow();
+    const bytes = fs.readFileSync(path.join(root, "package.json"));
+    files["package.json"] = { size: bytes.length, sha256: hash(bytes) };
+    expect(readInstalledTerminalMetadata(root, identity).schemaVersions).toEqual(schemaVersions);
+  }
+  for (const schemaVersions of [
+    undefined,
+    { state: 40 },
+    { state: "40", agent: 42 },
+    { state: 40, agent: -1 },
+    { state: 40.5, agent: 42 },
+  ]) {
+    writeJson(path.join(root, "package.json"), { ...manifest, openclaw: { schemaVersions } });
+    const bytes = fs.readFileSync(path.join(root, "package.json"));
+    files["package.json"] = { size: bytes.length, sha256: hash(bytes) };
+    expect(() => readInstalledTerminalMetadata(root, identity)).toThrow(
+      "Invalid package schema version",
+    );
+  }
+  writeJson(path.join(root, "package.json"), manifest);
+  const manifestBytes = fs.readFileSync(path.join(root, "package.json"));
+  files["package.json"] = { size: manifestBytes.length, sha256: hash(manifestBytes) };
+  expect(readInstalledTerminalMetadata(root, identity)).toEqual(result);
   expect(result.files["dist/infra/package.json"]).toBeNull();
   expect(result.files["dist/infra/build-info.json"]).toBeNull();
   fs.mkdirSync(path.join(root, "dist/state"));
-  for (const name of [
-    "package.json",
-    "build-info.json",
-    ".buildstamp",
-    ".runtime-postbuildstamp",
+  fs.mkdirSync(path.join(root, "dist/logging"));
+  for (const relative of [
+    "dist/state/package.json",
+    "dist/state/build-info.json",
+    "dist/state/.buildstamp",
+    "dist/state/.runtime-postbuildstamp",
+    "dist/logging/package.json",
   ]) {
-    const relative = `dist/state/${name}`;
     const file = path.join(root, relative);
     expect(result.files[relative], relative).toBeNull();
     const bytes = Buffer.from("{}\n");
@@ -223,36 +406,55 @@ function dependencyFixture() {
   const prefix = fs.realpathSync(dirs.make("installed-contract-native-"));
   const root = path.join(prefix, "node_modules/openclaw");
   const modules = path.join(root, "node_modules");
-  const packageAt = (relative: string, manifest: Record<string, unknown>) => {
+  const packageAt = (relative: string, manifest: Record<string, unknown> = {}) => {
     const directory = path.join(root, relative);
     fs.mkdirSync(directory, { recursive: true });
-    writeJson(path.join(directory, "package.json"), manifest);
+    writeJson(path.join(directory, "package.json"), {
+      name: path.basename(directory),
+      version: "1.0.0",
+      ...manifest,
+    });
     fs.writeFileSync(path.join(directory, "index.js"), "module.exports = {};\n");
     return directory;
   };
-  packageAt("", { name: "openclaw", version: "1.0.0", dependencies: { demo: "1.0.0" } });
+  packageAt("", { dependencies: { demo: "1.0.0", linkedom: "0.18.14" } });
   packageAt("node_modules/demo", {
-    name: "demo",
-    version: "1.0.0",
-    dependencies: { leaf: "1.0.0" },
+    dependencies: { "brace-expansion": "^5.0.8" },
     optionalDependencies: { "demo-native": "1.0.0", "absent-platform-fixture": "1.0.0" },
     bin: { foo: "index.js", bar: "other.js" },
   });
   fs.writeFileSync(path.join(modules, "demo/other.js"), "module.exports = 1;\n");
-  packageAt("node_modules/demo/node_modules/leaf", { name: "leaf", version: "1.0.0" });
-  packageAt("node_modules/demo-native", { name: "demo-native", version: "1.0.0" });
+  const brace = (version: string) =>
+    packageAt("node_modules/demo/node_modules/brace-expansion", {
+      version,
+    });
+  brace("5.0.13");
+  packageAt("node_modules/linkedom", {
+    version: "0.18.14",
+    dependencies: { "@acemir/cssom": "^0.9.32" },
+  });
+  const cssom = (version: string) =>
+    packageAt("node_modules/linkedom/node_modules/@acemir/cssom", {
+      name: "@acemir/cssom",
+      version,
+    });
+  cssom("0.9.32");
+  packageAt("node_modules/demo-native");
   fs.mkdirSync(path.join(modules, ".bin"));
   fs.symlinkSync("../demo/index.js", path.join(modules, ".bin/foo"));
   fs.symlinkSync("../demo/other.js", path.join(modules, ".bin/bar"));
   const integrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
   const reference: InstalledTerminalDependencyReference = {
-    policy: { dependencies: { demo: "1.0.0" } },
+    policy: { dependencies: { demo: "1.0.0", linkedom: "0.18.14" } },
     requiredPackages: { "demo-native": "1.0.0" },
     packages: Object.fromEntries(
-      ["demo", "leaf", "demo-native"].map((name) => [
-        `${name}@1.0.0`,
-        { resolution: { integrity } },
-      ]),
+      [
+        "demo@1.0.0",
+        "brace-expansion@5.0.13",
+        "demo-native@1.0.0",
+        "linkedom@0.18.14",
+        "@acemir/cssom@0.9.32",
+      ].map((key) => [key, { resolution: { integrity } }]),
     ),
   };
   const load = async () => {
@@ -262,25 +464,33 @@ function dependencyFixture() {
     const Arborist = npmRequire("@npmcli/arborist");
     const tree = await new Arborist({ path: prefix, global: true, forceActual: true }).loadActual();
     const application = tree.children.get("openclaw");
+    const roots = Object.keys(reference.policy.dependencies);
     const nodes = await application.querySelectorAll(
-      ':scope > [name="demo"], :scope > [name="demo"] *',
+      roots.map((name) => `:scope > [name="${name}"], :scope > [name="${name}"] *`).join(", "),
     );
     return { application, nodes };
   };
   const inspect = async () => {
     const { application, nodes } = await load();
-    return inspectInstalledTerminalDependencyNodes(application, nodes, ["demo"], reference);
+    return inspectInstalledTerminalDependencyNodes(
+      application,
+      nodes,
+      Object.keys(reference.policy.dependencies),
+      reference,
+    );
   };
-  return { root, modules, packageAt, reference, load, inspect };
+  return { root, modules, packageAt, brace, cssom, reference, load, inspect };
 }
 
 it("uses native global placements, retains direct specs and refuses changed root policy", async () => {
   const fixture = dependencyFixture();
   const result = await fixture.inspect();
   expect(result.packages.map((entry) => entry.key).toSorted()).toEqual([
+    "@acemir/cssom@0.9.32",
+    "brace-expansion@5.0.13",
     "demo-native@1.0.0",
     "demo@1.0.0",
-    "leaf@1.0.0",
+    "linkedom@0.18.14",
   ]);
   expect(result.edges).toContainEqual({
     from: ".",
@@ -293,11 +503,30 @@ it("uses native global placements, retains direct specs and refuses changed root
   expect(result.edges.find((edge) => edge.name === "absent-platform-fixture")?.optionalAbsent).toBe(
     true,
   );
-  writeJson(path.join(fixture.root, "package.json"), {
-    name: "openclaw",
-    version: "1.0.0",
-    dependencies: { demo: "^1.0.0" },
+  fixture.brace("5.0.14");
+  await expect(fixture.inspect()).rejects.toThrow("Dependency is outside the reviewed reference");
+  fixture.brace("5.0.13");
+  fixture.cssom("0.9.33");
+  await expect(fixture.inspect()).rejects.toThrow("Dependency is outside the reviewed reference");
+  const integrity =
+    "sha512-52IMmrBsIsDZLp/KFM+KmaMLJ8GTj113K+iFGFCoOjstZSZbsAxMJE8KYtwao7bz1LsEG810ts1m5wvkVEqPlg==";
+  fixture.reference.packages["@acemir/cssom@0.9.33"] = { resolution: { integrity } };
+  const renewed = await fixture.inspect();
+  expect(renewed.packages.find((entry) => entry.key === "@acemir/cssom@0.9.33")?.integrity).toBe(
+    integrity,
+  );
+  expect(renewed.edges).toContainEqual({
+    from: "linkedom",
+    name: "@acemir/cssom",
+    spec: "^0.9.32",
+    type: "prod",
+    to: "linkedom/node_modules/@acemir/cssom",
+    optionalAbsent: false,
   });
+  fixture.cssom("0.9.34");
+  await expect(fixture.inspect()).rejects.toThrow("Dependency is outside the reviewed reference");
+  fixture.cssom("0.9.32");
+  fixture.packageAt("", { dependencies: { demo: "^1.0.0", linkedom: "0.18.14" } });
   await expect(fixture.inspect()).rejects.toThrow("Selected direct dependency spec changed");
 });
 
@@ -305,16 +534,25 @@ it("refuses missing required native targets and invalid or omitted dependency ed
   const fixture = dependencyFixture();
   fs.rmSync(path.join(fixture.modules, "demo-native"), { recursive: true });
   await expect(fixture.inspect()).rejects.toThrow("Required selected platform package is absent");
-  fixture.packageAt("node_modules/demo-native", { name: "demo-native", version: "1.0.0" });
-  fixture.packageAt("node_modules/demo/node_modules/leaf", { name: "leaf", version: "2.0.0" });
+  fixture.packageAt("node_modules/demo-native");
+  fs.rmSync(path.join(fixture.modules, "demo/node_modules/brace-expansion"), { recursive: true });
   await expect(fixture.inspect()).rejects.toThrow("Invalid native dependency edge");
-  fixture.packageAt("node_modules/demo/node_modules/leaf", { name: "leaf", version: "1.0.0" });
+  fixture.brace("6.0.0");
+  await expect(fixture.inspect()).rejects.toThrow("Invalid native dependency edge");
+  fixture.brace("5.0.13");
+  fs.rmSync(path.join(fixture.modules, "linkedom/node_modules/@acemir/cssom"), {
+    recursive: true,
+  });
+  await expect(fixture.inspect()).rejects.toThrow("Invalid native dependency edge");
+  fixture.cssom("0.10.0");
+  await expect(fixture.inspect()).rejects.toThrow("Invalid native dependency edge");
+  fixture.cssom("0.9.32");
   const { application, nodes } = await fixture.load();
   expect(() =>
     inspectInstalledTerminalDependencyNodes(
       application,
-      nodes.filter((node: { name: string }) => node.name !== "leaf"),
-      ["demo"],
+      nodes.filter((node: { name: string }) => node.name !== "brace-expansion"),
+      Object.keys(fixture.reference.policy.dependencies),
       fixture.reference,
     ),
   ).toThrow("Native dependency closure is incomplete");
@@ -337,14 +575,10 @@ it("refuses swapped npm bin targets even when both executables belong to the pac
 it("requires the native addon to resolve from its owner, not another private placement", async () => {
   const fixture = dependencyFixture();
   fs.rmSync(path.join(fixture.modules, "demo-native"), { recursive: true });
-  fixture.packageAt("node_modules/demo/node_modules/leaf", {
-    name: "leaf",
-    version: "1.0.0",
+  fixture.packageAt("node_modules/demo/node_modules/brace-expansion", {
+    version: "5.0.13",
     dependencies: { "demo-native": "1.0.0" },
   });
-  fixture.packageAt("node_modules/demo/node_modules/leaf/node_modules/demo-native", {
-    name: "demo-native",
-    version: "1.0.0",
-  });
+  fixture.packageAt("node_modules/demo/node_modules/brace-expansion/node_modules/demo-native");
   await expect(fixture.inspect()).rejects.toThrow("Required platform edge does not resolve");
 });
