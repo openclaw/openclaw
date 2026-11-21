@@ -185,6 +185,22 @@ describe("resident update launcher", () => {
     expect((await run.exited)[0]).toBe(78);
   });
 
+  it("rolls back a trial whose new build refuses the configuration with exit 78", async () => {
+    const { prefix, launcher } = await fixture("process.exit(78);");
+    await pending(prefix);
+    const run = start(launcher);
+    await output(run.child, "OLD", run.stdout);
+    expect(await readTrial(prefix)).toMatchObject({
+      phase: "rolled-back",
+      outcome: { status: "rolled-back", reason: "new build refused the configuration (exit 78)" },
+    });
+    expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(
+      path.join(prefix, "releases/old/openclaw"),
+    );
+    run.child.kill("SIGTERM");
+    await run.exited;
+  });
+
   it("restarts an unrequested zero exit immediately and forwards stop with the child's code", async () => {
     const { prefix, launcher } = await fixture(`
       import fs from 'node:fs';

@@ -206,8 +206,10 @@ if (!gatewayRun) {
       child = undefined;
       const exitCode = code ?? (signal ? 1 : 0);
       if (stopping) process.exit(exitCode);
-      if (exitCode === 78) process.exit(78);
       const current = readTrial();
+      // 78 refuses the configuration: terminal for a serving release, a failed candidate in a trial.
+      if (exitCode === 78 && current?.phase !== "trial") process.exit(78);
+      if (exitCode === 78 && current?.phase === "trial") rollback(current, "new build refused the configuration (exit 78)");
       if (budgetExpired && current?.phase === "trial") rollback(current, "new build did not become ready in " + budget / 60000 + " min");
       let delay = 0;
       if (exitCode !== 0 && current?.phase !== "trial" && !budgetExpired) {
