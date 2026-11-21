@@ -595,14 +595,14 @@ function readPrRollup(
     boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined;
   // Successful non-CI run evidence is refreshed each poll: reruns reuse run IDs.
   const workflowRuns = new Map<number, RunListItem>();
-  const readWorkflowRun = (id: number) => {
-    let evidence = workflowRuns.get(id);
+  const readWorkflowRun = (id: number, cache = workflowRuns) => {
+    let evidence = cache.get(id);
     if (!evidence && reads.remaining > 0) {
       reads.remaining -= 1;
       evidence = RunListItemSchema.parse(
         execGhJson(["api", `repos/${args.repo}/actions/runs/${id}`], ghReadOptions(deadline)),
       );
-      workflowRuns.set(id, evidence);
+      cache.set(id, evidence);
     }
     return evidence;
   };
@@ -650,7 +650,9 @@ function readPrRollup(
         if (successor) {
           const nextId = successor.runId;
           const next = readWorkflowRun(nextId);
-          const previous = readWorkflowRun(identity.runId);
+          // Old-run identity is stable across reruns. Retain it across polls so
+          // backlogs larger than one metadata budget can make bounded progress.
+          const previous = readWorkflowRun(identity.runId, runs);
           if (!next || !previous) {
             pendingEvidence.add(check);
           } else if (
