@@ -2433,7 +2433,6 @@
 ["src/cli/capability-cli/local-account-secrets.test.ts","../../secrets/runtime-state.js","99698e86d03a92d4df23811a1e3ef8bf479674c80ca2a82aff678b63d6ef7488",1]
 ["src/cli/capability-cli/local-account-secrets.test.ts","../../secrets/runtime.js","985f7ab2427be7a04342d0d2224bae68e8a4a7901b659e6b49e73b868f41d2de",1]
 ["src/cli/capability-cli/local-runners.account-secrets.test.ts","../cli-utils.js","e67c1937db07008820908bdde0e39b9fa34939b9f9efdbda84ee8788989c4f52",1]
-["src/cli/capability-cli/local-runners.account-secrets.test.ts","./output.js","61421562122f3f365fab2381cc42fe4d0a790259189859b8a191b22154a1b54c",1]
 ["src/cli/channel-auth.test.ts","../agents/agent-scope.js","0aa0dd5ab0dac513b573751e9c5ff255f029cefb6fb073f60c27e4b2ad1c31c2",1]
 ["src/cli/channel-auth.test.ts","../channels/plugins/catalog.js","f4f6485c937cb25a66c7b92694e86c6067c440d29f769b8ed0bfd4062f689c06",1]
 ["src/cli/channel-auth.test.ts","../channels/plugins/helpers.js","cffd7e870d4bf0af13c31d85c743e31c7c132d6d0ace642c9168420d2b0ed1c0",1]

@@ -1,7 +1,6 @@
 import Foundation
 import OpenClawKit
 import Testing
-@testable import OpenClaw
 @testable import OpenClawChatUI
 
 struct ChatSessionsCodingTests {
@@ -102,6 +101,7 @@ struct ChatSessionsCodingTests {
         #expect(entry.lastActivityAt == 1_720_000_005_000)
     }
 
+    #if os(iOS)
     @Test @MainActor func `ios nested custom results preserve envelope and cached output`() throws {
         for (result, output, failed) in [
             (["content": [["type": "text", "text": "Nested success output"]]], "Nested success output", false),
@@ -260,7 +260,7 @@ struct ChatSessionsCodingTests {
     @Test @MainActor func `ios nested live row adopts history without changing presentation identity`() async throws {
         let model = OpenClawChatViewModel(
             sessionKey: "main",
-            transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
+            transport: ToolResultIngestionTransport())
         defer { model.detachTransport() }
         var liveEnvelope = Self.nestedEnvelope
         liveEnvelope["__openclaw"] = ["id": "nested-row", "runId": "earlier-run"]
@@ -870,8 +870,10 @@ struct ChatSessionsCodingTests {
             hideFromChannelProgress: hidden,
             suppressChannelProgress: suppressed)
     }
+    #endif
 }
 
+#if os(iOS)
 extension ChatSessionsCodingTests {
     @Test(arguments: [
         "inferred-final", "inferred-commentary", "ordinary-final", "inferred-only",
@@ -968,3 +970,4 @@ extension ChatSessionsCodingTests {
         #expect(ChatTranscriptRow.collapseCompletedWork(settled, runWorking: false) == settled)
     }
 }
+#endif

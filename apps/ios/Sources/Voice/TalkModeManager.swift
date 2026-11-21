@@ -65,13 +65,6 @@ private struct ChatCompletionResult {
     var assistantText: String?
 }
 
-private struct TalkSpeechLanguageSelection: Equatable {
-    /// Provider synthesis accepts a two-letter language, while the system
-    /// voice accepts a BCP 47 locale. Keep both forms so fallback stays correct.
-    let provider: String?
-    let systemVoice: String?
-}
-
 @MainActor
 private final class TranscriptStreamingOwner {
     var task: Task<Void, Never>?
@@ -2919,7 +2912,9 @@ final class TalkModeManager {
             }
         }
 
-        let languages = self.resolvedSpeechLanguages(directiveLanguage: directive?.language)
+        let languages = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: directive?.language,
+            gatewaySelection: self.gatewaySpeechLocaleID)
         if self.runtimeRoute.usesGatewayTalkSpeak {
             do {
                 try await self.playGatewayTalkSpeak(
@@ -3054,19 +3049,6 @@ final class TalkModeManager {
         }
     }
 
-    private func resolvedSpeechLanguages(
-        directiveLanguage: String?,
-        isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
-        -> TalkSpeechLanguageSelection
-    {
-        TalkSpeechLanguageSelection(
-            provider: ElevenLabsTTSClient.validatedLanguage(directiveLanguage),
-            systemVoice: TalkSpeechLocale.resolvedSynthesisLocaleID(
-                directiveLanguage: directiveLanguage,
-                gatewaySelection: self.gatewaySpeechLocaleID,
-                isVoiceAvailable: isSystemVoiceAvailable))
-    }
-
     private func resolvedElevenLabsAPIKey() -> String? {
         let configuredKey = self.apiKey?.trimmedNonEmpty
         #if DEBUG
@@ -3183,7 +3165,9 @@ final class TalkModeManager {
         self.cancelIncrementalSpeech()
         self.incrementalSpeechActive = true
         self.incrementalSpeechUsed = false
-        self.incrementalSpeechLanguages = self.resolvedSpeechLanguages(directiveLanguage: nil)
+        self.incrementalSpeechLanguages = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: nil,
+            gatewaySelection: self.gatewaySpeechLocaleID)
         self.incrementalSpeechBuffer = IncrementalSpeechBuffer()
     }
 
@@ -3351,7 +3335,9 @@ final class TalkModeManager {
         let parsed = TalkDirectiveParser.parse(text)
         self.applyDirective(parsed.directive)
         if let lang = parsed.directive?.language {
-            self.incrementalSpeechLanguages = self.resolvedSpeechLanguages(directiveLanguage: lang)
+            self.incrementalSpeechLanguages = TalkSpeechLocale.resolvedLanguages(
+                directiveLanguage: lang,
+                gatewaySelection: self.gatewaySpeechLocaleID)
         }
         guard await self.updateIncrementalContextIfNeeded(speechGeneration: speechGeneration) else { return false }
         guard self.incrementalSpeechActive,
@@ -3399,7 +3385,9 @@ final class TalkModeManager {
             guard let text = OpenClawChatEventText.assistantText(from: chatEvent) else { continue }
             let segments = self.incrementalSpeechBuffer.ingest(text: text, isFinal: false)
             if let lang = incrementalSpeechBuffer.directive?.language {
-                self.incrementalSpeechLanguages = self.resolvedSpeechLanguages(directiveLanguage: lang)
+                self.incrementalSpeechLanguages = TalkSpeechLocale.resolvedLanguages(
+                    directiveLanguage: lang,
+                    gatewaySelection: self.gatewaySpeechLocaleID)
             }
             guard await self.updateIncrementalContextIfNeeded(speechGeneration: speechGeneration) else { return }
             guard self.isCurrentTranscriptProcessing(generation),
@@ -4342,17 +4330,6 @@ extension TalkModeManager {
 
     func _test_playAssistant(text: String) async {
         await self.playAssistant(text: text)
-    }
-
-    func _test_resolvedSpeechLanguages(
-        directiveLanguage: String?,
-        isSystemVoiceAvailable: (String) -> Bool = { _ in true })
-        -> (provider: String?, systemVoice: String?)
-    {
-        let selection = self.resolvedSpeechLanguages(
-            directiveLanguage: directiveLanguage,
-            isSystemVoiceAvailable: isSystemVoiceAvailable)
-        return (selection.provider, selection.systemVoice)
     }
 
     func _test_stopSpeaking(storeInterruption: Bool = true) {
