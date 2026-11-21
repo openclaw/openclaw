@@ -161,9 +161,8 @@ export function createWorkerTaskHost(
     receiveMessage: receiveWorkerMemoryPort,
     observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     workerStarted(worker, pool) {
-      if (owner.databaseAccess !== "read-only") {
-        trackSqliteDatabaseAdmissionWorker(worker);
-      }
+      // Read-only connections also retain admission references until their worker exits.
+      trackSqliteDatabaseAdmissionWorker(worker);
       attributeWorkerToPool(worker, pool);
     },
     workerRetiring(worker, reason) {
