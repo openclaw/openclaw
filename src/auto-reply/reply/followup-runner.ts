@@ -1,3 +1,4 @@
+import { formatErrorMessage as formatRawErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -8,9 +9,14 @@ import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { CronDeliveryAuthorityError } from "../../cron/delivery-attempt-fence.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../../infra/errors.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -133,6 +139,7 @@ export function createFollowupRunner(
     let executionEntered = false;
     // A revoked input settles visibly through its source, also before turn admission.
     let withheld = false;
+    let withheldError: unknown;
     const hasSurvivingSources = () => {
       const claim = queued.controllerClaim ?? queued.controllerInput?.claim;
       return Boolean(
@@ -173,6 +180,7 @@ export function createFollowupRunner(
       .map((correlation) => correlation.begin())
       .filter((end) => typeof end === "function");
     try {
+      queued.operatorAuthority?.signal?.throwIfAborted();
       if (isFollowupRunAborted(queued)) {
         disposition = hasSurvivingSources()
           ? { kind: "retry", error: queued.abortSignal?.reason }
@@ -432,14 +440,17 @@ export function createFollowupRunner(
         // Revoked input is terminal and visible; retrying it would hold the queue indefinitely.
         disposition = { kind: "consumed" };
         withheld = authorityLost;
+        withheldError = error;
         completion = {
           kind: "failed",
           error: formatErrorMessage(error),
           ...(authorityLost ? { notice: `withheld: ${formatErrorMessage(error)}` } : {}),
         };
-        defaultRuntime.error?.(
-          `followup queue: input withheld; refusing replay: ${formatErrorMessage(error)}`,
-        );
+        if (!withheld) {
+          defaultRuntime.error?.(
+            `followup queue: input withheld; refusing replay: ${formatRawErrorMessage(error)}`,
+          );
+        }
         operation?.fail("run_failed", error);
       } else {
         disposition = { kind: "retry", error };
@@ -457,21 +468,42 @@ export function createFollowupRunner(
       }
       activitySummaryCompletion?.release();
       const sourceDisposition = (admittedTurn?.queued ?? queued).queuedFollowupReplyDisposition;
-      if (withheld && completion.kind === "failed" && queued.run.scheduledAutomation) {
+      if (withheld && completion.kind === "failed") {
+        const revoked = collectErrorGraphCandidates(withheldError, readErrorCauses).find(
+          (cause): cause is CronDeliveryAuthorityError =>
+            cause instanceof CronDeliveryAuthorityError,
+        );
+        const fence = revoked?.fence ?? queued.run.scheduledAutomation?.deliveryAttemptFence;
         const runId =
           admittedTurn?.runId ??
           queued.sourceTurnId ??
           queued.messageId ??
           `${queued.run.sessionId}:${queued.enqueuedAt}`;
-        const sessionKey = queued.run.sessionKey;
-        const outcomes = await Promise.allSettled([
-          queued.run.scheduledAutomation.deliveryAttemptFence?.recordWithheld?.({
-            runId,
-            sessionKey,
-            error: completion.error,
-          }),
-          sessionKey && queued.run.sessionId
-            ? recordGatewaySessionRunFailure({
+        const sessionKey = queued.run.sessionKey ?? defaults.sessionKey;
+        const identifiers = {
+          sessionKey,
+          jobId: revoked?.jobId ?? queued.run.scheduledAutomation?.job.id,
+          runId,
+        };
+        const recordings: Array<{ path: string; record: () => Promise<void> }> = [];
+        const nonOutcomes: string[] = [];
+        const error = completion.error;
+        const recordWithheld = fence?.recordWithheld;
+        if (recordWithheld) {
+          recordings.push({
+            path: "history",
+            record: () => recordWithheld({ runId, sessionKey, error }),
+          });
+        } else {
+          nonOutcomes.push(
+            fence ? "history: fence has no recordWithheld" : "history: no cron receipt handle",
+          );
+        }
+        if (sessionKey && queued.run.sessionId) {
+          recordings.push({
+            path: "session-notice",
+            record: () =>
+              recordGatewaySessionRunFailure({
                 target: {
                   agentId: queued.run.agentId,
                   sessionKey,
@@ -484,18 +516,30 @@ export function createFollowupRunner(
                     }),
                 },
                 runId,
-                error: completion.error,
-                notice: `withheld: ${truncateSessionRunError(sanitizeSessionRunError(completion.error), 512)}`,
-              })
-            : undefined,
-        ]);
-        for (const outcome of outcomes) {
-          if (outcome.status === "rejected") {
-            defaultRuntime.error?.(
-              `followup queue: withheld outcome recording failed: ${formatErrorMessage(outcome.reason)}`,
-            );
-          }
+                error,
+                notice: `withheld: ${truncateSessionRunError(sanitizeSessionRunError(error), 512)}`,
+              }),
+          });
+        } else {
+          nonOutcomes.push("session-notice: no session target");
         }
+        const outcomes = await Promise.all(
+          recordings.map(async ({ path, record }) => {
+            try {
+              await record();
+              return path;
+            } catch (recordingError) {
+              defaultRuntime.error?.(
+                `followup queue: withheld outcome recording failed: ${JSON.stringify({ ...identifiers, path, error: formatRawErrorMessage(recordingError) })}`,
+              );
+              return undefined;
+            }
+          }),
+        );
+        const recorded = outcomes.filter((path) => path !== undefined);
+        defaultRuntime.error?.(
+          `followup queue: input withheld; refusing replay: ${JSON.stringify({ ...identifiers, reason: formatRawErrorMessage(withheldError), recorded: recorded.length ? recorded : "none", nonOutcomes })}`,
+        );
       }
       if (
         disposition.kind === "consumed" &&
