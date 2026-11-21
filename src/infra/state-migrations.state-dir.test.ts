@@ -29,6 +29,19 @@ async function withStateDirFixture(
   });
 }
 
+it.each(["HOME", "USERPROFILE"])("uses current %s instead of a stale account home", (selector) =>
+  withStateDirFixture(async ({ root, legacyDir, targetDir, write, read }) => {
+    write(path.join(legacyDir, "marker.txt"), "current home bytes");
+    const result = await autoMigrateLegacyStateDir({
+      env: { [selector]: root },
+      homedir: () => path.join(root, "stale-account-home"),
+    });
+    expect(result).toMatchObject({ migrated: true, skipped: false, warnings: [] });
+    expect(fs.existsSync(legacyDir)).toBe(false);
+    expect(read(path.join(targetDir, "marker.txt"))).toBe("current home bytes");
+  }),
+);
+
 it.each(["config", "environment"])(
   "preserves retired OAuth sidecars selected by %s and reports their relocated recovery path",
   (selection) =>
