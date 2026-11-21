@@ -509,7 +509,7 @@ it.skipIf(!connection)(
 );
 
 it.skipIf(!connection)(
-  "reaps removed online capture roots and keeps retained PostgreSQL captures",
+  "reaps missing online roots when the stopped pass captures PostgreSQL schemas",
   () =>
     withSeededWorkboard(async ({ state, client, namespaces, anchorPath, config }) => {
       const capture = async () => {
@@ -518,7 +518,7 @@ it.skipIf(!connection)(
           stateDir: state.stateDir,
           config,
           env: state.env,
-          postgresOnline: true,
+          stopped: true,
           postgresSchemaCaptures: true,
         });
         const entry = backup.databases.find((database) => database.path === anchorPath);
