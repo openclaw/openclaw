@@ -64,7 +64,7 @@ export function createTemplateCatalogFixture(runtime: () => { browser: Browser; 
   };
 }
 
-export async function installTemplateCatalogGateway(
+async function installTemplateCatalogGateway(
   page: Page,
   options: {
     entry: ClawHubTemplateCatalogEntry;

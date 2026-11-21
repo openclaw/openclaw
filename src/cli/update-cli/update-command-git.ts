@@ -8,6 +8,7 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import { resolveGitReleasePrefix, servingGitReleaseSlot } from "../../infra/git-release-paths.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -680,6 +681,15 @@ export async function gatewayServiceOwnsGitInstall(
     const release = await inspectManagedGatewayServiceBeforeUpdate({ root: slot, state });
     if (release.kind === "owned") {
       return true;
+    }
+    // On macOS the Gateway's handoff cannot rebind its own LaunchAgent. Even an
+    // independent update must not convert using another selection as the running
+    // checkout: the release runner would use it as the verified predecessor.
+    if (
+      process.platform === "darwin" &&
+      (process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" || readPackageReleaseSlotSync(slot))
+    ) {
+      return false;
     }
     const checkout = await inspectManagedGatewayServiceBeforeUpdate({ root, state });
     return shouldRestart && checkout.kind === "owned" && checkout.refreshDefinition;

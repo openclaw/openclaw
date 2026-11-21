@@ -122,7 +122,7 @@ Moved to [Configuration — browser, UI, and desktop](/gateway/config-browser-ui
 
 ## Gateway
 
-Moved to [Configuration — gateway](/gateway/config-gateway). Sections: OpenAI-compatible endpoints, Multi-instance isolation, `gateway.tls`, `gateway.reload`.
+Moved to [Configuration — gateway](/gateway/config-gateway). Sections: OpenAI-compatible endpoints, Multi-instance isolation, `gateway.tls`, `gateway.reload`, [`gateway.resources.profile`](/gateway/config-gateway#gateway.resources.profile) (`auto` | `standard` | `lean`).
 
 <a id="gateway-field-details"></a>
 <a id="openai-compatible-endpoints"></a>
@@ -256,3 +256,11 @@ Disabling it denies new requests without revoking one already admitted, includin
 across an off/on transition. Retries still require admission and must keep the
 original message ID; disabling the feature never makes uncertain delivery safe
 to repeat. It does not start idle sessions.
+
+### Publication writer opt-in
+
+`gateway.sessionControl.publicationWriteEnabled` permits restricted writer
+requests only when set to `true`. It defaults to off independently of
+publication reads and host steering. The switch is checked at each request's
+admission; disabling denies new requests but does not revoke admitted work.
+A source plugin must also enable its writer capability and admit the device.
