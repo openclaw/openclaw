@@ -42,7 +42,6 @@ it("loads inspector-only context copy with the panel while keeping the breakdown
     contextClientTools: "Client tools",
     contextAvailableOnDemand: "Tools loaded on use",
     contextDeferredEstimate: "Schema sizes, not current usage.",
-    contextFree: "Free space",
     contextUnavailable: "No matching context report. Send a message to capture one.",
     contextReserve: "{tokens} tokens reserved outside this budget",
     contextFreeShort: "{tokens} free",
