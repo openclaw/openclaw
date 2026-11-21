@@ -1,7 +1,7 @@
 package ai.openclaw.app.gateway
 
 import ai.openclaw.app.asJsonStringOrNull
-import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.asObjectOrNull
 import kotlinx.serialization.json.Json
 
 internal data class ChatSendAck(

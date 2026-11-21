@@ -6,7 +6,6 @@ import ai.openclaw.app.gateway.GatewayBootstrapHandoff
 import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
-import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.content.Context

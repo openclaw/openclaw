@@ -1,6 +1,6 @@
 package ai.openclaw.app.wear
 
-import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.asStringOrNull
 import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
 import ai.openclaw.app.voice.RealtimeAgentSession

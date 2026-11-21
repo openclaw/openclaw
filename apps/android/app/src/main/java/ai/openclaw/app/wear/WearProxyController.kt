@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.node.asArrayOrNull
+import ai.openclaw.app.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.takeCodePoints
