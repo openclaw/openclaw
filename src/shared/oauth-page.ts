@@ -1,82 +1,31 @@
 import { escapeHtml } from "./html-escape.js";
+import { openClawMascotStyles, renderOpenClawMascot } from "./openclaw-mascot.js";
+import { openClawWordmarkTextSvg } from "./openclaw-wordmark.js";
 
-// Static OpenClaw lobster mascot; keep shapes in sync with ui/public/favicon.svg.
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none" aria-hidden="true"><defs><linearGradient id="lobster-gradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><path fill="url(#lobster-gradient)" d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"/><path fill="url(#lobster-gradient)" d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z"/><path fill="url(#lobster-gradient)" d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z"/><path stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" d="M45 15 Q35 5 30 8"/><path stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" d="M75 15 Q85 5 90 8"/><circle cx="45" cy="35" r="6" fill="#050810"/><circle cx="75" cy="35" r="6" fill="#050810"/><circle cx="46" cy="34" r="2.5" fill="#00e5cc"/><circle cx="76" cy="34" r="2.5" fill="#00e5cc"/></svg>`;
+const PHONE_MEDIA =
+  "@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape)";
+const MASCOT = renderOpenClawMascot("openclaw-oauth-mascot-shell");
 
 // Callback transports admit exactly these bytes through their stylesheet CSP hash.
+// Status geometry and theme tokens follow the Gateway's standalone availability page.
 export const OAUTH_PAGE_STYLES = `
-    :root {
-      color-scheme: light dark;
-      --text: #191b20;
-      --text-dim: #60646d;
-      --page-bg: #f5f6f8;
-      --surface: #ffffff;
-      --detail-bg: #f1f2f5;
-      --shadow: 0 16px 52px rgb(24 30 42 / 0.07);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-synthesis: none;
-      -webkit-font-smoothing: antialiased;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --text: #f2f3f5;
-        --text-dim: #a9afb9;
-        --page-bg: #0f1012;
-        --surface: #181a1e;
-        --detail-bg: #22252a;
-        --shadow: 0 16px 52px rgb(0 0 0 / 0.18);
-      }
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      min-height: 100svh;
-      display: grid;
-      place-items: center;
-      padding: 24px;
-      background: var(--page-bg);
-      color: var(--text);
-      text-align: center;
-    }
-    main {
-      width: min(100%, 480px);
-      padding: clamp(28px, 6vw, 44px) clamp(24px, 5vw, 40px);
-      border-radius: 24px;
-      background: var(--surface);
-      box-shadow: var(--shadow);
-      overflow-wrap: anywhere;
-    }
-    .logo {
-      width: 56px;
-      height: 56px;
-      margin: 0 auto 24px;
-    }
-    .logo svg { display: block; width: 100%; height: 100%; }
-    h1 {
-      margin: 0 0 12px;
-      font-size: clamp(23px, 5vw, 28px);
-      line-height: 1.2;
-      font-weight: 650;
-      letter-spacing: -0.035em;
-      text-wrap: balance;
-    }
-    p {
-      margin: 0;
-      color: var(--text-dim);
-      font-size: 15px;
-      line-height: 1.65;
-    }
-    .details {
-      margin-top: 24px;
-      padding: 14px 16px;
-      border-radius: 12px;
-      background: var(--detail-bg);
-      color: var(--text-dim);
-      font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      text-align: left;
-      white-space: pre-wrap;
-    }
+:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--detail-bg:#f1f2f5;--mascot-ground:radial-gradient(closest-side,rgb(32 32 32/.16),rgb(32 32 32/.06) 60%,transparent);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8e8e97;--detail-bg:#22252a;--mascot-ground:radial-gradient(closest-side,rgb(0 0 0/.42),rgb(0 0 0/.16) 60%,transparent)}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg)}
+.shell{display:flex;flex-direction:column;min-height:100svh;min-width:0}
+.topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}
+.wordmark{display:block;width:105px;height:32px;color:var(--text-strong)}
+main{position:relative;flex:1;min-height:calc(100svh - 64px)}
+.body{position:absolute;top:38%;left:50%;width:min(460px,calc(100% - 48px));transform:translateX(-50%);text-align:center;overflow-wrap:anywhere}
+h1{position:relative;margin:0;color:var(--text-strong);font-size:22px;font-weight:600;line-height:28px;letter-spacing:-.01em;text-wrap:balance}
+p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pretty}
+.details{margin-top:24px;padding:14px 16px;border-radius:12px;background:var(--detail-bg);color:var(--muted);font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;text-align:left;white-space:pre-wrap}
+${PHONE_MEDIA}{.shell{padding:0 4px}.body{top:36%;left:24px;right:24px;width:auto;transform:none}h1{font-size:20px;line-height:26px}}
+${openClawMascotStyles({
+  busy: ".mascot[data-pose=busy]",
+  error: "[data-state=error] .mascot",
+  phone: PHONE_MEDIA,
+})}
 `;
 
 export function renderOAuthPage(options: {
@@ -84,6 +33,7 @@ export function renderOAuthPage(options: {
   heading: string;
   message: string;
   details?: string;
+  state?: "error";
 }): string {
   const title = escapeHtml(options.title);
   const heading = escapeHtml(options.heading);
@@ -94,18 +44,20 @@ export function renderOAuthPage(options: {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1,viewport-fit=cover" />
   <meta name="color-scheme" content="light dark" />
   <title>${title}</title>
   <style>${OAUTH_PAGE_STYLES}</style>
 </head>
-<body>
-  <main>
-    <div class="logo">${LOGO_SVG}</div>
-    <h1>${heading}</h1>
-    <p>${message}</p>
-    ${details ? `<div class="details">${details}</div>` : ""}
-  </main>
+<body data-state="${options.state === "error" ? "error" : "success"}">
+  <div class="shell">
+    <header class="topbar">${openClawWordmarkTextSvg}</header>
+    <main><div class="body">
+      <h1>${MASCOT}${heading}</h1>
+      <p>${message}</p>
+      ${details ? `<div class="details">${details}</div>` : ""}
+    </div></main>
+  </div>
 </body>
 </html>`;
 }
@@ -113,8 +65,8 @@ export function renderOAuthPage(options: {
 /** Renders the local OAuth callback success page after provider authentication completes. */
 export function oauthSuccessHtml(message: string): string {
   return renderOAuthPage({
-    title: "Authentication successful",
-    heading: "Authentication successful",
+    title: "Account connected",
+    heading: "You’re connected",
     message,
   });
 }
@@ -122,8 +74,9 @@ export function oauthSuccessHtml(message: string): string {
 /** Renders the local OAuth callback error page without exposing raw credential material. */
 export function oauthErrorHtml(message: string, details?: string): string {
   return renderOAuthPage({
-    title: "Authentication failed",
-    heading: "Authentication failed",
+    title: "Sign-in incomplete",
+    heading: "Sign-in didn’t complete",
+    state: "error",
     message,
     details,
   });

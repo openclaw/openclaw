@@ -593,7 +593,7 @@ describe("OpenAI Codex OAuth flow", () => {
             createVpsAwareHandlers: () => ({
               onAuth: async ({ url }) => {
                 const { body } = await requestCallback(buildCallbackUrl(url), agent);
-                expect(body).toContain("<h1>Authorization received</h1>");
+                expect(body).toMatch(/<h1>[\s\S]*Authorization received<\/h1>/);
                 expect(body).not.toMatch(/successful|completed|OAuth complete/i);
                 expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
                 expect(stop).not.toHaveBeenCalled();
