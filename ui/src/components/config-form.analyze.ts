@@ -184,9 +184,9 @@ function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<str
 }
 
 function hasRenderableObjectStructure(schema: JsonSchema): boolean {
-  if (Object.keys(schema.properties ?? {}).length > 0) {
-    return true;
-  }
+  // The map editor only enumerates dynamic entries from an object-valued (or `true`,
+  // normalized to `{}` here) additionalProperties. Named properties alone are not
+  // enough: pattern-defined entries would vanish from the form without a Raw notice.
   const additional = schema.additionalProperties;
   return additional === true || isRecord(additional);
 }

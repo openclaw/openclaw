@@ -687,6 +687,32 @@ describe("config form renderer", () => {
     expect(onPatch).not.toHaveBeenCalled();
   });
 
+  it("keeps the Raw-mode notice for mixed named and pattern-defined entries", async () => {
+    // Review finding (#202730): named properties alone do not make a pattern-refined
+    // map renderable — with additionalProperties:false the editor shows only `default`
+    // and would silently hide pattern-defined entries like vllm/local.
+    const analysis = analyze({
+      models: {
+        type: "object",
+        properties: { default: { type: "string" } },
+        additionalProperties: false,
+        patternProperties: { "^vllm/.+$": { type: "string" } },
+      },
+    });
+    expect(analysis.unsupportedPaths).toEqual(["models"]);
+    renderForm(analysis, {
+      activeSection: "models",
+      value: { models: { default: "main", "vllm/local": "local" } },
+    });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      ),
+    );
+    expect(container.querySelector(".cfg-map")).toBeNull();
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
   it("filters by authored metadata tags without rendering field chips", () => {
     renderForm(rootAnalysis, {
       uiHints: {
