@@ -695,7 +695,8 @@ describe("Canvas widget view", () => {
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
-    expectRecovering(view);
+    expect(alert(view)).toBeNull();
+    expect(view.querySelector(".chat-tool-card__reservation")).not.toBeNull();
     expect(view.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
     slowRead.resolve(documentView);

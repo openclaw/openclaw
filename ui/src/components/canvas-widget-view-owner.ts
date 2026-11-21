@@ -103,6 +103,7 @@ export function createCanvasWidget(
     accessDenied: boolean;
     unavailable: boolean;
     awaitingResult: boolean;
+    reconnecting: boolean;
     runtimeError: string;
     resourceError: boolean;
     contentHeight?: number;
@@ -114,6 +115,7 @@ export function createCanvasWidget(
     accessDenied: false,
     unavailable: false,
     awaitingResult: false,
+    reconnecting: false,
     runtimeError: "",
     resourceError: false,
     sandboxGeneration: 0,
@@ -182,6 +184,7 @@ export function createCanvasWidget(
     if (retryTimer !== undefined) {
       return;
     }
+    state.reconnecting = true;
     retryTimer = window.setTimeout(
       () => {
         retryTimer = undefined;
@@ -212,6 +215,7 @@ export function createCanvasWidget(
     clearRetry();
     retryDelayMs = 1_000;
     state.awaitingResult = false;
+    state.reconnecting = false;
     validatedBinding = undefined;
     ownerBinding = undefined;
     state.sandboxGeneration += 1;
@@ -299,6 +303,7 @@ export function createCanvasWidget(
       validatedBinding = undefined;
       sandboxHost?.setActive(false);
       state.awaitingResult = false;
+      state.reconnecting = true;
       return;
     }
     if (!hasOperatorSelfReadAccess(gateway.snapshot.hello?.auth ?? null)) {
@@ -368,6 +373,7 @@ export function createCanvasWidget(
         ownerBinding = binding;
         validatedBinding = binding;
         state.awaitingResult = false;
+        state.reconnecting = false;
         retryDelayMs = 1_000;
         sandboxHost?.setActive(props.presentationActive);
       })
@@ -442,7 +448,11 @@ export function createCanvasWidget(
       sandboxShellHtml: view.sandboxShellHtml,
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
-      onLoaded: postHostState,
+      onLoaded: () => {
+        state.reconnecting = false;
+        postHostState();
+        notify();
+      },
       onRendered: () => {
         state.rendered = true;
         postHostState();
@@ -454,7 +464,10 @@ export function createCanvasWidget(
         props.onHeightChange?.(null, true);
         notify();
       },
-      onReadyTimeout: () => {},
+      onReadyTimeout: () => {
+        state.reconnecting = true;
+        notify();
+      },
     });
     sandboxHost.setActive(active);
   }

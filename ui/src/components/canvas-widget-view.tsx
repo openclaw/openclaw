@@ -159,8 +159,14 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
           <div class="chat-tool-card__reservation">
             {/* Script-free documents have no presentation acknowledgement to hold a title. */}
             {props.allowScripts ? props.title : undefined}
-            <Show when={read().awaitingResult}>
-              <div role="status">{t("board.widget.waitingForResult")}</div>
+            <Show when={read().awaitingResult || read().reconnecting}>
+              <div role="status">
+                {t(
+                  read().awaitingResult
+                    ? "board.widget.waitingForResult"
+                    : "board.widget.waitingForConnection",
+                )}
+              </div>
             </Show>
           </div>
         </Show>
