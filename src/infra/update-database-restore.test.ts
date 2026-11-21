@@ -57,11 +57,14 @@ const sqliteBoundaryHooks = vi.hoisted(() => ({ injectConversionFailure: false }
 vi.mock("node:sqlite", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:sqlite")>();
   class BoundaryDatabaseSync extends actual.DatabaseSync {
-    prepare(sql: string, ...args: Parameters<InstanceType<typeof actual.DatabaseSync>["prepare"]>) {
-      if (sqliteBoundaryHooks.injectConversionFailure && sql.includes("journal_mode = WAL")) {
+    override prepare(...args: Parameters<InstanceType<typeof actual.DatabaseSync>["prepare"]>) {
+      if (
+        sqliteBoundaryHooks.injectConversionFailure &&
+        String(args[0]).includes("journal_mode = WAL")
+      ) {
         throw new Error("injected sqlite-boundary conversion failure");
       }
-      return super.prepare(sql, ...args);
+      return super.prepare(...args);
     }
   }
   return { ...actual, DatabaseSync: BoundaryDatabaseSync };
