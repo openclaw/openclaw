@@ -135,6 +135,7 @@ export class SessionLinkTitler {
     return () => {
       if (this.registered.get(entry.element) === entry) {
         this.registered.delete(entry.element);
+        this.pruneCaches();
       }
     };
   }
@@ -358,7 +359,15 @@ export class SessionLinkTitler {
   private remember<T>(cache: Map<string, CacheEntry<T>>, key: string, entry: CacheEntry<T>): void {
     cache.delete(key);
     cache.set(key, entry);
-    pruneMapToMaxSize(cache, CACHE_LIMIT);
+    pruneMapToMaxSize(cache, CACHE_LIMIT + this.registered.size);
+  }
+
+  private pruneCaches(): void {
+    // One projection must fit without evicting its own pending reads or retry waits.
+    // Releasing registrations returns retention to the bounded dormant cache.
+    const limit = CACHE_LIMIT + this.registered.size;
+    pruneMapToMaxSize(this.cache, limit);
+    pruneMapToMaxSize(this.references, limit);
   }
 
   private load<T>(
