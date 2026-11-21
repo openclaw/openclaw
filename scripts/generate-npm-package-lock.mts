@@ -1148,6 +1148,14 @@ const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map<
       ]),
     },
   ],
+  // npm 12.2.2 also satisfies the ip-address override; only minimatch remains bundled below it.
+  [
+    "12.2.2",
+    {
+      allowMissingBundleMarker: false,
+      exceptions: new Map([["node_modules/npm/node_modules/minimatch", "10.2.5"]]),
+    },
+  ],
 ]);
 
 function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
