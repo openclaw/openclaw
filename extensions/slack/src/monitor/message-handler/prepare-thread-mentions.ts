@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
-import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
+import { hasInboundSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -23,6 +23,7 @@ export async function resolveSlackThreadMentionPolicy(params: {
   thread: { isThreadReply: boolean; threadTs?: string };
   wasMentioned: boolean;
   teamId?: string;
+  workspaceTeamId?: string;
   getThreadStarter: () => Promise<SlackThreadStarter | null>;
 }): Promise<ReturnType<typeof resolveBotThreadMentionPolicy>> {
   const { ctx, account, message, conversation, thread } = params;
@@ -38,11 +39,12 @@ export async function resolveSlackThreadMentionPolicy(params: {
         ? replyToBotKinds
         : implicitMentionKindWhen(
             "bot_thread_participant",
-            await hasSlackThreadParticipationWithPersistence({
+            await hasInboundSlackThreadParticipationWithPersistence({
               accountId: account.accountId,
               channelId: message.channel,
               threadTs: message.thread_ts,
-              teamId: params.teamId,
+              eventTeamId: params.teamId,
+              workspaceTeamId: params.workspaceTeamId,
             }),
           );
   }
