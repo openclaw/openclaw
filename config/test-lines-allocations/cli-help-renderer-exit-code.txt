@@ -1,0 +1,2 @@
+# Real metadata-writer regression for a silent help renderer's lost exit code.
+18
