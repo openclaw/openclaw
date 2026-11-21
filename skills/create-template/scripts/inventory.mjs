@@ -89,7 +89,7 @@ function cliJson(args) {
     // Output from an unsuccessful lookup can contain local paths or configuration.
     // Return only availability; never put that output into the proposal context.
     const timer = setTimeout(() => child.kill("SIGKILL"), COMMAND_TIMEOUT_MS);
-    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
     child.stderr.resume();
     child.on("error", () => {
       clearTimeout(timer);
