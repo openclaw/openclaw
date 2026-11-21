@@ -26,6 +26,7 @@ import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx"
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
 import { renderChatPrimaryActionsSolid as ChatPrimaryActions } from "./chat-composer-controls.tsx";
+import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
 import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
@@ -47,9 +48,6 @@ import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
-const DisabledBanner = lazy(() => import("./chat-composer-disabled-banner.tsx"), {
-  export: "ChatComposerDisabledBanner",
-});
 const WorktreeRestoreNotice = lazy(() => import("./chat-worktree-restore-notice.tsx"), {
   export: "ChatWorktreeRestoreNotice",
 });
@@ -141,13 +139,11 @@ export function renderChatComposerView(
   const disabledBanner = (
     <Show when={props.disabledBanner?.presentation !== "hidden" ? props.disabledBanner : undefined}>
       {(banner) => (
-        <ChatLazyBoundary>
-          <DisabledBanner
-            banner={banner()}
-            showAbortableUi={context().showAbortableUi}
-            runControls={context().runControlsProps}
-          />
-        </ChatLazyBoundary>
+        <ChatComposerDisabledBanner
+          banner={banner()}
+          showAbortableUi={context().showAbortableUi}
+          runControls={context().runControlsProps}
+        />
       )}
     </Show>
   );
