@@ -126,8 +126,9 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
   };
 
   const openFromDisk = async (): Promise<GeolocationDatabase> => {
-    const refreshDue = Date.now() > refreshAfter;
-    const age = await readFileAge(target, new Date());
+    const now = new Date();
+    const refreshDue = now.getTime() > refreshAfter;
+    const age = await readFileAge(target, now);
     let downloaded: DatabaseReader | undefined;
     if (age === undefined) {
       downloaded = await downloadDatabase(deps, target);
@@ -147,9 +148,13 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
       cached: true,
     };
     opened = reader;
-    // Idle eviction must neither retry a failed refresh early nor extend its backoff.
+    // A fresh disk copy keeps its original expiry; attempted refreshes retain
+    // their backoff across idle reopens.
     if (refreshDue) {
-      refreshAfter = Date.now() + deps.settings.refreshMs;
+      refreshAfter =
+        age !== undefined && age <= deps.settings.refreshMs
+          ? now.getTime() + deps.settings.refreshMs - age
+          : Date.now() + deps.settings.refreshMs;
     }
     clearTimeout(idleTimer);
     // A failed publication leaves memory as the only usable copy. Otherwise the
