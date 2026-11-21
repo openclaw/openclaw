@@ -565,6 +565,17 @@ export class ModelSetupWizardRunner {
     ) {
       next = { ...next, externalAuthInput: true };
     }
+    // Only the reply to a rejected answer names its reason; the automatic callback read of the
+    // same step keeps it. A new answer clears it before its request.
+    const previous = this.currentState;
+    if (
+      next.phase === "step" &&
+      !next.validationError &&
+      previous.phase === "step" &&
+      previous.step.id === next.step.id
+    ) {
+      next = { ...next, validationError: previous.validationError };
+    }
     if (result.done) {
       clearTimeout(session.externalInputTimer);
       session.reservedWindow?.close();

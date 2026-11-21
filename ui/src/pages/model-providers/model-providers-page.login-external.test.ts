@@ -123,6 +123,52 @@ describe("Models provider login", () => {
     }
   });
 
+  it("keeps a rejected pasted address's reason under the field across automatic callback reads", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { context, request, cancel } = loginHarness();
+    const originalRequest = request.getMockImplementation()!;
+    const step = {
+      id: "paste",
+      type: "text",
+      message: "Paste the address your browser opens",
+      externalUrl: "https://provider.example/sign-in",
+    };
+    const reason = "This address belongs to a different sign-in attempt.";
+    request.mockImplementation(async (method, params) =>
+      method === "wizard.next"
+        ? {
+            done: false,
+            status: "running",
+            step,
+            // The Gateway names the reason only in its reply to the rejected answer.
+            ...((params as { answer?: unknown } | undefined)?.answer ? { error: reason } : {}),
+          }
+        : originalRequest(method),
+    );
+    const reads = () => request.mock.calls.filter(([method]) => method === "wizard.next").length;
+    const page = appendPage(context);
+    try {
+      await chooseLogin(page, "Example browser sign-in");
+      await waitForSolid(() => expect(page.querySelector(".wizard-sign-in--paste")).not.toBeNull());
+      const input = page.querySelector<HTMLInputElement>("input[name=wizard-text]")!;
+      input.value = "http://localhost:1455/auth/callback?code=c&state=other";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.form!.requestSubmit();
+      await waitForSolid(() =>
+        expect(page.querySelector("[role=alert]")?.textContent, "answer reply").toBe(reason),
+      );
+      const afterAnswer = reads();
+      // The once-a-second callback read returns the same step without the reason.
+      await waitForSolid(() => expect(reads()).toBeGreaterThan(afterAnswer), { timeout: 3000 });
+      await waitForSolid(() =>
+        expect(page.querySelector("[role=alert]")?.textContent, "after callback read").toBe(reason),
+      );
+    } finally {
+      cancel.resolve({ status: "cancelled" });
+      unmountPage(page);
+    }
+  });
+
   it("starts a fresh sign-in from a typed failure's Start sign-in again action", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, cancel } = loginHarness({
