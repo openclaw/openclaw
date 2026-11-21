@@ -65,7 +65,7 @@ export function approvalReaderSessionPolicy(
 }
 
 /** Existing session visibility remains independent of approval requester ownership. */
-export function canReadApprovalSession(params: ApprovalSessionAccessParams): boolean {
+function canReadApprovalSession(params: ApprovalSessionAccessParams): boolean {
   const cap = operatorSessionCap(params.client, params.cfg);
   if (cap !== "none" && cap !== "invited") {
     return true;
