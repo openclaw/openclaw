@@ -9,22 +9,21 @@ it("presents recorded members, replacement hints, and their approved final compa
     "session-store:getSessionEntry",
     "getSessionEntry",
     "getSessionEntryAsync",
-    "2026-12-31",
+    "2026-10-01",
   );
   expect(buildPluginSdkDeprecationNotices("notice-synthetic")).toEqual([
     {
       code: "deprecated-sdk-api",
       severity: "info",
-      message:
-        "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
-      removalDate: "2026-12-31",
+      message: "Uses older OpenClaw APIs. Migration date: Oct 1, 2026. Check for a plugin update.",
+      removalDate: "2026-10-01",
       migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration/how-to-migrate",
       apis: [
         {
           id: "session-store:getSessionEntry",
           displayName: "getSessionEntry",
           replacement: "getSessionEntryAsync",
-          removeAfter: "2026-12-31",
+          removeAfter: "2026-10-01",
         },
       ],
     },
@@ -39,7 +38,7 @@ it("keeps the earliest announced retirement visible alongside undated APIs", () 
   expect(buildPluginSdkDeprecationNotices("notice-mixed")).toMatchObject([
     {
       removalDate: "2026-12-31",
-      message: expect.stringContaining("retire on Dec 31, 2026"),
+      message: expect.stringContaining("Migration date: Dec 31, 2026"),
     },
   ]);
 });
