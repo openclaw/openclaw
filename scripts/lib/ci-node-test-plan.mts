@@ -4646,6 +4646,7 @@ export function createSelectedNodeTestShardBundles(
         ...group,
         configs: selectedConfigs,
         includePatterns,
+        pretestBuildMode: resolveTestFilesBuildMode(includePatterns),
         timing_key: timingKeys[0]!,
       };
       groupSeconds.set(projectedGroup, selectedSeconds);
@@ -4663,6 +4664,9 @@ export function createSelectedNodeTestShardBundles(
     ) {
       delete env.OPENCLAW_VITEST_MAX_WORKERS;
     }
+    const pretestBuildMode = mergeVitestPretestBuildModes(
+      groups.map((group) => group.pretestBuildMode),
+    );
     return groups.length
       ? [
           {
@@ -4671,9 +4675,9 @@ export function createSelectedNodeTestShardBundles(
             checkName: `checks-node-changed-${shard.shardName}`,
             shardName: `changed-${shard.shardName}`,
             groups,
+            pretestBuildMode,
             predictedSeconds: Math.ceil(
-              retainedSeconds +
-                compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
+              retainedSeconds + compactPreparationSeconds(pretestBuildMode, options.runnerBackend),
             ),
           },
         ]

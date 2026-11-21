@@ -118,6 +118,25 @@ const planFiles = (
   ...(job.groups ?? []).flatMap((group) => group.includePatterns ?? []),
 ];
 
+it.each([
+  ["test/scripts/pr-worktree-provision.test.ts", undefined],
+  ["src/config/config-startup-corpus.test.ts", "runtime"],
+  ["src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts", "runtime"],
+] as const)("plans the build required by the selected suite %s", (target, mode) => {
+  const jobs = expectDefined(
+    createSelectedNodeTestShardBundles([target], {
+      runnerBackend: "github",
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+    }),
+    "qualified compact selection",
+  );
+
+  expect(jobs).toHaveLength(1);
+  expect(jobs.flatMap(planFiles)).toEqual([target]);
+  expect(jobs[0]?.pretestBuildMode).toBe(mode);
+});
+
 it("retains canonical capacity and exact scope for a compact selection", () => {
   const targets = [
     "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",

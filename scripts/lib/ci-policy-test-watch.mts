@@ -859,6 +859,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-agent-execution.worker.ts",
     ],
   },
+  {
+    // The test loads the packaged worker through its runtime entrypoint.
+    testFile: "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+    watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
+  },
   ...[
     "src/config/sessions/session-accessor.sqlite-transcript-suffix.test.ts",
     "src/config/sessions/session-transcript-context-eligibility.test.ts",
