@@ -41,7 +41,16 @@ vi.mock("../agents/tools/gateway.js", async (importOriginal) => ({
 // requester's profile is current, so an owner child gets the owner scope.
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  captureResidentUserProfileAccess: () => ({ assertCurrent: () => {} }),
+  captureResidentUserProfileAccess: (profileId: string) => ({
+    assertCurrent: () => {},
+    readCurrentFacts: () => ({
+      profileId,
+      emails: [],
+      assignedRole: null,
+      githubLogin: null,
+      openclawIdAccountIds: [],
+    }),
+  }),
 }));
 
 const { consumeCronNextCheckProposal } = await import("../infra/agent-run-registry.automation.js");

@@ -297,7 +297,6 @@ describe("production lint suppressions", () => {
         "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
         // Stream wrappers preserve the original source iterator's rejection value.
         "src/agents/embedded-agent-runner/run/stream-wrapper.ts|typescript/prefer-promise-reject-errors|1",
-        "src/agents/embedded-agent-runner/session-prompt-state.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/tool-name-allowlist.ts|unicorn/no-array-sort|1",
         "src/agents/harness-runtimes.ts|unicorn/no-array-sort|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
@@ -420,9 +419,9 @@ describe("production lint suppressions", () => {
         "src/plugins/provider-login-options.ts|unicorn/no-array-sort|2",
         "src/plugins/provider-registry-selection.ts|unicorn/no-array-sort|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
-        "src/plugins/registry-registrars-providers.ts|typescript/unbound-method|1",
         // Admission records original factory identities; executable views bind their receivers.
-        "src/plugins/registry-registrars.ts|typescript/unbound-method|1",
+        "src/plugins/registry-registrars-memory.ts|typescript/unbound-method|1",
+        "src/plugins/registry-registrars-providers.ts|typescript/unbound-method|1",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         // Indexed adoption scans avoid per-row iterator allocation on frozen catalog snapshots.
         "src/plugins/session-catalog.ts|typescript/prefer-for-of|1",

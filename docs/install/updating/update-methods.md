@@ -10,6 +10,11 @@ sidebarTitle: "Update methods"
 
 Install-type switching, the source-server reference script, the installer, and manual package-manager updates. Part of the [Updating](/install/updating) guide.
 
+For [updates requested in chat](/install/updating#from-chat), the agent uses the
+built-in updater on standard installations. A directly served Git checkout can
+use its documented, host-authorized in-place procedure without an exact revision.
+An update request alone does not authorize switching installation methods.
+
 ## Switch between npm and git installs
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. Before retiring an old source wrapper, the updater rechecks its identity and contents and confirms that it still owns the update. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.

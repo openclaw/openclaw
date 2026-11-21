@@ -14,9 +14,9 @@ describe("buildCredentialSafetyPrompt", () => {
     // Legacy and unknown callers keep handoff-only credential guidance.
     expect(prompt.split("\n")).toHaveLength(lines);
     expect(prompt.includes("openclaw channels add <channel>")).toBe(lines === 4);
-    expect(prompt.includes("In the final reply, briefly acknowledge")).toBe(lines > 2);
-    expect(prompt.includes("without repeating its value")).toBe(lines > 2);
-    expect(prompt.includes("factual and non-alarming")).toBe(lines > 2);
+    expect(prompt.includes("User-supplied credentials:")).toBe(lines > 2);
+    expect(prompt.includes("without repeating values")).toBe(lines > 2);
+    expect(prompt.includes("factually acknowledge")).toBe(lines > 2);
     expect(prompt).not.toContain("legacy-secrets-tool");
   });
 });

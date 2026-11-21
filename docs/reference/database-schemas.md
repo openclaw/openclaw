@@ -79,8 +79,14 @@ repair admission keeps its private snapshot on SQLite. PostgreSQL maintenance
 inspects the lease through an admitted state reader without a file snapshot.
 Synchronous CLI startup diagnostics also read the current lease directly when
 the exact SQLite database has a verified live owner. This bounded read does not
-copy the database; artifact-preserving inspection and Doctor's schema repair
-admission still use private snapshots.
+copy the database. Ordinary artifact-preserving shared-state inspection also
+reads directly and read-only when that database has a verified live owner;
+offline inspection retains private copies to avoid creating or changing sidecars.
+Admitted in-process readers reuse the owner's published path custody without
+filesystem identity polling. Owner loss, release, and maintenance clear that fact;
+CLI and worker readers without local custody still verify the persisted owner.
+Explicit frozen inspection scopes, including `openclaw update status`, and Doctor's
+schema repair admission still use private snapshots.
 
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
@@ -224,6 +230,8 @@ On Linux, transcript and shared-state SQLite readers sample `/proc/thread-self/i
 and completion. An operation that incurs at least 64 MiB of kernel-accounted
 storage reads emits one `heavy SQLite reader operation` warning through the
 existing logger, including `operation`, `readBytes`, `elapsedMs`, and worker IDs.
+`workerScript` names the bundled script, and Linux `nativeThreadId`, when available,
+matches the task under `/proc/<pid>/task/`; Node's `threadId` is a separate identity.
 The context retains the last transaction's existing session/row diagnostics,
 the outer `readerOperation`, and the agent ID for transcript workers. Nested
 owners share the outer measurement rather than counting the bytes twice.

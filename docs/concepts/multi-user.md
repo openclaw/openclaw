@@ -172,6 +172,8 @@ People presence is shared with operators who have read access (`operator.read`, 
 
 **Viewing now** and **Recent sessions** use a bounded, access-scoped session list independent of the sidebar's owner, **Involving me**, and status filters. Opening a card refreshes that list across configured agents; it includes active sessions only. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
 
+The card shows **No recent visible sessions** only after the list loads successfully. If the first read fails, the card shows that recent sessions are unavailable; reopen it to try again.
+
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
 
 ## Reactions

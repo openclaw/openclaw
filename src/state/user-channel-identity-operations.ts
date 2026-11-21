@@ -68,7 +68,7 @@ export async function readCanonicalUserChannelIdentityProfileId(
 ): Promise<string | undefined> {
   const reply = await executeExistingOpenClawStateRead(options, {
     type: "userProfiles.channelIdentity.resolve",
-    identity,
+    identity: { ...identity },
   });
   return reply?.linked?.profileId;
 }
@@ -295,6 +295,9 @@ export async function prepareUserProfileRolePolicyAuthority(
           profileId: profile.profileId,
           role: profile.role,
           githubLogin: profile.githubLogin ?? null,
+          ...(profile.openclawIdAccountIds
+            ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+            : {}),
         }
       );
     }
@@ -307,6 +310,9 @@ export async function prepareUserProfileRolePolicyAuthority(
             profileId: profile.profileId,
             role: profile.role,
             githubLogin: profile.githubLogin ?? null,
+            ...(profile.openclawIdAccountIds
+              ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+              : {}),
           }
         );
       } finally {

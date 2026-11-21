@@ -575,6 +575,12 @@ Escape stay with composition. Finish composing before saving or canceling.
 Once the Gateway confirms a rename, the saved name stays visible while the session
 list refreshes, even if an older snapshot arrives late.
 
+Choose **Archive all** from a shared sidebar group’s options to archive its
+unarchived sessions, including nested sessions that still belong to the group.
+The confirmation shows how many sessions will be archived, even when the
+sidebar hasn’t loaded them all. The group stays in place, and **Undo** cancels
+the archive before it is saved.
+
 Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.

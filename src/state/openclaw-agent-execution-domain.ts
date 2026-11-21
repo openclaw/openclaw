@@ -174,14 +174,22 @@ export function createAgentDatabaseDomainOwner(context: {
       const backend = factory(input.input, {
         databasePath: context.databasePath,
         database,
-        admitSearchExtensions: (definitions: Readonly<Record<string, SearchSchema>>) => {
+        admitSearchExtensions: (
+          definitions: Readonly<Record<string, SearchSchema>>,
+          options?: { rebuild: true },
+        ) => {
           if (!authority.active) {
             throw new Error("Agent publication cleanup cannot admit search extensions");
           }
-          admitAgentEngineSearchExtensions(database, definitions, (stage) => {
-            context.assertCurrent();
-            context.admit(stage);
-          });
+          admitAgentEngineSearchExtensions(
+            database,
+            definitions,
+            (stage) => {
+              context.assertCurrent();
+              context.admit(stage);
+            },
+            options?.rebuild,
+          );
         },
         admit: (
           stage: "prepare" | "transaction" | "commit",

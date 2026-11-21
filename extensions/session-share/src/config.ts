@@ -40,7 +40,7 @@ export function sessionShareNodeBinding(config: SessionShareConfigSnapshot, node
   };
 }
 
-export function sessionShareGatewayEnabled(config: SessionShareConfigSnapshot): boolean {
+export function sessionShareGatewaySourceEnabled(config: SessionShareConfigSnapshot): boolean {
   const share = sessionShareConfig(config).share;
   return (
     config.plugins?.enabled !== false &&
