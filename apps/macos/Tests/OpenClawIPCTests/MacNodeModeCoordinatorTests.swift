@@ -211,6 +211,38 @@ struct MacNodeModeCoordinatorTests {
         return MacNodeModeCoordinator.nodeDeviceAuthBinding(for: endpoint)
     }
 
+    @Test @MainActor func `Peekaboo generation survives routine refresh and rotates on provider replacement`() async throws {
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(computerControlEnabled: { true }),
+            initialPaused: false,
+            initialComputerControlEnabled: true,
+            initialComputerControlProvider: .peekaboo)
+        defer { coordinator.stop() }
+        let commands = [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue]
+        let initialDescriptor = try #require(coordinator.computerUseDescriptor(
+            provider: .peekaboo,
+            commands: commands,
+            workerManifest: nil))
+
+        coordinator.refresh(isPaused: false, computerControlEnabled: true, computerControlProvider: .peekaboo)
+        let refreshedDescriptor = try #require(coordinator.computerUseDescriptor(
+            provider: .peekaboo,
+            commands: commands,
+            workerManifest: nil))
+        #expect(refreshedDescriptor == initialDescriptor)
+
+        coordinator.refresh(isPaused: false, computerControlEnabled: true, computerControlProvider: .cua)
+        coordinator.refresh(isPaused: false, computerControlEnabled: true, computerControlProvider: .peekaboo)
+        let replacedDescriptor = try #require(coordinator.computerUseDescriptor(
+            provider: .peekaboo,
+            commands: commands,
+            workerManifest: nil))
+        #expect(replacedDescriptor != initialDescriptor)
+
+        await coordinator.stopAndWait()
+    }
+
     @MainActor
     private func cleanupRevocationTest(
         lifecycleInvalidationGate: AsyncTestGate,

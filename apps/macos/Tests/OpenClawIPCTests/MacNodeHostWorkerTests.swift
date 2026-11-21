@@ -449,7 +449,12 @@ struct MacNodeHostWorkerTests {
             ["system", "mcp"]) == ["canvas", "screen", "system", "mcp"])
     }
 
-    @Test func `provider selection filters command ownership and publishes each provider descriptor`() throws {
+    @Test @MainActor func `provider selection filters command ownership and publishes each provider descriptor`() async throws {
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(computerControlEnabled: { true }),
+            initialComputerControlProvider: .peekaboo)
+        defer { coordinator.stop() }
         let descriptor = OpenClawProtocol.AnyCodable([
             "contractVersion": OpenClawProtocol.AnyCodable(2),
         ])
@@ -464,7 +469,7 @@ struct MacNodeHostWorkerTests {
         #expect(!peekaboo.commands.contains(OpenClawScreenCommand.snapshot.rawValue))
         #expect(!peekaboo.commands.contains(OpenClawComputerCommand.act.rawValue))
         #expect(peekaboo.computerUse == nil)
-        let peekabooDescriptor = try #require(MacNodeModeCoordinator.computerUseDescriptor(
+        let peekabooDescriptor = try #require(coordinator.computerUseDescriptor(
             provider: .peekaboo,
             commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
             workerManifest: peekaboo))
@@ -486,10 +491,11 @@ struct MacNodeHostWorkerTests {
 
         let cua = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .cua))
         #expect(cua.commands == manifest.commands)
-        #expect(MacNodeModeCoordinator.computerUseDescriptor(
+        #expect(coordinator.computerUseDescriptor(
             provider: .cua,
             commands: cua.commands,
             workerManifest: cua) == descriptor)
+        await coordinator.stopAndWait()
     }
 
     @Test(arguments: [ComputerControlProvider.peekaboo, .cua])
@@ -512,7 +518,12 @@ struct MacNodeHostWorkerTests {
         #expect(native.pathEnv == direct.pathEnv)
     }
 
-    @Test func `elevation host never advertises a persisted CUA provider`() throws {
+    @Test @MainActor func `elevation host never advertises a persisted CUA provider`() async throws {
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(computerControlEnabled: { true }),
+            initialComputerControlProvider: .peekaboo)
+        defer { coordinator.stop() }
         let suiteName = "MacNodeElevationHostProviderTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -533,13 +544,14 @@ struct MacNodeHostWorkerTests {
             pathEnv: "/usr/bin:/bin")
         let workerManifest = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))
         #expect(workerManifest.computerUse == nil)
-        let advertised = try #require(MacNodeModeCoordinator.computerUseDescriptor(
+        let advertised = try #require(coordinator.computerUseDescriptor(
             provider: provider,
             commands: manifest.commands,
             workerManifest: workerManifest))
         let data = try JSONEncoder().encode(advertised)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect((object["provider"] as? [String: Any])?["id"] as? String == "peekaboo")
+        await coordinator.stopAndWait()
     }
 
     @Test func `stale route updates cannot replace newer worker authority`() async {
