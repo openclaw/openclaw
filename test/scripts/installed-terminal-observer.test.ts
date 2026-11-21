@@ -4651,6 +4651,7 @@ it.each([
           2,
         ) + "\n",
       );
+      assert(result.status !== null, result.stderr);
       assertInstalledTerminalOutput(
         rows,
         { ...f.spec, historical: true },
