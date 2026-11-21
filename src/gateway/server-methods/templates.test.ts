@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
@@ -155,11 +156,16 @@ describe("ClawHub Template catalog Gateway methods", () => {
   });
 
   it.each([
-    [new ClawHubSourceError("unavailable", "Release is unavailable."), "Release is unavailable."],
-    [new Error("upstream internal detail"), "ClawHub catalog is unavailable."],
+    [
+      new ClawHubSourceError("unavailable", "Release is unavailable."),
+      "Release is unavailable.",
+      false,
+    ],
+    [new Error("upstream internal detail"), "ClawHub catalog is unavailable.", false],
     [
       new ClawHubRequestError({ path: "/api/v1/packages/missing", status: 404, body: "" }),
       "This Template is not on ClawHub. Check the name or browse the catalog.",
+      true,
     ],
     [
       new ClawHubRequestError({
@@ -168,13 +174,24 @@ describe("ClawHub Template catalog Gateway methods", () => {
         body: "",
       }),
       "This Template version is not on ClawHub. Choose another version.",
+      true,
     ],
     [
       new ClawHubRequestError({ path: "/api/v1/packages/agent", status: 503, body: "" }),
       "ClawHub catalog is unavailable.",
+      false,
     ],
-  ])("preserves the public catalog failure for %s", async (failure, message) => {
+  ])("preserves the public catalog failure for %s", async (failure, message, notFound) => {
     readClawHubTemplateDetail.mockRejectedValue(failure);
-    expectError(await catalogRequest("templates.catalog.detail", release), "UNAVAILABLE", message);
+    const replies = await catalogRequest("templates.catalog.detail", release);
+    expectError(replies, "UNAVAILABLE", message);
+    if (notFound) {
+      expect(replies[0]?.[2]).toMatchObject({
+        retryable: false,
+        details: { code: GatewayErrorDetailCodes.TEMPLATE_NOT_FOUND },
+      });
+    } else {
+      expect(replies[0]?.[2]?.details).toBeUndefined();
+    }
   });
 });

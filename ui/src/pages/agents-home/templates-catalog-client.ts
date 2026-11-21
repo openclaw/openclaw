@@ -3,6 +3,7 @@ import type {
   TemplatePluginAcknowledgement,
   TemplateSkillAcknowledgement,
 } from "@openclaw/gateway-protocol";
+import { isTemplateNotFoundError } from "@openclaw/gateway-protocol/gateway-error-details";
 import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
@@ -27,6 +28,13 @@ export type TemplateAddApplyResult = {
 
 function isPublicEntry(entry: TemplateCatalogEntry): boolean {
   return entry.channel === "official" || entry.channel === "community";
+}
+
+export function isTemplateNotFoundFailure(error: unknown): boolean {
+  return (
+    isTemplateNotFoundError(error) ||
+    (error instanceof Error && isTemplateNotFoundError(error.cause))
+  );
 }
 
 export async function searchTemplates(

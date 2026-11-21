@@ -5,11 +5,13 @@ import {
   ErrorCodes,
   CronJobNotFoundErrorDetailsSchema,
   ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  TemplateNotFoundErrorDetailsSchema,
   TemplateReviewRequiredErrorDetailsSchema,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
   isMcpAppViewExpiredError,
+  isTemplateNotFoundError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   OutboundDeliveryQueuedErrorDetailsSchema,
@@ -155,6 +157,14 @@ describe("gateway error details", () => {
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(isMcpAppViewExpiredError({ details })).toBe(true);
     expect(isMcpAppViewExpiredError(new Error("upstream token expired"))).toBe(false);
+  });
+
+  it("identifies missing Template catalog entries without message parsing", () => {
+    const details = { code: GatewayErrorDetailCodes.TEMPLATE_NOT_FOUND };
+    expect(Value.Check(TemplateNotFoundErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(isTemplateNotFoundError({ details })).toBe(true);
+    expect(isTemplateNotFoundError(new Error("This Template is not on ClawHub."))).toBe(false);
   });
 
   it("validates queued outbound delivery details", () => {
