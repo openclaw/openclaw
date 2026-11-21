@@ -139,19 +139,29 @@ describe("retireStandaloneGitWrapper", () => {
 
   it("points the wrapper install.ps1 wrote, with its doubled backslash, at the release launcher", async () => {
     const { wrapper, write, root } = await fixture("win32");
-    await write(`@echo off\r\nnode "${root}\\dist\\\\entry.js" %*\r\n`);
+    const installed = `@echo off\r\nnode "${root}\\dist\\\\entry.js" %*\r\n`;
+    await write(installed);
     vi.stubEnv("OPENCLAW_STATE_DIR", "C:\\Users\\me\\.openclaw");
-    await expect(
+    const repoint = () =>
       retireStandaloneGitWrapper({
         previousRoot: root,
         replacementRoot: "C:\\Users\\me\\.openclaw\\git-install\\openclaw",
         platform: "win32",
         searchDirs: [path.dirname(wrapper)],
-      }),
-    ).resolves.toEqual({});
-    await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
-      '@echo off\r\nnode "C:\\Users\\me\\.openclaw\\git-install\\openclaw-launcher.mjs" %*\r\n',
+      });
+    await expect(repoint()).resolves.toEqual({});
+    const repointed = await fs.readFile(wrapper, "utf8");
+    expect(repointed).toMatch(/^@goto run\r\n@rem x*\r\n@exit \/b %errorlevel%\r\n:run\r\n/u);
+    expect(repointed).toContain(
+      '@node "C:\\Users\\me\\.openclaw\\git-install\\openclaw-launcher.mjs" %*\r\n',
     );
+    // cmd.exe running `openclaw update` through the old wrapper resumes at the old length.
+    expect(Buffer.from(repointed).subarray(Buffer.byteLength(installed)).toString()).toMatch(
+      /^@exit \/b %errorlevel%\r\n/u,
+    );
+    // A later update recognizes its own wrapper and rewrites it unchanged.
+    await expect(repoint()).resolves.toEqual({});
+    await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(repointed);
     vi.unstubAllEnvs();
   });
 

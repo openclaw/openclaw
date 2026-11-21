@@ -105,11 +105,18 @@ export async function retireStandaloneGitWrapper(params: {
       return { error: `Could not inspect ${wrapperPath}: ${String(error)}` };
     }
     const lines = contents.trimEnd().split(/\r?\n/u);
-    // install.ps1 wrote `dist\\entry.js` (a literal double backslash) before this fix; Windows
-    // resolves that and differently-cased spellings to the same file.
+    // The installer's two-line wrapper, or the one an earlier update wrote (see below). install.ps1
+    // wrote `dist\\entry.js` (a literal double backslash) before this fix; Windows resolves that and
+    // differently-cased spellings to the same file.
     const windowsEntry =
-      platform === "win32" && lines.length === 2 && lines[0] === "@echo off"
-        ? /^node "(?<entry>[^"]+)" %\*$/u.exec(lines[1] ?? "")?.groups?.entry
+      platform === "win32" &&
+      ((lines.length === 2 && lines[0] === "@echo off") ||
+        (lines.length === 5 &&
+          lines[0] === "@goto run" &&
+          /^@rem x*$/u.test(lines[1] ?? "") &&
+          lines[2] === WINDOWS_WRAPPER_EXIT &&
+          lines[3] === ":run"))
+        ? /^@?node "(?<entry>[^"]+)" %\*$/u.exec(lines.at(-1) ?? "")?.groups?.entry
         : undefined;
     const sameWindowsPath = (left: string, right: string) =>
       path.win32.normalize(left).toLowerCase() === path.win32.normalize(right).toLowerCase();
@@ -155,9 +162,15 @@ export async function retireStandaloneGitWrapper(params: {
         // recognize with the launcher entry. The launcher selects a pending release and counts a
         // foreground Gateway start.
         const entry = pathApi.join(pathApi.dirname(params.replacementRoot), GIT_RELEASE_LAUNCHER);
+        // cmd.exe rereads a running batch file at its saved byte offset, and `openclaw update` usually
+        // runs through this wrapper: once it returns, cmd resumes in the new file at the old file's
+        // length. The padded comment ends exactly there, so cmd runs the exit line (keeping the
+        // update's exit code) instead of the middle of the new command.
+        const head = "@goto run\r\n@rem ";
+        const pad = "x".repeat(Math.max(0, Buffer.byteLength(contents) - head.length - 2));
         const next =
           platform === "win32"
-            ? `@echo off\r\nnode "${entry}" %*\r\n`
+            ? `${head}${pad}\r\n${WINDOWS_WRAPPER_EXIT}\r\n:run\r\n@node "${entry}" %*\r\n`
             : `${lines[0]}\n${lines[1]}\nexec ${shellQuote(execArgs![1]!)} ${shellQuote(entry)} "$@"\n`;
         const temporary = `${wrapperPath}.${process.pid}.tmp`;
         await fs.writeFile(temporary, next, { mode: 0o755 });
@@ -173,6 +186,8 @@ export async function retireStandaloneGitWrapper(params: {
   }
   return {};
 }
+
+const WINDOWS_WRAPPER_EXIT = "@exit /b %errorlevel%";
 
 /** Bash `printf %q` style quoting, as the installer writes the wrapper. */
 const shellQuote = (value: string) => value.replace(/[^\w@%+=:,./-]/gu, "\\$&");

@@ -2337,8 +2337,8 @@ function Refresh-GatewayServiceIfLoaded {
 function Test-PreviousGitWrapper {
     $wrapper = Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"
     if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { return $false }
-    # `openclaw update` points a Git install's wrapper at the release launcher.
-    return ([System.IO.File]::ReadAllText($wrapper) -match '^@echo off\r?\nnode ".+([\\/]dist[\\/]+entry\.js|[\\/]git-install[\\/]openclaw-launcher\.mjs)" %\*\r?\n?$')
+    # `openclaw update` points a Git install's wrapper at the release launcher (padded so a running cmd.exe exits cleanly).
+    return ([System.IO.File]::ReadAllText($wrapper) -match '^(@echo off\r?\nnode|@goto run\r?\n@rem x*\r?\n@exit /b %errorlevel%\r?\n:run\r?\n@node) ".+([\\/]dist[\\/]+entry\.js|[\\/]git-install[\\/]openclaw-launcher\.mjs)" %\*\r?\n?$')
 }
 
 function Remove-PreviousGitWrapper {

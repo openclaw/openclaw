@@ -1,16 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import {
-  GIT_RELEASE_LAUNCHER,
-  gitReleaseForwardingEntry,
-  gitReleaseSlot,
-  resolveGitReleasePrefix,
-} from "../../infra/git-release-paths.js";
-import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release.js";
+import { describe, expect, it } from "vitest";
 import {
   capturePackageReleaseSlot,
   switchPackageReleaseLink,
@@ -24,7 +16,7 @@ import {
 } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
 
-const fixture = useExecutorFixture("update-release-link-", { restoreEnv: true });
+const fixture = useExecutorFixture("update-release-link-");
 
 describe.skipIf(process.platform === "win32")("executor admission on a release link", () => {
   it("runs post-switch children under the installation's lease, not the new release's", async () => {
@@ -89,54 +81,5 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
 
     expect(outcome.releaseLease).toBe("absent");
     expect(outcome.deselected).toMatch(/does not resolve to its original installation/u);
-  });
-
-  it("reserves the npm package a Git release install forwards from, so switching back to npm is admitted", async () => {
-    const { root } = fixture();
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    const prefix = resolveGitReleasePrefix();
-    const { releaseRoot } = await createGitReleaseDirs(prefix);
-    fs.mkdirSync(path.join(releaseRoot, "dist"), { recursive: true });
-    await publishGitRelease({ prefix, releaseRoot, trial: false });
-    // What a package-to-Git switch leaves at the npm package path.
-    const writePackage = (dir: string, entry: string) => {
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "openclaw.mjs"), entry);
-      return dir;
-    };
-    const forwarding = writePackage(
-      path.join(root, "npm", "lib", "node_modules", "openclaw"),
-      gitReleaseForwardingEntry(path.join(prefix, GIT_RELEASE_LAUNCHER)),
-    );
-    const unrelated = writePackage(
-      path.join(root, "other", "lib", "node_modules", "openclaw"),
-      "export {};\n",
-    );
-    const store = createManagedHandoffLeaseStore();
-    const outcome: { forwarding?: string; unrelated?: string; otherInstall?: string } = {};
-
-    // Another installation sharing the state directory cannot take this install's package.
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(unrelated);
-      try {
-        reserveUpdateCommandExecutorSlot(fence, forwarding);
-      } catch (error) {
-        outcome.otherInstall = (error as Error).message;
-      }
-    });
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(gitReleaseSlot(prefix));
-      try {
-        reserveUpdateCommandExecutorSlot(fence, unrelated);
-      } catch (error) {
-        outcome.unrelated = (error as Error).message;
-      }
-      reserveUpdateCommandExecutorSlot(fence, forwarding);
-      outcome.forwarding = store.read(forwarding).kind;
-    });
-
-    expect(outcome.forwarding).toBe("current");
-    expect(outcome.unrelated).toMatch(/does not resolve to its original installation/u);
-    expect(outcome.otherInstall).toMatch(/does not resolve to its original installation/u);
   });
 });

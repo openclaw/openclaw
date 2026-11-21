@@ -2,16 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
-import {
-  isGitReleaseForwardingPackage,
-  resolveGitReleasePrefix,
-  servingGitReleaseSlot,
-} from "../../infra/git-release-paths.js";
 import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
-import {
-  resolveUpdateInstallRoot,
-  updateInstallRootsMatch,
-} from "../../infra/update-install-root.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
@@ -234,16 +226,7 @@ export async function withUpdateCommandExecutor<T>(
         }
         // Reserve the spelling before publication moves the symlink. A live
         // original owner cannot use this to acquire an unrelated installation.
-        // The npm package this Git release install forwards from (exact forwarding
-        // text) is its own, so its executor may switch back to npm through it.
-        const gitPrefix = resolveGitReleasePrefix();
-        if (
-          fs.realpathSync.native(key) !== installLease.key &&
-          !(
-            isGitReleaseForwardingPackage(key, gitPrefix) &&
-            updateInstallRootsMatch(installLease.key, servingGitReleaseSlot(gitPrefix))
-          )
-        ) {
+        if (fs.realpathSync.native(key) !== installLease.key) {
           throw new UpdateCommandRecoveryPendingError(
             "Occupied slot does not resolve to its original installation.",
           );
