@@ -1,0 +1,2 @@
+91
+# Muse harness: prove session host reuse and real interrupt/5-second force-close isolation with an active sibling; replaces the pool-only close test.

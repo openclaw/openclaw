@@ -185,7 +185,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           taskId: "task-1",
           sourceRange,
         });
-      } else if (prompt !== "wait") {
+      } else if (prompt !== "wait" && prompt !== "stuck") {
         answer();
       }
     });
@@ -197,6 +197,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       setImmediate(answer);
     }
   } else if (method === "turn/interrupt") {
+    if (active.prompt === "stuck") {
+      // Acknowledge cancellation but never settle, exercising the harness deadline.
+      gated("MUSE_FIXTURE_INTERRUPT_GATE", id, { commandId: params.commandId, status: "accepted" });
+      return;
+    }
     accept(id, params);
     if (active.prompt === "settle" || active.prompt === "approval-settle") {
       // Deliberately separate admission from native settlement.
