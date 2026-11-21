@@ -5558,7 +5558,6 @@
 ["src/plugins/memory-provider-runtime.test.ts","../config/sessions/session-delivery-generation.js","d1da5e727b98a28121708b33aed62fe299b7558520ecd292bfba84581f17cd7c",1]
 ["src/plugins/memory-provider-runtime.test.ts","../config/sessions/session-entry-read-runtime.js","a6aaa4557d6960891a2ee0217607b0be2a9ef95ad596569295b80fee70bbad52",1]
 ["src/plugins/memory-provider-runtime.test.ts","./loader.js","c0f9334e20e652991411705ccf6324b6049dea431d664a010c2af3571c332a10",1]
-["src/plugins/memory-provider-runtime.test.ts","./memory-state.js","4f19cc28cf901935ec33a646a70a48fdb7ac354db3526f6f18062151c815ef80",1]
 ["src/plugins/memory-runtime.test.ts","../agents/agent-scope.js","0aa0dd5ab0dac513b573751e9c5ff255f029cefb6fb073f60c27e4b2ad1c31c2",1]
 ["src/plugins/memory-runtime.test.ts","./loader.js","a6746879aeff9739cad706e4ddaaa03004579310c4cb176bd46dca115247d022",1]
 ["src/plugins/migration-provider-runtime.test.ts","./bundled-plugin-metadata.js","2b84cce421aa66e79e1e112df4cf5643af3587790f2d926c8988c1fef3e3dcc1",1]

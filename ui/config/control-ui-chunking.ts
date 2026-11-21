@@ -97,10 +97,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/plugins/catalog-skeleton.tsx":
       // Catalogs load their grid, cards, and loading state together.
       return "plugin-catalog-runtime";
-    case "ui/src/pages/plugins/reasoned-disabled-control.tsx":
-    case "ui/src/pages/plugins/settings-retry-error.tsx":
-      // Catalog and Settings share these controls without loading each other's pages.
-      return "plugin-action-feedback";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
     case "ui/src/lib/reactive/window-message.ts":
