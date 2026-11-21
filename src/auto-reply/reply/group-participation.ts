@@ -2,6 +2,7 @@ import { estimateStringTokenPressure } from "@openclaw/normalization-core/cjk-ch
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
 import { buildBootstrapContextForFiles } from "../../agents/embedded-agent-helpers/bootstrap.js";
+import { projectPersistedSenderContext } from "../../agents/embedded-agent-runner/run/attempt-history.js";
 import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { readSessionManagerContextAsync } from "../../agents/sessions/session-manager-incognito.js";
@@ -12,6 +13,8 @@ import { selectBoundedContextStart } from "../../config/sessions/session-bounded
 import type { DecisionBatch } from "../../decisions/types.js";
 import { decisionJsonLimits } from "../../decisions/validation-common.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
+import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { InternalFollowupRun } from "./queue/types.js";
@@ -141,7 +144,14 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
             storePath: candidate.storePath,
           },
           (messages, _header, seed) => {
-            const recent = Array.from(messages);
+            // Reuse primary user-prompt projection; tool calls/results keep their receipt evidence.
+            const recent = projectPersistedSenderContext(
+              Array.from(messages, (message) =>
+                message.role === "user"
+                  ? projectRecordedModelPrompt(projectModelContextMessages([message])[0]!)
+                  : message,
+              ),
+            );
             const cut = selectBoundedContextStart(
               recent,
               historyBytes + 2,
@@ -162,8 +172,9 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
           {
             signal,
             seed: {
-              maxBytes: Math.max(2, historyBytes),
-              tokenBudget: historyTokens,
+              // Bound hydration separately; model caps apply to the projected evidence above.
+              maxBytes: decisionJsonLimits.maxBytes,
+              tokenBudget: decisionJsonLimits.maxBytes / 4,
               beforeAdmittedUser: true,
               admittedKey: candidate.recorder.message?.idempotencyKey,
             },
