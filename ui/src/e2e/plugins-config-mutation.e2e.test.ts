@@ -129,7 +129,7 @@ suite.define(() => {
       });
 
       await gateway.deferNext("plugins.setEnabled");
-      await page.getByRole("button", { name: "Enable Workboard", exact: true }).click();
+      await page.getByRole("switch", { name: "Workboard", checked: false, exact: true }).click();
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
       const pendingDraft = await gateway.waitForRequest("config.set");
@@ -151,7 +151,7 @@ suite.define(() => {
         runtime: { operationId: "enable-workboard", generation: 1, pluginIds: ["workboard"] },
       });
 
-      await page.getByRole("button", { name: "Disable Workboard", exact: true }).waitFor();
+      await page.getByRole("switch", { name: "Workboard", checked: true, exact: true }).waitFor();
       expect((await gateway.getRequests("plugins.inspect")).length).toBeGreaterThan(0);
       expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       await expect

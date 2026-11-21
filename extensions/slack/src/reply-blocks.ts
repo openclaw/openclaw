@@ -18,8 +18,11 @@ import {
   type SlackAuthoredTextPlacement,
 } from "./authored-text.js";
 import {
+  appendSlackNativeDataFallbackText,
   buildSlackBlocksFallbackText,
   buildSlackCompleteBlocksFallbackText,
+  buildSlackNativeDataAccessibilityText,
+  hasSlackNativeDataBlock,
   renderSlackBlockFallbackText,
 } from "./blocks-fallback.js";
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
@@ -32,11 +35,6 @@ import {
 } from "./blocks-render.js";
 import { markdownToSlackMrkdwnChunks, type SlackMarkdownOptions } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
-import {
-  appendSlackNativeDataFallbackText,
-  buildSlackNativeDataAccessibilityText,
-  hasSlackNativeDataBlock,
-} from "./native-data-blocks.js";
 import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
 import { SLACK_BUTTON_ACTION_IDS, SLACK_SELECT_ACTION_IDS } from "./reply-action-ids.js";
 

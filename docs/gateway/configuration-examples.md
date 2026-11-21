@@ -320,7 +320,7 @@ This example leaves `agents.defaults.timeoutSeconds` unset, so each model attemp
   tools: {
     media: {
       models: [
-        { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+        { provider: "openai", model: "gpt-transcribe", capabilities: ["audio"] },
         { provider: "google", model: "gemini-3-flash-preview", capabilities: ["video"] },
       ],
       audio: { enabled: true, maxBytes: 20971520, timeoutSeconds: 120 },

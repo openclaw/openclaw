@@ -60,6 +60,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
+  "src/gateway/server-methods/sessions-github-read.target.test.ts",
   "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
   "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
@@ -271,6 +272,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||
+      config === "test/vitest/vitest.gateway.config.ts" ||
       config === "test/vitest/vitest.gateway-database-workers.config.ts" ||
       config === "test/vitest/vitest.gateway-methods.config.ts" ||
       config === "test/vitest/vitest.gateway-server.config.ts") &&

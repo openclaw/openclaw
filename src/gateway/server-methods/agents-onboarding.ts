@@ -19,6 +19,7 @@ import { readSessionCreationReceiptInWorker } from "../../config/sessions/sessio
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { buildAgentOnboardingGreeting } from "../../shared/agent-onboarding.js";
@@ -362,6 +363,8 @@ export async function startAgentOnboardingConversation(
   /** Chat-based Template Add only: the caller has built the one setup opening. */
   templateSetupPrompt?: string,
   onStarted?: () => void,
+  /** Chat-based Template Add only: the opening turn has sent its first model request. */
+  onModelRequested?: () => void,
 ): Promise<void> {
   const releaseAuthorization = options.sessionMutationAuthorization?.retain?.();
   using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
@@ -370,6 +373,14 @@ export async function startAgentOnboardingConversation(
   const runId = setup
     ? `agents.create:${agentId}:template-setup:${randomUUID()}`
     : `agents.create:${agentId}:${opening === "template" ? "template-greeting" : "onboarding-question"}`;
+  const stopModelRequestWatch = onModelRequested
+    ? onAgentEventForRun(runId, (event) => {
+        if (event.stream === "run_status" && event.data.phase === "starting_model") {
+          stopModelRequestWatch?.();
+          onModelRequested();
+        }
+      })
+    : undefined;
   try {
     await runOutsideAsyncWorkScope(() =>
       handleTrustedInternalChatSend(
@@ -448,6 +459,8 @@ export async function startAgentOnboardingConversation(
     options.context.logGateway.warn(
       `could not start onboarding for agent ${agentId}: ${formatErrorMessage(error)}`,
     );
+  } finally {
+    stopModelRequestWatch?.();
   }
 }
 

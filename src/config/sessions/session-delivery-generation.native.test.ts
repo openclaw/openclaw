@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { writeHostFile } from "../../agents/host-file-write.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { captureGatewayToolReceiptAssertion } from "../../agents/tools/gateway-caller-context.js";
 import {
   bindCommandOwnerAuthority,
   captureCommandOwnerAssertion,
@@ -214,6 +214,10 @@ it("writes under prepared generation and command-owner authority without synchro
   });
   const receiptAuthority = captureCommandOwnerAssertion(context);
   expect(receiptAuthority).toBeDefined();
+  const prepareMutation =
+    receiptAuthority &&
+    captureGatewayToolReceiptAssertion(receiptAuthority).prepareSessionSourceStorageEffect;
+  expect(prepareMutation).toBeTypeOf("function");
   const file = `${database.path}.effect.txt`;
   await fs.promises.writeFile(file, "original");
   database.db
@@ -244,10 +248,7 @@ it("writes under prepared generation and command-owner authority without synchro
   onTestFinished(() => {
     vi.restoreAllMocks();
   });
-  await withGatewayToolCallerIdentity(
-    { agentId: scope.agentId, sessionKey: scope.sessionKey, receiptAuthority },
-    () => writeHostFile(file, "replacement"),
-  );
+  await writeHostFile(file, "replacement", undefined, prepareMutation);
   expect(await fs.promises.readFile(file, "utf8")).toBe("replacement");
   expect({
     identity: identity.mock.calls.length,

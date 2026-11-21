@@ -706,3 +706,40 @@ it("follows the conversation key through a reset", async () => {
     }),
   ).resolves.toMatchObject({ ok: true });
 });
+
+it("writes a display-only row while the producing turn holds the session", async () => {
+  const target = await createTarget();
+  await withSessionTurn(target, async () => {
+    await expect(target.commit({ displayOnly: true })).resolves.toEqual({ ok: true });
+    await expect(
+      target.commit({
+        text: "A foreign result while the turn runs.",
+        idempotencyKey: "cron-current-completion:cron:job-2:2000",
+        provenance: { kind: "cron", jobId: "job-2", runId: "cron:job-2:2000" },
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+  const rows = (await loadTranscriptEvents(target.scope)).flatMap((event) => {
+    const message = readTranscriptEventMessage(event) as Record<string, unknown> | undefined;
+    if (!message) {
+      return [];
+    }
+    return {
+      key: message?.idempotencyKey,
+      excludeFromContext: message?.excludeFromContext,
+      placement: message?.openclawModelPlacement,
+    };
+  });
+  expect(rows).toEqual([
+    {
+      key: "cron-current-completion:cron:job-1:1000",
+      excludeFromContext: true,
+      placement: undefined,
+    },
+    {
+      key: "cron-current-completion:cron:job-2:2000",
+      excludeFromContext: true,
+      placement: "pending",
+    },
+  ]);
+});

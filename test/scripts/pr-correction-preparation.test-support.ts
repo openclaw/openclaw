@@ -15,11 +15,18 @@ export function createCapturedHashProbe(root: string, write = false) {
   writeFileSync(
     probe,
     `#!/usr/bin/env python3
-import os,sys,subprocess
+import json,os,struct,sys,subprocess
 args=sys.argv[1:]
 if args == ${JSON.stringify(args)}:
  captured=sys.stdin.buffer.read()
- with open(${JSON.stringify(calls)},'a') as record: record.write(str(len(captured))+'\\n')
+ with open(${JSON.stringify(calls)},'a+') as record:
+  record.seek(0); count=len(record.readlines()); record.write(str(len(captured))+'\\n')
+ if os.environ.get('HASH_SEQUENCE'):
+  sequence=json.load(open(os.environ['HASH_SEQUENCE']))
+  if count+1 < len(sequence):
+   size,identity=sequence[count+1]
+   value=bytearray([identity%256])*size; value[:4]=struct.pack('<I',identity)
+   open('.local/correction-review.json','wb').write(value)
  if os.environ.get('MUTATE_ORIGINAL'): open('.local/correction-review.json','wb').write(b'changed after capture')
  if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
  sys.exit(subprocess.run([${JSON.stringify(git)},*args],input=captured).returncode)

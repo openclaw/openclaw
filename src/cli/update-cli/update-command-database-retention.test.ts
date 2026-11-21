@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNpmTarget } from "../../infra/package-update-steps.test-support.js";
@@ -9,7 +8,6 @@ import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { UpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import * as databaseBackup from "../../infra/update-database-backup.js";
-import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as snapshotBackup from "../../snapshot/database-backup.js";
 import { captureUpdateDatabases } from "./update-command-database-backup.js";
@@ -20,20 +18,12 @@ import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function captureExecution(
-  root: string,
-  env: NodeJS.ProcessEnv,
-  installKind: "package" | "git",
-): MutableUpdateExecutionParams {
+function captureExecution(root: string, env: NodeJS.ProcessEnv): MutableUpdateExecutionParams {
   return {
     root,
-    installKind,
-    ...(installKind === "package"
-      ? {
-          updateInstallKind: installKind,
-          packageInstallTarget: createNpmTarget(path.dirname(root)),
-        }
-      : { updateInstallKind: installKind }),
+    installKind: "package",
+    updateInstallKind: "package",
+    packageInstallTarget: createNpmTarget(path.dirname(root)),
     switchToGit: false,
     timeoutMs: 30_000,
     updateStepTimeoutMs: 30_000,
@@ -74,52 +64,6 @@ async function captureEnvironment(stateDir: string) {
   return env;
 }
 
-it.runIf(process.platform !== "win32").each([false, true])(
-  "captures Git update databases in physical artifact storage (redirected: %s)",
-  async (redirected) => {
-    const base = await fs.realpath(dirs.make("update-database-artifacts-"));
-    const root = path.join(base, "install");
-    const stateDir = path.join(base, "state");
-    const artifactRoot = path.join(root, ".artifacts");
-    const physicalArtifacts = redirected ? path.join(base, "external-artifacts") : artifactRoot;
-    await fs.mkdir(root);
-    await fs.mkdir(physicalArtifacts);
-    if (redirected) {
-      await fs.symlink(physicalArtifacts, artifactRoot, "dir");
-    }
-    await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
-    const env = await captureEnvironment(stateDir);
-    {
-      using db = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"));
-      db.exec("CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES ('synthetic');");
-    }
-    const capture = await captureUpdateDatabases({
-      transaction: {
-        backupRoot: path.join(base, "runtime.backup"),
-        rollback: async () => {
-          throw new Error("Unexpected rollback");
-        },
-        complete: async () => {
-          throw new Error("Unexpected completion");
-        },
-      },
-      execution: captureExecution(root, env, "git"),
-      context: undefined,
-      assertCurrent: () => {},
-    });
-    expect(capture.step.exitCode).toBe(0);
-    expect(capture.backup?.directory).toBe(
-      path.join(physicalArtifacts, "runtime.backup.databases"),
-    );
-    expect(capture.backup?.databases).toHaveLength(1);
-    using snapshot = new DatabaseSync(capture.backup!.databases[0]!.snapshotPath, {
-      readOnly: true,
-    });
-    expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    expect(snapshot.prepare("SELECT value FROM payload").all()).toEqual([{ value: "synthetic" }]);
-  },
-);
-
 function captureWith(base: string, root: string, env: NodeJS.ProcessEnv) {
   return captureUpdateDatabases({
     transaction: {
@@ -131,7 +75,7 @@ function captureWith(base: string, root: string, env: NodeJS.ProcessEnv) {
         throw new Error("Unexpected completion");
       },
     },
-    execution: captureExecution(root, env, "package"),
+    execution: captureExecution(root, env),
     context: undefined,
     assertCurrent: () => {},
   });
@@ -194,23 +138,17 @@ it.each([
   await expect(captureWith(base, root, env)).rejects.toBe(failure);
 });
 
-it.each(
-  (["git", "package"] as const).flatMap((kind) =>
-    [
-      { restorable: false, lateRefusal: false, outcome: "success" },
-      { restorable: true, lateRefusal: false, outcome: "success" },
-      { restorable: true, lateRefusal: false, outcome: "success", discardFails: true },
-      { restorable: true, lateRefusal: true, outcome: "success" },
-      { restorable: true, lateRefusal: true, outcome: "failure" },
-      { restorable: true, lateRefusal: false, outcome: "failure" },
-      ...(kind === "package"
-        ? [{ restorable: true, lateRefusal: false, outcome: "rollback" }]
-        : []),
-    ].map((scenario) => Object.assign(scenario, { kind })),
-  ),
-)(
-  "retains $kind snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome, discardFails=$discardFails",
-  async ({ kind, restorable, lateRefusal, outcome, discardFails }) => {
+it.each([
+  { restorable: false, lateRefusal: false, outcome: "success" },
+  { restorable: true, lateRefusal: false, outcome: "success" },
+  { restorable: true, lateRefusal: false, outcome: "success", discardFails: true },
+  { restorable: true, lateRefusal: true, outcome: "success" },
+  { restorable: true, lateRefusal: true, outcome: "failure" },
+  { restorable: true, lateRefusal: false, outcome: "failure" },
+  { restorable: true, lateRefusal: false, outcome: "rollback" },
+])(
+  "retains package snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome, discardFails=$discardFails",
+  async ({ restorable, lateRefusal, outcome, discardFails }) => {
     const base = await fs.realpath(dirs.make("update-database-retention-"));
     const fixture = await createPackageSwapFixture(base);
     const root = fixture.packageRoot;
@@ -250,32 +188,16 @@ it.each(
       transaction = value;
       capture = await captureUpdateDatabases({
         transaction: value,
-        execution: captureExecution(root, env, kind),
+        execution: captureExecution(root, env),
         context: undefined,
         assertCurrent: () => {},
       });
     };
-    if (kind === "git") {
-      await onTransaction(
-        createGitRuntimeTransaction({
-          root,
-          promotion: {
-            backupRoot: path.join(base, "dist-runtime.openclaw-update-id.tmp"),
-            cleanup: async () => undefined,
-          },
-          assertRollbackSafe: async () => {},
-          restoreRuntime: async () => {
-            throw new Error("Unexpected rollback");
-          },
-        }),
-      );
-    } else {
-      const result = await swapStagedPackageInstall({ ...fixture.params, onTransaction });
-      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-    }
+    const result = await swapStagedPackageInstall({ ...fixture.params, onTransaction });
+    expect(result.status, result.step.stderrTail ?? "").toBe("committed");
     const finalResult: UpdateRunResult = {
       status: outcome === "success" ? "ok" : "error",
-      mode: kind === "git" ? "git" : "npm",
+      mode: "npm",
       root,
       steps: [capture!.step],
       durationMs: 0,
@@ -326,9 +248,7 @@ it.each(
       );
     }
     if (retired && !discardFails) {
-      await expect(
-        fs.stat(kind === "git" ? path.dirname(snapshotPath) : snapshotPath),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
     } else {
       expect(await fs.readFile(snapshotPath, "utf8")).toBe("pre-migration bytes");
     }

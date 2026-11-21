@@ -260,6 +260,8 @@ it("runs a chat-based Template opening hidden, under the agent's own tool policy
   );
   const [request] = sendInternalChat.mock.calls[0]!;
   expect(request.params.message).toBe("Fixture setup prompt");
+  // Inherit the selected model's policy: a nonreasoning model cannot accept explicit low effort.
+  expect(request.params).not.toHaveProperty("thinking");
   expect(request.params.systemInputProvenance).toEqual({
     kind: "internal_system",
     sourceTool: "template_add_setup",
@@ -284,6 +286,7 @@ it("runs a chat-based Template opening hidden, under the agent's own tool policy
     "template",
     "Fixture setup prompt",
   );
+  expect(sendInternalChat.mock.calls[1]![0].params).not.toHaveProperty("thinking");
   expect(sendInternalChat.mock.calls[1]![0].params.idempotencyKey).not.toBe(
     request.params.idempotencyKey,
   );

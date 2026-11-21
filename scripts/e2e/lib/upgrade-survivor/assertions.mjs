@@ -1964,10 +1964,28 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
       )
     : -1;
   const rejectedStep = result?.steps?.[rejectedStepIndex];
+  const rejectedDoctorFindings = Array.isArray(rejectedStep?.doctorLintFindings)
+    ? rejectedStep.doctorLintFindings
+    : undefined;
+  const rejectedStepMetadata = {
+    termination: String(rejectedStep?.termination).slice(0, 24),
+    signal: String(rejectedStep?.signal).slice(0, 24),
+    killed: Boolean(rejectedStep?.killed),
+    outputLimitExceeded: Boolean(rejectedStep?.outputLimitExceeded),
+    failureFactsCount: Array.isArray(rejectedStep?.failureFacts)
+      ? rejectedStep.failureFacts.length
+      : "missing",
+    doctorFindingsCount: rejectedDoctorFindings?.length ?? "missing",
+    doctorFindings: rejectedDoctorFindings?.slice(0, 8).map((finding) => ({
+      checkId: String(finding?.checkId).slice(0, 120),
+      severity: String(finding?.severity).slice(0, 16),
+      target: String(finding?.target ?? "").slice(0, 160),
+    })),
+  };
   const rejectedStepContext =
     rejectedStepIndex < 0
       ? ""
-      : `: step ${rejectedStepIndex + 1} of ${result.steps.length}; name=${JSON.stringify(String(rejectedStep?.name).slice(0, 160))}; exitCode=${String(rejectedStep?.exitCode).slice(0, 16)}; advisory=${JSON.stringify(String(rejectedStep?.advisory?.kind).slice(0, 80))}`;
+      : `: step ${rejectedStepIndex + 1} of ${result.steps.length}; name=${JSON.stringify(String(rejectedStep?.name).slice(0, 160))}; exitCode=${String(rejectedStep?.exitCode).slice(0, 16)}; advisory=${JSON.stringify(String(rejectedStep?.advisory?.kind).slice(0, 80))}; metadata=${JSON.stringify(rejectedStepMetadata)}`;
   assert(
     Array.isArray(result?.steps) && rejectedStepIndex === -1,
     `successful update contained a failed core step${rejectedStepContext}`,

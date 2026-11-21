@@ -198,10 +198,15 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   );
   onSettled(() => {
     const stop = () => context().stopRunFromEscape();
+    const send = () => context().runControlsProps.onSend();
     state.stopRunFromEscape = stop;
+    state.sendDraft = send;
     return () => {
       if (state.stopRunFromEscape === stop) {
         state.stopRunFromEscape = null;
+      }
+      if (state.sendDraft === send) {
+        state.sendDraft = null;
       }
     };
   });
