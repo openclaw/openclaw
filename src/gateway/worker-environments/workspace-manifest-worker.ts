@@ -274,7 +274,12 @@ export async function captureTemplateWorkspaceManifest(
   signal?: AbortSignal,
   idleIoPriority?: boolean,
 ) {
-  return await computeValue("workspace.manifest.template", input, signal, idleIoPriority);
+  const result = await computeValue("workspace.manifest.template", input, signal, idleIoPriority);
+  return {
+    ...result,
+    projectionFingerprints:
+      result.projectionFingerprints && Buffer.from(result.projectionFingerprints),
+  };
 }
 
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {
