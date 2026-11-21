@@ -54,6 +54,7 @@ import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-co
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
 import {
+  resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
   withOwnedManagedUpdateEnv,
   withUpdateInProgressEnv,
@@ -93,6 +94,8 @@ export async function initializeAndRunUpdate(
   },
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
+  // Repair uses the invoking operator, even when run registration enters the service environment.
+  const operatorEnv = resolveServiceRefreshEnv(process.env, invocationCwd);
   const targetEnv = resolveUpdateTargetEnv({ baseEnv: env, nodeRunner: process.execPath });
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
@@ -195,7 +198,7 @@ export async function initializeAndRunUpdate(
                     recordCompletedStep(`warning:original-state-capture:${index + 1}`, detail);
                   }
                   handleFailure = await prepareUpdateCommandFailureTriage(
-                    { ...opts, invocationCwd, run },
+                    { ...opts, invocationCwd, operatorEnv, run },
                     recoveryState.triageTarget,
                   );
                 },
