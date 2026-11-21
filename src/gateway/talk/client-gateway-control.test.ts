@@ -44,6 +44,24 @@ function responseEvent(owner: ControlOwner, type: string, responseId: string) {
 }
 
 describe("Talk client Gateway control owner", () => {
+  it("preserves whitespace transcript deltas without persisting blank finals", async () => {
+    const events: Array<{ type: string; payload: unknown }> = [];
+    const { owner, closeProvider, appendTranscript } = createControlFixture({
+      voiceSessionId: "voice-whitespace",
+      connId: "conn-whitespace",
+      context: controlContext(vi.fn(), (event) => events.push(event)),
+    });
+    await activate(owner, closeProvider);
+    owner.control.onTranscript?.("assistant", " ", false);
+    owner.control.onTranscript?.("assistant", "", false);
+    owner.control.onTranscript?.("assistant", " ", true);
+    expect(events.filter((event) => event.type === "output.text.delta")).toMatchObject([
+      { payload: { text: " " } },
+    ]);
+    expect(appendTranscript).not.toHaveBeenCalled();
+    await owner.close();
+  });
+
   it.each(["failed", "incomplete"] as const)(
     "keeps Gateway-controlled browser Talk reusable after a %s response",
     async (status) => {
