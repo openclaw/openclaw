@@ -12,7 +12,7 @@ if (!state) {
 const control = path.join(state, "benchmark-commit-delay.json");
 const output = path.join(state, `benchmark-commits.${threadId}.jsonl`);
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
-const exec = DatabaseSync.prototype.exec;
+const exec = Function.prototype.call.bind(DatabaseSync.prototype.exec);
 DatabaseSync.prototype.exec = function (sql) {
   let settings;
   if (/^\s*COMMIT(?:\s+TRANSACTION)?\s*;?\s*$/iu.test(sql) && this.isTransaction) {
@@ -23,7 +23,7 @@ DatabaseSync.prototype.exec = function (sql) {
     }
   }
   if (!settings) {
-    return exec.call(this, sql);
+    return exec(this, sql);
   }
   const { delayMs, sample } = settings;
   if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 5_000) {
@@ -36,7 +36,7 @@ DatabaseSync.prototype.exec = function (sql) {
   Error.stackTraceLimit = stackLimit;
   Atomics.wait(sleeper, 0, 0, delayMs);
   try {
-    return exec.call(this, sql);
+    return exec(this, sql);
   } finally {
     appendFileSync(
       output,

@@ -182,7 +182,29 @@ try {
     worktree: true,
     worktreeName: `storage-proof-${randomUUID()}`,
   });
+  let previousRunId: string | undefined;
   for (let index = -2; index < samples; index++) {
+    // A chat final can precede ownership release and change the next input's admission path.
+    const settleStarted = performance.now();
+    if (previousRunId) {
+      const completion = (await rpc("agent.wait", {
+        runId: previousRunId,
+        timeoutMs: 120_000,
+      })) as { status: string };
+      assert.equal(completion.status, "ok");
+    }
+    while (true) {
+      const description = (await rpc("sessions.describe", { key: sessionKey })) as {
+        session: { hasActiveRun?: boolean } | null;
+      };
+      assert(description.session);
+      if (description.session.hasActiveRun === false) {
+        break;
+      }
+      assert(performance.now() - settleStarted < 120_000, "Session did not become idle");
+      await delay(50);
+    }
+    const settleMs = performance.now() - settleStarted;
     const sample = `storage-${index}`,
       beforeLog = logs.length;
     const begin = performance.now(),
@@ -221,11 +243,13 @@ try {
             )
           : undefined;
       runId ??= await send();
+      previousRunId = runId;
       const cpu = measureGatewayCpuUsage(beforeCpu, await readGatewayCpuUsage(child));
       results.push({
         sample,
         runId,
         measured: index >= 0,
+        settleMs,
         startedAt,
         endedAt: Date.now(),
         durationMs: performance.now() - begin,
