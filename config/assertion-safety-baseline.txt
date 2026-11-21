@@ -630,7 +630,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	5
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
-extensions/qa-lab/src/providers/mock-openai/server.ts	4
+extensions/qa-lab/src/providers/mock-openai/server.ts	3
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1

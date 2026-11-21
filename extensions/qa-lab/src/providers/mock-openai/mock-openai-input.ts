@@ -4,7 +4,6 @@ import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.j
 import { normalizeAnthropicMessagesRequest } from "./mock-anthropic-messages.js";
 import {
   type ResponsesInputItem,
-  type AnthropicMessagesRequest,
   type QaMockProviderDispatchRequest,
   type MockOpenAiRequestKind,
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
@@ -86,7 +85,7 @@ export function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
 export function normalizeQaMockProviderRequest(request: QaMockProviderDispatchRequest) {
   const normalized =
     request.route === "anthropic-messages"
-      ? normalizeAnthropicMessagesRequest(request.body as AnthropicMessagesRequest)
+      ? normalizeAnthropicMessagesRequest(request.body)
       : {
           body: request.body,
           input: normalizeResponsesInput(request.body.input),
