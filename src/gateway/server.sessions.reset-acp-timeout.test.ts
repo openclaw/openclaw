@@ -434,6 +434,40 @@ describe("concurrency", () => {
     },
   );
 
+  test("finishes a role-wide writer reset to default after adopted cleanup closes its caller", async () => {
+    const key = "agent:main:dashboard:writer-default-reset";
+    const { read } = await seedSession(key, "writer-default-reset", {
+      lifecycleRevision: "before-reset",
+      permissionMode: "workspace",
+      totalTokens: 99,
+    });
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Gateway caller authority is no longer active");
+      }
+    };
+    using _ = resetHarness("writer-reset-cleanup", async () => {
+      current = false;
+    });
+    const result = await resetSession({
+      key,
+      clearSpawnedCwd: true,
+      requestingOperatorScopes: ["operator.write"],
+      requestingOperatorProfileId: "role-wide-writer",
+      getCurrentSessionAccessCap: () => {
+        assertCurrent();
+        return "write";
+      },
+      assertCurrent,
+    });
+    expect(result.ok).toBe(true);
+    expect(current).toBe(false);
+    expect(read()).toMatchObject({ sessionId: "writer-default-reset", totalTokens: 0 });
+    expect(read()?.permissionMode).toBeUndefined();
+    expect(read()?.lifecycleRevision).not.toBe("before-reset");
+  });
+
   test("sessions.reset never creates a missing session after caller closure during cleanup", async () => {
     const { storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:dashboard:missing-reset";
