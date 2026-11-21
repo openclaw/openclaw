@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Root-owned integration may combine public plugin surfaces with Gateway-owned runtime.
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { telegramOutbound } from "../extensions/telegram/api.js";
+import { markdownToTelegramHtml, telegramOutbound } from "../extensions/telegram/api.js";
 import { compileStructuredInputUrl } from "../src/agents/harness/structured-input.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../src/agents/harness/user-input-bridge.js";
 import { QuestionManager } from "../src/gateway/question-manager.js";
@@ -67,6 +67,41 @@ it("opens an external step with a URL button separate from completion callbacks"
     { text: "Decline", callback_data: callback(1) },
   ]);
   expect(payload.text).toContain(url);
+});
+
+it("keeps each question's option numbers in a multi-question Telegram prompt", () => {
+  const payload = buildAgentHarnessQuestionPromptPayload({
+    questionId,
+    questions: [
+      {
+        id: "deploy_target",
+        header: "Deploy",
+        question: "Where should this deploy?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+        isOther: true,
+      },
+      {
+        id: "checks",
+        header: "Checks",
+        question: "Which checks should run?",
+        options: [{ label: "Unit" }, { label: "E2E" }, { label: "Lint" }],
+        multiSelect: true,
+        isOther: true,
+      },
+    ],
+  });
+  // Telegram renders markdown lists with its own numbering, so a numbered
+  // question header would join the option lines into one list.
+  const lines = markdownToTelegramHtml(payload.text).split("\n");
+
+  expect(lines.filter((line) => /^\d+\. /.test(line))).toEqual([
+    "1. Staging",
+    "2. Production",
+    "1. Unit",
+    "2. E2E",
+    "3. Lint",
+  ]);
+  expect(lines).toEqual(expect.arrayContaining(["Question 1: Deploy", "Question 2: Checks"]));
 });
 
 it("resolves canonical option C when rendered option A repeats across blocks", async () => {
