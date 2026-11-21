@@ -43,6 +43,7 @@ export type GoogleStreamChunk = {
       }>;
     };
     finishReason?: string;
+    continuationToken?: string;
     finishMessage?: string;
   }>;
   usageMetadata?: {

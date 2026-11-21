@@ -21,6 +21,7 @@ export function hasGoogleFirstResponseActivity(chunk: GoogleSseChunk): boolean {
 export async function* parseGoogleSseChunks(
   response: Response,
   signal?: AbortSignal,
+  requireEof = false,
 ): AsyncGenerator<GoogleSseChunk> {
   if (!response.body) {
     throw new Error("No response body");
@@ -32,13 +33,28 @@ export async function* parseGoogleSseChunks(
   };
   signal?.addEventListener("abort", abortHandler);
   try {
-    for await (const { frame, terminated } of iterateSseFrames(async () => {
-      signal?.throwIfAborted();
-      const chunk = await reader.read();
-      // Cancellation settles a pending read as done; never mistake that for EOF.
-      signal?.throwIfAborted();
-      return chunk;
-    })) {
+    for await (const { frame, terminated } of iterateSseFrames(
+      async () => {
+        signal?.throwIfAborted();
+        const chunk = await reader.read();
+        // Cancellation settles a pending read as done; never mistake that for EOF.
+        signal?.throwIfAborted();
+        return chunk;
+      },
+      requireEof
+        ? {
+            max: 2 * 1024 * 1024,
+            unit: "bytes",
+            message: "Google continuation frame exceeds 2 MiB",
+          }
+        : undefined,
+    )) {
+      if (
+        requireEof &&
+        frame.split(/\r\n|\n|\r/u).some((line) => /^event:\s*error\s*$/u.test(line))
+      ) {
+        throw new Error("Google continuation stream returned an error event");
+      }
       const data = frame
         .split(/\r\n|\n|\r/u)
         .filter((line) => line.startsWith("data:"))
@@ -57,6 +73,9 @@ export async function* parseGoogleSseChunks(
         }
       } else {
         if (data === "[DONE]") {
+          if (requireEof) {
+            continue;
+          }
           // Compatible proxies use this boundary even when their HTTP body stays open.
           return;
         }

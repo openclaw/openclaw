@@ -89,11 +89,16 @@ class ModelRequestJson {
     return this.json.length;
   }
 }
+type FinalizeModelRequestPayload = (payload: unknown) => unknown;
+
 type ModelRequestBodyState = {
   enabled?: boolean;
   hasFinalPolicy?: boolean;
   reportsBytes?: boolean;
-  encode?: (payload: unknown) => Promise<EncodedModelRequestBody>;
+  encode?: (
+    payload: unknown,
+    finalizePayload?: FinalizeModelRequestPayload,
+  ) => Promise<EncodedModelRequestBody>;
   onBytes?: (bytes: number) => void;
 };
 
@@ -168,21 +173,58 @@ export function encodedModelRequestBodyStream(body: unknown): boolean | undefine
 /** Defer an opted-in host policy until after a JSON transport's private media projection.
  * Without a final policy, keep the transport's existing serialization path unchanged.
  */
-export function prepareFinalModelRequestJson(options: object | undefined) {
-  if (!options || !modelRequestBodyState(options).hasFinalPolicy) {
+export function prepareFinalModelRequestJson(
+  options: object | undefined,
+  finalizePayload?: FinalizeModelRequestPayload,
+) {
+  if (!finalizePayload && (!options || !modelRequestBodyState(options).hasFinalPolicy)) {
     return undefined;
   }
-  const encode = prepareModelRequestBody(options);
+  const encode = prepareModelRequestBody(options, finalizePayload);
   return async (wireJson: string): Promise<Uint8Array<ArrayBuffer>> =>
     (await encode(JSON.parse(wireJson))).body;
 }
 
 /** SDK RequestOptions.body overrides encoding while the original params retain stream metadata. */
-export function prepareModelRequestBody(options: object | undefined) {
+export function prepareModelRequestBody(
+  options: object | undefined,
+  finalizePayload?: FinalizeModelRequestPayload,
+) {
   const state = options ? modelRequestBodyState(options) : {};
   state.enabled = true;
   return async (payload: unknown) => {
-    const encoded = state.encode ? await state.encode(payload) : serializeModelRequestBody(payload);
+    let calls = 0;
+    let active = true;
+    let failed = false;
+    let failure: unknown;
+    const finalize = finalizePayload
+      ? (value: unknown) => {
+          if (!active || ++calls !== 1) {
+            throw new Error("Model request finalizer must run exactly once before encoding");
+          }
+          try {
+            return finalizePayload(value);
+          } catch (error) {
+            failed = true;
+            failure = error;
+            throw error;
+          }
+        }
+      : undefined;
+    let encoded: EncodedModelRequestBody;
+    try {
+      encoded = state.encode
+        ? await state.encode(payload, finalize)
+        : serializeModelRequestBody(finalize ? finalize(payload) : payload);
+      if (failed) {
+        throw failure;
+      }
+      if (finalize && calls !== 1) {
+        throw new Error("Model request encoder did not apply its finalizer");
+      }
+    } finally {
+      active = false;
+    }
     // The encoder owns these bytes; Fetch snapshots them for each retry/redirect.
     const body = encoded.body;
     state.onBytes?.(body.byteLength);
