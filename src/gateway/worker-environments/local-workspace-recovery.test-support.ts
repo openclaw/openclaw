@@ -289,19 +289,16 @@ export async function proveAggregateWorkspaceRecovery({
   const projection = first!.workspaceDir;
   // Real aggregate budget, individually valid files: no limit override can hide a staging bypass.
   const artifactBytes = Math.ceil((768 * 1024 * 1024) / 13);
-  const artifacts = Array.from(
-    { length: 13 },
-    (_, index) =>
-      "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
-  );
+  const artifacts = Array.from({ length: 13 }, (_, index) => `.artifacts/output-${index}.bin`);
   const sourceText = "authored edit survives aggregate recovery\n";
   for (const relative of artifacts) {
     const file = path.join(projection, relative);
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, "synthetic build output\n");
+    await fs.writeFile(file, "synthetic retained artifact\n");
     await fs.truncate(file, artifactBytes);
   }
   await fs.writeFile(path.join(projection, "source.txt"), sourceText);
+  await fs.mkdir(path.join(projection, "src/App/bin"), { recursive: true });
   await fs.writeFile(
     path.join(projection, "src/App/App.csproj"),
     '<Project Sdk="Microsoft.NET.Sdk" />\n',
@@ -367,7 +364,7 @@ export async function proveAggregateWorkspaceRecovery({
   }
   expect((await fs.stat(recovered.path)).size).toBe(artifactBytes);
   const originalBytes = Buffer.alloc(artifactBytes);
-  originalBytes.write("synthetic build output\n");
+  originalBytes.write("synthetic retained artifact\n");
   expect((await fs.readFile(recovered.path)).equals(originalBytes)).toBe(true);
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
     pending_ref: null,
