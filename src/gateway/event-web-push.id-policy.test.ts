@@ -8,7 +8,7 @@ import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.wor
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createEventWebPushDelivery } from "./event-web-push.js";
+import { createEventWebPushDelivery, sendProfileWebPush } from "./event-web-push.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
   setOpenClawIdMemberAccountLookup,
@@ -203,6 +203,108 @@ describe("Web Push ID canonical profile policy", () => {
         } else {
           expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ subscriptions }),
+          );
+        }
+      });
+    },
+  );
+});
+
+describe("profile-targeted send under named roles and OpenClaw ID", () => {
+  it.each([
+    ["member", ["id-browser", "local-browser"]],
+    ["scope removed", []],
+    // An unassigned profile role falls back to the installation default ("restricted").
+    ["unknown role", ["id-browser", "local-browser"]],
+    ["removed", ["local-browser"]],
+    ["owner", ["id-browser", "local-browser"]],
+  ] as const)(
+    "uses the recipient's canonical role and current ID principal: %s",
+    async (membership, expected) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const recipient = ensureProfileForEmail("send-recipient@example.test");
+        linkOpenClawIdUserProfile(
+          { profileId: recipient.id, accountId: "account", email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup(
+          (accountId) =>
+            accountId === "account" && membership !== "removed" && membership !== "owner",
+        );
+        setUserProfileRole(
+          recipient.id,
+          membership === "owner"
+            ? "restricted"
+            : membership === "removed"
+              ? "admin"
+              : membership === "unknown role"
+                ? "missing"
+                : "member",
+        );
+        const cfg: OpenClawConfig = {
+          gateway: {
+            openclawId: { enabled: true },
+            roles: {
+              default: "restricted",
+              definitions: {
+                admin: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
+                restricted: {
+                  scopes: ["operator.read"],
+                  sessions: { others: "none" },
+                  agents: "*",
+                },
+                member: {
+                  scopes: membership === "scope removed" ? [] : ["operator.read"],
+                  sessions: { others: "none" },
+                  agents: "*",
+                },
+              },
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(cfg);
+        const browsers = {
+          "id-browser": makeSubscription("id-browser", recipient.id),
+          "local-browser": makeSubscription("local-browser", recipient.id),
+        };
+        setSubscriptions(...Object.values(browsers));
+        setPaired(
+          pairedOperator("id-browser", ["operator.admin"]),
+          pairedOperator("local-browser", ["operator.admin"]),
+        );
+        const peerKey = `iroh:${"b".repeat(64)}`;
+        setDeviceTokenBindingOwner({
+          lookup: (deviceId) => (deviceId === "id-browser" ? peerKey : undefined),
+          record: async () => {},
+          forget: async () => {},
+          reportMismatch: () => {},
+        });
+        const principal: OpenClawIdTunnelPrincipal =
+          membership === "owner"
+            ? { kind: "owner", peerKey }
+            : { kind: "member", peerKey, accountId: "account", role: "admin" };
+        setOpenClawIdTunnelPrincipalLookup(() =>
+          membership === "removed" ? undefined : principal,
+        );
+        mocks.send.mockImplementation(
+          async ({ subscriptions }: { subscriptions: BoundWebPushSubscription[] }) =>
+            subscriptions.map((subscription) => ({
+              ok: true,
+              subscriptionId: subscription.subscriptionId,
+              statusCode: 201,
+            })),
+        );
+
+        await expect(
+          sendProfileWebPush(() => cfg, { profileId: recipient.id, category: "agent-finished" }),
+        ).resolves.toEqual({ sent: expected.length, failed: 0, skipped: 0, pruned: 0 });
+        if (expected.length === 0) {
+          expect(mocks.send).not.toHaveBeenCalled();
+        } else {
+          expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              subscriptions: expected.map((deviceId) => browsers[deviceId]),
+            }),
           );
         }
       });
