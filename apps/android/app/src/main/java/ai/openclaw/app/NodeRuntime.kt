@@ -2468,6 +2468,44 @@ class NodeRuntime internal constructor(
     scope.launch { loadCronRunHistoryFromGateway(historyRequest) }
   }
 
+  fun refreshCronModels(id: String) {
+    val loaded = (_cronJobDetailState.value as? GatewayCronJobDetailState.Loaded)?.takeIf { it.job.id == id } ?: return
+    if (loaded.job.payloadKind != "agentTurn" || loaded.models.loading) return
+    if (mode != NodeRuntimeMode.ScreenshotFixture && !operatorConnected) return
+    val gatewayScope = if (mode == NodeRuntimeMode.ScreenshotFixture) null else captureGatewayDataScope() ?: return
+    val request =
+      cronJobDetailRequestGuard.beginIfCurrent(id) {
+        _cronJobDetailState.value = loaded.copy(models = loaded.models.copy(loading = true, error = null))
+      } ?: return
+    scope.launch {
+      try {
+        val params = cronJobModelParams(loaded.job)
+        val root =
+          if (gatewayScope != null) {
+            requestGatewayObject(gatewayScope, "models.list", params)
+          } else {
+            json.parseToJsonElement(screenshotRequester("models.list", params)).asObjectOrNull()
+          }
+        val catalog = parseGatewayModelCatalog(root)
+        cronJobDetailRequestGuard.publishIfCurrent(request) {
+          _cronJobDetailState.value =
+            loaded.copy(
+              models =
+                GatewayCronModelChoices(
+                  models = catalog.models,
+                  error = if (catalog.refreshFailed) nativeText("Some models could not be refreshed.") else null,
+                ),
+            )
+        }
+      } catch (error: Exception) {
+        if (error is CancellationException) throw error
+        cronJobDetailRequestGuard.publishIfCurrent(request) {
+          _cronJobDetailState.value = loaded.copy(models = loaded.models.copy(loading = false, error = nativeText("Could not load models.")))
+        }
+      }
+    }
+  }
+
   fun refreshCronRunHistory(id: String) {
     val request = cronRunHistoryRequestGuard.begin(id) ?: return
     _cronRunHistoryState.value = GatewayCronRunHistoryState.Loading(request.id)

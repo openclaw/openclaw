@@ -1,8 +1,15 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
@@ -307,6 +314,104 @@ class CronRuntimeGuardTest {
       delay(50)
 
       assertEquals(running, runtime.cronActionState.value)
+    }
+
+  @Test
+  fun modelChoicesFollowSelectedJobAndRetainItsDetailsThroughFailureAndRetry() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      seedConnectedRuntime(runtime)
+      val firstRead = CompletableDeferred<Job>()
+      val releaseFirst = CompletableDeferred<Unit>()
+      var failNext = false
+      val modelRequests = java.util.concurrent.CopyOnWriteArrayList<String>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        when (method) {
+          "cron.get" -> {
+            val id =
+              Json
+                .parseToJsonElement(requireNotNull(params))
+                .jsonObject
+                .getValue("id")
+                .jsonPrimitive.content
+            val agent = if (id == "job-a") "writer" else "planner"
+            """{"id":"$id","name":"Task $id","agentId":"$agent","createdAtMs":1000,"updatedAtMs":2000,"enabled":true,"sessionTarget":"isolated","wakeMode":"now","schedule":{"kind":"every","everyMs":60000},"payload":{"kind":"agentTurn","message":"Write a report"},"state":{}}"""
+          }
+
+          "cron.runs" -> {
+            """{"entries":[],"total":0,"hasMore":false}"""
+          }
+
+          "models.list" -> {
+            val parsed = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+            assertEquals("configured", parsed.getValue("view").jsonPrimitive.content)
+            val agent = parsed.getValue("agentId").jsonPrimitive.content
+            modelRequests.add(agent)
+            if (agent == "writer") {
+              firstRead.complete(requireNotNull(currentCoroutineContext()[Job]))
+              releaseFirst.await()
+            }
+            if (failNext) {
+              failNext = false
+              error("Synthetic model read failure")
+            }
+            """{"models":[{"id":"$agent-model","provider":"fixture","name":"$agent model"}]}"""
+          }
+
+          else -> {
+            error("Unexpected request $method")
+          }
+        }
+      }
+
+      suspend fun loaded(id: String): GatewayCronJobDetailState.Loaded =
+        withTimeout(5_000) {
+          runtime.cronJobDetailState.filterIsInstance<GatewayCronJobDetailState.Loaded>().first { it.job.id == id && !it.models.loading }
+        }
+      try {
+        runtime.loadCronJobDetail("job-a")
+        loaded("job-a")
+        assertEquals(emptyList<String>(), modelRequests.toList())
+        runtime.refreshCronModels("job-a")
+        val oldRead = withTimeout(5_000) { firstRead.await() }
+        runtime.loadCronJobDetail("job-b")
+        loaded("job-b")
+        runtime.refreshCronModels("job-b")
+        assertEquals(
+          "planner-model",
+          loaded("job-b")
+            .models.models
+            .single()
+            .id,
+        )
+        releaseFirst.complete(Unit)
+        withTimeout(5_000) { oldRead.join() }
+        assertEquals(
+          "planner-model",
+          loaded("job-b")
+            .models.models
+            .single()
+            .id,
+        )
+        failNext = true
+        runtime.refreshCronModels("job-b")
+        val failed = loaded("job-b")
+        assertEquals("Task job-b", failed.job.name)
+        assertEquals(
+          "planner-model",
+          failed.models.models
+            .single()
+            .id,
+        )
+        org.junit.Assert.assertNotNull(failed.models.error)
+        runtime.refreshCronModels("job-b")
+        org.junit.Assert.assertNull(loaded("job-b").models.error)
+        assertEquals(listOf("writer", "planner", "planner", "planner"), modelRequests.toList())
+      } finally {
+        releaseFirst.complete(Unit)
+        runtime.clearCronJobDetail()
+        readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin()
+      }
     }
 
   private fun createTestRuntime(): NodeRuntime {

@@ -55,6 +55,8 @@ data class GatewayCronJobDetail(
   val consecutiveSkipped: Long?,
   val lastDeliveryStatus: String?,
   val lastDeliveryError: String?,
+  val agentId: String? = null,
+  val sessionKey: String? = null,
 )
 
 sealed interface GatewayCronJobDetailState {
@@ -66,6 +68,7 @@ sealed interface GatewayCronJobDetailState {
 
   data class Loaded(
     val job: GatewayCronJobDetail,
+    val models: GatewayCronModelChoices = GatewayCronModelChoices(),
   ) : GatewayCronJobDetailState
 
   data class Error(
@@ -73,6 +76,19 @@ sealed interface GatewayCronJobDetailState {
     val message: NativeText,
   ) : GatewayCronJobDetailState
 }
+
+data class GatewayCronModelChoices(
+  val models: List<GatewayModelSummary> = emptyList(),
+  val loading: Boolean = false,
+  val error: NativeText? = null,
+)
+
+internal fun cronJobModelParams(job: GatewayCronJobDetail): String =
+  buildJsonObject {
+    put("view", JsonPrimitive("configured"))
+    val agentId = job.agentId ?: resolveAgentIdFromMainSessionKey(job.sessionKey)
+    if (agentId != null) put("agentId", JsonPrimitive(agentId))
+  }.toString()
 
 internal data class CronJobDetailRequest(
   val id: String,
@@ -201,6 +217,8 @@ internal fun parseGatewayCronJobDetail(job: JsonObject?): GatewayCronJobDetail? 
     consecutiveSkipped = state.long("consecutiveSkipped"),
     lastDeliveryStatus = state.nonBlankString("lastDeliveryStatus"),
     lastDeliveryError = state.nonBlankString("lastDeliveryError"),
+    agentId = value.nonBlankString("agentId"),
+    sessionKey = value.nonBlankString("sessionKey"),
   )
 }
 
