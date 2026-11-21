@@ -285,10 +285,31 @@ class AccessibilityActionExecutor internal constructor(
     if (actionId == AccessibilityNodeInfo.ACTION_SET_TEXT && shouldRedactText(node.isPassword, node.isEditable, node.inputType)) {
       return ActionResult(ActionOutcomeCode.SecureContent, "Text entry into password fields is refused")
     }
-    if (node.actionList.none { it.id == actionId }) {
-      return ActionResult(ActionOutcomeCode.ActionNotSupported, "Node $ref does not advertise $actionName")
-    }
-    val accepted = runCatching { node.performAction(actionId, arguments) }.getOrDefault(false)
+    // A label or icon inside a clickable row does not advertise click itself;
+    // activate clicks its nearest clickable ancestor, as a tap on it would.
+    val ancestors = mutableListOf<AccessibilityNodeInfo>()
+    val target =
+      if (node.actionList.any { it.id == actionId }) {
+        node
+      } else if (action is MobileUiAction.Activate) {
+        nearestMatchingAncestor(
+          node,
+          parentOf = { child -> runCatching { child.parent }.getOrNull()?.also(ancestors::add) },
+          matches = { candidate -> candidate.actionList.any { it.id == actionId } },
+        )
+      } else {
+        null
+      }
+    val accepted =
+      try {
+        if (target == null) {
+          return ActionResult(ActionOutcomeCode.ActionNotSupported, "Node $ref does not advertise $actionName")
+        }
+        runCatching { target.performAction(actionId, arguments) }.getOrDefault(false)
+      } finally {
+        @Suppress("DEPRECATION")
+        ancestors.forEach(AccessibilityNodeInfo::recycle)
+      }
     return if (accepted) {
       ActionResult(ActionOutcomeCode.AcceptedButUnverified)
     } else {
@@ -396,3 +417,18 @@ private fun swipeGesture(action: MobileUiAction.Swipe): GestureDescription =
       moveTo(action.x1.toFloat(), action.y1.toFloat())
       lineTo(action.x2.toFloat(), action.y2.toFloat())
     }.gesture(action.durationMs)
+
+/** Walks up from [start] (exclusive) for at most [maxDepth] parents and returns the first match. */
+internal fun <T : Any> nearestMatchingAncestor(
+  start: T,
+  parentOf: (T) -> T?,
+  matches: (T) -> Boolean,
+  maxDepth: Int = 8,
+): T? {
+  var current = start
+  repeat(maxDepth) {
+    current = parentOf(current) ?: return null
+    if (matches(current)) return current
+  }
+  return null
+}
