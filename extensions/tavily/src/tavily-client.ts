@@ -152,7 +152,7 @@ async function postTavilyJson(params: {
       apiKey: params.apiKey,
       body: params.body,
       errorLabel: params.errorLabel,
-      extraHeaders: { "X-Client-Source": "openclaw" },
+      extraHeaders: { "X-Client-Name": "openclaw", "X-Client-Source": "api" },
       ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) =>
@@ -160,6 +160,13 @@ async function postTavilyJson(params: {
         maxBytes: params.responseMaxBytes,
       }),
   );
+}
+
+function readTavilyUsage(payload: Record<string, unknown>): { usage?: { credits: number } } {
+  const credits = isRecord(payload.usage) ? payload.usage.credits : undefined;
+  return typeof credits === "number" && Number.isFinite(credits) && credits >= 0
+    ? { usage: { credits } }
+    : {};
 }
 
 export async function runTavilySearch(params: {
@@ -172,12 +179,32 @@ export async function runTavilySearch(params: {
   timeRange?: string;
   includeDomains?: string[];
   excludeDomains?: string[];
+  includeDomainsMode?: string;
+  language?: string;
+  filterByLanguage?: boolean;
+  safeSearch?: boolean;
+  includePublishedDate?: boolean;
+  filterByPublishedDate?: boolean;
+  startDate?: string;
+  endDate?: string;
+  exactMatch?: boolean;
+  includeUsage?: boolean;
+
   timeoutSeconds?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  if (params.includeDomainsMode && !params.includeDomains?.length) {
+    throw new Error("include_domains_mode requires include_domains.");
+  }
+  if (params.filterByLanguage && !params.language) {
+    throw new Error("filter_by_language requires language.");
+  }
+  if (params.safeSearch && (params.searchDepth === "fast" || params.searchDepth === "ultra-fast")) {
+    throw new Error("safe_search is unavailable with fast or ultra-fast search_depth.");
+  }
   const apiKey = requireTavilyApiKey(params.cfg, "web_search (tavily)");
-  const count = resolveIntegerOption(params.maxResults, DEFAULT_SEARCH_COUNT, { min: 1, max: 20 });
+  const count = resolveIntegerOption(params.maxResults, DEFAULT_SEARCH_COUNT, { min: 0, max: 20 });
   const timeoutSeconds = resolvePositiveTimeoutSeconds(
     params.timeoutSeconds,
     DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS,
@@ -197,6 +224,16 @@ export async function runTavilySearch(params: {
       timeRange: params.timeRange,
       includeDomains: params.includeDomains,
       excludeDomains: params.excludeDomains,
+      includeDomainsMode: params.includeDomainsMode,
+      language: params.language,
+      filterByLanguage: params.filterByLanguage,
+      safeSearch: params.safeSearch,
+      includePublishedDate: params.includePublishedDate,
+      filterByPublishedDate: params.filterByPublishedDate,
+      startDate: params.startDate,
+      endDate: params.endDate,
+      exactMatch: params.exactMatch,
+      includeUsage: params.includeUsage,
     }),
   );
   const cacheTtlMs = resolveSearchCacheTtlMs(params.cfg?.tools?.web?.search);
@@ -210,10 +247,28 @@ export async function runTavilySearch(params: {
     max_results: count,
     ...(params.searchDepth ? { search_depth: params.searchDepth } : {}),
     ...(params.topic ? { topic: params.topic } : {}),
-    ...(params.includeAnswer ? { include_answer: true } : {}),
+    ...(params.includeAnswer !== undefined ? { include_answer: params.includeAnswer } : {}),
     ...(params.timeRange ? { time_range: params.timeRange } : {}),
     ...(params.includeDomains?.length ? { include_domains: params.includeDomains } : {}),
     ...(params.excludeDomains?.length ? { exclude_domains: params.excludeDomains } : {}),
+    ...(params.includeDomainsMode !== undefined
+      ? { include_domains_mode: params.includeDomainsMode }
+      : {}),
+    ...(params.language !== undefined ? { language: params.language } : {}),
+    ...(params.filterByLanguage !== undefined
+      ? { filter_by_language: params.filterByLanguage }
+      : {}),
+    ...(params.safeSearch !== undefined ? { safe_search: params.safeSearch } : {}),
+    ...(params.includePublishedDate !== undefined
+      ? { include_published_date: params.includePublishedDate }
+      : {}),
+    ...(params.filterByPublishedDate !== undefined
+      ? { filter_by_published_date: params.filterByPublishedDate }
+      : {}),
+    ...(params.startDate !== undefined ? { start_date: params.startDate } : {}),
+    ...(params.endDate !== undefined ? { end_date: params.endDate } : {}),
+    ...(params.exactMatch !== undefined ? { exact_match: params.exactMatch } : {}),
+    ...(params.includeUsage !== undefined ? { include_usage: params.includeUsage } : {}),
   };
 
   const start = Date.now();
@@ -264,6 +319,7 @@ export async function runTavilySearch(params: {
     tookMs: Date.now() - start,
     externalContent: externalContentStamp("tavily"),
     results,
+    ...(params.includeUsage ? readTavilyUsage(payload) : {}),
   };
   if (typeof payload.answer === "string" && payload.answer) {
     result.answer = wrapBoundedSearchContent(payload.answer);
@@ -283,6 +339,10 @@ export async function runTavilyExtract(params: {
   extractDepth?: string;
   chunksPerSource?: number;
   includeImages?: boolean;
+  format?: string;
+  includeFavicon?: boolean;
+  includeUsage?: boolean;
+
   timeoutSeconds?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
@@ -304,6 +364,9 @@ export async function runTavilyExtract(params: {
       extractDepth: params.extractDepth,
       chunksPerSource: params.chunksPerSource,
       includeImages: params.includeImages,
+      format: params.format,
+      includeFavicon: params.includeFavicon,
+      includeUsage: params.includeUsage,
     }),
   );
   const cached = readCache(EXTRACT_CACHE, cacheKey);
@@ -316,7 +379,10 @@ export async function runTavilyExtract(params: {
     ...(params.query ? { query: params.query } : {}),
     ...(params.extractDepth ? { extract_depth: params.extractDepth } : {}),
     ...(params.chunksPerSource ? { chunks_per_source: params.chunksPerSource } : {}),
-    ...(params.includeImages ? { include_images: true } : {}),
+    ...(params.includeImages !== undefined ? { include_images: params.includeImages } : {}),
+    ...(params.format !== undefined ? { format: params.format } : {}),
+    ...(params.includeFavicon !== undefined ? { include_favicon: params.includeFavicon } : {}),
+    ...(params.includeUsage !== undefined ? { include_usage: params.includeUsage } : {}),
   };
 
   const start = Date.now();
@@ -357,6 +423,7 @@ export async function runTavilyExtract(params: {
     if (!url) {
       return [];
     }
+    const favicon = params.includeFavicon ? normalizeTavilyResultUrl(entry.favicon) : undefined;
     const rawImages = Array.isArray(entry.images) ? entry.images : undefined;
     const images = rawImages?.slice(0, remainingImages).flatMap((image: unknown) => {
       const imageUrl = normalizeTavilyResultUrl(image);
@@ -379,6 +446,7 @@ export async function runTavilyExtract(params: {
           ? { content: wrapBoundedContent(entry.content, "content") }
           : {}),
         ...(images ? { images } : {}),
+        ...(favicon ? { favicon } : {}),
       },
     ];
   });
@@ -408,6 +476,7 @@ export async function runTavilyExtract(params: {
     },
     results,
     ...(failedResults.length > 0 ? { failedResults } : {}),
+    ...(params.includeUsage ? readTavilyUsage(payload) : {}),
     ...(truncated ? { truncated: true } : {}),
   };
 
