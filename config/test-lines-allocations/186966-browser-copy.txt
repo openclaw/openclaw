@@ -1,0 +1,3 @@
+# Browser panel copy-selection regressions: selection script, input owner, actions menu and clipboard transport.
+# Exact net growth for PR #186966.
+445
