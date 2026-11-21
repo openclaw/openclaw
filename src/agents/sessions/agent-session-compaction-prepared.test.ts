@@ -128,6 +128,61 @@ describe("public SDK compaction adapter", () => {
     },
   );
 
+  it.each(["missing", "off-branch"] as const)(
+    "rejects a manual hook boundary that is %s on the current branch",
+    async (mode) => {
+      const f = await fixture();
+      let firstKeptEntryId = "missing-boundary-id";
+      if (mode === "off-branch") {
+        const branch = f.manager.getBranch();
+        const first = branch[0];
+        const retained = branch[3];
+        if (!first || !retained) {
+          throw new Error("Expected fixture branch");
+        }
+        firstKeptEntryId = retained.id;
+        f.manager.branch(first.id);
+        await f.manager.appendMessageAsync({
+          ...createAssistant(testModel, "Replacement answer."),
+          timestamp: 5,
+        });
+        await f.manager.appendMessageAsync(makeUserMessage("Replacement request", 6));
+      }
+      f.execute.mockImplementation(async () => ({ compaction: { ...f.result, firstKeptEntryId } }));
+      const before = f.manager.getPersistedEntries();
+      const contextBefore = f.manager.buildSessionContext().messages;
+      const append = vi.spyOn(f.manager, "appendCompactionAsync");
+
+      await expect(f.session.compact()).rejects.toThrow("boundary entry on the current branch");
+
+      expect(f.execute).toHaveBeenCalledOnce();
+      expect(append).not.toHaveBeenCalled();
+      expect(f.manager.getPersistedEntries()).toEqual(before);
+      expect(f.manager.buildSessionContext().messages).toEqual(contextBefore);
+      expect(f.publicAfter).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the retained tail for a manual hook boundary on the current branch", async () => {
+    const f = await fixture();
+
+    await f.session.compact();
+
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(f.manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+    expect(
+      f.manager
+        .buildSessionContext()
+        .messages.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.content.some(
+              (block) => block.type === "text" && block.text === "Retained answer.",
+            ),
+        ),
+    ).toBe(true);
+  });
+
   it.each(["abort", "retire"] as const)(
     "does not publish after %s while the prepared summary awaits",
     async (mode) => {
