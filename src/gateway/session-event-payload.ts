@@ -222,8 +222,10 @@ export function buildGatewaySessionSnapshot(params: {
   if ((sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
     delete session.swarm;
   }
+  session.hasActiveSubagentDescendantRun = sessionRow.hasActiveSubagentDescendantRun ?? false;
   eventFields.session = session;
   eventFields.subagentRunState = sessionRow.subagentRunState;
   eventFields.hasActiveSubagentRun = sessionRow.hasActiveSubagentRun;
+  eventFields.hasActiveSubagentDescendantRun = sessionRow.hasActiveSubagentDescendantRun ?? false;
   return eventFields;
 }

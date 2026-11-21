@@ -337,6 +337,8 @@ extension OpenClawChatViewModel {
             phase: phase,
             activeRunIDs: change.activeRunIds,
             activeRunIDsPresent: change.activeRunIdsPresent,
+            hasActiveSubagentDescendantRun: change.hasActiveSubagentDescendantRun,
+            hasActiveSubagentDescendantRunPresent: change.hasActiveSubagentDescendantRunPresent,
             color: change.color,
             colorPresent: change.colorPresent)
         guard let index else {
@@ -415,6 +417,8 @@ extension OpenClawChatViewModel {
         phase: String,
         activeRunIDs: [String]?,
         activeRunIDsPresent: Bool,
+        hasActiveSubagentDescendantRun: Bool?,
+        hasActiveSubagentDescendantRunPresent: Bool,
         color: String?,
         colorPresent: Bool) -> OpenClawChatSessionEntry
     {
@@ -436,6 +440,9 @@ extension OpenClawChatViewModel {
 
         if activeRunIDsPresent {
             merged.activeRunIds = activeRunIDs
+        }
+        if hasActiveSubagentDescendantRunPresent {
+            merged.hasActiveSubagentDescendantRun = hasActiveSubagentDescendantRun
         }
 
         merged.startedAt = snapshot.startedAt ?? existing.startedAt
