@@ -1,0 +1,17 @@
+{
+  "componentId": "native-state-dir",
+  "effectiveValue": "C:\\Users\\maicon\\.openclaw",
+  "authoritySource": "runtime-resolver-output",
+  "confidence": "HIGH",
+  "evidence": [
+    {
+      "evidenceType": "PROCESS",
+      "source": "active-process-args",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "NativeRuntimeObserver",
+      "confidence": "HIGH",
+      "valueHash": "def456",
+      "notes": "Active process arguments prove current use."
+    }
+  ]
+}

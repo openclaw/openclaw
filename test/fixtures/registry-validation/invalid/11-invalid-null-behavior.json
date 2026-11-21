@@ -1,0 +1,17 @@
+{
+  "componentId": "bad-null-behavior",
+  "observedValue": 123,
+  "observationStatus": "OK",
+  "collectedAt": "2026-07-18T18:00:00.000Z",
+  "evidence": [
+    {
+      "evidenceType": "FILESYSTEM",
+      "source": "test",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "test",
+      "confidence": "HIGH",
+      "valueHash": null,
+      "notes": "observedValue must be string or null, not number."
+    }
+  ]
+}

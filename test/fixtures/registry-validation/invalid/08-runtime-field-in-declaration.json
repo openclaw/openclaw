@@ -1,0 +1,16 @@
+{
+  "componentId": "runtime-field-in-declaration",
+  "pathClass": "NATIVE_RUNTIME",
+  "logicalName": "Runtime Field In Declaration",
+  "declarationRule": null,
+  "declaredValue": null,
+  "declarationSource": "src/config/paths.ts",
+  "lifecycle": "persistent",
+  "startupRequirementRule": true,
+  "capabilityDependencies": [],
+  "taskDependencyRules": [],
+  "fallbackPolicy": null,
+  "validationPolicy": {},
+  "notes": "This declaration has a runtime field.",
+  "observedValue": "C:\\Users\\maicon\\.openclaw"
+}

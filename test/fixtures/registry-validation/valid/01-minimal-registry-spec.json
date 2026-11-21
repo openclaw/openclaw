@@ -1,0 +1,24 @@
+{
+  "schema": {
+    "schemaId": "openclaw.registry-specification",
+    "version": "1.0.0",
+    "compatibilityPolicy": "exact"
+  },
+  "components": [
+    {
+      "componentId": "native-state-dir",
+      "pathClass": "NATIVE_RUNTIME",
+      "logicalName": "Native State Directory",
+      "declarationRule": null,
+      "declaredValue": null,
+      "declarationSource": "src/config/paths.ts",
+      "lifecycle": "persistent",
+      "startupRequirementRule": true,
+      "capabilityDependencies": [],
+      "taskDependencyRules": [],
+      "fallbackPolicy": null,
+      "validationPolicy": { "requireExists": true },
+      "notes": "Minimal valid registry specification with one component."
+    }
+  ]
+}

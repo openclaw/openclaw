@@ -1,0 +1,16 @@
+{
+  "schema": {
+    "schemaId": "openclaw.validation-snapshot",
+    "version": "1.0.0",
+    "compatibilityPolicy": "exact"
+  },
+  "executionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "startTimestamp": "2026-07-18T18:00:00.000Z",
+  "completionTimestamp": "2026-07-18T18:00:05.000Z",
+  "validatorBuildId": "test",
+  "validationContext": {},
+  "components": [],
+  "overallStatus": "UNKNOWN",
+  "outputComplete": true,
+  "diagnostics": []
+}

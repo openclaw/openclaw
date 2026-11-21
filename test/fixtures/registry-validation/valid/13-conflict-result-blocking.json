@@ -1,0 +1,25 @@
+{
+  "componentId": "native-state-dir",
+  "conflictType": "startup-dependency-unresolved",
+  "severity": "CRITICAL",
+  "authorityConflict": true,
+  "startupImpact": true,
+  "capabilityImpact": ["joint-methodology"],
+  "taskImpact": ["phase-4e-specification"],
+  "fallbackAvailable": false,
+  "fallbackActive": false,
+  "approvalRequired": true,
+  "blocking": true,
+  "evidence": [
+    {
+      "evidenceType": "FILESYSTEM",
+      "source": "FilesystemObserver",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "FilesystemObserver",
+      "confidence": "HIGH",
+      "valueHash": "jkl012",
+      "notes": "Required startup dependency is missing."
+    }
+  ],
+  "notes": "Blocking conflict due to unresolved startup dependency."
+}

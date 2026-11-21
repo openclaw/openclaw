@@ -1,0 +1,17 @@
+{
+  "componentId": "native-state-dir",
+  "observedValue": "C:\\Users\\maicon\\.openclaw",
+  "observationStatus": "OK",
+  "collectedAt": "2026-07-18T18:00:00.000Z",
+  "evidence": [
+    {
+      "evidenceType": "FILESYSTEM",
+      "source": "FilesystemObserver",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "FilesystemObserver",
+      "confidence": "HIGH",
+      "valueHash": "abc123",
+      "notes": "Directory exists and is readable."
+    }
+  ]
+}

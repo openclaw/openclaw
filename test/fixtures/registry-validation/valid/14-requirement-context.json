@@ -1,0 +1,25 @@
+{
+  "componentId": "configured-workspace",
+  "startupRequired": true,
+  "startupRequirementSource": "registry-declaration",
+  "capabilityRequired": true,
+  "requiredCapabilities": ["joint-methodology"],
+  "taskRequired": false,
+  "requiredTasks": [],
+  "activeRuntimeProfile": "default",
+  "fallbackAllowed": false,
+  "fallbackApproved": false,
+  "policyBlocked": false,
+  "approvalBlocked": false,
+  "evidence": [
+    {
+      "evidenceType": "CONFIG",
+      "source": "openclaw.json",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "WorkspaceObserver",
+      "confidence": "HIGH",
+      "valueHash": "mno345",
+      "notes": "Workspace configured and exists."
+    }
+  ]
+}
