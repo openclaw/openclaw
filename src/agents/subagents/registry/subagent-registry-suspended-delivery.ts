@@ -61,6 +61,7 @@ export async function discardExpiredSubagentDelivery(params: {
   discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
   completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
   isCurrent: () => boolean;
+  isNoticeCurrent: () => boolean;
   sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
   shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
   shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
@@ -88,6 +89,18 @@ export async function discardExpiredSubagentDelivery(params: {
   const prepareHookCurrent = async () =>
     isHookCurrent() && !(await params.shouldSuppressSessionEffects(entry)) && isHookCurrent();
   const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+  // Retain the existing row and outcome if the notice fails so the sweeper can retry.
+  if (!params.isNoticeCurrent()) {
+    throw new Error("Subagent expiry notice owner changed");
+  }
+  await recordRequiredCompletionNotice(
+    entry,
+    "expired",
+    [entry],
+    "failed",
+    () => isCurrent() && params.isNoticeCurrent(),
+  );
+  assertCurrent();
   await params.completeCleanupBookkeeping({
     runId,
     entry,
@@ -121,38 +134,26 @@ export async function discardExpiredSubagentDelivery(params: {
     recovery:
       "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
   });
-  try {
-    if (
-      !deferDelete &&
-      shouldRemoveSubagentAttachments(entry) &&
-      (suspended ? isHookCurrent() : await prepareHookCurrent())
-    ) {
-      await safeRemoveAttachmentsDir(entry, isHookCurrent);
-    }
-    assertCurrent();
-    if (
-      suspended &&
-      (await prepareHookCurrent()) &&
-      entry.expectsCompletionMessage === true &&
-      params.shouldEmitEndedHookForRun({ entry, reason: completionReason })
-    ) {
-      await params.emitSubagentEndedHookForRun({
-        entry,
-        reason: completionReason,
-        sendFarewell: true,
-        isCurrent: isHookCurrent,
-        prepareCurrent: prepareHookCurrent,
-      });
-    }
-  } finally {
-    // Retiring the obligation is the final failure: the requester sees it, not only the log.
-    // The discard is already committed, so the notice is best-effort and cannot undo it.
-    await recordRequiredCompletionNotice(entry, "expired").catch((error: unknown) => {
-      params.warn("subagent expiry notice could not be recorded", {
-        runId: entry.runId,
-        requesterSessionKey: entry.requesterSessionKey,
-        error: error instanceof Error ? error.message : String(error),
-      });
+  if (
+    !deferDelete &&
+    shouldRemoveSubagentAttachments(entry) &&
+    (suspended ? isHookCurrent() : await prepareHookCurrent())
+  ) {
+    await safeRemoveAttachmentsDir(entry, isHookCurrent);
+  }
+  assertCurrent();
+  if (
+    suspended &&
+    (await prepareHookCurrent()) &&
+    entry.expectsCompletionMessage === true &&
+    params.shouldEmitEndedHookForRun({ entry, reason: completionReason })
+  ) {
+    await params.emitSubagentEndedHookForRun({
+      entry,
+      reason: completionReason,
+      sendFarewell: true,
+      isCurrent: isHookCurrent,
+      prepareCurrent: prepareHookCurrent,
     });
   }
 }

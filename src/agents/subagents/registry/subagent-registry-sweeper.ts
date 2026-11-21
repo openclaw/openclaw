@@ -274,8 +274,25 @@ export function createSubagentRegistrySweeper(params: {
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
           continue;
         }
-        if (await settleSubagentCompletionReservation(selected, now, params)) {
-          continue;
+        const isNoticeCurrent = (candidate: SubagentRunRecord) =>
+          isSameSubagentRunOwner(runs.get(candidate.runId), candidate) &&
+          params.isCleanupOwnerCurrent(candidate) &&
+          !subagentRuns.isCompletionAuthorityRetired(candidate);
+        try {
+          if (
+            await settleSubagentCompletionReservation(selected, now, {
+              ...params,
+              isNoticeCurrent: () => isNoticeCurrent(selected),
+            })
+          ) {
+            continue;
+          }
+        } catch (error) {
+          // A revoked/replaced owner cannot publish notice or stop unrelated cleanup.
+          if (!isNoticeCurrent(selected)) {
+            continue;
+          }
+          throw error;
         }
         if (
           selected.killReconciliation &&
@@ -315,14 +332,23 @@ export function createSubagentRegistrySweeper(params: {
         if (isSuspendedPendingFinalDelivery(entry)) {
           const expired =
             now - (entry.delivery?.suspendedAt ?? now) >= SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS;
-          if (expired) {
-            await discardExpiredSubagentDelivery({
-              ...params,
-              runId,
-              entry,
-              now,
-              isCurrent: () => params.isCleanupOwnerCurrent(entry),
-            });
+          if (expired && isNoticeCurrent(entry)) {
+            try {
+              await discardExpiredSubagentDelivery({
+                ...params,
+                runId,
+                entry,
+                now,
+                isCurrent: () => params.isCleanupOwnerCurrent(entry),
+                isNoticeCurrent: () => isNoticeCurrent(entry),
+              });
+            } catch (error) {
+              // Keep the row and outcome when its authority changes while notice waits.
+              if (!isNoticeCurrent(entry)) {
+                continue;
+              }
+              throw error;
+            }
           }
           continue;
         }
