@@ -13,6 +13,10 @@ import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type {
+  BindComposerActionMenu,
+  ComposerMenuAction,
+} from "../../../plugins/control-ui-actions.ts";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
@@ -91,6 +95,12 @@ export function renderChatComposerView(
       () => shell,
       () => placeholderElement,
     );
+  const [readPluginActions, setReadPluginActions] =
+    createSignal<() => readonly ComposerMenuAction[]>();
+  const bindActionMenu: BindComposerActionMenu = (read) => {
+    setReadPluginActions(() => read);
+    return () => setReadPluginActions(undefined);
+  };
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -577,6 +587,7 @@ export function renderChatComposerView(
                 <ChatComposerPlusMenu
                   menu={{
                     attachments: props,
+                    pluginActions: readPluginActions()?.(),
                     inputHandle,
                     capabilityMenu: props.capabilityMenu,
                     disabled: !context().canCompose || props.suggestionComposer === true,
@@ -594,6 +605,7 @@ export function renderChatComposerView(
                 />
                 <ChatComposerPluginContributions
                   kind="composer-toolbar"
+                  bindActionMenu={props.mobileComposer ? bindActionMenu : undefined}
                   composer={props}
                   presented={props.pluginActionsPresented ?? true}
                 />
