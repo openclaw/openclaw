@@ -169,6 +169,22 @@ function steering(
   return { queueMessage, input, operation };
 }
 
+it.each(["rpc", "restart"])(
+  "settles a private completion interrupted by %s",
+  async (stopReason) => {
+    const fixture = setup("subagent_announce");
+    fixture.params.completionTarget = "parent";
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.dispatchDone.resolve({ status: "timeout", stopReason });
+    expect(await delivery).toMatchObject({
+      delivered: false,
+      disposition: stopReason === "restart" ? "retryable" : "intentional_non_delivery",
+    });
+    expect(fixture.send).not.toHaveBeenCalled();
+  },
+);
+
 function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.dispatch).toHaveBeenCalledTimes(dispatches);
   expect(fixture.send).not.toHaveBeenCalled();
