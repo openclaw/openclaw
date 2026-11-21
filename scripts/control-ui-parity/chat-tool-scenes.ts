@@ -60,6 +60,8 @@ async function openActivities(page: Page) {
     .all()) {
     await group.click();
   }
+  // Patch rows settle into their linked file form after the surrounding text paints.
+  await page.locator(".chat-tool-row--file .chat-tool-row__toggle").first().waitFor();
 }
 
 export const chatToolScenes: Scene[] = [
@@ -96,6 +98,8 @@ export const chatToolScenes: Scene[] = [
     path: `/chat?session=${sessionKey}`,
     ready: "openclaw-chat-page",
     scenario: {
+      // Hold the separate startup read so the image route exists before history renders.
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup"],
       historyMessages: [
         {
