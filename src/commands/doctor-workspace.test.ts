@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
+import { collectWorkspaceSuggestionNotes } from "./doctor-workspace-suggestions.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -19,6 +20,34 @@ import {
 
 const WORKSPACE_BACKUP_TIP =
   "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
+
+it("only suggests memory setup for existing workspaces", async () => {
+  await withTestDir({ prefix: "openclaw-doctor-workspace-suggestions-" }, async (tempDir) => {
+    const missing = path.join(tempDir, "missing");
+    const existing = path.join(tempDir, "existing");
+    const linked = path.join(tempDir, "linked");
+    await fs.mkdir(existing);
+    await fs.symlink(existing, linked, process.platform === "win32" ? "junction" : "dir");
+
+    const suggestions = async (workspace: string) => {
+      const notes: string[] = [];
+      for await (const suggestion of collectWorkspaceSuggestionNotes(workspace)) {
+        if (suggestion.includes("Memory system not found in workspace.")) {
+          notes.push(suggestion);
+        }
+      }
+      return notes;
+    };
+    expect(await suggestions(missing)).toEqual([]);
+    await expect(fs.access(missing)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await suggestions(existing)).toHaveLength(1);
+    expect(await suggestions(linked)).toHaveLength(1);
+
+    await fs.writeFile(path.join(existing, "MEMORY.md"), "# Memory\n");
+    expect(await suggestions(existing)).toEqual([]);
+    expect(await suggestions(linked)).toEqual([]);
+  });
+});
 
 it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
   await withTestDir({ prefix: "openclaw-doctor-workspace-git-" }, async (tempDir) => {
