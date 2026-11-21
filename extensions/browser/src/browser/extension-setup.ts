@@ -35,6 +35,7 @@ export type BrowserExtensionSetupResult = {
     | "platform_unsupported"
     | "chrome_approval_required"
     | "extension_missing"
+    | "profile_inspection_blocked"
     | "connection_unchecked"
     | "relay_unavailable"
     | "extension_disconnected"
@@ -46,6 +47,8 @@ export type BrowserExtensionSetupResult = {
     discoveredProfiles: number;
     awaitingApproval: boolean;
     automaticBootstrapSupported: boolean;
+    /** Chrome profile reads are blocked; installation count may be unknown rather than zero. */
+    discoveryBlocked: boolean;
   };
   connection: {
     state: "not_checked" | "unavailable" | "waiting_for_extension" | "connected";
@@ -287,6 +290,9 @@ export async function runBrowserExtensionSetup(
       unpackedProfiles.length + storeProfiles.filter((entry) => entry.enabled).length,
     awaitingApproval: storeProfiles.some((entry) => entry.awaitingApproval),
     automaticBootstrapSupported: status.platformSupport === "automatic",
+    // Carried independently of the connection reason: verification proves the
+    // relay, not the installation count, so unknown must survive verify.
+    discoveryBlocked: status.chromeDiscoveryBlocked,
   };
   const result: BrowserExtensionSetupResult = {
     action: options.action,
@@ -316,15 +322,23 @@ export async function runBrowserExtensionSetup(
       nextAction: unavailable ? "repair_native_host" : "install",
     });
   } else if (!installation.discoveredProfiles) {
-    Object.assign(result, {
-      phase: "needs_browser_action",
-      reason: installation.awaitingApproval ? "chrome_approval_required" : "extension_missing",
-      nextAction: installation.awaitingApproval
-        ? "approve_extension"
-        : installation.installRequested
-          ? "open_chrome"
-          : "install_from_store",
-    });
+    if (status.chromeDiscoveryBlocked && nativeHostRegistered) {
+      // Blocked profile reads cannot prove absence; trust the live relay check instead.
+      Object.assign(result, {
+        reason: "profile_inspection_blocked" as const,
+        nextAction: "check_connection" as const,
+      });
+    } else {
+      Object.assign(result, {
+        phase: "needs_browser_action",
+        reason: installation.awaitingApproval ? "chrome_approval_required" : "extension_missing",
+        nextAction: installation.awaitingApproval
+          ? "approve_extension"
+          : installation.installRequested
+            ? "open_chrome"
+            : "install_from_store",
+      });
+    }
   }
   return options.action === "verify" && (status.platform !== "win32" || result.phase !== "blocked")
     ? verifyBrowserExtensionSetup(result, options.signal)

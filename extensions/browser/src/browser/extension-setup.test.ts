@@ -37,6 +37,10 @@ function installation(overrides: Partial<BrowserExtensionStatus> = {}) {
     storeDiscovered: [],
     storeInstallRequests: [],
     registrations: [registration()],
+    discoveryBlocked: [],
+    chromeDiscoveryBlocked: false,
+    manualSetupRequired: true,
+    issues: [],
     ...overrides,
   };
 }
@@ -166,6 +170,41 @@ it.each([false, true])(
     expect(mocks.connect).toHaveBeenCalledTimes(hasKey ? 1 : 0);
   },
 );
+
+it("verifies the relay instead of reporting a missing extension when profile reads are blocked", async () => {
+  const blocked = installation({
+    manualSetupRequired: false,
+    discoveryBlocked: ["Google Chrome"],
+    chromeDiscoveryBlocked: true,
+    issues: ["Google Chrome: could not list profiles (Error: EPERM: operation not permitted)"],
+  });
+  mocks.inspect.mockResolvedValue(blocked);
+
+  const inspect = await setup("inspect");
+  expect(inspect).toMatchObject({
+    phase: "waiting_for_connection",
+    reason: "profile_inspection_blocked",
+    nextAction: "check_connection",
+    installation: {
+      nativeHostRegistered: true,
+      installedProfiles: 0,
+      discoveredProfiles: 0,
+      discoveryBlocked: true,
+    },
+  });
+
+  const verified = await setup("verify");
+  expect(verified).toMatchObject({
+    phase: "ready",
+    reason: "connected",
+    nextAction: "none",
+    connection: { state: "connected", extensionVersion: "2.3.0" },
+    // The unknown install fact must survive a connected verify; the
+    // desktop card keys "unknown" off this, not off the connection reason.
+    installation: { discoveryBlocked: true },
+  });
+  expect(mocks.install).not.toHaveBeenCalled();
+});
 
 it("rejects invalid profile and canceled request before install", async () => {
   await expect(setup("install", { profile: "openclaw" })).rejects.toThrow(

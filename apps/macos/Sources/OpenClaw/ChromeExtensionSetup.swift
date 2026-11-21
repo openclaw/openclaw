@@ -35,6 +35,7 @@ final class ChromeExtensionSetup {
         let installRequested: Bool
         let installedProfiles: Int
         let discoveredProfiles: Int
+        var discoveryBlocked: Bool? = nil
     }
 
     /// Decode and re-encode only the public setup projection, never installer paths or credentials.
@@ -44,7 +45,8 @@ final class ChromeExtensionSetup {
                 nativeHostRegistered: self.installation.nativeHostRegistered,
                 installRequested: self.installation.installRequested,
                 installedProfiles: self.installation.installedProfiles,
-                discoveredProfiles: self.installation.discoveredProfiles)
+                discoveredProfiles: self.installation.discoveredProfiles,
+                discoveryBlocked: self.installation.discoveryBlocked)
         }
 
         struct Target: Codable, Equatable {
@@ -62,6 +64,8 @@ final class ChromeExtensionSetup {
             let discoveredProfiles: Int
             let awaitingApproval: Bool
             let automaticBootstrapSupported: Bool
+            /// Optional for older CLI output; profile reads blocked means the counts may be unknown.
+            var discoveryBlocked: Bool? = nil
         }
 
         struct Connection: Codable, Equatable {
