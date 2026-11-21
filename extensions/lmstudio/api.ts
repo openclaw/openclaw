@@ -33,10 +33,10 @@ export {
   resolveLmstudioRequestContext,
   resolveLmstudioRuntimeApiKey,
 } from "./src/runtime.js";
+export { discoverLmstudioProvider } from "./src/catalog.js";
 export {
   configureLmstudioNonInteractive,
   detectAppGuidedLmstudioAvailability,
-  discoverLmstudioProvider,
   prepareAppGuidedLmstudioSetup,
   prepareLmstudioDynamicModel,
   promptAndConfigureLmstudioInteractive,

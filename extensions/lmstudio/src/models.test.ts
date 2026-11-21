@@ -8,13 +8,14 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import {
   cancelTrackedTextResponse,
   createStreamingResponse,
 } from "../../test-support/streaming-error-response.js";
 import plugin from "../index.js";
+import { discoverLmstudioProvider } from "./catalog.js";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
@@ -26,13 +27,11 @@ import {
   resolveLmstudioReasoningCompat,
   type LmstudioModelWire,
 } from "./models.js";
-import { discoverLmstudioProvider } from "./setup.js";
 
 const guardedFetch = vi.hoisted(() => vi.fn());
 function expectRequest(mock: ReturnType<typeof vi.fn>, headers: Record<string, string>) {
   expect(mock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
     headers,
-    signal: expect.any(AbortSignal),
   });
 }
 
@@ -50,6 +49,23 @@ afterEach(() => {
   guardedFetch.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+beforeEach(() => {
+  guardedFetch.mockImplementation(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: typeof fetch;
+      signal?: AbortSignal;
+    }) => ({
+      response: await (params.fetchImpl ?? fetch)(
+        params.url,
+        params.signal ? { ...params.init, signal: params.signal } : params.init,
+      ),
+      release: async () => undefined,
+    }),
+  );
 });
 
 // Direct helpers retain undefined-vs-empty compat semantics hidden by discovery.
@@ -126,38 +142,34 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
+    const llm = (key: string, capabilities?: object, extra?: object) => ({
+      type: "llm",
+      key,
+      ...(capabilities ? { capabilities } : {}),
+      ...extra,
+    });
     const fetchMock = catalog([
-      {
-        type: "llm",
-        key: "qwen3-8b-instruct",
-        display_name: "Qwen3 8B",
-        max_context_length: 262144,
-        format: "mlx",
-        capabilities: {
+      llm(
+        "qwen3-8b-instruct",
+        {
           vision: true,
           trained_for_tool_use: true,
           reasoning: { allowed_options: ["off", "on"], default: "on" },
         },
-        loaded_instances: [{ id: "inst-1", config: { context_length: 8_192 } }],
-      },
-      { type: "llm", key: "deepseek-r1" },
-      {
-        type: "llm",
-        key: "graded-reasoning",
-        capabilities: {
-          reasoning: { allowed_options: ["low", "medium", "high"], default: "low" },
+        {
+          display_name: "Qwen3 8B",
+          max_context_length: 262144,
+          format: "mlx",
+          loaded_instances: [{ id: "inst-1", config: { context_length: 8_192 } }],
         },
-      },
-      {
-        type: "llm",
-        key: "off-only-reasoning",
-        capabilities: { reasoning: { allowed_options: ["off"], default: "off" } },
-      },
-      ...[["off", "low", "medium"], ["minimal"]].map((allowed_options) => ({
-        type: "llm",
-        key: allowed_options.join("-"),
-        capabilities: { reasoning: { allowed_options } },
-      })),
+      ),
+      llm("deepseek-r1"),
+      llm("graded-reasoning", {
+        reasoning: { allowed_options: ["low", "medium", "high"], default: "low" },
+      }),
+      llm("off-only-reasoning", { reasoning: { allowed_options: ["off"], default: "off" } }),
+      llm("off-low-medium", { reasoning: { allowed_options: ["off", "low", "medium"] } }),
+      llm("minimal", { reasoning: { allowed_options: ["minimal"] } }),
       { type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" },
       { type: "llm", key: "   " },
       null,
