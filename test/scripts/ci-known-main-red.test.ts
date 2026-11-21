@@ -456,6 +456,39 @@ describe("main failure attribution", () => {
 
 describe("known hourly main failures", () => {
   it.each([
+    ["complete empty config", "No test files found, exiting with code 0", "", 1],
+    ["missing empty receipt", "", "", 0],
+    ["failed empty config", "No test files found, exiting with code 1", "", 0],
+    [
+      "failure after empty receipt",
+      "No test files found, exiting with code 0",
+      "Error: cleanup failed",
+      0,
+    ],
+    [
+      "test after empty receipt",
+      "No test files found, exiting with code 0",
+      "Tests 1 passed (1)",
+      0,
+    ],
+  ])("accounts for %s without hiding incomplete execution", (_name, receipt, extra, count) => {
+    const empty = [
+      "[test] starting test/vitest/vitest.gateway-server-isolated.config.ts",
+      "RUN v5.0.5 /workspace",
+      receipt,
+      "include:",
+      "exclude: **/node_modules/**",
+      extra,
+    ]
+      .map((line) => `[shard:gateway] ${line}`)
+      .join("\n");
+    const log = report()
+      .replace("[shard:gateway] [test] starting", `${empty}\n[shard:gateway] [test] starting`)
+      .replace("failed 1 Vitest shard in", "failed 2 Vitest shards in");
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it.each([
     ["complete mixed invocations", "", 2, 1],
     ["failed-only terminal count", "", 1, 0],
     ["missing passing summary", "Tests 2 passed (2)", 2, 0],
@@ -490,6 +523,21 @@ describe("known hourly main failures", () => {
       `[shard:gateway] ${telemetry}\n[shard:gateway] begin`,
     );
     expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it.each([
+    ["GatewayClientRequestTimeoutError: gateway request timed out", "", 1],
+    [
+      "GatewayClientRequestTimeoutError: gateway request timed out",
+      "GatewayClientRequestTimeoutError: cleanup failed",
+      0,
+    ],
+    ["UnknownFailure: gateway request timed out", "", 0],
+  ])("requires a named error to belong to a test: %s %s", (message, extra, count) => {
+    const log = report().replaceAll("AssertionError: expected true to be false", message);
+    expect(
+      parseNodeFailureReport(extra ? `${log}\n[shard:gateway] ${extra}` : log, true),
+    ).toHaveLength(count);
   });
 
   it("accepts the project display label emitted for nested Gateway projects", () => {
