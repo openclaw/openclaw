@@ -23,7 +23,10 @@ import {
 } from "./project-clone-runtime.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
+  await flushLogger();
+  setLoggerOverride(null);
+  resetLogger();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -71,160 +74,157 @@ function uncertainFailure() {
   });
 }
 
-it("links an unmatched real Git failure to its retained process diagnostics", async () => {
-  const root = dirs.make("openclaw-clone-diagnostic-");
-  const file = path.join(root, "gateway.log");
-  setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
-  try {
+async function localCheckout(prepare = true) {
+  const root = dirs.make("openclaw-clone-fixture-");
+  const source = path.join(root, "source");
+  const target = path.join(root, "checkout");
+  const git = promisify(execFile);
+  await git("git", ["init", "-b", "main", source]);
+  await git("git", [
+    "-C",
+    source,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "initial",
+  ]);
+  if (prepare) {
+    await cloneProjectCheckout({ url: source, target });
+  }
+  return { root, source, target };
+}
+
+it.each(["clone", "inventory", "publication"] as const)(
+  "retains native Git diagnostics after %s failure",
+  async (phase) => {
+    const { root, source, target } = await localCheckout(phase !== "clone");
+    const fault =
+      phase === "clone" ? "GIT_CONFIG_COUNT" : phase === "inventory" ? "packed-refs" : "main.lock";
+    const file = path.join(root, "gateway.log");
+    const faultPath =
+      phase === "inventory"
+        ? path.join(target, ".git", fault)
+        : path.join(target, ".git", "refs", "remotes", "origin", fault);
+    if (phase !== "clone") {
+      await fs.mkdir(path.dirname(faultPath), { recursive: true });
+      await fs.writeFile(faultPath, phase === "inventory" ? "invalid packed ref\n" : "");
+    }
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
     // Invalid inherited Git configuration fails before any network access.
     const error = await capture(
-      cloneProjectCheckout(
-        { url: projectUrl, target: path.join(root, "checkout") },
-        { env: { GIT_CONFIG_COUNT: "invalid" } },
-      ),
+      phase === "clone"
+        ? cloneProjectCheckout({ url: source, target }, { env: { GIT_CONFIG_COUNT: "invalid" } })
+        : refreshProjectCheckout({ url: source, target }),
     );
-    expect(error).toBeInstanceOf(ProjectCloneError);
     if (!(error instanceof ProjectCloneError)) {
       throw error;
     }
-    expect(error).toMatchObject({
-      failure: "clone_failed",
-      message: expect.stringMatching(/Diagnostic ID: [a-f0-9-]{36}/u),
-    });
-    await flushLogger();
-    const records = await fs.readFile(file, "utf8");
-    expect(records).toContain("GIT_CONFIG_COUNT");
-    expect(records).toContain("exitCode");
-    expect(error.message).not.toContain("GIT_CONFIG_COUNT");
-    const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
-    expect(diagnosticId).toBeDefined();
-    expect(records).toContain(diagnosticId);
-    expect(resolveSessionRunError({ error: String(error) }, "failed")).toContain(
-      `Diagnostic ID: ${diagnosticId}`,
-    );
-    await expectMissing(path.join(root, "checkout"));
-  } finally {
-    await flushLogger();
-    setLoggerOverride(null);
-    resetLogger();
-  }
-});
-
-it("explains repository access denial without exposing Git transport output", async () => {
-  const target = targetPath();
-  mockGit().mockResolvedValue({
-    ...failedClone,
-    stderr:
-      "remote: Write access to repository not granted.\nfatal: unable to access private repository: The requested URL returned error: 403",
-  });
-  await expect(clone(target)).rejects.toMatchObject({
-    failure: "auth_required",
-    message:
-      "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying.",
-  });
-  await expectMissing(target);
-});
-
-it.each(["inventory", "publication"] as const)(
-  "retains native Git diagnostics when refresh fails during ref %s",
-  async (phase) => {
-    const root = dirs.make("openclaw-refresh-diagnostic-");
-    const source = path.join(root, "source");
-    const target = path.join(root, "checkout");
-    const git = promisify(execFile);
-    await git("git", ["init", "-b", "main", source]);
-    await git("git", [
-      "-C",
-      source,
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "initial",
-    ]);
-    await cloneProjectCheckout({ url: source, target });
-    const fault =
-      phase === "inventory"
-        ? path.join(target, ".git", "packed-refs")
-        : path.join(target, ".git", "refs", "remotes", "origin", "main.lock");
-    await fs.mkdir(path.dirname(fault), { recursive: true });
-    await fs.writeFile(fault, phase === "inventory" ? "invalid packed ref\n" : "");
-    const file = path.join(root, "gateway.log");
-    setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
-    try {
-      const error = await capture(refreshProjectCheckout({ url: source, target }));
-      expect(error).toBeInstanceOf(ProjectCloneError);
-      if (!(error instanceof ProjectCloneError)) {
-        throw error;
-      }
-      expect(error.failure).toBe("clone_failed");
-      const summary = resolveSessionRunError({ error: String(error) }, "failed");
-      expect(summary).not.toContain(" ... ");
-      expect(summary).toContain(
-        phase === "inventory"
+    expect(error.failure).toBe("clone_failed");
+    const summary = resolveSessionRunError({ error: String(error) }, "failed");
+    expect(summary).not.toContain(" ... ");
+    expect(summary).toContain(
+      phase === "clone"
+        ? "Git clone failed."
+        : phase === "inventory"
           ? "Git could not read repository branches."
           : "Git could not update repository branches.",
-      );
-      expect(summary).toContain("Send again");
-      const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
-      expect(diagnosticId).toBeDefined();
-      expect(summary).toContain(`Diagnostic ID: ${diagnosticId}`);
-      expect(error.message).not.toContain(target);
-      await flushLogger();
-      const records = await fs.readFile(file, "utf8");
-      expect(records).toContain(diagnosticId);
-      expect(records).toContain(phase === "inventory" ? "packed-refs" : "main.lock");
-      expect(records).toContain("exitCode");
+    );
+    expect(summary).toContain(phase === "clone" ? "Ask the Gateway operator" : "Send again");
+    const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
+    expect(diagnosticId).toBeDefined();
+    expect(summary).toContain(`Diagnostic ID: ${diagnosticId}`);
+    expect(error.message).not.toContain(phase === "clone" ? fault : target);
+    await flushLogger();
+    const records = await fs.readFile(file, "utf8");
+    expect(records).toContain(diagnosticId);
+    expect(records).toContain(fault);
+    expect(records).toContain("exitCode");
+    if (phase === "clone") {
+      await expectMissing(target);
+    } else {
       // Correct only the fixture's filesystem fault; the same checkout can retry.
-      await fs.unlink(fault);
+      await fs.unlink(faultPath);
       await expect(refreshProjectCheckout({ url: source, target })).resolves.toBeUndefined();
-    } finally {
-      await flushLogger();
-      setLoggerOverride(null);
-      resetLogger();
     }
   },
 );
 
-it("preserves an existing checkout when its target cannot be inspected", async () => {
-  const target = dirs.make("openclaw-clone-target-");
-  const sentinel = path.join(target, "existing.txt");
-  await fs.writeFile(sentinel, "existing project data");
-  vi.spyOn(fs, "lstat").mockRejectedValueOnce(
-    Object.assign(new Error("synthetic target inspection failure"), { code: "EACCES" }),
-  );
-  const command = mockGit().mockResolvedValue({
-    ...failedClone,
-    stderr: "fatal: destination path already exists and is not an empty directory",
-  });
-  const error = await capture(clone(target));
-  await expectFile(sentinel, "existing project data");
-  expect(error).toBeInstanceOf(ProjectCloneError);
-  expect(error).toMatchObject({ failure: "clone_failed" });
-  expect(command).not.toHaveBeenCalled();
-});
+it.each(["clone", "refresh", "denied"] as const)(
+  "explains project Git %s failure without exposing transport output",
+  async (operation) => {
+    const { source: url, target } =
+      operation !== "refresh"
+        ? { source: projectUrl, target: targetPath() }
+        : await localCheckout();
+    const run = processExec.runCommandWithTimeout;
+    mockGit().mockImplementation((argv, options) =>
+      argv.includes(operation === "refresh" ? "fetch" : "clone")
+        ? Promise.resolve({
+            ...failedClone,
+            stderr:
+              operation === "denied"
+                ? "remote: Write access to repository not granted. The requested URL returned error: 403"
+                : "Receiving objects: 50%",
+            termination: operation === "denied" ? "exit" : "timeout",
+          })
+        : run(argv, options),
+    );
+    const error = await capture(
+      (operation === "refresh" ? refreshProjectCheckout : cloneProjectCheckout)(
+        { url, target },
+        { timeoutMs: 60 },
+      ),
+    );
+    expect(error).toBeInstanceOf(ProjectCloneError);
+    expect(error).toMatchObject({
+      failure: operation === "denied" ? "auth_required" : "clone_failed",
+      message:
+        operation === "denied"
+          ? "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying."
+          : `Git ${operation} did not finish within 60 ms. The repository may be too large to clone here; retry, or ask the Gateway operator to check projects/clone logs.`,
+    });
+    expect(String(error)).not.toContain("could not reach GitHub");
+    if (operation === "denied") {
+      await expectMissing(target);
+    }
+  },
+);
 
-it.each([128, "throw"] as const)(
-  "retains a clone after uncertain cleanup (%s)",
+it.each(["inspection", 128, "throw"] as const)(
+  "retains existing clone data after %s failure",
   async (outcome) => {
     const target = targetPath();
+    const sentinel = path.join(target, "partial.txt");
     const failure = uncertainFailure();
     const command = mockGit().mockImplementation(async () => {
       await writeArtifact(target, "partial.txt", "owned clone data");
       if (outcome === "throw") {
         throw failure;
       }
-      return { ...failedClone, code: outcome, cleanup: "uncertain" };
+      return { ...failedClone, cleanup: "uncertain" };
     });
+    if (outcome === "inspection") {
+      await writeArtifact(target, "partial.txt", "owned clone data");
+      vi.spyOn(fs, "lstat").mockRejectedValueOnce(
+        Object.assign(new Error("synthetic target inspection failure"), { code: "EACCES" }),
+      );
+    }
     const error = await capture(clone(target));
-    await expectFile(path.join(target, "partial.txt"), "owned clone data");
-    expect(command).toHaveBeenCalledOnce();
-    expect(hasCommandProcessCleanupError(error)).toBe(true);
-    if (outcome === "throw") {
-      expect(error).toHaveProperty("cause", failure);
+    await expectFile(sentinel, "owned clone data");
+    if (outcome === "inspection") {
+      expect(error).toBeInstanceOf(ProjectCloneError);
+      expect(error).toMatchObject({ failure: "clone_failed" });
+      expect(command).not.toHaveBeenCalled();
+    } else {
+      expect(command).toHaveBeenCalledOnce();
+      expect(hasCommandProcessCleanupError(error)).toBe(true);
+      if (outcome === "throw") {
+        expect(error).toHaveProperty("cause", failure);
+      }
     }
   },
 );

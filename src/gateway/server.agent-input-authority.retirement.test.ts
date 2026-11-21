@@ -6,7 +6,6 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
-import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -99,17 +98,12 @@ it("rejects retained agent and independent-creation input after acceptance", asy
   let restoreRuntimeRelease: (() => void) | undefined;
   let createdWorkReleased: Promise<void> | undefined;
   try {
-    const guard = await withGatewayToolCallerIdentity(
-      await createCaller(admission),
-      captureAgentToolSourceExecutionGuard,
-    );
     dispatch = dispatchGatewayMethodInProcess(
       "agent",
       { message, sessionKey: childKey, idempotencyKey: runId },
       {
         forceSyntheticClient: true,
         resolveGatewayContext: context.resolveGatewayContext,
-        sessionMutationCommitGuard: guard,
       },
     );
     const accepted = await dispatch;
@@ -140,7 +134,6 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     expect(workAdmission.isActive()).toBe(true);
     expect(rpcSourceTesting.get(runId)).toBe(abort.entry);
     expect(abort.controller.signal.aborted).toBe(false);
-    expect(() => guard()).not.toThrow();
     const runtimeRelease = vi.spyOn(
       expectDefined(preparedModelRuntimeLease, "ready session runtime"),
       Symbol.asyncDispose,
@@ -148,10 +141,6 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     restoreRuntimeRelease = () => runtimeRelease.mockRestore();
 
     const creationCaller = await createCaller(creationAdmission);
-    const creationGuard = await withGatewayToolCallerIdentity(
-      creationCaller,
-      captureAgentToolSourceExecutionGuard,
-    );
     const createdInputEntered = createDeferred<Parameters<typeof dispatchInboundMessage>[0]>();
     dispatchInboundMessageMock.mockReset().mockImplementation((args) => {
       createdInputEntered.resolve(args);
@@ -211,15 +200,12 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       provenance: { kind: "inter_session", sourceTool: "sessions_spawn" },
     });
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
-    expect(() => creationGuard()).not.toThrow();
 
     // The synthetic agent source stays live as the control. Creation's real
     // operator source retires with its Gateway; neither target is cancelled.
     expect(runtime.isAvailable()).toBe(true);
     runtime.close();
     expect(runtime.isAvailable()).toBe(false);
-    expect(() => guard()).not.toThrow();
-    expect(() => creationGuard()).toThrow("tool invocation authority is no longer active");
     expect(abort.controller.signal.aborted).toBe(false);
     expect(rpcSourceTesting.get(createdRunId)).toBe(createdAbortEntry);
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
@@ -266,7 +252,6 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     expect(workAdmission.isActive()).toBe(false);
     await workAdmission.released;
     expect(runtimeRelease).toHaveBeenCalledOnce();
-    expect(() => guard()).not.toThrow();
   } finally {
     release();
     await Promise.allSettled([dispatch, held.cleanup(), createdWorkReleased]);

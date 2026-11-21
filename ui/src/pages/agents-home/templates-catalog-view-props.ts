@@ -25,6 +25,8 @@ export type TemplatesCatalogViewProps = {
   readPreview?: () => void;
   onClosePreview?: () => void;
   onOpenPreview: (kind: "instruction" | "skill", name: string) => void;
+  /** The whole text of one workspace file of the shown release. */
+  readInstruction?: (name: string) => Promise<string>;
   onBack: () => void;
   onRetryDetail: () => void;
   onConfirm: () => void | Promise<void>;

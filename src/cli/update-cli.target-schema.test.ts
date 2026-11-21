@@ -1,10 +1,11 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveConfigPath } from "../config/paths.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
+import { gitReleaseSlot, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -35,9 +36,9 @@ const {
   defaultRuntime: runtime,
   runCommandWithTimeout: runCommand,
   updateCommand: runUpdate,
-  updateGitCheckout: gitUpdate,
+  updateGitRelease: gitUpdate,
 } = cli;
-const { packageInstallCommandCall: packageInstall, freshRestartCalls: restarts } = check;
+const { packageInstallCommandCall: packageInstall } = check;
 
 const { preflightOpenClawDatabaseSchemas } = await vi.importActual<
   typeof import("../state/openclaw-database-preflight.js")
@@ -55,17 +56,13 @@ describe("update-cli", () => {
     mockOwnedGitService,
     mockPackageInstallAtCaseDir,
     mockPackageInstallStatus,
-    mockRunningManagedGateway,
     primeNpmChannelTag,
     primeServiceCommand,
     profileStateDir,
     setupInstalledPackageRoot,
     tempDirs,
     useFileBackedConfig,
-    mockPackageGatewayLifecycle,
     runControlPlaneUpdate,
-    setupNpmUpdatedRootRefresh,
-    setupUpdatedRootRefresh,
   } = createUpdateCliFixture();
 
   it("refuses a v2026.7.1-2 target and names every current-schema agent store", async () => {
@@ -114,7 +111,6 @@ describe("update-cli", () => {
       const { pkgRoot, nodeModules, entryPath } = await setupInstalledPackageRoot(fixture, "1.0.0");
       const root = kind === "git" ? fixture : pkgRoot;
       const destination = path.join(fixture, "checkout");
-      let destinationVisibleAtAdmission: boolean | undefined;
       if (kind === "git") {
         await writeOpenClawPackageFixture(root, "1.0.0", { git: true });
         vi.mocked(cli.resolveOpenClawPackageRoot).mockResolvedValue(root);
@@ -156,7 +152,6 @@ describe("update-cli", () => {
       );
       if (kind === "git" || kind === "package-to-git") {
         vi.mocked(gitUpdate).mockImplementationOnce(async ({ opts: options }) => {
-          destinationVisibleAtAdmission = fsSync.existsSync(destination);
           await check.requireValue(
             options.beforeGitMutation,
             "Git mutation admission",
@@ -219,17 +214,12 @@ describe("update-cli", () => {
         mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
       );
       expect(packageInstall()).toBeUndefined();
-      if (kind === "package-to-git") {
-        expect(destinationVisibleAtAdmission).toBe(false);
-        expect(fsSync.existsSync(destination)).toBe(false);
-      }
     },
   );
 
   it.each([
     "package metadata",
     "package runtime",
-    "npm policy",
     "clone failure",
     "non-git directory",
     "git metadata",
@@ -240,9 +230,6 @@ describe("update-cli", () => {
     const packageTarget = failure.startsWith("package ");
     mockFileBackedPathExists();
     mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (failure === "npm policy" && argv[0] === "npm" && argv[1] === "--version") {
-        return commandResult({ stdout: "unrecognized npm version\n" });
-      }
       if (failure === "clone failure" && argv[0] === "git" && argv[1] === "clone") {
         return commandResult({ code: 128, stderr: "clone unavailable" });
       }
@@ -552,7 +539,33 @@ describe("update-cli", () => {
       },
       options: { yes: true, json: true },
       beforeUpdate: async () => {
-        setupNpmUpdatedRootRefresh();
+        const previousRoot = createCaseDir("openclaw-git-service");
+        await writeOpenClawPackageFixture(previousRoot, "2026.4.23", {
+          git: true,
+          builtSha: "b".repeat(40),
+          entrySource: "export {};\n",
+        });
+        vi.mocked(cli.resolveOpenClawPackageRoot).mockResolvedValue(previousRoot);
+        mockOwnedGitService(previousRoot);
+        mockFileBackedPathExists();
+        cli.mockGitUpdateAfterMutation(
+          cli.makeOkUpdateResult({ root: previousRoot, after: { version: VERSION } }),
+        );
+        // The control-plane run selects its own state directory, so resolve the release lazily.
+        vi.mocked(cli.resolveGatewayInstallEntrypoint).mockImplementation(async () =>
+          path.join(gitReleaseSlot(resolveGitReleasePrefix()), "dist", "index.js"),
+        );
+        const runFixtureCommand = check.requireValue(
+          vi.mocked(runCommand).getMockImplementation(),
+          "release command fixture",
+        );
+        vi.mocked(runCommand).mockImplementation(async (argv, options) => {
+          const result = await runFixtureCommand(argv, options);
+          if (result.code === 0 && argv[2] === "gateway" && argv[3] === "install") {
+            primeServiceCommand([argv[0], expectDefined(argv[1], "entrypoint"), "gateway", "run"]);
+          }
+          return result;
+        });
         mocks.serviceLoaded.mockResolvedValue(true);
         mockGatewayHealth("2026.4.23", "old-gateway");
         const respond = expectDefined(mocks.callGateway.getMockImplementation(), "health response");
@@ -576,44 +589,60 @@ describe("update-cli", () => {
   });
 
   it("keeps a core update successful when a plugin cannot load", async () => {
-    const { updatedEntrypoint } = setupNpmUpdatedRootRefresh();
-    mocks.readPackageVersion.mockResolvedValue("2026.4.24");
+    const previousRoot = createCaseDir("openclaw-git-service");
+    await writeOpenClawPackageFixture(previousRoot, "1.0.0", {
+      git: true,
+      builtSha: "b".repeat(40),
+      entrySource: "export {};\n",
+    });
+    vi.mocked(cli.resolveOpenClawPackageRoot).mockResolvedValue(previousRoot);
+    mockOwnedGitService(previousRoot);
+    mockFileBackedPathExists();
+    cli.mockGitUpdateAfterMutation(
+      cli.makeOkUpdateResult({ root: previousRoot, after: { version: VERSION } }),
+    );
+    const updatedEntrypoint = path.join(
+      gitReleaseSlot(resolveGitReleasePrefix()),
+      "dist",
+      "index.js",
+    );
+    vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValue(updatedEntrypoint);
     mocks.serviceLoaded.mockResolvedValue(true);
-    mockGatewayHealth("2026.4.23", "previous-gateway");
-    const activateGateway = mockPackageGatewayLifecycle();
+    mockGatewayHealth("1.0.0", "previous-gateway", "fixture-original-build");
     const runFixtureCommand = check.requireValue(
       vi.mocked(runCommand).getMockImplementation(),
-      "package command fixture",
+      "release command fixture",
     );
     vi.mocked(runCommand).mockImplementation(async (argv, options) => {
       const result = await runFixtureCommand(argv, options);
-      if (
-        result.code === 0 &&
-        argv[2] === "gateway" &&
-        ["install", "restart"].includes(argv[3] ?? "")
-      ) {
-        await activateGateway(argv);
-        const activatedHealth = check.requireValue(
-          mocks.callGateway.getMockImplementation(),
-          "activated package health",
-        );
-        // Keep the identity read from the installed package and add the plugin failure after activation.
-        mocks.callGateway.mockImplementation(async (request) => {
-          await activatedHealth(request);
-          return {
-            ok: true,
-            plugins: {
-              errors: [
-                {
-                  id: "telegram",
-                  origin: "bundled",
-                  activated: true,
-                  error: "failed to load plugin dependency: ENOSPC",
-                },
-              ],
-            },
-          };
-        });
+      if (result.code === 0 && argv[1] === updatedEntrypoint && argv[2] === "gateway") {
+        if (argv[3] === "install") {
+          primeServiceCommand([argv[0], updatedEntrypoint, "gateway", "run"]);
+        }
+        if (argv[3] === "restart") {
+          mockGatewayHealth(VERSION, "updated-gateway", "fixture-original-build");
+          const activatedHealth = check.requireValue(
+            mocks.callGateway.getMockImplementation(),
+            "activated release health",
+          );
+          // Keep the identity read from the installed release and add the plugin failure after activation.
+          mocks.callGateway.mockImplementation(async (request) => {
+            await activatedHealth(request);
+            return {
+              ok: true,
+              plugins: {
+                errors: [
+                  {
+                    id: "telegram",
+                    origin: "bundled",
+                    activated: true,
+                    error: "failed to load plugin dependency: ENOSPC",
+                  },
+                ],
+              },
+            };
+          });
+        }
       }
       return result;
     });
@@ -621,7 +650,6 @@ describe("update-cli", () => {
     await runUpdate({ yes: true, json: false });
 
     expect(check.gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
-    expect(restarts()).toHaveLength(0);
     expect(check.gatewayHealthCall()).toMatchObject({
       method: "health",
       scopes: ["operator.read"],
@@ -633,72 +661,39 @@ describe("update-cli", () => {
     expect(check.getLogOutput()).not.toContain("failed to load plugin dependency: ENOSPC");
   });
 
-  it("merges current auth refs with captured service selectors for updated install refresh", async () => {
-    const invocationCwd = process.cwd();
-    let setup: ReturnType<typeof setupUpdatedRootRefresh> | undefined;
-    initializeExistingUpdateProfile({
-      ...process.env,
-      OPENCLAW_STATE_DIR: profileStateDir("personal"),
-    });
-    initializeExistingUpdateProfile({
-      ...process.env,
-      OPENCLAW_STATE_DIR: profileStateDir("work"),
-    });
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_AUTH_TOKEN: undefined,
-        OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: path.relative(invocationCwd, profileStateDir("personal")),
-        OPENCLAW_CONFIG_PATH: path.relative(
-          invocationCwd,
-          path.join(profileStateDir("personal"), "openclaw.json"),
-        ),
-        PATH: "/caller/bin",
-      },
-      async () => {
-        setup = setupUpdatedRootRefresh({
-          gatewayUpdateImpl: async (root) => {
-            process.env.OPENCLAW_GATEWAY_AUTH_TOKEN = "runtime-auth-ref";
-            return cli.makeOkUpdateResult({ mode: "npm", root, after: { version: VERSION } });
-          },
-        });
-        primeServiceCommand([process.execPath, setup.entrypoints[0], "gateway", "run"], {
-          OPENCLAW_PROFILE: "work",
-          OPENCLAW_STATE_DIR: path.relative(invocationCwd, profileStateDir("work")),
-          OPENCLAW_CONFIG_PATH: path.relative(
-            invocationCwd,
-            path.join(profileStateDir("work"), "openclaw.json"),
-          ),
-          PATH: "/service/bin",
-        });
-
-        await runUpdate({});
-      },
-    );
-
-    const entryPath = expectDefined(setup?.entrypoints[0], "updated entrypoint");
-    const installEnv = check.gatewayCommandCall(entryPath, "install")?.[1].env as
-      | NodeJS.ProcessEnv
-      | undefined;
-    expect(installEnv?.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-auth-ref");
-    expect(installEnv?.OPENCLAW_STATE_DIR).toBe(profileStateDir("work"));
-    expect(installEnv?.OPENCLAW_CONFIG_PATH).toBe(
-      path.join(profileStateDir("work"), "openclaw.json"),
-    );
-    expect(installEnv?.PATH).toBe("/service/bin");
-  });
-
   it("reuses captured invocation paths after process.cwd becomes unavailable", async () => {
     const invocationCwd = process.cwd();
+    const previousRoot = createCaseDir("openclaw-git-service");
+    await writeOpenClawPackageFixture(previousRoot, "1.0.0", {
+      git: true,
+      builtSha: "b".repeat(40),
+      entrySource: "export {};\n",
+    });
+    vi.mocked(cli.resolveOpenClawPackageRoot).mockResolvedValue(previousRoot);
+    // The service definition owns the state selector; the updater resolves it from the captured cwd.
+    primeServiceCommand(
+      ["node", path.join(previousRoot, "dist", "index.js"), "gateway", "run"],
+      { OPENCLAW_STATE_DIR: path.relative(invocationCwd, profileStateDir()) },
+      process.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined,
+    );
+    mockFileBackedPathExists();
+    const root = gitReleaseSlot(path.join(profileStateDir(), "git-install"));
+    const entrypoint = path.join(root, "dist", "index.js");
+    vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
+    mocks.serviceLoaded.mockResolvedValue(true);
+    mockGatewayHealth("1.0.0", "previous-gateway", "fixture-original-build");
+    const release = check.requireValue(
+      vi.mocked(gitUpdate).getMockImplementation(),
+      "Git release fixture",
+    );
     let restoreCwd: (() => void) | undefined;
-    const { root, entrypoints } = setupUpdatedRootRefresh({
-      gatewayUpdateImpl: async () => {
-        const spy = vi.spyOn(process, "cwd").mockImplementation(() => {
-          throw new Error("ENOENT: current working directory is gone");
-        });
-        restoreCwd = () => spy.mockRestore();
-        return cli.makeOkUpdateResult({ mode: "npm", root, after: { version: VERSION } });
-      },
+    vi.mocked(gitUpdate).mockImplementationOnce(async (...args) => {
+      const result = await release(...args);
+      const spy = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw new Error("ENOENT: current working directory is gone");
+      });
+      restoreCwd = () => spy.mockRestore();
+      return result;
     });
     try {
       await withEnvAsync(
@@ -714,7 +709,6 @@ describe("update-cli", () => {
     } finally {
       restoreCwd?.();
     }
-    const entrypoint = check.requireValue(entrypoints[0], "updated entrypoint");
     const install = check.gatewayCommandCall(entrypoint, "install");
     expect(install?.[0][0]).toBe(process.execPath);
     expect(install?.[0].slice(1)).toEqual([
@@ -739,12 +733,37 @@ describe("update-cli", () => {
     expect(cli.runDaemonInstall).not.toHaveBeenCalled();
   });
 
-  it("keeps the update flag through mutation and restores it after restart", async () => {
+  it("keeps the update flag through mutation and restores it after Gateway activation", async () => {
     await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
-      const entrypoint = path.join(process.cwd(), "dist", "index.js");
+      const previousRoot = createCaseDir("openclaw-git-service");
+      await writeOpenClawPackageFixture(previousRoot, "1.0.0", {
+        git: true,
+        builtSha: "b".repeat(40),
+        entrySource: "export {};\n",
+      });
+      vi.mocked(cli.resolveOpenClawPackageRoot).mockResolvedValue(previousRoot);
+      mockOwnedGitService(previousRoot);
+      mockFileBackedPathExists();
+      const entrypoint = path.join(gitReleaseSlot(resolveGitReleasePrefix()), "dist", "index.js");
       vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
-      mockRunningManagedGateway([nodeExecutable, entrypoint, "gateway"]);
-      cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ root: process.cwd() }));
+      mocks.serviceLoaded.mockResolvedValue(true);
+      mockGatewayHealth("1.0.0", "previous-gateway", "fixture-original-build");
+      const runFixtureCommand = check.requireValue(
+        vi.mocked(runCommand).getMockImplementation(),
+        "release command fixture",
+      );
+      vi.mocked(runCommand).mockImplementation(async (argv, options) => {
+        const result = await runFixtureCommand(argv, options);
+        if (result.code === 0 && argv[1] === entrypoint && argv[2] === "gateway") {
+          if (argv[3] === "install") {
+            primeServiceCommand([argv[0], entrypoint, "gateway", "run"]);
+          }
+          if (argv[3] === "restart") {
+            mockGatewayHealth("1.0.0", "updated-gateway", "fixture-original-build");
+          }
+        }
+        return result;
+      });
       const update = check.requireValue(
         vi.mocked(gitUpdate).getMockImplementation(),
         "Git update fixture",

@@ -589,6 +589,26 @@ describe("cleanup path removals", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("trash unavailable"));
   });
 
+  it("reports a missing path instead of claiming it was removed", async () => {
+    const runtime = createRuntimeMock();
+    const missing = path.join(tempDirs.make("openclaw-cleanup-missing-"), "absent");
+
+    const result = await removePath(missing, runtime);
+
+    expect(result.ok).toBe(true);
+    expect(runtime.log.mock.calls).toEqual([[`Not found: ${missing}`]]);
+  });
+
+  it("reports removal for a path that existed", async () => {
+    const runtime = createRuntimeMock();
+    const target = path.join(tempDirs.make("openclaw-cleanup-present-"), "target");
+    await fs.writeFile(target, "remove me");
+
+    await removePath(target, runtime);
+
+    expect(runtime.log.mock.calls).toEqual([[`Removed ${target}`]]);
+  });
+
   it("refuses to remove the current working directory", async () => {
     const runtime = createRuntimeMock();
     const result = await removePath(process.cwd(), runtime, { dryRun: true });
