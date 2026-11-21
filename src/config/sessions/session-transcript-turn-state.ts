@@ -102,6 +102,9 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
             params.sessionLifecyclePatch?.updatedAt ?? 0,
             touchUpdatedAt,
           ),
+          // A fresh append is session activity; the unread stamp must commit with it,
+          // not in a second write that could fail after the transcript landed.
+          lastActivityAt: Math.max(params.currentEntry.lastActivityAt ?? 0, touchUpdatedAt),
         }
       : {}),
   };

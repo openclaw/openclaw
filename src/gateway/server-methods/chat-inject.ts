@@ -8,7 +8,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { SessionTranscriptTurnPersistOptions } from "../../config/sessions/session-accessor.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
@@ -168,18 +167,6 @@ export async function injectGatewayAssistantMessage(
     // The original append already published this message.
     return ok({ messageId: appended.messageId, replayed: true });
   }
-  // A posted message is session activity: clients derive unread from lastActivityAt,
-  // and no run lifecycle patches this entry for an injected turn. The identity check
-  // keeps a concurrent reset or delete from being resurrected by the bump.
-  if (!appended.skipped) {
-    const activityAt = Date.now();
-    await patchSessionEntryCore({ agentId, storePath, sessionKey }, (current) =>
-      current.sessionId === sessionId
-        ? { updatedAt: activityAt, lastActivityAt: activityAt }
-        : null,
-    );
-  }
-
   const message = projectChatDisplayMessage(appended.message, {
     maxChars: resolveEffectiveChatHistoryMaxChars(),
   });
