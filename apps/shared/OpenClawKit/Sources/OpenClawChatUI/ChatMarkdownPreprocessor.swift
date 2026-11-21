@@ -64,8 +64,8 @@ enum ChatMarkdownPreprocessor {
         }
 
         func range(for sourceRange: SourceRange) -> Range<String.Index>? {
-            guard let lowerBound = self.index(for: sourceRange.lowerBound),
-                  let upperBound = self.index(for: sourceRange.upperBound),
+            guard let lowerBound = index(for: sourceRange.lowerBound),
+                  let upperBound = index(for: sourceRange.upperBound),
                   lowerBound <= upperBound
             else {
                 return nil
@@ -82,12 +82,12 @@ enum ChatMarkdownPreprocessor {
             }
 
             let bytes = self.markdown.utf8
-            guard let lineStart = self.lineStarts[location.line - 1].samePosition(in: bytes),
+            guard let lineStart = lineStarts[location.line - 1].samePosition(in: bytes),
                   let byteIndex = bytes.index(
                       lineStart,
                       offsetBy: location.column - 1,
                       limitedBy: bytes.endIndex),
-                  let stringIndex = String.Index(byteIndex, within: self.markdown)
+                  let stringIndex = String.Index(byteIndex, within: markdown)
             else {
                 return nil
             }
@@ -112,7 +112,7 @@ enum ChatMarkdownPreprocessor {
 
         mutating func visitImage(_ image: Markdown.Image) {
             guard let sourceRange = image.range,
-                  let range = self.sourceMap.range(for: sourceRange)
+                  let range = sourceMap.range(for: sourceRange)
             else {
                 return
             }
@@ -159,7 +159,7 @@ enum ChatMarkdownPreprocessor {
 
         for occurrence in collector.images.reversed() {
             let range = NSRange(occurrence.range, in: markdown)
-            if let inlineImage = self.inlineImage(
+            if let inlineImage = inlineImage(
                 label: occurrence.label,
                 source: occurrence.source)
             {
@@ -237,13 +237,36 @@ enum ChatMarkdownPreprocessor {
         let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").split(
             separator: "\n",
             omittingEmptySubsequences: false)
-        let filtered = lines.filter { line in
-            String(line).range(of: self.messageIdHintPattern, options: .regularExpression) == nil
+        let insideFences = self.fencedCodeLineFlags(lines)
+        let filtered = lines.enumerated().filter { index, line in
+            insideFences[index]
+                || String(line).range(of: self.messageIdHintPattern, options: .regularExpression) == nil
         }
         guard filtered.count != lines.count else {
             return raw
         }
-        return filtered.map(String.init).joined(separator: "\n")
+        return filtered.map(\.1).map(String.init).joined(separator: "\n")
+    }
+
+    /// Marks lines that belong to a fenced code block (the opening fence, its
+    /// body, and the closing fence). Literal timestamp prefixes and message-id
+    /// hints inside fenced code are user content, not chat metadata.
+    private static func fencedCodeLineFlags(_ lines: [Substring]) -> [Bool] {
+        var flags = [Bool](repeating: false, count: lines.count)
+        var openFence: ChatMarkdownBlockSegmenter.FenceOpener?
+        for (index, rawLine) in lines.enumerated() {
+            let line = String(rawLine)
+            if let opener = openFence {
+                flags[index] = true
+                if opener.isClose(line) {
+                    openFence = nil
+                }
+            } else {
+                openFence = ChatMarkdownBlockSegmenter.FenceOpener.parse(line)
+                flags[index] = openFence != nil
+            }
+        }
+        return flags
     }
 
     private static func stripInboundContextBlocks(_ raw: String) -> String {
@@ -256,7 +279,9 @@ enum ChatMarkdownPreprocessor {
         var outputLines: [String] = []
         while let currentLine = lines.next() {
             let trimmed = currentLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed == self.contextHeader { break }
+            if trimmed == self.contextHeader {
+                break
+            }
             if trimmed.count > self.inboundContextMarker.count, trimmed.hasSuffix(self.inboundContextMarker) {
                 let firstBodyLine = lines.next()?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let terminator = firstBodyLine == "```json" ? "```" : ""
@@ -264,7 +289,9 @@ enum ChatMarkdownPreprocessor {
                 // first prose blank, including any marker-looking text inside.
                 if firstBodyLine != terminator {
                     while let bodyLine = lines.next() {
-                        if bodyLine.trimmingCharacters(in: .whitespacesAndNewlines) == terminator { break }
+                        if bodyLine.trimmingCharacters(in: .whitespacesAndNewlines) == terminator {
+                            break
+                        }
                     }
                 }
             } else {
@@ -278,8 +305,24 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {
-        let pattern = #"(?m)^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+(?:GMT|UTC)[+-]?\d{0,2}\]\s*"#
-        return raw.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        guard raw.contains("[") else { return raw }
+        let lines = raw.replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+        let insideFences = self.fencedCodeLineFlags(lines)
+        var changed = false
+        let stripped = lines.enumerated().map { index, line -> Substring in
+            guard !insideFences[index] else { return line }
+            let replaced = line.replacingOccurrences(
+                of: #"^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+(?:GMT|UTC)[+-]?\d{0,2}\]\s*"#,
+                with: "",
+                options: .regularExpression)
+            if replaced != line {
+                changed = true
+            }
+            return replaced[...]
+        }
+        guard changed else { return raw }
+        return stripped.joined(separator: "\n")
     }
 
     private static func normalize(_ raw: String) -> String {

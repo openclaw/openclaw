@@ -110,6 +110,82 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.images.isEmpty)
     }
 
+    @Test func `preserves timestamp prefixes and message id hints inside fenced code`() {
+        let markdown = """
+        ```text
+        [Fri 2026-11-06 12:34 UTC] job started
+        [message_id: example-42]
+        [Fri 2026-11-06 12:35 UTC] job finished
+        ```
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == markdown)
+    }
+
+    @Test func `preserves timestamp prefixes inside tilde fence`() {
+        let markdown = """
+        ~~~
+        [Fri 2026-11-06 12:34 UTC] kept
+        ~~~
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == markdown)
+    }
+
+    @Test func `still strips timestamp prefixes and message id hints outside fences`() {
+        let markdown = """
+        Intro
+        [Fri 2026-11-06 12:34 UTC] job started
+        [message_id: example-42]
+        job body
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "Intro\njob started\njob body")
+    }
+
+    @Test func `preserves inline timestamps in prose`() {
+        let markdown = "Observed [Fri 2026-11-06 12:34 UTC] job started"
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == markdown)
+    }
+
+    @Test func `resumes metadata cleanup after valid closing fence`() {
+        let code = """
+        ```text
+            ```
+        [message_id: literal]
+        [Fri 2026-11-06 12:34 UTC] log
+        ````
+        """
+        let markdown = "\(code)\n[message_id: metadata]\n[Fri 2026-11-06 12:35 UTC] after"
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "\(code)\nafter")
+    }
+
+    @Test func `distinguishes timestamp prefixes from fenced content with CRLF`() {
+        let markdown = [
+            "Intro",
+            "[Fri 2026-11-06 12:34 UTC] job started",
+            "```text",
+            "[Fri 2026-11-06 12:35 UTC] log",
+            "```",
+        ].joined(separator: "\r\n")
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "Intro\njob started\n```text\n[Fri 2026-11-06 12:35 UTC] log\n```")
+    }
+
     @Test func preservesImageSyntaxInsideInlineCode() {
         let markdown = "Use `![Logo](https://example.com/logo.png)` verbatim."
 
