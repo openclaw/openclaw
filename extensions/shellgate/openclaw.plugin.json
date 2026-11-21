@@ -1,0 +1,23 @@
+{
+  "id": "shellgate",
+  "name": "Shellgate",
+  "description": "Per-account Bearer credentials for a trusted reverse proxy; Gateway profiles and roles remain authoritative.",
+  "categories": ["infrastructure"],
+  "cliCommands": [
+    {
+      "name": "shellgate",
+      "description": "Manage proxy Bearer credentials",
+      "hasSubcommands": true
+    }
+  ],
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["shellgate"],
+    "onConfigPaths": ["plugins.entries.shellgate"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
