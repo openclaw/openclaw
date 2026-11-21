@@ -1,0 +1,4 @@
+# The QA self-check isolation cases must run the real runner against a synthetic operator
+# state (sentinel bytes plus a non-database sqlite file) and prove the restored environment,
+# which the existing qa-lab unit cases cannot express.
+53
