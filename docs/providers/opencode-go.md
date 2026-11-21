@@ -62,6 +62,13 @@ interactive onboarding or pass the shared OpenCode API key directly.
   </Tab>
 </Tabs>
 
+## Browser sign-in
+
+To sign in with your browser instead of an API key, run
+`openclaw models auth login --provider opencode-go --method oauth` and pick a
+workspace with a Go subscription. Go keeps a sign-in separate from the Zen
+catalog's. See [OpenCode browser sign-in](/providers/opencode#browser-sign-in).
+
 ## Config example
 
 ```json5
