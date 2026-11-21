@@ -455,6 +455,36 @@ describe("main failure attribution", () => {
 });
 
 describe("known hourly main failures", () => {
+  it.each([
+    ["complete", "", 1],
+    ["incomplete", "receipt", 0],
+    ["unframed", "unframed", 0],
+    ["unrelated error", "Error: unrelated failure", 0],
+    ["additional failure", "FAIL test/other.test.ts > another failure", 0],
+    ["mismatched counts", "counts", 0],
+    ["setup failure", "failed to spawn", 0],
+  ])("parses separated native errors only with complete evidence: %s", (_name, mutation, count) => {
+    let log = report()
+      .replace(
+        "[shard:gateway] AssertionError:",
+        "[shard:gateway] \n[shard:peer] [test] starting test/vitest/vitest.process.config.ts\n[shard:peer] Test Files 1 passed (1)\n[shard:peer] Tests 1 passed (1)\n[shard:peer] [test] passed 1 Vitest shard\n[shard:gateway] AssertionError:",
+      )
+      .replace('"invocations":1', '"invocations":2');
+    if (mutation === "receipt") {
+      log = log.replace(/^.*\[shard:completion\].*\n/mu, "");
+    } else if (mutation === "unframed") {
+      log = log.replace(/\[shard:[^\]]+\] /gu, "");
+    } else if (mutation === "counts") {
+      log = log.replace("Tests 1 failed", "Tests 2 failed");
+    } else if (mutation) {
+      log = log.replace(
+        "[shard:gateway] Test Files",
+        `[shard:gateway] ${mutation}\n[shard:gateway] Test Files`,
+      );
+    }
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
   it.each(["", ":42", ":42:3"])(
     "keeps replayed failure attribution with location %j",
     (location) => {

@@ -33,6 +33,7 @@ import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
 import { collectVitestFileFilters, resolveExplicitVitestMode } from "./lib/vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import { isCiLikeEnv, shouldContinueVitestFailures } from "./lib/vitest-local-scheduling.mts";
 import { mergeVitestExitCodes, vitestInfrastructureExitCode } from "./lib/vitest-outcome.mts";
 import {
   createVitestReportOwner,
@@ -434,6 +435,14 @@ export async function runExtensionBatchPlan(
     process.on("SIGTERM", onSignal);
     process.on("SIGINT", onSignal);
   }
+  // Only the native joined process path can publish invocation evidence.
+  const nativeEvidence =
+    isCiLikeEnv(env) &&
+    !params.runGroup &&
+    !reports &&
+    resolveExplicitVitestMode(["run", ...vitestArgs]) !== "watch";
+  let completedInvocations = 0;
+  let failedInvocations = 0;
   let reportFailure: string | undefined;
   let exitCode = 0;
   let stopScheduling = false;
@@ -445,7 +454,23 @@ export async function runExtensionBatchPlan(
     try {
       attempt = reports?.attempt(invocations.indexOf(invocation), invocation.args);
       if (!attempt) {
-        const code = await runGroup(invocation);
+        const code = await runGroup({
+          ...invocation,
+          ...(nativeEvidence
+            ? { evidenceLabel: `extension:${invocations.indexOf(invocation)}` }
+            : {}),
+          ...(nativeEvidence
+            ? {
+                onComplete: (value: VitestReportOutcome) => {
+                  termination.signal ??= value.signal;
+                  if (!value.signal && (value.code === 0 || value.code === 1)) {
+                    completedInvocations++;
+                    failedInvocations += Number(value.code === 1);
+                  }
+                },
+              }
+            : {}),
+        });
         exitCode = mergeVitestExitCodes(exitCode, code);
         stopScheduling ||= code !== 0 && code !== 1;
         return code;
@@ -492,7 +517,10 @@ export async function runExtensionBatchPlan(
           async (group) => {
             if (
               stopScheduling ||
-              (exitCode !== 0 && batchPlan.extensionCount > 1 && runtimePolicy !== "dual-all") ||
+              (exitCode !== 0 &&
+                batchPlan.extensionCount > 1 &&
+                runtimePolicy !== "dual-all" &&
+                !shouldContinueVitestFailures(env)) ||
               termination.signal
             ) {
               return;
@@ -561,6 +589,24 @@ export async function runExtensionBatchPlan(
         }
       }
     }
+  }
+  if (
+    nativeEvidence &&
+    !termination.signal &&
+    !reportFailure &&
+    completedInvocations === invocations.length &&
+    completedInvocations > 0 &&
+    (exitCode === 0 || exitCode === 1)
+  ) {
+    console.log(
+      `[shard:completion] ${JSON.stringify({
+        version: 1,
+        planned: invocations.length,
+        completed: completedInvocations,
+        invocations: invocations.length,
+        failedInvocations,
+      })}`,
+    );
   }
   return exitCode;
 }
