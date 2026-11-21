@@ -29,6 +29,7 @@ const CRON_JOB_NOT_FOUND = "CRON_JOB_NOT_FOUND";
 const MCP_APP_VIEW_EXPIRED = "MCP_APP_VIEW_EXPIRED";
 const GITHUB_PUBLICATION_SELECTION_REJECTED = "GITHUB_PUBLICATION_SELECTION_REJECTED";
 const CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED";
+const TEMPLATE_NOT_FOUND = "TEMPLATE_NOT_FOUND";
 const TEMPLATE_REVIEW_REQUIRED = "TEMPLATE_REVIEW_REQUIRED";
 
 /** Stable discriminants for structured method-level failures. */
@@ -48,6 +49,7 @@ export const GatewayErrorDetailCodes = {
   TASK_WORKTREE_SOURCE_REQUIRED: TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE,
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
   CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
+  TEMPLATE_NOT_FOUND,
   TEMPLATE_REVIEW_REQUIRED,
   PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
   OPENCLAW_CONFIG_READONLY: "OPENCLAW_CONFIG_READONLY",
@@ -114,6 +116,10 @@ export type TaskWorktreeSourceRequiredErrorDetails = Static<
   typeof ErrorSchemas.TaskWorktreeSourceRequiredErrorDetailsSchema
 >;
 
+export type TemplateNotFoundErrorDetails = Static<
+  typeof ErrorSchemas.TemplateNotFoundErrorDetailsSchema
+>;
+
 export type TemplateReviewRequiredErrorDetails = Static<
   typeof ErrorSchemas.TemplateReviewRequiredErrorDetailsSchema
 >;
@@ -138,6 +144,7 @@ export type GatewayErrorDetails =
   | SessionWorkspaceRecoveryRequiredErrorDetails
   | TaskWorktreeSourceRequiredErrorDetails
   | ClawHubRiskAcknowledgementRequiredErrorDetails
+  | TemplateNotFoundErrorDetails
   | TemplateReviewRequiredErrorDetails
   | PendingInputNotRetiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
@@ -183,4 +190,9 @@ export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDe
 export function isMcpAppViewExpiredError(error: unknown): boolean {
   const record = asProtocolRecord(error);
   return asProtocolRecord(record?.details)?.code === MCP_APP_VIEW_EXPIRED;
+}
+
+export function isTemplateNotFoundError(error: unknown): boolean {
+  const record = asProtocolRecord(error);
+  return asProtocolRecord(record?.details)?.code === TEMPLATE_NOT_FOUND;
 }

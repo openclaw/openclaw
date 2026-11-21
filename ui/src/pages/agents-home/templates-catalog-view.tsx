@@ -12,6 +12,7 @@ import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import { renderPackageMetadata } from "../plugins/overview.tsx";
 import { TemplatePreviewView } from "./template-preview-view.tsx";
+import { isTemplateNotFoundFailure } from "./templates-catalog-client.ts";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplatesDetailView } from "./templates-detail-view.tsx";
 
@@ -40,9 +41,11 @@ function DetailRead(props: TemplatesCatalogViewProps & { children: JSX.Element }
           fallback={(error) => (
             <InlineAlert tone="danger" role="alert">
               {formatUiError(error(), t("templatesCatalog.unavailable"))}
-              <button class="btn btn--sm" onClick={() => props.onRetryDetail()}>
-                {t("templatesCatalog.retry")}
-              </button>
+              <Show when={!isTemplateNotFoundFailure(error())}>
+                <button class="btn btn--sm" onClick={() => props.onRetryDetail()}>
+                  {t("templatesCatalog.retry")}
+                </button>
+              </Show>
             </InlineAlert>
           )}
         >
