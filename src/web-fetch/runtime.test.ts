@@ -133,6 +133,33 @@ describe("web fetch runtime", () => {
     expectProvider({ config: selectedProviderConfig("firecrawl") });
   });
 
+  it("matches an explicit caller provider id case-insensitively", () => {
+    useFirecrawl({ requiresCredential: false });
+    expectProvider({ config: {}, providerId: "Firecrawl" });
+  });
+
+  it("keeps an exact mixed-case registered provider id working verbatim", () => {
+    pluginProviders.mockReturnValue([
+      createProvider("thirdparty", { id: "AcmeFetch", requiresCredential: false }),
+    ]);
+    expect(resolveWebFetchDefinition({ config: {}, providerId: "AcmeFetch" })?.provider.id).toBe(
+      "AcmeFetch",
+    );
+  });
+
+  it("rejects a blank explicit provider id instead of selecting another provider", () => {
+    useFirecrawl({ requiresCredential: false });
+    expect(
+      resolveWebFetchDefinition({ config: selectedProviderConfig("firecrawl"), providerId: "" }),
+    ).toBeNull();
+    expect(resolveWebFetchDefinition({ config: {}, providerId: "  " })).toBeNull();
+  });
+
+  it("returns no definition when an explicit caller provider id is unknown", () => {
+    useFirecrawl({ requiresCredential: false });
+    expect(resolveWebFetchDefinition({ config: {}, providerId: "Missing-Fetch" })).toBeNull();
+  });
+
   it("does not auto-detect a keyless provider without a credential", () => {
     useFirecrawl({ requiresCredential: false });
     expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
