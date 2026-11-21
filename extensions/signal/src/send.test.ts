@@ -154,6 +154,42 @@ describe("sendMessageSignal receipts", () => {
 });
 
 it.each([
+  ["container", false],
+  ["container", true],
+  ["external-native", false],
+  ["external-native", true],
+] as const)(
+  "preserves %s edits on the wire (rejected=%s) without an ordinary send",
+  async (kind, rejected) => {
+    await using rpc = await realRpc(kind, (payload, _index, response) => {
+      const result = { timestamp: 1700000000999 };
+      const error = { code: -32602, message: "edit rejected" };
+      response.writeHead(kind === "container" && rejected ? 400 : 200);
+      response.end(
+        JSON.stringify(
+          kind === "container"
+            ? rejected
+              ? error
+              : result
+            : { jsonrpc: "2.0", id: payload.id, ...(rejected ? { error } : { result }) },
+        ),
+      );
+    });
+    const delivery = rpc.send(recipient, { editTimestamp: 1700000000123 });
+    if (rejected) {
+      await expect(delivery).rejects.toThrow("edit rejected");
+    } else {
+      await expect(delivery).resolves.toMatchObject({ messageId: "1700000000999" });
+    }
+    expect(rpc.requests).toHaveLength(1);
+    expect(rpc.requests[0]).toHaveProperty(
+      kind === "container" ? "edit_timestamp" : "params.edit-timestamp",
+      1700000000123,
+    );
+  },
+);
+
+it.each([
   ["container", 429, false],
   ["container", 400, true],
   ["external-native", -32603, false],

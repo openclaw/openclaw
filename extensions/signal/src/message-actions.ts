@@ -8,6 +8,7 @@ import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-co
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
+import { recordSignalEditRevision, resolveSignalEditTarget } from "./edit-revisions.js";
 import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
@@ -29,9 +30,9 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
-    return { actions: reactionsEnabled ? ["send", "react"] : ["send"] };
+    return { actions: reactionsEnabled ? ["send", "edit", "react"] : ["send", "edit"] };
   },
-  supportsAction: ({ action }) => action === "react",
+  supportsAction: ({ action }) => action === "react" || action === "edit",
   prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
     if (ctx.action !== "send") {
       return null;
@@ -131,6 +132,43 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
       });
       return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
+    }
+
+    if (action === "edit") {
+      // Signal edits replace the text of an earlier message from this account, in place.
+      const account = resolveSignalAccount({ cfg, accountId });
+      if (!account.enabled || !account.configured) {
+        throw new Error(`Signal account "${account.accountId}" is not enabled and configured.`);
+      }
+      const to = readStringParam(params, "to", {
+        required: true,
+        label: "recipient (UUID, phone number, or group)",
+      });
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const timestamp = parseStrictNonNegativeInteger(messageId);
+      if (timestamp === undefined) {
+        throw new Error(`Invalid messageId: ${messageId}. Expected numeric timestamp.`);
+      }
+      const text =
+        readStringParam(params, "text") ??
+        readStringParam(params, "newText") ??
+        readStringParam(params, "message");
+      if (!text) {
+        throw new Error("Signal edit requires text, newText, or message.");
+      }
+      const { sendMessageSignal } = await import("./send.js");
+      const target = { accountId: account.accountId, to, timestamp };
+      const result = await sendMessageSignal(to, text, {
+        cfg,
+        accountId: account.accountId,
+        editTimestamp: await resolveSignalEditTarget(target),
+        ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
+      });
+      const revision = parseStrictNonNegativeInteger(result.messageId);
+      if (revision !== undefined) {
+        await recordSignalEditRevision({ ...target, revision });
+      }
+      return jsonResult({ ok: true, edited: messageId, messageId: result.messageId });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

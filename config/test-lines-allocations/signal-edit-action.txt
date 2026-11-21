@@ -1,0 +1,2 @@
+89
+# Signal edit action: one plugin-state-backed handler case proves initial and repeated edits with recipient, text, and revision assertions; loopback native/container cases preserve edit timestamps on success and rejection without ordinary-send fallback; action discovery cases updated.
