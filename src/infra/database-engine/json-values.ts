@@ -65,6 +65,20 @@ export function jsonObjectValue(
   return /* kysely-allow-raw: Engine-owned typed JSON object construction. */ sql<string>`${sql.raw(isPostgresSqlConnection(db) ? "json_build_object" : "json_object")}(${sql.join(Object.entries(fields).flatMap(([key, value]) => [sql.lit(key), value]))})`;
 }
 
+/** Parse serialized JSON while retaining its native type in JSON value arguments. */
+export function jsonValue(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string | null>,
+): RawBuilder<string | null> {
+  return isPostgresSqlConnection(db)
+    ? /* kysely-allow-raw: PG16 needs an explicit cast for bound JSON text. */ sql<
+        string | null
+      >`${value}::json`
+    : /* kysely-allow-raw: JSON1 value arguments need the parsed JSON subtype. */ sql<
+        string | null
+      >`json(${value})`;
+}
+
 /** JSON-valued inputs remain JSON instead of becoming quoted strings. */
 export function jsonOrderedArray(
   db: DatabaseSync | PostgresSqlConnection,
