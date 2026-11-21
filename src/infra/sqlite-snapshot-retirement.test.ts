@@ -12,6 +12,8 @@ import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingDirectory as createStaging,
   createSqliteSnapshotStagingDirectorySync as createStagingSync,
+  createSqliteSnapshotStagingTokenSync as createStagingTokenSync,
+  reconcileSqliteSnapshotRetirement,
 } from "./sqlite-snapshot-staging.js";
 import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
 
@@ -131,6 +133,35 @@ it.each([
   }
   expect(fs.existsSync(orphan)).toBe(true);
 });
+
+it.each([
+  ["stray-notes.txt", /Unrecognized snapshot artifact: stray-notes\.txt$/u],
+  ["subdir", /Unrecognized snapshot directory: subdir$/u],
+] as const)(
+  "names the rejected %s when reconciliation refuses unknown content",
+  (entry, expected) => {
+    const { cache, source } = createFixture();
+    const owned = createStagingTokenSync(cache);
+    const location = path.join(owned.directory, "database.sqlite");
+    fs.copyFileSync(source, location);
+    if (entry === "subdir") {
+      fs.mkdirSync(path.join(owned.directory, entry));
+    } else {
+      fs.writeFileSync(path.join(owned.directory, entry), "retain");
+    }
+    owned.release();
+    try {
+      // The reconcile/retire production path uses an unbounded cutoff, where unknown
+      // content is refused; the message must name the rejected entry for an operator.
+      expect(() => reconcileSqliteSnapshotRetirement(owned.directory)).toThrow(expected);
+      expect(fs.existsSync(path.join(owned.directory, entry))).toBe(true);
+      assertReadable(location);
+    } finally {
+      remove(owned.directory);
+      owned.release();
+    }
+  },
+);
 
 it.each([false, true])("cleans owned legacy staging (async: %s)", async (asynchronous) => {
   const { cache, source } = createFixture();
