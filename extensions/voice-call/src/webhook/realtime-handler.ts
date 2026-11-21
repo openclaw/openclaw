@@ -13,6 +13,7 @@ import {
   calculateMulawRms,
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
+  buildRealtimeVoiceAgentConsultPolicyInstructions,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   readRealtimeVoiceConsultQuestion,
@@ -642,18 +643,20 @@ export class RealtimeCallHandler {
 
     let registration: RealtimeCallRegistration;
     let sessionPolicy: ReturnType<typeof resolveRealtimeVoiceSessionPolicy>;
+    let consultPolicyInstructions: string | undefined;
     try {
       registration = await this.resolveCallRegistration(callRecord);
       sessionPolicy = resolveRealtimeVoiceSessionPolicy({
         isAgentProxy: false,
         capabilities: registration.capabilities,
         configuredToolPolicy: this.config.toolPolicy,
-        configuredConsultPolicy: this.config.consultPolicy === "always" ? "always" : "auto",
+        configuredConsultPolicy: this.config.consultPolicy,
         requireWakeName: undefined,
         configuredWakeNames: undefined,
         cfg: this.coreConfig ?? {},
         agentId: registration.agentId,
       });
+      consultPolicyInstructions = buildRealtimeVoiceAgentConsultPolicyInstructions(sessionPolicy);
     } catch (error) {
       console.error(
         `[voice-call] Failed to resolve realtime call registration callId=${callId} providerCallId=${callSid}: ${formatErrorMessage(error)}`,
@@ -692,12 +695,15 @@ export class RealtimeCallHandler {
     const previousTelephonyBinding = this.activeTelephonyBindingsByCallId.get(callId);
     const {
       agentId,
-      instructions,
+      instructions: registrationInstructions,
       provider: realtimeProvider,
       providerConfig,
       capabilities,
     } = registration;
     const { handlesAgentConsult, toolPolicy } = sessionPolicy;
+    const instructions = [registrationInstructions, consultPolicyInstructions]
+      .filter(Boolean)
+      .join("\n\n");
     if (handlesAgentConsult) {
       console.warn(
         "[voice-call] This realtime model uses native agent delegation; hang-up is available through the call-scoped OpenClaw agent, while other custom realtime function tools remain unavailable.",

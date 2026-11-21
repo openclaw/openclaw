@@ -79,10 +79,12 @@ export function makeHandler(params: {
   endCall?: CallManager["endCall"];
   idleHangupMs?: number;
   nativeConsult?: boolean;
+  consultPolicy?: ReturnType<typeof createRealtimeConfig>["consultPolicy"];
 }) {
   const config = {
     ...createRealtimeConfig(),
     ...(params.idleHangupMs ? { idleHangupMs: params.idleHangupMs } : {}),
+    ...(params.consultPolicy ? { consultPolicy: params.consultPolicy } : {}),
   };
   const provider = makeRealtimeProvider(params.createBridge, {
     capabilities: {

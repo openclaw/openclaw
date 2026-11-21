@@ -159,7 +159,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.consultPolicy": {
     label: "Discord Realtime Consult Policy",
-    help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
+    help: "auto adds no guidance, substantive asks the realtime model to hand facts, memory, tools, and user context to the OpenClaw agent, and always also forces a consult for every turn. agent-proxy defaults to always; GPT-Live supports auto and substantive.",
   },
   "voice.realtime.requireWakeName": {
     label: "Discord Realtime Require Wake Name",

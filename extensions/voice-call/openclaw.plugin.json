@@ -175,7 +175,7 @@
     },
     "realtime.consultPolicy": {
       "label": "Realtime Consult Policy",
-      "help": "Guides when the realtime voice model should call openclaw_agent_consult.",
+      "help": "Guides when the realtime voice model should call openclaw_agent_consult, or delegate natively on GPT-Live.",
       "advanced": true
     },
     "realtime.consultThinkingLevel": {

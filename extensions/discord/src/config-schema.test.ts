@@ -84,12 +84,21 @@ it("accepts Discord application IDs at top-level and account scope", () => {
   });
 });
 
+it.each(["auto", "substantive", "always"] as const)(
+  "accepts the shared realtime consult policy %s",
+  (consultPolicy) => {
+    expect(
+      schema.parse({ voice: { mode: "agent-proxy", realtime: { consultPolicy } } }).voice?.realtime,
+    ).toMatchObject({ consultPolicy });
+  },
+);
+
 it("rejects invalid Discord realtime voice modes", () => {
   for (const voice of [
     { mode: "realtime" },
     { mode: "talk-buffer" },
     { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
-    { mode: "agent-proxy", realtime: { consultPolicy: "substantive" } },
+    { mode: "agent-proxy", realtime: { consultPolicy: "sometimes" } },
     { mode: "bidi", realtime: { bootstrapContextFiles: ["AGENTS.md"] } },
     { mode: "agent-proxy", realtime: { wakeNames: [] } },
     { mode: "agent-proxy", realtime: { wakeNames: [""] } },

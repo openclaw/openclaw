@@ -10,6 +10,7 @@ import {
   resolveRealtimeVoiceAgentConsultToolPolicy,
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultToolPolicy,
+  type RealtimeVoiceConsultPolicy,
 } from "./agent-consult-tool.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "./provider-internal.js";
 import type { RealtimeVoiceBridge } from "./provider-types.js";
@@ -20,7 +21,8 @@ export type RealtimeVoiceSessionPolicy = {
   handlesAgentConsult: boolean;
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
   consultToolsAllow: string[] | undefined;
-  consultPolicy: "auto" | "always";
+  /** Pass with toolPolicy and handlesAgentConsult to buildRealtimeVoiceAgentConsultPolicyInstructions. */
+  consultPolicy: RealtimeVoiceConsultPolicy;
   wakeNamePolicy: RealtimeVoiceWakeNamePolicy;
   wakeNames: string[];
   autoRespondToAudio: boolean;
@@ -32,7 +34,7 @@ export function resolveRealtimeVoiceSessionPolicy(params: {
   capabilities?: InternalRealtimeVoiceProviderCapabilities;
   supportsActivationNameGating?: boolean;
   configuredToolPolicy: unknown;
-  configuredConsultPolicy: "auto" | "always" | undefined;
+  configuredConsultPolicy: RealtimeVoiceConsultPolicy | undefined;
   requireWakeName: boolean | undefined;
   configuredWakeNames: string[] | undefined;
   cfg: OpenClawConfig;
