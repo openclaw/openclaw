@@ -3,7 +3,7 @@ import {
   SESSION_COMPANION_MAX_MS,
   SESSION_COMPANION_SLOW_MS,
 } from "../../packages/gateway-protocol/src/session-companion-contract.js";
-import { type AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isTimeoutError, isFailoverError } from "../agents/failover/error.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.js";

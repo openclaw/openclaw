@@ -25,7 +25,7 @@ import {
   assertSessionCompanionImageInput,
   SESSION_COMPANION_TOOLS,
 } from "./session-companion-policy.js";
-import { type SessionCompanionPromptMessage } from "./session-companion-prompt.js";
+import type { SessionCompanionPromptMessage } from "./session-companion-prompt.js";
 
 const companionLog = createSubsystemLogger("gateway/session-companion");
 
