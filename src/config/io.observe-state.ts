@@ -24,6 +24,27 @@ export function readConfigHealthEntry(
   return isRecord(entry) ? entry : {};
 }
 
+/** Resolve a legacy raw-byte baseline only from a file with the recorded hash. */
+export function readConfigBaselineContentBytes(
+  deps: ConfigFingerprintDeps,
+  configPath: string,
+  baseline: ConfigHealthFingerprint,
+): number | null {
+  for (const suffix of [".last-good", ".bak"]) {
+    try {
+      const raw = deps.fs.readFileSync(`${configPath}${suffix}`, "utf8");
+      if (hashConfigRaw(raw) !== baseline.hash) {
+        continue;
+      }
+      const parsed = parseConfigJson5(raw);
+      return parsed.ok ? Buffer.byteLength(JSON.stringify(parsed.parsed), "utf8") : null;
+    } catch {
+      // Keep the existing raw-byte guard if the matching baseline is unavailable.
+    }
+  }
+  return null;
+}
+
 export function createConfigHealthFingerprint(params: {
   raw: string;
   parsed: unknown;

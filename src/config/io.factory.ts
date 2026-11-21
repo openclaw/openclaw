@@ -8,7 +8,11 @@ import {
   createConfigRecoverySourceGuard,
 } from "./io.observe-recovery-effects.js";
 import { recoverConfigFromLastKnownGoodCore } from "./io.observe-recovery.js";
-import { createConfigHealthFingerprint, readConfigHealthEntry } from "./io.observe-state.js";
+import {
+  createConfigHealthFingerprint,
+  readConfigBaselineContentBytes,
+  readConfigHealthEntry,
+} from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { recoverConfigFromJsonRootSuffixWithContext } from "./io.recovery.js";
 import {
@@ -93,13 +97,17 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       const lastGoodPath = `${snapshot.path}.last-good`;
       health.assertCurrent();
       const entry = readConfigHealthEntry(healthSnapshot.state, snapshot.path);
+      const baseline = entry.lastKnownGood;
       const suspiciousReasons = resolveConfigObserveSuspiciousReasons({
         hash: current.hash,
         lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
         bytes: current.bytes,
         gatewayMode: current.gatewayMode,
         parsed: snapshot.parsed,
-        lastKnownGood: entry.lastKnownGood,
+        lastKnownGood: baseline,
+        getBaselineContentBytes: baseline
+          ? () => readConfigBaselineContentBytes(deps, snapshot.path, baseline)
+          : undefined,
       });
       if (suspiciousReasons.length > 0) {
         deps.logger.warn(
