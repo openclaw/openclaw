@@ -36,7 +36,6 @@ import {
 } from "./nodes.helpers.js";
 import {
   captureNodeSystemRunEventSource,
-  isForwardedNodeInvokeApprovalAuthorityActive,
   resolveNodeInvokeRuntimeAuthorityError,
 } from "./nodes.invoke-authority.js";
 import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
@@ -384,17 +383,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           }
         }
         const runtimeAuthorityError = () =>
-          resolveNodeInvokeRuntimeAuthorityError({
-            context,
-            client,
-            approvalAuthority: forwardedParams.approvalAuthority,
-          });
-        const isForwardedApprovalAuthorityActive = () =>
-          isUploadAllowed() &&
-          isForwardedNodeInvokeApprovalAuthorityActive({
-            manager: context.execApprovalManager,
-            authority: forwardedParams.approvalAuthority,
-          });
+          resolveNodeInvokeRuntimeAuthorityError({ context, client });
         if (rejectDisabledUpload()) {
           return;
         }
@@ -428,7 +417,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 generation,
                 lifecycle: wakeLifecycle,
               })) && isUploadAllowed(),
-            isApprovalAuthorityActive: isForwardedApprovalAuthorityActive,
+            // Carry the upload gate through to the policy's final send.
+            isApprovalAuthorityActive: isUploadAllowed,
             ...(nodeInvokeStream ? { nodeInvokeStream } : {}),
           }),
         );
@@ -484,8 +474,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           respondIfInvokeExpired();
           return;
         }
-        // Policy, pairing, and approval checks above may await. Revalidate the
-        // exact runtime capability at the final raw transport handoff.
+        // Preserve the caller capability check at the final transport handoff.
         const authorityError = runtimeAuthorityError();
         if (authorityError) {
           respondError(respond, ErrorCodes.INVALID_REQUEST, authorityError, {

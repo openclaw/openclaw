@@ -1485,7 +1485,7 @@ describe("node.invoke APNs wake path", () => {
     invalidateNodeWakeState(nodeId);
   });
 
-  it("does not raw-dispatch when runtime authority closes during an awaited policy check", async () => {
+  it("dispatches an already consumed forwarded approval after its decision window closes", async () => {
     const nodeId = "ios-node-authority-close";
     const nodeRegistry = mockNode(() => makeNodeSession(nodeId, { connId: "authority-conn" }), {
       ok: true,
@@ -1519,11 +1519,8 @@ describe("node.invoke APNs wake path", () => {
 
     expect(retainForHandoff).toHaveBeenCalledWith("approval-backend-bridge");
     expect(releaseHandoff).toHaveBeenCalledOnce();
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expectInvokeError(respond, {
-      message: "approved runtime authority closed before node dispatch",
-      details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-    });
+    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 
   it.each(["invalidated", "prior generation"])(
