@@ -7,20 +7,20 @@ type Reader = "metadata" | "sessions";
 type Dependency = Reader | "both" | "unknown";
 
 // Keep the shared conversation projection independent of server-only readers.
-const otherReaders = [
-  "$schema",
-  "wizard",
-  "diagnostics",
-  "logging",
-  "update",
-  "telemetry",
-  "browser",
-  "ui",
-  "commands",
+const otherReaders = {
+  $schema: true,
+  wizard: true,
+  diagnostics: true,
+  logging: true,
+  update: true,
+  telemetry: true,
+  browser: true,
+  ui: true,
+  commands: true,
   // refreshConfigReloadSkills publishes command eligibility after every commit,
   // including arbitrary requires.config paths; metadata consumes its skills version.
-  "skills",
-] as const satisfies readonly (keyof OpenClawConfig)[];
+  skills: true,
+} as const satisfies Partial<Record<keyof OpenClawConfig, true>>;
 
 // Model metadata reads catalog/auth/runtime resolution and agent policy.
 // Session rows also read workspace, sandbox, execution and response presentation.
@@ -67,21 +67,20 @@ const dependencies: Record<string, Dependency> = {
   surfaces: "unknown",
   proxy: "unknown",
   audit: "unknown",
-} satisfies Record<Exclude<keyof OpenClawConfig, (typeof otherReaders)[number]>, Dependency>;
+} satisfies Record<Exclude<keyof OpenClawConfig, keyof typeof otherReaders>, Dependency>;
 
 export function configPathAffectsReader(path: string, reader: Reader): boolean {
   if (!configPathAffectsConversation(path)) {
     return false;
   }
-  const root = path.split(".")[0]!;
+  const root = path.split(".", 1)[0]!;
   const dependency = Object.hasOwn(dependencies, root) ? dependencies[root] : "unknown";
   return dependency === reader || dependency === "both" || dependency === "unknown";
 }
 
 /** The same dependency decision scopes both publication keys and client refreshes. */
 function configPathAffectsConversation(path: string): boolean {
-  const roots: readonly string[] = otherReaders;
-  return path !== "meta.lastTouchedVersion" && !roots.includes(path.split(".")[0]!);
+  return path !== "meta.lastTouchedVersion" && !Object.hasOwn(otherReaders, path.split(".", 1)[0]!);
 }
 
 /** Config editors refresh every revision; conversations follow their readers' dependencies. */
