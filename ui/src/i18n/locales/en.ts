@@ -1226,7 +1226,6 @@ const startupEnglish = {
     active: "Active",
     onlineActive: "Online · Active",
     onlineIdle: "Online · Idle",
-    idle: "Idle",
     offline: "Offline",
     sessions: {
       openCount: "{count}\u00a0open",
@@ -1975,8 +1974,6 @@ const startupEnglish = {
     adminRequired: {},
     tabs: {},
     list: {},
-    suggestions: {},
-    stats: {},
     detail: {},
     actions: {},
     runNotStarted: {},
