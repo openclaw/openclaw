@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayProxyCredentials
 import ai.openclaw.app.gateway.GatewayProxyPrincipal
@@ -35,6 +36,33 @@ import ai.openclaw.app.gateway.gatewayProxyDestination as canonicalGatewayProxyD
 internal fun gatewayProxyDestination(endpoint: GatewayEndpoint): String = "${if (endpoint.tlsEnabled) "https" else "http"}://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}"
 
 internal fun gatewayProxyAccountLockedMessage(): String = nativeString("To use a different proxy account, forget this Gateway and add it again.")
+
+/** Confirm the endpoint and stage proxy credentials before either setup entry point connects. */
+@Composable
+internal fun GatewayProxyConnectionReview(
+  viewModel: MainViewModel,
+  plan: GatewayConnectPlan,
+  onCancel: () -> Unit,
+  onConnect: (GatewayConnectPlan) -> Unit,
+) {
+  var action by remember(plan) { mutableStateOf<GatewayProxyAuthAction>(GatewayProxyAuthAction.Keep) }
+  val config = plan.config
+  val endpoint = GatewayEndpoint.manual(config.host, config.port, config.tls, config.contextPath)
+  FoldAwarePrompt(
+    onDismissRequest = onCancel,
+    title = nativeString("Connect to this Gateway?"),
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(gatewayProxyDestination(endpoint), style = ClawTheme.type.body)
+        GatewayProxyAuthentication(endpoint, viewModel.gatewayProxyPrincipal(endpoint.stableId), action, { action = it }, viewModel.hasGatewayProxyCredentials(endpoint.stableId))
+      }
+    },
+    actions = {
+      TextButton(onClick = onCancel) { Text(nativeString("Cancel")) }
+      TextButton(onClick = { onConnect(plan.copy(proxyAuthAction = action)) }) { Text(nativeString("Connect")) }
+    },
+  )
+}
 
 /** One staged form shared by onboarding, addition, and saved Gateway editing. */
 @Composable
@@ -125,6 +153,7 @@ internal fun GatewayProxyCredentialDialog(
   // Draft secrets deliberately never enter saved instance state or read back stored passwords.
   var usernameInput by remember(endpoint) { mutableStateOf(username) }
   var passwordInput by remember(endpoint) { mutableStateOf("") }
+  val credentials = runCatching { GatewayProxyCredentials(usernameInput, passwordInput) }.getOrNull()
   val destinationSupported =
     remember(endpoint) {
       runCatching { canonicalGatewayProxyDestination(endpoint) }.isSuccess
@@ -134,7 +163,6 @@ internal fun GatewayProxyCredentialDialog(
     title = nativeString("Proxy login"),
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        ProxyLobsterMascot()
         Text(gatewayProxyDestination(endpoint), style = ClawTheme.type.body, modifier = Modifier.testTag("proxy-destination"))
         Text(nativeString("These credentials authenticate to the HTTPS proxy. Gateway permissions and pairing still apply."), style = ClawTheme.type.caption)
         ClawTextField(value = usernameInput, onValueChange = { usernameInput = it }, label = nativeString("Username"), placeholder = "", modifier = Modifier.testTag("proxy-username"), enabled = !saving && !usernameLocked, maxLines = 1, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, autoCorrectEnabled = false))
@@ -146,8 +174,8 @@ internal fun GatewayProxyCredentialDialog(
         error?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning) }
         ClawPrimaryButton(
           text = saveLabel,
-          enabled = !saving && destinationSupported && usernameInput.isNotBlank() && ':' !in usernameInput && passwordInput.isNotEmpty() && (usernameInput + passwordInput).none { it.code < 0x20 || it.code == 0x7f },
-          onClick = { onSave(GatewayProxyCredentials(usernameInput, passwordInput)) },
+          enabled = !saving && destinationSupported && credentials != null,
+          onClick = { credentials?.let(onSave) },
           modifier = Modifier.fillMaxWidth().testTag("proxy-save"),
         )
       }

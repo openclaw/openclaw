@@ -1756,6 +1756,8 @@ class GatewaySessionReconnectTest {
   fun handshakeRejectionIsNotRepublishedAsTransportDisconnect() =
     runBlocking {
       for (transportFailure in listOf(false, true)) {
+        val detailCode = if (transportFailure) "AUTH_UNAUTHORIZED" else "AUTH_VERIFIED_USER_REQUIRED"
+        val authReason = if (transportFailure) "trusted_proxy_user_missing" else null
         val connectRequestId = CompletableDeferred<String>()
         val blockEventStarted = CountDownLatch(1)
         val allowBlockEvent = CountDownLatch(1)
@@ -1793,7 +1795,7 @@ class GatewaySessionReconnectTest {
           // Hold the pump so the terminal callback closes CONNECTING before it drains the rejection.
           listener.onMessage(
             socket,
-            """{"type":"res","id":"$requestId","ok":false,"error":{"code":"INVALID_REQUEST","message":"verified user identity required","details":{"code":"AUTH_VERIFIED_USER_REQUIRED"}}}""",
+            """{"type":"res","id":"$requestId","ok":false,"error":{"code":"INVALID_REQUEST","message":"verified user identity required","details":{"code":"$detailCode","authReason":${JsonPrimitive(authReason)},"recommendedNextStep":"review_auth_configuration"}}}""",
           )
           if (transportFailure) {
             listener.onFailure(socket, IOException("test transport failure"), null)
@@ -1805,14 +1807,15 @@ class GatewaySessionReconnectTest {
 
           withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { closed.await() }
           val (error, paused) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFailure.await() }
-          assertEquals("AUTH_VERIFIED_USER_REQUIRED", error.details?.code)
+          assertEquals(detailCode, error.details?.code)
+          assertEquals(authReason, error.details?.reason)
           assertTrue(paused)
           // Both schedules are wrong: a generic close before OR after the structured failure.
           assertEquals(
             listOf(
               "disconnected:Connecting…",
               "disconnected:Gateway error: verified user identity required",
-              "failure:AUTH_VERIFIED_USER_REQUIRED",
+              "failure:$detailCode",
             ),
             callbacks.toList(),
           )

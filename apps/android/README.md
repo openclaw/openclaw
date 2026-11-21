@@ -44,8 +44,12 @@ If onboarding asks for an authenticated setup code, generate it with
 authenticate the Android app. Mutually untrusted users need separate, isolated
 Gateways; see the [Gateway trust model](https://docs.openclaw.ai/gateway/security/trust-model#scope-one-trust-boundary-per-gateway).
 
-See [the proxy login contract](PROXY_LOGIN_DESIGN.md) for storage, retry, source-icon
-fetching, and deployment requirements.
+Failed credential writes preserve the saved login and Gateway authentication.
+Cancel discards the draft; changing accounts requires successful local cleanup.
+Proxy credentials never enter setup codes or Gateway token/password fields.
+Source cards use a generic icon through an authenticated proxy; other connections
+retain their existing favicon behavior. Chat attachments keep their existing
+authenticated media path.
 
 ## Open in Android Studio
 

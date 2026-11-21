@@ -697,14 +697,20 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun verifiedUserRecoveryRequiresAuthenticatedSetupWithoutTreatingNodeAsChatAccess() {
-    val problem = authProblem(code = "AUTH_VERIFIED_USER_REQUIRED", recommendedNextStep = null)
-    val state = gatewayPairingUiState(false, "Connected (operator: sign-in required)", problem)
-    assertEquals(GatewayRecoveryUiState.Failed, state)
-    assertEquals(GatewayRecoveryPrimaryAction.UseAuthenticatedSetup, gatewayRecoveryPrimaryAction(state, problem))
-    val detail = recoveryGatewayAuthDetail(problem)
-    assertTrue(detail.contains("openclaw qr --url"))
-    assertTrue(detail.contains("WebSocket"))
-    assertTrue(detail.contains("browser-only SSO"))
+    for (problem in listOf(
+      authProblem(code = "AUTH_VERIFIED_USER_REQUIRED", recommendedNextStep = null),
+      authProblem(code = "AUTH_UNAUTHORIZED", recommendedNextStep = "review_auth_configuration").copy(reason = "trusted_proxy_user_missing"),
+    )) {
+      val state = gatewayPairingUiState(false, "Connected (operator: sign-in required)", problem)
+      assertEquals(GatewayRecoveryUiState.Failed, state)
+      assertEquals(GatewayRecoveryPrimaryAction.UseAuthenticatedSetup, gatewayRecoveryPrimaryAction(state, problem))
+      val detail = recoveryGatewayAuthDetail(problem)
+      assertTrue(detail.contains("openclaw qr --url"))
+      assertTrue(detail.contains("WebSocket"))
+      assertTrue(detail.contains("browser-only SSO"))
+    }
+    assertFalse(authProblem(code = "AUTH_BOOTSTRAP_TOKEN_INVALID", recommendedNextStep = null).requiresVerifiedSignIn)
+    assertFalse(authProblem(code = "AUTH_UNAUTHORIZED", recommendedNextStep = null).requiresVerifiedSignIn)
   }
 
   @Test

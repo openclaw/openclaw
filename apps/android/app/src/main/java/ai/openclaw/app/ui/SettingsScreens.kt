@@ -1535,7 +1535,6 @@ private fun GatewaySettingsScreen(
   var showManual by rememberSaveable { mutableStateOf(false) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingGatewayReview by remember { mutableStateOf<GatewayConnectPlan?>(null) }
-  var settingsProxyAction by remember { mutableStateOf<GatewayProxyAuthAction>(GatewayProxyAuthAction.Keep) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
   var pendingProxyStableId by remember { mutableStateOf<String?>(null) }
@@ -1595,34 +1594,16 @@ private fun GatewaySettingsScreen(
     setupValidationText = null
     manualValidationText = null
     pendingGatewayReview = plan
-    settingsProxyAction = GatewayProxyAuthAction.Keep
   }
 
   pendingGatewayReview?.let { plan ->
-    val config = plan.config
-    val endpoint = GatewayEndpoint.manual(config.host, config.port, config.tls, config.contextPath)
-    FoldAwarePrompt(
-      onDismissRequest = {
+    GatewayProxyConnectionReview(
+      viewModel = viewModel,
+      plan = plan,
+      onCancel = { pendingGatewayReview = null },
+      onConnect = { confirmed ->
         pendingGatewayReview = null
-        settingsProxyAction = GatewayProxyAuthAction.Keep
-      },
-      title = nativeString("Connect to this Gateway?"),
-      text = {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          Text(gatewayProxyDestination(endpoint), style = ClawTheme.type.body)
-          GatewayProxyAuthentication(endpoint, viewModel.gatewayProxyPrincipal(endpoint.stableId), settingsProxyAction, { settingsProxyAction = it }, viewModel.hasGatewayProxyCredentials(endpoint.stableId))
-        }
-      },
-      actions = {
-        TextButton(onClick = {
-          pendingGatewayReview = null
-          settingsProxyAction = GatewayProxyAuthAction.Keep
-        }) { Text(nativeString("Cancel")) }
-        TextButton(onClick = {
-          pendingGatewayReview = null
-          viewModel.saveGatewayConfigAndConnect(plan.copy(proxyAuthAction = settingsProxyAction))
-          settingsProxyAction = GatewayProxyAuthAction.Keep
-        }) { Text(nativeString("Connect")) }
+        viewModel.saveGatewayConfigAndConnect(confirmed)
       },
     )
   }
@@ -1751,17 +1732,7 @@ private fun GatewaySettingsScreen(
         passwordInput = if (useSetupCode) "" else passwordInput,
       )
     if (plan == null) {
-      val message =
-        if (useSetupCode && resolveScannedSetupCodeResult(setupCode)
-            .setupCode
-            ?.let(::decodeGatewaySetupCode)
-            ?.expiresAtMs
-            ?.let { it <= System.currentTimeMillis() } == true
-        ) {
-          nativeString("Setup code has expired. Create a new setup code.")
-        } else {
-          nativeString("Enter a valid setup code or gateway address.")
-        }
+      val message = nativeString("Enter a valid setup code or gateway address.")
       if (useSetupCode) setupValidationText = message else manualValidationText = message
       return
     }

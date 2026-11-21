@@ -2623,7 +2623,6 @@ class NodeForegroundServiceTest {
       tls: GatewayTlsParams?,
       bootstrapHandoff: GatewayBootstrapHandoff?,
       onReady: (() -> Unit)?,
-      bootstrapExpiresAtMs: Long?,
     ) {
       connectStarted?.complete(Unit)
       Shadow
@@ -2642,7 +2641,6 @@ class NodeForegroundServiceTest {
         ReflectionHelpers.ClassParameter.from(GatewayTlsParams::class.java, tls),
         ReflectionHelpers.ClassParameter.from(GatewayBootstrapHandoff::class.java, bootstrapHandoff),
         ReflectionHelpers.ClassParameter.from(Function0::class.java, onReady),
-        ReflectionHelpers.ClassParameter.from(Long::class.javaObjectType, bootstrapExpiresAtMs),
       )
     }
 

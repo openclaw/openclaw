@@ -481,7 +481,6 @@ class GatewaySession(
     val tls: GatewayTlsParams?,
     val bootstrapHandoff: GatewayBootstrapHandoff?,
     val onReady: (() -> Unit)?,
-    val bootstrapExpiresAtMs: Long?,
   ) {
     var recoveringStoredBootstrap = false
 
@@ -494,9 +493,7 @@ class GatewaySession(
     @Volatile var reconnectPausedForAuthFailure = false
 
     var attempt = 0
-    var basicNetworkFailures = 0
     var cleanupDeadline: Job? = null
-    var proxyPairingDeadline: Job? = null
   }
 
   private val lifecycleLock = Any()
@@ -528,14 +525,12 @@ class GatewaySession(
     tls: GatewayTlsParams? = null,
     bootstrapHandoff: GatewayBootstrapHandoff? = null,
     onReady: (() -> Unit)? = null,
-    bootstrapExpiresAtMs: Long? = null,
   ) {
     val connectionToClose: Connection?
     synchronized(notificationLock) {
-      val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff, onReady, bootstrapExpiresAtMs)
+      val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff, onReady)
       synchronized(lifecycleLock) {
         desired?.cleanupDeadline?.cancel()
-        desired?.proxyPairingDeadline?.cancel()
         desired = target
         connectionToClose = currentConnection
         connectionToClose?.retire()
@@ -581,7 +576,6 @@ class GatewaySession(
     val cleanup: Job
     synchronized(lifecycleLock) {
       desired?.cleanupDeadline?.cancel()
-      desired?.proxyPairingDeadline?.cancel()
       desired = null
       drainReconnectSignals()
       connectionToClose = currentConnection
@@ -627,9 +621,6 @@ class GatewaySession(
       val target = desired ?: return
       if (resumeAuthPaused) {
         target.reconnectPausedForAuthFailure = false
-        target.basicNetworkFailures = 0
-        target.proxyPairingDeadline?.cancel()
-        target.proxyPairingDeadline = null
       } else if (target.reconnectPausedForAuthFailure || currentConnection?.hasOpenTransport() == true) {
         // Another network becoming available does not invalidate an open WebSocket.
         // Its handshake may already have consumed a one-time setup code.
@@ -843,7 +834,7 @@ class GatewaySession(
   ): GatewayLoadedImage? {
     if (!config.automaticallyFetchFavicons) return null
     val conn = readyConnection(expectedEndpointStableId) ?: return null
-    val image = conn.loadSourceFavicon(hostname, guardRequestEnqueue(conn, withEnqueue))
+    val image = conn.loadSourceFavicon(config, hostname, guardRequestEnqueue(conn, withEnqueue))
     return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
   }
 
@@ -1118,7 +1109,8 @@ class GatewaySession(
     private var connectRequestId: String? = null
     val tlsConfig: GatewayTlsConfig? = buildGatewayTlsConfig(target.tls)
     private val client: OkHttpClient = buildClient()
-    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader() }
+    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
+    private var controlUiReadCredentials: List<String> = emptyList()
     private val listener = Listener()
     private var socket: WebSocket? = null
 
@@ -1267,24 +1259,21 @@ class GatewaySession(
     }
 
     suspend fun loadSourceFavicon(
+      config: GatewaySourcePreviewConfig,
       hostname: String,
       withEnqueue: (() -> Unit) -> Unit,
     ): GatewayLoadedImage? {
-      // Older Gateways without page-preview RPC keep the globe. Never replace
-      // proxy Basic credentials or export Gateway credentials to an image URL.
-      val method = "controlUi.linkPreview"
-      if (method !in advertisedMethods) return null
-      return try {
-        sourceFaviconLoader.load(hostname) { url ->
-          val params = buildJsonObject { put("url", JsonPrimitive(url)) }
-          val response = request(method, params, timeoutMs = 15_000, withEnqueue = withEnqueue)
-          if (response.ok) response.payloadJson?.let(::parseJsonOrNull).asObjectOrNull() else null
-        }
-      } catch (_: GatewayRequestDefinitiveFailure) {
-        null
-      } catch (_: GatewayRequestOutcomeUnknown) {
-        null
-      }
+      // This HTTP route cannot carry both proxy and Gateway Authorization. Keep the
+      // generic source icon rather than replace the proxy credential with a Gateway token.
+      if (hasBasicProxyAuthorization) return null
+      return sourceFaviconLoader.load(
+        gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
+        basePath = config.basePath,
+        hostname = hostname,
+        headers = mediaTransportHeaders(),
+        credentials = controlUiReadCredentials,
+        withEnqueue = withEnqueue,
+      )
     }
 
     fun bufferedMedia(
@@ -1747,12 +1736,6 @@ class GatewaySession(
       val identity = identityStore.loadOrCreate()
       val storedEntry = deviceAuthStore.loadEntry(target.endpoint.stableId, identity.deviceId, target.options.role)
       val storedToken = storedEntry?.token?.trim()
-      val bootstrapExpired = target.bootstrapExpiresAtMs?.let { it <= System.currentTimeMillis() } == true
-      if (bootstrapExpired && target.bootstrapHandoff?.allowStoredTokenRecovery == true && !storedToken.isNullOrEmpty()) {
-        // A previously paired role can recover an implicitly loaded, expired bootstrap.
-        // Fresh setup input cannot inherit a different account's older role grant.
-        target.recoveringStoredBootstrap = true
-      }
       val selectedAuth =
         selectConnectAuth(
           target = target,
@@ -1762,9 +1745,6 @@ class GatewaySession(
           storedToken = storedToken?.takeIf { it.isNotEmpty() },
           storedScopes = storedEntry?.scopes.orEmpty(),
         )
-      if (selectedAuth.authBootstrapToken != null && bootstrapExpired && target.bootstrapHandoff?.completed != true) {
-        throw GatewayConnectFailure(ErrorShape("SETUP_CODE_EXPIRED", "Setup code has expired. Create a new setup code."))
-      }
       if (selectedAuth.authDeviceToken != null) {
         target.pendingDeviceTokenRetry = false
       }
@@ -1907,6 +1887,11 @@ class GatewaySession(
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
       val authSessionCap = authObj?.get("sessionCap").asStringOrNull()
+      controlUiReadCredentials =
+        listOfNotNull(deviceToken, selectedAuth.authDeviceToken, selectedAuth.authToken, selectedAuth.authPassword)
+          .map(String::trim)
+          .filter(String::isNotEmpty)
+          .distinct()
       val authScopes = authObj?.get("scopes").asStringList()
       val persistedRoles = mutableMapOf<String, Boolean>()
       if (!deviceToken.isNullOrBlank()) {
@@ -2109,7 +2094,7 @@ class GatewaySession(
                 canRetryWithDeviceToken = it["canRetryWithDeviceToken"].asBooleanOrNull() == true,
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
-                reason = it["reason"].asStringOrNull(),
+                reason = it["reason"].asStringOrNull() ?: it["authReason"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
                 retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
@@ -2335,37 +2320,6 @@ class GatewaySession(
     }
   }
 
-  private fun armProxyPairingDeadline(
-    target: DesiredConnection,
-    error: ErrorShape,
-  ) {
-    synchronized(lifecycleLock) {
-      if (desired !== target || target.proxyPairingDeadline != null) return
-      target.proxyPairingDeadline =
-        scope.launch(lifecycleDispatcher) {
-          delay(120_000L)
-          val connection: Connection?
-          synchronized(notificationLock) {
-            synchronized(lifecycleLock) {
-              if (desired !== target || target.reconnectPausedForAuthFailure) return@launch
-              target.reconnectPausedForAuthFailure = true
-              connection = currentConnection
-              connection?.retire()
-            }
-            onConnectFailure(
-              error.copy(
-                message = "Phone approval is still pending. Check again or cancel waiting.",
-                details = error.details?.copy(retryable = false, recommendedNextStep = "check_again", pauseReconnect = true),
-              ),
-              true,
-            )
-            reconnectSignal.trySend(Unit)
-          }
-          connection?.closeQuietly()
-        }
-    }
-  }
-
   private suspend fun connectOnce(
     target: DesiredConnection,
     loopJob: Job,
@@ -2384,9 +2338,6 @@ class GatewaySession(
         synchronized(lifecycleLock) {
           if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady(connected.hello)) return@withContext
           // Ready metadata precedes callbacks; retries requested by a callback remain queued.
-          target.basicNetworkFailures = 0
-          target.proxyPairingDeadline?.cancel()
-          target.proxyPairingDeadline = null
           pluginSurfaceUrls = connected.pluginSurfaceUrls
           sessionRouting = connected.sessionRouting
           drainReconnectSignals()
@@ -2416,7 +2367,7 @@ class GatewaySession(
                       "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "The Gateway rejected this setup code. Request a new code."
                       "AUTH_SCOPE_MISMATCH" -> "The Gateway rejected the requested role or permissions."
                       "AUTH_VERIFIED_USER_REQUIRED" -> "The Gateway requires a verified user identity from its authenticated proxy or Tailscale. A setup code alone does not provide it."
-                      else -> if (err.gatewayError.code == "SETUP_CODE_EXPIRED") "Setup code has expired. Create a new setup code." else "The Gateway rejected login. Review its authentication and pairing requirements."
+                      else -> "The Gateway rejected login. Review its authentication and pairing requirements."
                     },
                 )
               } else {
@@ -2455,12 +2406,7 @@ class GatewaySession(
               false
             } else {
               // Commit before callbacks so a reentrant connect/reconnect owns the next state.
-              if (conn?.hasBasicProxyAuthorization == true && error?.code == "NETWORK_UNREACHABLE") {
-                target.basicNetworkFailures += 1
-              }
-              target.reconnectPausedForAuthFailure =
-                error?.let { shouldPauseReconnectAfterAuthFailure(target, it) } == true ||
-                (conn?.hasBasicProxyAuthorization == true && target.basicNetworkFailures >= 3)
+              target.reconnectPausedForAuthFailure = error?.let { shouldPauseReconnectAfterAuthFailure(target, it) } == true
               true
             }
           }
@@ -2469,9 +2415,6 @@ class GatewaySession(
           onDisconnected("Gateway error: ${error?.message ?: err.message ?: err::class.java.simpleName}")
           if (error != null && synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
             onConnectFailure(error, target.reconnectPausedForAuthFailure)
-            if (conn?.hasBasicProxyAuthorization == true && error.details?.code == "PAIRING_REQUIRED" && !target.reconnectPausedForAuthFailure) {
-              armProxyPairingDeadline(target, error)
-            }
           }
         }
       }
@@ -2586,7 +2529,7 @@ class GatewaySession(
     target: DesiredConnection,
     error: ErrorShape,
   ): Boolean =
-    (error.code.startsWith("PROXY_AUTH_") || error.code in setOf("EXTERNAL_AUTH_REQUIRED", "PROXY_TLS_FAILURE", "PROXY_REDIRECT", "HTTP_UPGRADE_REJECTED", "SETUP_CODE_EXPIRED")) ||
+    (error.code.startsWith("PROXY_AUTH_") || error.code in setOf("EXTERNAL_AUTH_REQUIRED", "PROXY_TLS_FAILURE", "PROXY_REDIRECT", "HTTP_UPGRADE_REJECTED")) ||
       (
         !(target.recoveringStoredBootstrap && error.details?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID") &&
           shouldPauseGatewayReconnectAfterAuthFailure(

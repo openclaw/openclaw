@@ -574,6 +574,9 @@ data class GatewayConnectionProblem(
 ) {
   val isNetworkFailure: Boolean = code == "NETWORK_UNREACHABLE"
   val isPairingRequired: Boolean = code == "PAIRING_REQUIRED"
+  val requiresVerifiedSignIn: Boolean =
+    code == "AUTH_VERIFIED_USER_REQUIRED" ||
+      (code == "AUTH_UNAUTHORIZED" && reason == "trusted_proxy_user_missing")
   val canAutoRetry: Boolean =
     isPairingRequired &&
       (
@@ -899,7 +902,6 @@ class NodeRuntime internal constructor(
     val bootstrapToken: String?,
     val password: String?,
     val bootstrapHandoff: ai.openclaw.app.gateway.GatewayBootstrapHandoff? = null,
-    val bootstrapExpiresAtMs: Long? = null,
   )
 
   /** Gateway page route and a short-lived signer owned by its native operator connection. */
@@ -3240,7 +3242,7 @@ class NodeRuntime internal constructor(
                 created
               }
             secondaryOperatorSessions[stableId] = SecondaryOperatorRuntime(endpoint, session)
-            session.connect(endpoint, operatorAuth.token, operatorAuth.bootstrapToken, operatorAuth.password, options, tls, bootstrapExpiresAtMs = operatorAuth.bootstrapExpiresAtMs)
+            session.connect(endpoint, operatorAuth.token, operatorAuth.bootstrapToken, operatorAuth.password, options, tls)
           }
         }
       }
@@ -4543,7 +4545,6 @@ class NodeRuntime internal constructor(
           operatorConnectOptions(auth, storedOperatorEntry),
           tls,
           onReady = { publishOperatorReadiness(connection) },
-          bootstrapExpiresAtMs = operatorAuth.bootstrapExpiresAtMs,
         )
       }
       connectNodeSession(endpoint, auth, tls, connectionManager.buildNodeConnectOptions())
@@ -4576,7 +4577,6 @@ class NodeRuntime internal constructor(
       options,
       tls,
       bootstrapHandoff = auth.bootstrapHandoff,
-      bootstrapExpiresAtMs = auth.bootstrapExpiresAtMs,
     )
   }
 
@@ -4892,7 +4892,6 @@ class NodeRuntime internal constructor(
           GatewayConnectAuth(
             token = credentials.token,
             bootstrapToken = credentials.bootstrapToken,
-            bootstrapExpiresAtMs = credentials.bootstrapExpiresAtMs,
             password = credentials.password,
           )
         }
@@ -5000,7 +4999,6 @@ class NodeRuntime internal constructor(
             operatorConnectOptions(auth, storedOperatorEntry),
             connectionManager.resolveTlsParams(endpoint),
             onReady = { publishOperatorReadiness(connection) },
-            bootstrapExpiresAtMs = operatorAuth.bootstrapExpiresAtMs,
           )
         }
       }

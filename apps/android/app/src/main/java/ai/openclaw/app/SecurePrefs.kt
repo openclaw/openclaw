@@ -56,14 +56,12 @@ data class GatewayCredentials(
   val token: String? = null,
   val bootstrapToken: String? = null,
   val password: String? = null,
-  val bootstrapExpiresAtMs: Long? = null,
 ) {
   internal fun normalized(): GatewayCredentials =
     copy(
       token = token?.trim()?.takeIf { it.isNotEmpty() },
       bootstrapToken = bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
       password = password?.trim()?.takeIf { it.isNotEmpty() },
-      bootstrapExpiresAtMs = bootstrapExpiresAtMs.takeIf { !bootstrapToken.isNullOrBlank() },
     )
 }
 
@@ -483,8 +481,7 @@ class SecurePrefs(
     token: String? = null,
     bootstrapToken: String? = null,
     password: String? = null,
-    bootstrapExpiresAtMs: Long? = null,
-  ) = saveGatewayCredentials(stableId, GatewayCredentials(token, bootstrapToken, password, bootstrapExpiresAtMs))
+  ) = saveGatewayCredentials(stableId, GatewayCredentials(token, bootstrapToken, password))
 
   fun clearGatewayCredentials(stableId: String) {
     synchronized(gatewayCredentialLock) {

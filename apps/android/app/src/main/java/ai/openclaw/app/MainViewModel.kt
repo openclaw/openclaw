@@ -827,12 +827,6 @@ class MainViewModel internal constructor(
     ) { runtime, operation ->
       addition?.proxySaveFailure?.value = null
       val config = plan.config
-      if (config.setupExpiresAtMs?.let { it <= System.currentTimeMillis() } == true) {
-        withContext(Dispatchers.Main) {
-          Toast.makeText(nodeApp, nativeString("Setup code has expired. Create a new setup code."), Toast.LENGTH_LONG).show()
-        }
-        return@launchGatewayConnectionOperation
-      }
       val endpoint =
         GatewayEndpoint.manual(
           host = config.host,
@@ -879,7 +873,6 @@ class MainViewModel internal constructor(
             NodeRuntime.GatewayConnectAuth(
               token = config.token.ifEmpty { null },
               bootstrapToken = config.bootstrapToken.ifEmpty { null },
-              bootstrapExpiresAtMs = config.setupExpiresAtMs,
               password = config.password.ifEmpty { null },
             )
           } else {
@@ -907,7 +900,6 @@ class MainViewModel internal constructor(
             stableId = endpoint.stableId,
             token = config.token,
             bootstrapToken = config.bootstrapToken,
-            bootstrapExpiresAtMs = config.setupExpiresAtMs,
             password = config.password,
           )
         }
