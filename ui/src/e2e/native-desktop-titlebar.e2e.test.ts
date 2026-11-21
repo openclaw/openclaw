@@ -292,8 +292,9 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
   await namedButton(caption, "Minimize window").click({ trial: true });
 }
 
-async function keepsHomeActionsClearOfCaption(page: Page, platform: "linux" | "windows") {
-  await installWindowChrome(page, platform);
+// Linux and Windows publish the same caption width, so one platform covers both.
+async function keepsHomeActionsClearOfCaption(page: Page) {
+  await installWindowChrome(page, "linux");
   // Home opens the side dock from a conversation, and stays disabled until the
   // Gateway advertises chat history.
   const sessionKey = "agent:main:work";
@@ -313,21 +314,15 @@ async function keepsHomeActionsClearOfCaption(page: Page, platform: "linux" | "w
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   await page.locator(".chat-pane__header").waitFor();
   await page.locator(".sidebar-footer-bar__home").click();
-  await page.locator(".assistant-panel--right").waitFor();
-  const actions = page.locator(".assistant-panel-actions button:visible");
+  const actions = page.locator(".assistant-panel--right .assistant-panel-actions button");
   const caption = page.locator(".openclaw-window-controls");
   await Promise.all([actions.first().waitFor(), caption.waitFor()]);
-  const captionBox = (await caption.boundingBox())!;
+  const captionLeft = (await caption.boundingBox())!.x;
   for (const action of await actions.all()) {
     const box = (await action.boundingBox())!;
-    const label = await action.getAttribute("aria-label");
-    const overlaps =
-      box.x < captionBox.x + captionBox.width &&
-      box.x + box.width > captionBox.x &&
-      box.y < captionBox.y + captionBox.height &&
-      box.y + box.height > captionBox.y;
-    expect(overlaps, `${label} overlaps the window controls`).toBe(false);
-    // A trial click fails when another element, such as a caption button, receives the pointer.
+    const label = `${await action.getAttribute("aria-label")}`;
+    expect(box.x + box.width, label).toBeLessThanOrEqual(captionLeft);
+    // A trial click fails when a caption button receives the pointer instead.
     await action.click({ trial: true });
   }
 }
@@ -511,14 +506,11 @@ suite.define(() => {
       ({ page }) => keepsWindowControlsClear(page, platform, width),
     ),
   );
-  it.each(["linux", "windows"] as const)(
-    "keeps the right-docked Home actions clear of the %s window controls",
-    (platform) =>
-      suite.withPage(
-        { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
-        ({ page }) => keepsHomeActionsClearOfCaption(page, platform),
-      ),
-  );
+  it("keeps the right-docked Home actions clear of the window controls", () =>
+    suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
+      ({ page }) => keepsHomeActionsClearOfCaption(page),
+    ));
   it.each(["web", "macos", "tauri-linux", "tauri-macos"] as const)(
     "aligns the %s rail, panel header, and content history row",
     (host) =>
