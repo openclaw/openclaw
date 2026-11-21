@@ -48,6 +48,7 @@ import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
 import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
+import { registerDevicePairSecureAccessEnglish } from "../../ui/src/i18n/locales/en-device-pair-secure-access.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
 import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.ts";
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
@@ -180,6 +181,7 @@ const sourceFiles = [
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
+  "en-device-pair-secure-access.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
   "en-processes.ts",
@@ -263,8 +265,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   const menuCopy = registerSessionMenuEnglish.catalog.sessionsView;
   // Menu leaves retain their original positions in the canonical translation memory.
   const menuBefore = new Map<string, keyof typeof menuCopy>([
-    ["personalGroupReferenceAdded", "personalGroupAdd"],
-    ["personalGroupEdit", "personalGroupNew"],
     ["subagentPrefix", "communication"],
     ["actionRequiresScope", "actionUnavailable"],
     ["withParticipant", "ownerYou"],
@@ -683,6 +683,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerConnectionRecoveryEnglish.catalog,
     registerCronEnglish.catalog,
     registerDevicesEnglish.catalog,
+    registerDevicePairSecureAccessEnglish.catalog,
     registerDreamingEnglish.catalog,
     registerFilePreviewEnglish.catalog,
     registerProcessesEnglish.catalog,

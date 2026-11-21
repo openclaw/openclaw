@@ -66,6 +66,8 @@ type TalkCatalogEntry = {
   revision?: readonly unknown[];
   refreshAfter: number;
   pending?: Promise<void>;
+  // Settles when the latest build settles or reaches its deadline.
+  ready?: Promise<void>;
 };
 const talkCatalogs = new WeakMap<object, Map<string, TalkCatalogEntry>>();
 const CATALOG_REFRESH_MS = 30_000;
@@ -75,7 +77,7 @@ function readTalkCatalog(
   context: GatewayRequestContext,
   config: OpenClawConfig,
   params: TalkCatalogParams,
-): TalkCatalogSnapshot | undefined {
+): TalkCatalogEntry | undefined {
   const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
   const resolver = context.resolveGatewayContext
     ? getCanonicalGatewayContextResolver(context.resolveGatewayContext)
@@ -143,6 +145,10 @@ function readTalkCatalog(
     };
     retained.revision = revision;
     retained.refreshAfter = started + CATALOG_REFRESH_MS;
+    let reachDeadline = () => {};
+    const deadlineReached = new Promise<void>((resolve) => {
+      reachDeadline = resolve;
+    });
     retained.pending = runInDetachedAsyncContext(async () => {
       const admission = tryBeginGatewayIndependentRootWorkAdmission("talk-catalog-refresh", {
         detachedWork: true,
@@ -163,6 +169,7 @@ function readTalkCatalog(
       const deadline = setTimeout(() => {
         expired = true;
         logSlow("deadline");
+        reachDeadline();
       }, CATALOG_REFRESH_DEADLINE_MS);
       deadline.unref();
       try {
@@ -200,8 +207,9 @@ function readTalkCatalog(
         retained.refreshAfter = Date.now() + 1_000;
       }
     });
+    retained.ready = Promise.race([retained.pending, deadlineReached]);
   }
-  return entry.snapshot;
+  return entry;
 }
 
 async function buildTalkCatalog(
@@ -462,7 +470,7 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
   try {
     const config = context.getRuntimeConfig();
     const respondCatalog = (resolvedParams: TalkCatalogParams) => {
-      const catalog = readTalkCatalog(context, config, resolvedParams);
+      const catalog = readTalkCatalog(context, config, resolvedParams)?.snapshot;
       if (catalog) {
         // Session callers need availability, not provider inventory or configuration.
         respond(
@@ -491,6 +499,13 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
         );
       }
     };
+    // A cold key answers with its first snapshot; "warming" remains only past the build deadline.
+    const awaitFirstSnapshot = async () => {
+      const entry = readTalkCatalog(context, config, catalogParams);
+      if (entry && !entry.snapshot) {
+        await entry.ready;
+      }
+    };
     if (!catalogParams.sessionKey) {
       if (!operatorScopeSatisfied("operator.read", client?.connect.scopes ?? [])) {
         respond(
@@ -500,6 +515,7 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
         );
         return;
       }
+      await awaitFirstSnapshot();
       respondCatalog(catalogParams);
       return;
     }
@@ -513,6 +529,8 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
       return;
     }
     const agentId = resolveTalkSessionAgentId(config, catalogParams.sessionKey);
+    // Wait outside the authorization callback so disclosure stays synchronous there.
+    await awaitFirstSnapshot();
     const resolveStarted = Date.now();
     await withPreparedSessionResolve(
       {

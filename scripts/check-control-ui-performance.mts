@@ -78,7 +78,10 @@ const controlUiPerformanceBudgets = {
   // (+849 B over paired base 1,331,724 B) plus 64 B headroom.
   // Josh approved the #202534 transcript file-link availability cost (2026-11-20): measured
   // 1,333,835 B (+477 B over paired base 1,333,358 B at d5a99b07) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_333_899,
+  // First-frame composer banner (#203246): #202800 lazy-loaded the banner that the
+  // #202534 measurement included; restoring it measured 1,334,416 B (+777 B over paired
+  // base 1,333,639 B at a3357794) plus 64 B headroom.
+  chatBootJsGzipBytes: 1_334_480,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.

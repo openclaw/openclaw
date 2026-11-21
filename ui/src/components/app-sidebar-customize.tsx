@@ -58,7 +58,7 @@ function sidebarPlugins(plugins: readonly PluginCatalogEntry[]): SidebarPlugin[]
 }
 
 function SidebarPages(props: { host: AppSidebarRenderHost; pluginSelected: boolean }) {
-  // Enabled routes leave out Templates unless its experimental flag is on.
+  // Enabled routes respect the advanced Templates opt-out.
   const pages = () =>
     CUSTOMIZE_PAGES.filter(([route]) => props.host.enabledRouteIds?.includes(route) ?? true);
   return (
@@ -144,9 +144,17 @@ function SidebarPlugins(props: {
                 href={href()}
                 active={props.pathname === href()}
                 icon={
-                  // Refresh artwork with the inventory snapshot while keeping the link mounted.
-                  <Show when={plugin()} keyed>
-                    {(entry) => <SidebarPluginArt plugin={entry} />}
+                  // A fresh list is not a new icon. Reload only for a changed installation or icon availability.
+                  <Show
+                    when={JSON.stringify([
+                      plugin().catalogId,
+                      plugin().version,
+                      plugin().installedAt,
+                      Boolean(plugin().hasIcon),
+                    ])}
+                    keyed
+                  >
+                    <SidebarPluginArt plugin={plugin()} />
                   </Show>
                 }
                 label={plugin().name}

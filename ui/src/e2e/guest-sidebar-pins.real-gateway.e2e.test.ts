@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
@@ -12,26 +10,21 @@ import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
-import { readUiBundle } from "./device-gateway.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Guest personal groups real Gateway",
+  name: "Guest sidebar pins real Gateway",
   startServerBeforeBrowser: true,
 });
 const scopes = ["operator.sessions.read", "operator.sessions.write"];
 const parentKey = "agent:main:dashboard:groups-parent";
 const childKey = "agent:main:dashboard:groups-child";
-const otherKey = "agent:main:dashboard:groups-other";
 const people = ["groups-owner@example.test", "groups-other@example.test"];
-const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 function rpc<T>(page: Page, method: string, params: Record<string, unknown>): Promise<T> {
   return evaluateControlUiContext(
@@ -48,7 +41,7 @@ function rpc<T>(page: Page, method: string, params: Record<string, unknown>): Pr
 }
 
 suite.define(() => {
-  it("preserves children and browser-local groups with only session permissions", async (test) => {
+  it("preserves child conversations and browser-local pins with only session permissions", async (test) => {
     let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
     let gateway: GatewayServer | undefined;
     const proxies: ViteDevServer[] = [];
@@ -56,7 +49,7 @@ suite.define(() => {
       async run() {
         const port = await getFreePort();
         state = await createOpenClawTestState({
-          label: "guest-personal-groups",
+          label: "guest-sidebar-pins",
           layout: "home",
           env: {
             ...deviceGatewayEnv,
@@ -162,22 +155,12 @@ suite.define(() => {
           label: "Verification notes",
           parentSessionKey: parentKey,
         });
-        await rpc(editor, "sessions.create", { key: otherKey, label: "Release checklist" });
         const initialStorage = await setupContext.storageState();
-        const artifactDir = capture
-          ? createControlUiE2eArtifactDir(
-              "guest-personal-groups",
-              process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR,
-            )
-          : undefined;
         await suite.withPage(
           {
             reducedMotion: "reduce",
             viewport: { width: 1280, height: 900 },
             storageState: initialStorage,
-            ...(artifactDir
-              ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
-              : {}),
           },
           async ({ page }) => {
             const methods: string[] = [];
@@ -192,39 +175,6 @@ suite.define(() => {
             await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(page);
             const sidebar = page.locator("openclaw-app-sidebar");
-            const group = (label: string) =>
-              sidebar
-                .locator("[data-personal-session-group]")
-                .filter({ has: page.getByRole("list", { name: label, exact: true }) });
-            const create = async (label: string, member?: string) => {
-              await sidebar.getByRole("button", { name: /^Filter & sort/ }).click();
-              await page
-                .locator(".sidebar-session-sort-menu")
-                .getByRole("button", { name: "New section", exact: true })
-                .click();
-              const dialog = page.getByRole("dialog", { name: "New section", exact: true });
-              await dialog.getByLabel("Section name", { exact: true }).fill(label);
-              await dialog.getByRole("button", { name: "Choose sessions", exact: true }).click();
-              if (member) {
-                await dialog.getByRole("checkbox", { name: member, exact: true }).check();
-              }
-              await dialog.getByRole("button", { name: "Save", exact: true }).click();
-              await dialog.waitFor({ state: "hidden" });
-            };
-            const menu = async (label: string, action: string) => {
-              await sidebar
-                .locator(".personal-session-groups__header", {
-                  has: page.getByRole("button", {
-                    name: `Options for section ${label}`,
-                    exact: true,
-                  }),
-                })
-                .hover();
-              await sidebar
-                .getByRole("button", { name: `Options for section ${label}`, exact: true })
-                .click();
-              await page.getByRole("menuitem", { name: action, exact: true }).click();
-            };
             const toggle = sidebar.locator(`[data-child-session-toggle="${parentKey}"]`);
             await toggle.waitFor();
             if ((await toggle.getAttribute("aria-expanded")) === "false") {
@@ -232,60 +182,26 @@ suite.define(() => {
             }
             await sidebar.getByRole("link", { name: /Verification notes/ }).waitFor();
             methods.length = 0;
-            await create("Focus", "Reliability Tracker");
-            await group("Focus")
-              .getByRole("link", { name: /Verification notes/ })
-              .waitFor();
-            expect(await sidebar.locator(`[data-session-key="${childKey}"]`).count()).toBe(2);
-            if (artifactDir) {
-              const frame = await takeControlUiScreenshotFrame(
-                page,
-                page.locator(".shell"),
-                [group("Focus")],
-                { animations: "disabled", elements: [page.locator(".shell")] },
-              );
-              await writeFile(path.join(artifactDir, "guest-group-children.png"), frame.png);
-            }
             await rpc(editor, "sessions.patch", {
               key: childKey,
               label: "Updated verification notes",
             });
             await expect
               .poll(() => sidebar.getByRole("link", { name: /Updated verification notes/ }).count())
-              .toBe(2);
-            await create("Later", "Release checklist");
-            await menu("Later", "Move up");
-            const order = () =>
-              sidebar
-                .locator("[data-personal-session-group] .sidebar-session-group-toggle")
-                .allTextContents();
-            await expect.poll(order).toEqual(["Later", "Focus"]);
-            await menu("Focus", "Edit section");
-            const dialog = page.getByRole("dialog", { name: "Edit section", exact: true });
-            // Edits open on session choice; Back returns to the name.
-            await dialog.getByRole("button", { name: "Back", exact: true }).click();
-            await dialog.getByLabel("Section name", { exact: true }).fill("This week");
-            await dialog.getByRole("button", { name: "Choose sessions", exact: true }).click();
-            await dialog.getByRole("button", { name: "Save", exact: true }).click();
-            await dialog.waitFor({ state: "hidden" });
+              .toBe(1);
+            const parent = sidebar.locator(`[data-session-key="${parentKey}"]`);
+            await parent.click({ button: "right" });
+            expect(
+              await page.getByRole("menuitem", { name: "Add to section", exact: true }).count(),
+            ).toBe(0);
+            await page.getByRole("menuitem", { name: /Pin session/ }).click();
+            const pinned = sidebar.locator(
+              `[data-session-section="pinned"] [data-session-key="${parentKey}"]`,
+            );
+            await pinned.waitFor();
             await page.reload();
             await waitForControlUiGatewayReady(page);
-            await expect.poll(order).toEqual(["Later", "This week"]);
-            expect(
-              await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
-            ).toMatchObject({ status: "ok", entries: {} });
-            const freshContext = await suite.newBrowserContext({
-              reducedMotion: "reduce",
-              storageState: initialStorage,
-            });
-            const fresh = await freshContext.newPage();
-            await fresh.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
-            await waitForControlUiGatewayReady(fresh);
-            expect(await fresh.locator("[data-personal-session-group]").count()).toBe(0);
-            await suite.closeBrowserContext(freshContext);
-            await menu("This week", "Remove section");
-            await expect.poll(order).toEqual(["Later"]);
-            expect(await sidebar.locator(`[data-session-key="${parentKey}"]`).count()).toBe(1);
+            await pinned.waitFor();
             const forbidden = new Set([
               "users.prefs.set",
               "sessions.patch",
@@ -301,19 +217,6 @@ suite.define(() => {
               "config.set",
             ]);
             expect(methods.filter((method) => forbidden.has(method))).toEqual([]);
-            if (artifactDir) {
-              await writeFile(
-                path.join(artifactDir, "runtime.json"),
-                JSON.stringify({ bundle: await readUiBundle(page), scopes, sharedWrites: 0 }),
-              );
-            }
-          },
-          async ({ page, context }) => {
-            const video = page.video();
-            await suite.closeBrowserContext(context);
-            if (artifactDir) {
-              await video?.saveAs(path.join(artifactDir, "guest-groups.webm"));
-            }
           },
         );
         const otherContext = await suite.newBrowserContext({ reducedMotion: "reduce" });
@@ -322,9 +225,6 @@ suite.define(() => {
         await expect(rpc(other, "sessions.describe", { key: parentKey })).rejects.toThrow(
           `Session "${parentKey}" was not found.`,
         );
-        expect(
-          await rpc(other, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
-        ).toMatchObject({ status: "ok", entries: {} });
         await suite.closeBrowserContext(otherContext);
         await suite.closeBrowserContext(setupContext);
       },
@@ -332,7 +232,7 @@ suite.define(() => {
         runQaGatewayFixture(
           async () => {},
           ...proxies.map((proxy) => () => proxy.close()),
-          () => gateway?.close({ reason: "guest personal groups proof cleanup" }),
+          () => gateway?.close({ reason: "guest sidebar pins proof cleanup" }),
         ),
       release: async () => state?.cleanup(),
       retainedState: () => state?.root,

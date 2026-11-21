@@ -1,3 +1,4 @@
+import { readCronJobNotFoundError } from "@openclaw/gateway-protocol/gateway-error-details";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../format-error.ts";
@@ -16,7 +17,7 @@ export type CronJobObservation = {
   writable: boolean;
   saving?: boolean;
   error?: string;
-  retryable?: true;
+  readFailure?: "not-found" | "retryable";
 };
 
 /** A mounted exact-job reader, independent of the Automations page's filters and draft. */
@@ -77,15 +78,19 @@ export function watchCronJobDefinition(
         return;
       }
       if (job?.id !== id) {
-        update({ loading: false, writable: false, retryable: true });
+        update({ loading: false, writable: false, readFailure: "retryable" });
         return;
       }
       awaitingWriteReconciliation = false;
       update({ job, loading: false, writable: writable(job), error: state.error });
-    } catch {
+    } catch (error) {
       if (!request.signal.aborted) {
-        // Removed and inaccessible jobs intentionally have the same Gateway read contract.
-        update({ loading: false, writable: false, retryable: true, error: state.error });
+        // An exact miss is final for this view, not proof of deletion for every viewer.
+        if (readCronJobNotFoundError(error)?.jobId === id) {
+          update({ loading: false, writable: false, readFailure: "not-found" });
+        } else {
+          update({ loading: false, writable: false, readFailure: "retryable", error: state.error });
+        }
       }
     }
   }

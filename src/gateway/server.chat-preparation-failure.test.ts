@@ -95,6 +95,8 @@ test.each(["direct", "queued"] as const)(
           frame.payload?.runId === runId &&
           frame.payload?.state === "error",
       );
+      // Observe early rejection while the RPC settles; the await below still checks it.
+      void terminal.catch(() => undefined);
       const started = await rpcReq(socket, "chat.send", {
         sessionKey: scope.sessionKey,
         message: "Land it.",

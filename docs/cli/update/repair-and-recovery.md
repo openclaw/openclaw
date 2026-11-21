@@ -375,7 +375,10 @@ beside the installation or in the system temporary directory. The updater settle
 its workers after success, failure, an exception, or `SIGINT`/`SIGTERM`, including
 failures while reporting the outcome. Complete projections record
 `Runtime retained at <path>: <reason>` for the next eligible update or Doctor
-cleanup, so recursive deletion does not delay command exit. Run
+cleanup, so recursive deletion does not delay command exit. Each runtime records
+the update process that created it in `owner.json`; cleanup removes the runtime
+once that process has exited and no running process points into the directory
+([Doctor checks](/cli/doctor/checks)). Run
 `openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
 extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
@@ -1192,6 +1195,20 @@ check passed), cleanup deletes at once:
   `<database>.migrated-<runId>.receipt.json` before it moves the migrated files
   aside; cleanup deletes only the files that receipt lists, with the recorded
   device, inode, size, and modification time, then the receipt.
+- the pre-migration database snapshot directories that earlier updates kept
+  (failed or rolled-back updates, and successful ones whose automatic restoration
+  was unavailable), once those updates finished before the verified one started.
+  The snapshot directory's name carries a transaction id, not a run id, so the
+  link is the `database snapshot` location that update recorded in update
+  history. Cleanup deletes only a real directory at that recorded path, under a
+  name the updater gives snapshots, and only if it is still the same directory it
+  listed. This reaches a snapshot under a previous install root when the update
+  that took it recorded that path. Update history records the location relative
+  to the home directory, or in full for a package backup outside it. Updaters
+  that rebuilt a Git checkout in place kept their snapshots in the checkout's
+  `.artifacts` directory, and cleanup finds those the same way. Update history
+  records no usable location for a checkout outside the home directory, so
+  cleanup does not find that checkout's snapshots.
 - superseded original-state captures, by the rules above.
 
 Doctor backups whose manifest predates `updateRunId` keep their previous rules: they
@@ -1208,8 +1225,8 @@ pending and no update run is unfinished. A newer run whose backup of a database 
 damaged or missing stands in for nothing, and moved-aside `.migrated-<runId>` files never
 stand in for an older backup (their receipt records no checksum). Backups taken by one
 Doctor run are kept or deleted together. So every database with an intact backup and no
-verified update after it keeps at least one intact backup. No backup is deleted while
-the live database it belongs to is missing.
+verified update after it keeps at least one intact backup. No Doctor backup or
+moved-aside copy is deleted while the live database it belongs to is missing.
 
 Cleanup never deletes:
 
@@ -1218,9 +1235,14 @@ Cleanup never deletes:
   manifests existed and `.migrated-*` files from before receipts existed.
 - a backup whose manifest names an update run with no record.
 - anything a pending recovery or an unfinished update run references.
-- `.databases` snapshot directories left by earlier updates, and snapshots whose
-  automatic restoration was unavailable; no receipt links them to a verified run.
-  Doctor reports older npm snapshot directories with their size.
+- the `.databases` snapshot the latest verified update kept because its automatic
+  restoration was unavailable, and snapshots of any update after it. They wait
+  for the next verified update.
+- `.databases` snapshot directories that no listed update recorded with a usable
+  location: cleanup reads the newest 100 updates, and only file times could order
+  such a directory against a verified update. Cleanup lists those beside a recorded
+  snapshot as `orphan-database-snapshot` with their size; it does not search
+  other locations. Doctor reports npm snapshot directories with their size.
 - files outside the state directory, the install root, and the release prefix, or
   any name the updater does not write, such as your own `openclaw.sqlite.bak`.
 
@@ -1228,7 +1250,8 @@ The update result's `recovery-artifact-cleanup` step lists what was removed with
 logical size and the total (file lengths; sparse or cloned files can release less disk
 space), what was kept and why, and each file kept as
 `Kept: not provably ours` with its size. To decide about those, ask your agent with
-`openclaw triage`; an unmanifested backup can also be removed with
+`openclaw triage`; an unmanifested backup can also be removed by stopping the Gateway
+(`openclaw gateway stop`) and running
 `openclaw update cleanup --include-unmanifested <path>`. A deletion that fails is a
 warning on the update and never changes its outcome; the next update retries it.
 The run record keeps the summary line and any warning; a cleanup that runs again after
@@ -1238,7 +1261,8 @@ includes them; manifests and receipts written by older builds stay protected.
 
 `openclaw status` (including `--json`) and read-only Doctor report local recovery
 copy logical bytes and counts by kind: update captures, standalone Doctor
-captures, and migration originals. Each kind separates retirable, protected,
+captures, and migration originals. Recorded database snapshots count as update
+captures. Each kind separates retirable, protected,
 and unmanifested/orphan copies. Status uses a bounded metadata/file-size scan,
 not payload hashing. An incomplete estimate reports observed bytes only;
 unverified eligibility stays protected. Entry, metadata-byte, and time limits
@@ -1435,6 +1459,26 @@ captures through their sealed manifests; it never reads the captured payload:
   file in the capture directory. `unreadable-update-history` also
   keeps every capture protected.
 
+Pre-migration database snapshot directories that update history records are
+listed with `kind: "database-snapshot"`, their run id, and logical bytes:
+
+- `candidate` / `superseded-by-verified-update`: the update finished, and a later
+  update that started after it succeeded with recorded Gateway health
+  verification.
+- `protected` / `awaiting-later-verified-update`: no verified successful update
+  started after this update finished. This includes the latest verified update's
+  own snapshot.
+- `protected` / `unfinished-update-run` or `pending-update-recovery`: the update
+  is still running, or its recorded recovery has not settled.
+- `protected` / `orphan-database-snapshot`: a directory with a snapshot name
+  beside a recorded snapshot that no listed update recorded.
+  `--include-unmanifested` does not select it.
+- `failed` / `database-snapshot-retirement-failed`: removal did not finish. With
+  `database.postgres.recoveryCaptures: "server"`, a snapshot's export manifests name
+  capture schemas on the PostgreSQL server. Cleanup drops those schemas first, through
+  the configured connection, and keeps the snapshot directory when the drop fails. Fix
+  the connection, then run cleanup again.
+
 Older `doctor-*` directories classified as `candidate` are also safe to delete by
 hand while OpenClaw is stopped. Keep the newest retained copies and never manually
 delete protected incomplete, unreadable, or active-recovery-referenced captures. Prefer cleanup
@@ -1450,11 +1494,13 @@ upgrading does not change the older installed updater's cleanup behavior.
 Retiring a capture deletes its whole directory, including any `candidate` and
 `prepared` recovery generations inside it, under the same exclusive ownership as
 the rest of cleanup. An interrupted removal leaves the remainder attributed to the
-same run, so rerunning cleanup finishes it.
+same run, so rerunning cleanup finishes it. Database snapshot directories are
+removed the same way.
 
 The JSON result contains `stateDir`, `status`, `artifacts`, `missingOriginals`, and `totals`. Each
 artifact reports its path, run ids, logical bytes, outcome, and reason; update
-captures also carry `kind: "update-capture"`. Totals separate candidates,
+captures also carry `kind: "update-capture"` and database snapshots
+`kind: "database-snapshot"`. Totals separate candidates,
 verification-required, protected, blocked, and removed bytes, including update
 captures. Removal failures exit nonzero. Keep the recovery manifests and rerun
 cleanup to finish recorded interrupted work; a retry does not delete a recreated
