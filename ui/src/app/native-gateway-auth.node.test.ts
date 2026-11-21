@@ -507,6 +507,42 @@ describe("native authenticated Control UI", () => {
     },
   );
 
+  it("slows reconnects after ten consecutive native refusals until a grant", async () => {
+    bridge.postMessage.mockImplementation(refuse("Native grant unavailable"));
+    let socket = connect();
+    for (let attempt = 1; attempt < 10; attempt += 1) {
+      await expectRejected(socket);
+      await vi.advanceTimersByTimeAsync(15_000);
+      socket = currentSocket(`refused-${attempt}`, signedAt + attempt);
+    }
+    await expectRejected(socket);
+    expect(wsInstances).toHaveLength(10);
+    // The refused document keeps its recovery path, once per five minutes.
+    expect(gateway!.snapshot.phase).toBe("connecting");
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Page activation replaces the client: one immediate attempt, not a new fast budget.
+    gateway!.connect();
+    await expectRejected(currentSocket("activated", signedAt + 10));
+    expect(wsInstances).toHaveLength(11);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(wsInstances).toHaveLength(11);
+    authorizeWith("recovered-native-grant");
+    await vi.advanceTimersByTimeAsync(1);
+    const recovered = currentSocket("recovered", signedAt + 11);
+    const frame = await recovered.connect.promise;
+    recovered.hello(frame.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gateway!.snapshot.phase).toBe("connected");
+
+    // A grant restores fast recovery for the next refusal.
+    bridge.postMessage.mockImplementation(refuse("Native grant unavailable"));
+    recovered.emitClose(1006, "");
+    await vi.advanceTimersByTimeAsync(800);
+    await expectRejected(currentSocket("after-grant", signedAt + 12));
+    await vi.advanceTimersByTimeAsync(1_360);
+    expect(wsInstances).toHaveLength(14);
+  });
+
   it("preserves the shipped iOS nonpersistent identity handoff", async () => {
     const deviceFamily = "iPhone";
     // The existing iOS host seeds its nonpersistent WKWebView, rather than
