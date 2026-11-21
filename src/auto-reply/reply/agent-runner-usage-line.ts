@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { hasBillableUsage, hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type CapturedModelCostPricing } from "../../model-catalog/usage-pricing.js";
+import type { CapturedModelCostPricing } from "../../model-catalog/usage-pricing.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import { estimateAggregateUsageCostAsync, formatUsd } from "../../utils/usage-format.js";
