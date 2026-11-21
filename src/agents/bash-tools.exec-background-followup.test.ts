@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
@@ -61,6 +62,7 @@ import {
   type PluginToolExecutionCapabilities,
 } from "./plugin-tool-execution.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import { runWithAgentWorkspaceReadiness } from "./workspace-readiness.js";
 
 // mock-isolation: Keep model inference outside the real process and session-event ownership fixture.
 vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -400,6 +402,63 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     }
   },
 );
+
+test("wakes the session after the turn that started the exec retired its workspace gate", async ({
+  signal,
+}) => {
+  // Incident: a worktree turn started a wake-armed exec and yielded. The exit callback
+  // inherited that turn's workspace gate, whose ownership check failed once the turn
+  // ended, so the wake was refused before it started and the result was dropped.
+  const sessionKey = "agent:main:dashboard:retired-workspace-gate";
+  const sessionId = sessionKey.replaceAll(":", "-");
+  await seedOrigin(sessionKey);
+  const claim = claimAgentRunContext(
+    "retired-gate-run",
+    { sessionKey, sessionId, agentId: "main" },
+    { trackOwner: true },
+  );
+  // Outside the workspace: a wake turn attests the content it saw, and removing it
+  // afterwards would read as a vanished workspace to later turns.
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "retired-gate-")));
+  const releasePath = path.join(directory, "release");
+  let retired = false;
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  try {
+    await runWithAgentWorkspaceReadiness(
+      {
+        sessionKey,
+        isReady: () => true,
+        waitUntilReady: async () => {},
+        assertCurrent: () => {
+          if (retired) {
+            throw new Error("Session changed while preparing its project; retry the task.");
+          }
+        },
+      },
+      () =>
+        exec(
+          "retired-gate",
+          `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+           const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("RETIRED_GATE_EXEC_RESULT"); } };
+           const watcher = fs.watch(${JSON.stringify(directory)}, finish); finish();`,
+        ),
+    );
+    // The starting turn yields and ends before the command exits.
+    retired = true;
+    await fs.writeFile(releasePath, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(model).toHaveBeenCalledOnce();
+    const [params] = expectDefined(model.mock.calls[0], "completion turn");
+    expect(params.sessionKey).toBe(sessionKey);
+    expect(params.prompt).toContain("RETIRED_GATE_EXEC_RESULT");
+  } finally {
+    releaseAgentRunContext("retired-gate-run", claim);
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(sessionKey);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("admits every completion that arrives while its cron run is live", async ({ signal }) => {
   const sessionKey = "agent:main:cron:nightly:run:two-live";
