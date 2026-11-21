@@ -350,6 +350,7 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
     methodId,
     authRefresh,
     ...(defaultModel ? { defaultModel } : {}),
+    ...(result.stagedRuntimePolicy === true ? { stagedRuntimePolicy: true as const } : {}),
     ...(modelAccess ? { modelAccess } : {}),
     profiles,
   };

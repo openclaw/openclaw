@@ -297,6 +297,7 @@
       "method": "muse-code",
       "choiceId": "muse-code",
       "appGuidedAuth": "device-code",
+      "channelLogin": {},
       "choiceLabel": "Muse Code",
       "choiceHint": "Sign in with Meta in your browser",
       "groupId": "meta",

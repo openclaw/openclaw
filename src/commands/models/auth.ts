@@ -83,6 +83,7 @@ import {
   resolveReloginProfileIdentity,
   snapshotReloginAuthProfiles,
 } from "./auth-relogin-identity.js";
+import { resolveLoginConnectionResult } from "./auth-runtime-staging.js";
 import { isSharedGatewayForCliLogin, showModelsAuthScopeNote } from "./auth-scope-note.js";
 import {
   loadValidConfigSnapshotOrThrow,
@@ -291,22 +292,14 @@ async function runProviderAuthMethod(
     browserAuthorization: params.browserAuthorization,
   });
   params.signal?.throwIfAborted();
-  const connectionResult: ProviderAuthResult = params.credentialOnly
-    ? {
-        profiles: result.profiles,
-        notes: result.notes,
-        ...(result.configPatch
-          ? {
-              configPatch: {
-                ...(result.configPatch.models?.providers
-                  ? { models: { providers: result.configPatch.models.providers } }
-                  : {}),
-                ...(result.configPatch.plugins ? { plugins: result.configPatch.plugins } : {}),
-              },
-            }
-          : {}),
-      }
-    : result;
+  const { connectionResult, stagesRuntimePolicy } = resolveLoginConnectionResult({
+    result,
+    config: params.config,
+    agentId: params.agentId,
+    providerId: params.provider.id,
+    ownerPluginId: params.ownerPluginId,
+    credentialOnly: params.credentialOnly,
+  });
   const resolvedIdentity = resolveReloginProfileIdentity({
     profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
@@ -406,6 +399,14 @@ async function runProviderAuthMethod(
         const warnings = await repairModelSelectionRuntimePlugins({
           cfg: updated,
           model: defaultModel,
+          agentId: login.agentId,
+          // Repair may await lifecycle leases and package work before it
+          // installs or records a runtime plugin; the login caller (for example
+          // a chat owner) must still be authorized at each of those effects.
+          beforePersistentEffect: async () => {
+            await login.beforePersistentEffect?.();
+            login.assertCurrent?.();
+          },
         });
         for (const warning of warnings) {
           login.runtime.error?.(warning);
@@ -445,11 +446,24 @@ async function runProviderAuthMethod(
     }
     throw error;
   }
+  // Harness-owned logins save no credential profile; their staged runtime
+  // policy is the success signal that the provider's models should become
+  // visible, or restricted model lists keep hiding the just-connected provider.
   const modelAccess =
-    persistedProfiles.length > 0
+    persistedProfiles.length > 0 || stagesRuntimePolicy
       ? await allowLoginProviderModels(params, params.agentId, params.provider.id)
       : undefined;
-  return { result: connectionResult, profiles: persistedProfiles, authRefresh, modelAccess };
+  // Reported by the persistence owner once the staged policy is saved (or
+  // already present): credential-only results drop the login's runtime
+  // metadata, so callers cannot reconstruct it from the result.
+  const stagedRuntimePolicy = stagesRuntimePolicy ? (true as const) : undefined;
+  return {
+    result: connectionResult,
+    profiles: persistedProfiles,
+    authRefresh,
+    modelAccess,
+    stagedRuntimePolicy,
+  };
 }
 
 export async function modelsAuthSetupTokenCommand(
@@ -708,6 +722,8 @@ export type ModelsAuthLoginFlowResult = {
   methodId: string;
   authRefresh: ModelAuthRefreshOutcome;
   defaultModel?: string;
+  /** A harness-owned login staged its declared runtime policy (no profile saved). */
+  stagedRuntimePolicy?: true;
   imported?: boolean;
   profiles: Array<{
     profileId: string;
@@ -914,15 +930,16 @@ async function runModelsAuthLoginFlow(
     await refreshRunningGatewayAuthState(context.agentId, "logout", opts.runtime);
   }
 
-  const { result, profiles, authRefresh, modelAccess } = await runProviderAuthMethod({
-    ...opts,
-    ...context,
-    provider: selectedProvider,
-    method: chosenMethod,
-    prompter,
-    existingProfiles,
-    allowMissingReusedProfile: forceLogin,
-  });
+  const { result, profiles, authRefresh, modelAccess, stagedRuntimePolicy } =
+    await runProviderAuthMethod({
+      ...opts,
+      ...context,
+      provider: selectedProvider,
+      method: chosenMethod,
+      prompter,
+      existingProfiles,
+      allowMissingReusedProfile: forceLogin,
+    });
   if (selectedProvider.id === "openai") {
     opts.runtime.log(
       `Tip: Codex-capable models can use native Codex web search. Configure the \`web_search\` tool with \`${formatCliCommand("openclaw configure --section web")}\`. Docs: https://docs.openclaw.ai/tools/web`,
@@ -932,6 +949,7 @@ async function runModelsAuthLoginFlow(
     providerId: selectedProvider.id,
     methodId: chosenMethod.id,
     authRefresh,
+    ...(stagedRuntimePolicy ? { stagedRuntimePolicy: true as const } : {}),
     ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
     ...(modelAccess ? { modelAccess } : {}),
     profiles: profiles.map((profile) => ({
