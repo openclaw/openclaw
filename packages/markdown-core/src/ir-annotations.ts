@@ -64,11 +64,33 @@ export function appendAssistantTranscriptRoleText(
   });
 }
 
+type ImageToken = { type: string; content?: string; children?: ImageToken[] };
+
+/** Image labels keep only their plain text: emphasis and link markup drops, code and HTML stay literal. */
+function imageAlternativeText(token: ImageToken): string {
+  // token.content is the raw label source, so `**bold**` would leak its delimiters.
+  if (!token.children) {
+    return token.content ?? "";
+  }
+  let text = "";
+  for (const child of token.children) {
+    text +=
+      child.type === "image"
+        ? imageAlternativeText(child)
+        : child.type === "softbreak" || child.type === "hardbreak"
+          ? "\n"
+          : (child.content ?? "");
+  }
+  return text;
+}
+
 /** Image alternatives are plain text, including labels projected for annotations. */
 export function appendImageAlternative(
   target: AnnotationTarget,
-  meta: AssistantTranscriptRoleImageMeta["assistantTranscriptRoleImage"],
+  annotated: AssistantTranscriptRoleImageMeta["assistantTranscriptRoleImage"] | undefined,
+  token: ImageToken,
 ): void {
+  const meta = annotated ?? { text: imageAlternativeText(token), spans: [] };
   if (!meta.text) {
     return;
   }
