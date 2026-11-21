@@ -1,5 +1,5 @@
 ---
-name: 1password
+name: one-password
 description: "Set up and use 1Password CLI for sign-in, desktop integration, and reading or injecting secrets."
 homepage: https://developer.1password.com/docs/cli/get-started/
 metadata:
