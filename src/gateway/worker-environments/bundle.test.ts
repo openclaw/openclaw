@@ -157,6 +157,13 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 describe("worker bundle producer", () => {
   it("stages many chunks deterministically", async () => {
     await withBundleFixture(async ({ root, packageRoot, cacheDir }) => {
+      const remove = fs.rm;
+      using _ = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+        if (options?.recursive && path.basename(String(target)).startsWith(".staging-")) {
+          throw new Error("Bulk bundle cleanup entered the Gateway libuv pool");
+        }
+        return remove(target, options);
+      });
       await writeFixture(packageRoot, 'export { value } from "./worker-chunk-0.mjs";', 48);
       const chunk = path.join(packageRoot, "dist/worker/worker-chunk-0.mjs");
       const first = await producer(packageRoot, cacheDir).prepare();
@@ -454,6 +461,13 @@ describe("worker bundle producer", () => {
         await writeFixture(packageRoot);
         const owner = producer(packageRoot, cacheDir);
         const current = await owner.prepare();
+        const remove = fs.rm;
+        using _ = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+          if (options?.recursive && path.basename(String(target)).startsWith(".staging-")) {
+            throw new Error("Bulk bundle cleanup entered the Gateway libuv pool");
+          }
+          return remove(target, options);
+        });
         const unknown = path.join(cacheDir, "keep-me.txt");
         await fs.writeFile(unknown, "operator-owned");
         const candidates = [
