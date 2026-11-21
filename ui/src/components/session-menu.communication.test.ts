@@ -69,9 +69,9 @@ describe("session communication menu", () => {
         readState: () => ({ session: { sessionId: null }, selectionCount: 0 }),
         runAction: () => {},
       });
-      const read = vi.fn(menuSettings.communicationState);
-      createEffect(read, () => {});
-      return { settings: menuSettings, read, dispose: disposeRoot };
+      const readCommunication = vi.fn(menuSettings.communicationState);
+      createEffect(readCommunication, () => {});
+      return { settings: menuSettings, read: readCommunication, dispose: disposeRoot };
     });
     try {
       flush();
