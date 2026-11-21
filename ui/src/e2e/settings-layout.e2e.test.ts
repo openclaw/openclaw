@@ -841,15 +841,16 @@ suite.define(() => {
             }
             const contentBox = content.getBoundingClientRect();
             const leadBox = lead.getBoundingClientRect();
-            const tabsBox = tabs.getBoundingClientRect();
+            const firstLabel = document.createRange();
+            firstLabel.selectNodeContents(tabs.querySelector('[role="tab"]')!);
             return {
               leadLeft: Math.round(leadBox.left),
               leadRightInset: Math.round(contentBox.left + content.clientWidth - leadBox.right),
-              tabsLeft: Math.round(tabsBox.left),
+              firstLabelLeft: Math.round(firstLabel.getBoundingClientRect().left),
             };
           }),
         )
-        .toEqual({ leadLeft: 12, leadRightInset: 12, tabsLeft: 12 });
+        .toEqual({ leadLeft: 12, leadRightInset: 12, firstLabelLeft: 12 });
     } finally {
       await context.close();
     }

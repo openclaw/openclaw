@@ -2,6 +2,7 @@
    navigation stays distinct from segmented filters inside each page. */
 .hub-tabs {
   --indicator-color: var(--accent);
+  --hub-tab-inline-padding: var(--space-2);
 
   display: flex;
   /* Preserve the horizontal scrollbar when a column shares height with a panel. */
@@ -13,6 +14,14 @@
   gap: var(--space-2);
 }
 
+/* A page-leading strip hangs into the gutter by its button padding. The label
+   follows the reading edge without shrinking the button or its underline. */
+.config-toolbar > .config-sections-hub-tabs:first-child,
+.hub-page-header--stacked .hub-page-header__tabs > .hub-tabs,
+.transcripts-reader > .transcript-reader-hub-tabs {
+  margin-inline-start: calc(-1 * var(--hub-tab-inline-padding));
+}
+
 .hub-tabs--sub {
   gap: var(--space-1);
 }
@@ -22,7 +31,7 @@
   font-weight: 550;
   color: var(--muted);
   transition: color var(--duration-normal) var(--ease-out);
-  padding: var(--space-1) var(--space-2) var(--space-2);
+  padding: var(--space-1) var(--hub-tab-inline-padding) var(--space-2);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -31,7 +40,7 @@
 .hub-tabs--sub .hub-tab {
   font-size: var(--control-ui-text-xs);
   font-weight: 550;
-  padding: 3px var(--space-2) var(--space-1);
+  padding: 3px var(--hub-tab-inline-padding) var(--space-1);
 }
 
 .hub-tab__badge {
@@ -252,6 +261,11 @@
 }
 
 @media (max-width: 640px) {
+  /* With no header inset, the first tab's leading hit area sits in the page gutter. */
+  .content-header.hub-page-header--stacked:not(.hub-page-header--untabbed) {
+    overflow: visible;
+  }
+
   /* Outranks the settings-page header column inset regardless of stylesheet order. */
   .content.content--hub-header .content-header.hub-page-header {
     padding-inline: 0;
