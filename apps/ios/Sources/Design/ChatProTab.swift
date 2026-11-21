@@ -704,7 +704,7 @@ struct ChatProTab: View {
 
     private var activeAgentModelReference: String? {
         guard let activeAgent else { return nil }
-        let modelID = RootSidebar.agentModelLabel(activeAgent)
+        let modelID = AgentIdentityPresentation.modelLabel(for: activeAgent)
         let providerID = activeAgent.model?["provider"]?.value as? String
         return ChatModelMenuPresentation.qualifiedModelReference(modelID: modelID, providerID: providerID)
     }
