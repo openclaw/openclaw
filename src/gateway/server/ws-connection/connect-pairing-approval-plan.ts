@@ -7,6 +7,7 @@ import {
 import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import {
+  hasEffectivePairedDeviceRole,
   listApprovedPairedDeviceRoles,
   type getPairedDevice,
 } from "../../../infra/device-pairing.js";
@@ -21,6 +22,7 @@ import {
   openclawIdTunnelRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "../../openclaw-id/tunnel-principal.js";
+import { isPublicationTransportScope } from "../../publication-reader.js";
 import {
   resolvePairedAccessScopes,
   isControlUiOwnerBootstrapProfile,
@@ -68,6 +70,41 @@ function resolveOpenClawIdPairingScopes(
 ): string[] {
   const policy = openclawIdTunnelRolePolicy(principal);
   return policy ? intersectOperatorScopes(requestedScopes, policy.scopes) : requestedScopes;
+}
+
+/**
+ * Opt-in (gateway.auth.trustedProxy.narrowToDeviceGrant): an approved CLI or TUI
+ * device behind the trusted proxy that asks for more than its paired grant
+ * connects within that grant instead of filing a scope-upgrade request. The
+ * hello reply reports the narrowed scopes, which is how a newly approved device
+ * learns its grant. Returns null when the lane does not apply or nothing fits.
+ */
+export function resolveTrustedProxyDeviceGrantScopes(params: {
+  state: AuthenticatedGatewayConnect;
+  hasBrowserOriginHeader: boolean;
+  pairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null;
+  devicePublicKey: string;
+  scopes: string[];
+}): string[] | null {
+  const { state, pairedDevice } = params;
+  if (
+    state.authMethod !== "trusted-proxy" ||
+    state.role !== "operator" ||
+    state.isBrowserOperatorUi ||
+    state.isWebchat ||
+    params.hasBrowserOriginHeader ||
+    pairedDevice?.publicKey !== params.devicePublicKey ||
+    !hasEffectivePairedDeviceRole(pairedDevice, "operator")
+  ) {
+    return null;
+  }
+  const grantedScopes = resolvePairedAccessScopes(pairedDevice);
+  // Reserved transport scopes require their own device-token admission.
+  if (grantedScopes.some(isPublicationTransportScope)) {
+    return null;
+  }
+  const scopes = intersectOperatorScopes(params.scopes, grantedScopes);
+  return scopes.length > 0 ? scopes : null;
 }
 
 /** One approval lane per pairing request; exactly one wins, "manual" prompts. */
