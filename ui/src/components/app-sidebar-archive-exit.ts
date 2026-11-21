@@ -9,14 +9,15 @@ const SNAPSHOT_ATTRIBUTES = [
 
 /**
  * Starts a short exit for a sidebar row the user is archiving; call it right
- * before the optimistic removal and call the returned stop once that settles.
+ * before the optimistic removal, then finish observing after the roster update.
+ * Cancel the presentation when the hold is released.
  *
  * The roster still owns membership and removes the live row immediately. When
  * the row's tree leaves the list, an inert snapshot takes its place and fades out
  * while the remaining rows glide into the gap. Archiving the last row of a
  * section unmounts the whole list, so that case stays instant.
  */
-export function startSidebarArchiveExit(row: HTMLElement): () => void {
+export function startSidebarArchiveExit(row: HTMLElement) {
   const tree = row.closest<HTMLElement>(".sidebar-session-tree") ?? row;
   const list = tree.parentElement;
   const view = row.ownerDocument.defaultView;
@@ -27,22 +28,27 @@ export function startSidebarArchiveExit(row: HTMLElement): () => void {
     typeof tree.animate !== "function" ||
     view.matchMedia("(prefers-reduced-motion: reduce)").matches
   ) {
-    return () => undefined;
+    return;
   }
   const height = tree.getBoundingClientRect().height;
+  let snapshot: HTMLElement | undefined;
   const observer = new MutationObserver((records) => {
     const removal = records.find((record) => [...record.removedNodes].includes(tree));
     if (removal) {
       observer.disconnect();
-      insertSnapshot(tree, height, list, removal.nextSibling);
+      snapshot = insertSnapshot(tree, height, list, removal.nextSibling);
     }
   });
   observer.observe(list, { childList: true });
-  // Solid applies the optimistic removal before the next frame; stop afterward.
-  return () =>
-    view.requestAnimationFrame(() => {
+  return {
+    // Schedule this after the roster update has scheduled its own layout frame.
+    finishObserving: () => view.requestAnimationFrame(() => observer.disconnect()),
+    cancel() {
       observer.disconnect();
-    });
+      // Early Undo restores the live row; its fading copy must not occupy a second slot.
+      snapshot?.remove();
+    },
+  };
 }
 
 function insertSnapshot(tree: HTMLElement, height: number, list: HTMLElement, next: Node | null) {
@@ -77,4 +83,5 @@ function insertSnapshot(tree: HTMLElement, height: number, list: HTMLElement, ne
   snapshot
     .animate(keyframes, { duration: EXIT_DURATION_MS, easing: EXIT_EASING, fill: "forwards" })
     .finished.then(finish, finish);
+  return snapshot;
 }
