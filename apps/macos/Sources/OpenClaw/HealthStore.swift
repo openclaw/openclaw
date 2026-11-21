@@ -49,6 +49,7 @@ struct HealthSnapshot: Codable {
     }
 
     let ok: Bool?
+    let coreReady: Bool?
     let ts: Double
     let durationMs: Double
     let channels: [String: ChannelSummary]
@@ -318,7 +319,23 @@ final class HealthStore {
         if let error = self.lastError, !error.isEmpty {
             return (.degraded(error), "Health check failed: \(error)")
         }
-        guard let snap = self.snapshot, let link = self.resolveHealthChannel(snap) else {
+        guard let snap = self.snapshot else {
+            return (.unknown, "Health check pending")
+        }
+        guard let link = self.resolveHealthChannel(snap) else {
+            if snap.ok == true {
+                // Health collection can succeed while the Gateway is not ready to accept work.
+                guard let ready = snap.coreReady else {
+                    return (.unknown, String(localized: "Health received; readiness not reported"))
+                }
+                if ready { return (.ok, String(localized: "Gateway ready")) }
+                let summary = String(localized: "Gateway not ready")
+                return (.degraded(summary), summary)
+            }
+            if snap.ok == false {
+                let failure = self.describeFailure(from: snap, fallback: nil)
+                return (.degraded(failure), "Health check failed: \(failure)")
+            }
             return (.unknown, "Health check pending")
         }
         let label = snap.channelLabels?[link.id] ?? link.id.capitalized
