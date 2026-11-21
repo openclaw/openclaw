@@ -73,7 +73,9 @@ export async function recoverStaleGitListener(
     assertCurrent: () => {
       assertCurrent();
       if (firstSignal && getFileLockProcessStartTime(pid, env) !== lock.startTime) {
-        throw new Error("Stale Gateway listener changed before cleanup.");
+        throw new Error(
+          "Refusing stale Gateway cleanup: the process start time could not be verified against the profile lock.",
+        );
       }
       firstSignal = false;
     },
