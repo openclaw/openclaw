@@ -7,12 +7,12 @@ import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
-import { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-heartbeat.js";
 import {
   resolveLeaseDatabasePath,
   type OpenClawStateLeaseDatabase,
   type OpenClawStateLeaseNativeSource,
 } from "./openclaw-state-lease-storage.js";
+import { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-timer.js";
 import type {
   createOpenClawStateLeaseWorkerOwner,
   WorkerLeaseScope,
@@ -185,14 +185,20 @@ export function createOpenClawStateLeaseWorkerStorage(
       leaseMs: number,
       operationLabel: string,
       signal?: AbortSignal,
+      recoverExpired = false,
     ): Promise<number> {
       return owner.runLifecycle(
-        "renew",
+        recoverExpired ? "recover" : "renew",
         admittedWorkerOperation(context, (scope, identity) =>
           scope.execute(
             {
               type: "stateLease.renew",
-              input: { identity, leaseMs, operationLabel },
+              input: {
+                identity,
+                leaseMs,
+                operationLabel,
+                ...(recoverExpired ? { recoverExpired: true as const } : {}),
+              },
             },
             { signal },
           ),
@@ -222,6 +228,8 @@ export function createOpenClawStateLeaseWorkerStorage(
         leaseMs: params.leaseMs,
         heartbeatMs: params.heartbeatMs,
         renew,
+        recover: () =>
+          storage.renew(owner, params.leaseMs, params.operationLabel, params.signal, true),
         onRenewError(error) {
           try {
             owner.rethrowIfUncertain(error, undefined);

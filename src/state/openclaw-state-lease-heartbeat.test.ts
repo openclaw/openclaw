@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -49,9 +50,16 @@ import {
   type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
-import { acquireOpenClawStateLeaseInTransaction } from "./openclaw-state-lease-store.js";
+import {
+  acquireOpenClawStateLeaseInTransaction,
+  releaseOpenClawStateLeaseInTransaction,
+} from "./openclaw-state-lease-store.js";
 import { runWithOpenClawStateLeaseWorker } from "./openclaw-state-lease-worker-operation.js";
-import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import {
+  withOpenClawStateLease,
+  withOpenClawStateLeaseAsync,
+  type OpenClawStateLeaseContext,
+} from "./openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const it = baseIt.extend<{ state: OpenClawTestState }>({
@@ -133,6 +141,61 @@ afterEach(() => {
 });
 
 describe("maintenance lease heartbeat", () => {
+  it.for(["recover", "takeover", "released", "reacquired"] as const)(
+    "settles a stalled timer owner after %s",
+    async (ending, { state }) => {
+      const context = captureOpenClawStateWorkerContext({ env: state.env });
+      let successor: string | undefined;
+      const operation = withOpenClawStateLeaseAsync(
+        { scope: "core:test-maintenance", key: "maintenance", leaseMs: 1_000, waitMs: 0 },
+        context,
+        async (lease, identity) => {
+          const before = Number(readLease(state.env)?.expires_at);
+          block(1_100);
+          if (ending !== "recover") {
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                const next = { ...identity, owner: randomUUID() };
+                expect(acquireOpenClawStateLeaseInTransaction(db, next, 10_000).kind).toBe(
+                  "acquired",
+                );
+                successor = next.owner;
+                if (ending !== "takeover") {
+                  releaseOpenClawStateLeaseInTransaction(db, next);
+                  successor = undefined;
+                }
+                if (ending === "reacquired") {
+                  next.owner = randomUUID();
+                  expect(acquireOpenClawStateLeaseInTransaction(db, next, 10_000).kind).toBe(
+                    "acquired",
+                  );
+                  successor = next.owner;
+                }
+              },
+              { env: state.env },
+            );
+            await expect.poll(() => lease.signal.aborted).toBe(true);
+            return;
+          }
+          await expect.poll(() => Number(readLease(state.env)?.expires_at)).toBeGreaterThan(before);
+          expect(lease.signal.aborted).toBe(false);
+          await lease.assertOwned();
+          const recovered = Number(readLease(state.env)?.expires_at);
+          await expect
+            .poll(() => Number(readLease(state.env)?.expires_at))
+            .toBeGreaterThan(recovered);
+          expect(lease.signal.aborted).toBe(false);
+        },
+      );
+      if (ending === "recover") {
+        await operation;
+      } else {
+        await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+      }
+      expect(readLease(state.env)?.owner).toBe(successor);
+    },
+  );
+
   it.for([0, 1])(
     "shares renewal without closing sibling lease %s",
     async (closing, { signal, state }) => {

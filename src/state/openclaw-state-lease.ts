@@ -31,7 +31,6 @@ import {
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import {
   startOpenClawStateLeaseHeartbeat,
-  type startOpenClawStateLeaseTimer,
   type LeaseHeartbeatCleanup,
 } from "./openclaw-state-lease-heartbeat.js";
 import { startOpenClawStateLeaseNativeHeartbeat } from "./openclaw-state-lease-native-heartbeat.js";
@@ -55,6 +54,7 @@ import {
   type OpenClawStateLeaseNativeSource,
 } from "./openclaw-state-lease-storage.js";
 import { renewOpenClawStateLeaseUnderWriteFence } from "./openclaw-state-lease-store.js";
+import type { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-timer.js";
 import { createOpenClawStateLeaseWorkerOwner } from "./openclaw-state-lease-worker-owner.js";
 import {
   acquireLease,
@@ -223,7 +223,16 @@ async function runStateLeaseOwnerInScope<T>(
           assertAcquisitionCurrent?.();
           return;
         }
-        assertActive();
+        if (purpose === "recover") {
+          // Recovery checks the exact acquisition owner in its write transaction.
+          leaseLost.signal.throwIfAborted();
+          validated.signal?.throwIfAborted();
+          if (closed) {
+            throw leaseError("OPENCLAW_STATE_LEASE_LOST", "State lease owner is closed");
+          }
+        } else {
+          assertActive();
+        }
         if (phase !== "owned") {
           throw new Error("State lease no longer admits operations");
         }

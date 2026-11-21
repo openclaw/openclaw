@@ -9,9 +9,9 @@ import {
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import {
   startOpenClawStateLeaseHeartbeat,
-  startOpenClawStateLeaseTimer,
   type LeaseHeartbeatCleanup,
 } from "./openclaw-state-lease-heartbeat.js";
+import { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-timer.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type ControlledWorker = EventEmitter & {
@@ -224,6 +224,8 @@ describe("state lease heartbeat lifetime", () => {
     ["pending", "SQLITE_IOERR"],
     ["idle", "SQLITE_IOERR"],
     ["released", "SQLITE_IOERR"],
+    ["idle-recovered", "SQLITE_IOERR"],
+    ["pending-recovered", "SQLITE_IOERR"],
   ] as const)(
     "diagnoses %s parent renewal (%s) without leaking error prose",
     async (outcome, code) => {
@@ -240,48 +242,76 @@ describe("state lease heartbeat lifetime", () => {
       });
       const onLost = vi.fn();
       const onRenewError = vi.fn();
+      const publish = () => Atomics.store(observation, state.expiresAt, BigInt(Date.now() + 1_000));
+      const recover = vi.fn(async () => {
+        if (outcome === "idle-recovered") {
+          publish();
+        } else {
+          throw failure;
+        }
+      });
       const timer = startOpenClawStateLeaseTimer({
         identity: { scope: "core:test", key: "workspace" },
         observation,
         leaseMs: 1_000,
-        heartbeatMs: outcome === "idle" ? 2_000 : 300,
-        renew: () => (outcome === "pending" ? pending.promise : Promise.reject(failure)),
+        heartbeatMs: outcome.startsWith("idle") ? 2_000 : 300,
+        renew: () => (outcome.startsWith("pending") ? pending.promise : Promise.reject(failure)),
+        recover,
         onRenewError,
         onLost,
       });
       try {
         await vi.advanceTimersByTimeAsync(outcome === "released" ? 900 : 1_000);
-        if (outcome === "failed" || outcome === "released") {
-          expect(onRenewError).toHaveBeenCalledTimes(3);
-          expect(controls.warn).toHaveBeenCalledWith(
-            `state lease renewal failed (scope="core:test", key="workspace", attempt=1, errorName=Error, errorCode=${code} (code=SQLITE_IOERR))`,
-          );
+        if (outcome.startsWith("pending")) {
+          expect(onLost).not.toHaveBeenCalled();
+          if (outcome === "pending-recovered") {
+            publish();
+          }
+          pending.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(recover).not.toHaveBeenCalled();
         }
+        if (outcome.endsWith("recovered")) {
+          expect(onLost).not.toHaveBeenCalled();
+          expect(timer.isExpired()).toBe(false);
+          expect(controls.warn.mock.calls).toEqual([
+            [
+              `state lease recovered after missed renewals (scope="core:test", key="workspace", overdueMs=0, attempts=1)`,
+            ],
+          ]);
+          return;
+        }
+        const label = 'scope="core:test", key="workspace"';
+        const detail =
+          outcome === "pending"
+            ? "renewal pending, attempt=1, pendingSince=2027-01-15T08:00:00.300Z, pendingMs=700"
+            : outcome === "failed"
+              ? `last renewal failed, attempt=3, errorName=Error, errorCode=${code} (code=SQLITE_IOERR)`
+              : "no renewal attempted since last commit, lastSuccessAgeMs=1000";
+        const finalMessage =
+          outcome === "released"
+            ? `state lease released (${label}, attempts=3, renewalFailures=3)`
+            : `state lease expired (${label}, ${detail}, renewalFailures=${outcome === "failed" ? 3 : 0})`;
         if (outcome === "released") {
           await timer.close();
           expect(onLost).not.toHaveBeenCalled();
         } else {
-          const detail =
-            outcome === "pending"
-              ? "renewal pending, attempt=1, pendingSince=2027-01-15T08:00:00.300Z, pendingMs=700"
-              : outcome === "failed"
-                ? `last renewal failed, attempt=3, errorName=Error, errorCode=${code} (code=SQLITE_IOERR)`
-                : "no renewal attempted since last commit, lastSuccessAgeMs=1000";
           expect(onLost).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              message: `state lease expired (scope="core:test", key="workspace", ${detail}, renewalFailures=${outcome === "failed" ? 3 : 0})`,
-            }),
+            expect.objectContaining({ message: finalMessage }),
           );
         }
-        expect(controls.warn).toHaveBeenCalledTimes(
-          outcome === "failed" || outcome === "released" ? 2 : 1,
-        );
-        expect(controls.warn.mock.calls.at(-1)?.[0]).toContain(
-          outcome === "released" ? "released" : "expired",
-        );
-        expect(controls.warn.mock.calls.at(-1)?.[0]).toContain(
-          `renewalFailures=${outcome === "failed" || outcome === "released" ? 3 : 0}`,
-        );
+        const failed = outcome === "failed" || outcome === "released";
+        expect(onRenewError).toHaveBeenCalledTimes(failed ? 3 : 0);
+        expect(controls.warn.mock.calls).toEqual([
+          ...(failed
+            ? [
+                [
+                  `state lease renewal failed (${label}, attempt=1, errorName=Error, errorCode=${code} (code=SQLITE_IOERR))`,
+                ],
+              ]
+            : []),
+          [finalMessage],
+        ]);
         expect(JSON.stringify(controls.warn.mock.calls)).not.toContain("/private");
       } finally {
         pending.resolve();
