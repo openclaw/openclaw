@@ -190,10 +190,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     restoredRuns.update(previous?.storedEntry, row.storedEntry);
     childRows.replace(row);
     creators.update(previous, row);
-    if (previous) {
-      if (previous.generation !== row.generation) {
-        transcriptUpdates.remove(records.identity(row));
-      }
+    if (previous && previous.generation !== row.generation) {
+      transcriptUpdates.remove(records.identity(row));
     }
     rows.set(records.identity(row), row);
     recents.update(row);
@@ -511,6 +509,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const stop = subscribeSessionRowPublications({
     rows,
+    byKey,
     dirty,
     revisions,
     advanceRevision: () => epoch++,

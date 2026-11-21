@@ -53,6 +53,19 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor removes empty snapshot directories left by cancellation between
+private directory creation and native-token acquisition, after its inspection
+workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
+remain retained. The candidate must contain this repair; installed updaters need
+no schema or protocol change.
+
+Git release conversion leaves the serving link unchanged until candidate checks
+and service ownership revalidation finish. At activation, the legacy
+`git-install/lib/node_modules/openclaw` link follows `git-install/openclaw`, so
+existing CLI paths keep working without retaining a separate release selection.
+This also applies with `--no-restart`; the launcher selects the pending candidate
+on its next start. The installed updater must contain this repair.
+
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
 older service definitions without adopting another global installation. The
@@ -82,6 +95,12 @@ plugin order and repair guidance. A changed owner, protected path, or migration
 requirement still refuses input publication; diagnostics name added or removed
 owners even when the displayed ID summary is truncated. The candidate must contain
 this repair; the installed updater needs no schema or protocol change.
+
+Update Doctor still defers agent database path repair so the captured rollback
+inventory stays unchanged. It reads the registrations and warns only when one
+needs that repair, with the count; a registry with nothing to repair adds no
+warning to the update result. The candidate must contain this change; the
+installed updater needs no schema or protocol change.
 
 Gateway update handoff preparation and its parent-side lease reads, identity checks,
 and cleanup run in the existing handoff worker. Slow coordinator filesystem work
@@ -294,6 +313,10 @@ through private snapshots. It does not retain an independent WAL reader that can
 block its own next migration's exclusive lock. Exec approvals policy, local socket
 credentials, and verified rollback attribution retain their existing checks. This
 repair requires the candidate Doctor; the installed updater needs no change.
+
+When retrying an update from a restored 2026.9.37 profile, Doctor configures
+shared-state journaling before taking the exclusive schema migration lock. This
+lets the agent maintenance worker acquire its lease after shared-state migration.
 
 Gateway cleanup preserves retired managed npm plugin generations referenced by
 absolute or home-relative paths in startup or current configuration. This keeps
@@ -1026,6 +1049,12 @@ schema, or protocol change is involved.
 
 ### Migration integrity checks
 
+Cold update-history bookkeeping verifies shared-state integrity before acquiring
+the SQLite writer. The full check still runs, but a serving Gateway can continue
+writing while it scans. Ledger changes and current ownership/schema checks remain
+transactional; explicit maintenance and orphan recovery retain their existing
+transaction-local verification.
+
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
 existing foreign-key checks. This avoids checking every unrelated index against
@@ -1235,6 +1264,17 @@ changes nothing. The saved report keeps the details.
   cache). Registries that omit `dist.unpackedSize` skip this check. The state
   snapshot has its own measured check.
 
+A package update that must migrate a shared or agent database runs that
+migration in the candidate Doctor, which needs exclusive access to the state.
+A Gateway that the updater does not manage as a service keeps running through
+the update, for example a foreground `openclaw gateway run` under a non-default
+`OPENCLAW_HOME` or `OPENCLAW_STATE_DIR` profile, or one under an external
+supervisor. If such a Gateway owns the state, the update refuses before
+replacing the package. The refusal names each database with its schema hop and
+the Gateway PID. Stop that Gateway through its owner, or press Ctrl+C in its
+terminal, then rerun `openclaw update`. Updates that need no migration still
+run while it serves.
+
 Every attempt ends with one update run record. Its `cause` is one of `none`,
 `node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
 `network`, `config-invalid`, `install-failed`, `state-migration-failed`,
@@ -1424,6 +1464,10 @@ Older running Gateways, including 2026.9.6, can still fail their first shutdown
 with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
 candidate cannot change code already running in that process. Start the updated
 Gateway with its installation owner if the old process exits without restarting.
+The retained shutdown code includes restart-marker persistence and subagent
+settlement. Running 2026.11.5 and 2026.11.6 Gateways load both only at shutdown,
+so after an in-place replacement such as `openclaw update --no-restart` they can
+fail that shutdown without recording which interrupted sessions to resume.
 
 When a writable managed Node Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the

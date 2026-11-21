@@ -6282,3 +6282,34 @@ Require reduced discovery work and owner CPU/allocations without a material
 handler regression beyond A/A variability. Returned catalog bytes must stay
 identical within each arm. This is owner-boundary evidence, not WebSocket,
 provider-network, filesystem cold-cache, or production incident attribution.
+
+## Directory watch stream
+
+`directory-watch-stream-measure.mjs` measures the complete directory-watch host
+parser and worker bridge using a real subprocess stdout pipe, MessagePort, and
+800 owned-directory subscribers in a worker. It freezes the baseline and candidate
+sources, replays 260,000 ordered native-protocol events in 65-event bursts, and
+checks each owner's sequence against an independently computed digest. It does
+not measure model-catalog refresh work or whole-Gateway latency.
+
+```sh
+node --expose-gc scripts/perf/directory-watch-stream-measure.mjs \
+  --base <baseline-commit> --output /path/to/new-proof-directory
+```
+
+Five counterbalanced A1/A2/B samples run serially in fresh processes with equal
+warmup. Separate timing and allocation passes record main-thread/process/producer
+CPU, collected-object-inclusive heap samples, CPU profiles, stream chunks, worker
+messages, monotonic-clock delivery tails, and host load. The private `--arm` and
+`--allocations` flags select one subprocess sample. Compare both A controls and
+report spread; a faster stream bridge must preserve every owner event and order.
+
+`--events 26000 --batch-events 5` checks smaller bursts resembling the native
+fixture’s typical chunk size; defaults retain the heavier burst workload.
+
+`--native` first characterizes the real watch helper on 800 synthetic roots with
+62,400 files (1.1 GB), then creates/renames/deletes 8,000 build artifacts. It records
+native events, notified roots, bytes and chunks over the churn plus a fixed drain
+window. Native operating-system notifications can coalesce transient files, so
+this rate is platform-specific, not a prediction of production traffic. No agent
+database is read by this transport; database size does not affect this workload.

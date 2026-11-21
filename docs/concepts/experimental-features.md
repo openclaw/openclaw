@@ -26,13 +26,10 @@ available for user-installed browser code.
 | Surface                 | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
 | ----------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Codex harness           | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
-| Code Mode               | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
 | Cloud workers           | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud device desktop](/gateway/cloud-workers#desktop-interactive)                     |
-| Templates               | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
 | This computer’s desktop | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
 | OpenClaw ID             | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
 | Speech bubbles          | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
-| Tool Search             | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 | Usage-ranked tool index | `agents.defaults.experimental.usageRankedToolIndex`                     | You want frequently and recently used tools to take priority in bounded prompt indexes                                            | [Usage-ranked tool index](#usage-ranked-tool-index)                                    |
 
 ## Control UI Labs
@@ -41,11 +38,10 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models,
+Labs includes Speech bubbles, Decision assistance, Composer predictions,
 Usage-ranked tool index,
-Templates, This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
-desktop availability updates in connected Control UI pages. Code Mode and Tool
-Search changes take effect for future agent runs. The Cloud device desktop lab
+This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
+desktop availability updates in connected Control UI pages. The Cloud device desktop lab
 controls access to existing desktop-capable workers; changing a profile’s
 `settings.desktop` affects only newly provisioned workers.
 
@@ -59,22 +55,24 @@ by default, while an existing explicit
 config path remains an advanced opt-out, not a Labs requirement. It does not
 disable bundled views or backend operations.
 
-Templates is off by default. Turning it on permits official starter discovery and
-Add in Agents, Gateway catalog/Add methods, and local CLI Add. Add creates an
-ordinary agent and installs its requirements; repeating Add creates another
-agent. Turning the switch off blocks new Add operations, but existing agents
-continue running. Local project authoring and inspection do not require the
-switch. An Add already admitted before the switch changes can finish safely.
+<a id="templates" />Templates has graduated from Labs and is available by
+default at **Customize → Templates**, with no replacement settings switch. The
+historical `gateway.controlUi.experimental.templates` key remains an advanced
+opt-out: existing explicit `false` stays off, while unset or `true` enables
+discovery and Add. Existing agents are unaffected. Installation still requires
+its normal authority, review, and consent. See [Templates](/cli/templates).
 
-When `tools.codeMode` is absent, Code Mode uses `"auto"`: it engages only for
-models marked as preferred Code Mode performers. The Labs switch writes `"auto"`
-when on and `false` when off; it does not force Code Mode on for every model.
-An explicitly authored object without `enabled` stays off. Agent and model
-overrides take precedence.
+<a id="code-mode" />Code Mode has graduated from Labs. Its default is unchanged:
+an absent `tools.codeMode` uses `"auto"` for catalog-preferred models only.
+Manage it in **Settings → Agents → Agent defaults → Tools**; the switch selects
+Auto or Off without forcing unsupported models on. Existing explicit settings,
+including option-bearing objects without `enabled`, and agent/model overrides
+keep their behavior. See [Code Mode](/tools/code-mode).
 
-Tool Search is enabled by default when `tools.toolSearch` is unset.
-Turning its Labs switch off disables the global default; turning it on restores
-that default.
+<a id="tool-search" />Tool Search has graduated from Labs and remains enabled
+by default when `tools.toolSearch` is unset. Manage the global default in
+**Settings → Agents → Agent defaults → Tools**. Existing explicit off/on, modes,
+limits, and model-specific behavior are preserved. See [Tool Search](/tools/tool-search).
 
 ## Usage-ranked tool index
 

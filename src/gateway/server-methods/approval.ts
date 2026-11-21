@@ -35,7 +35,10 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
+import {
+  prepareApprovalSessionAccess,
+  readOperatorApprovalRequestSource,
+} from "./approval-record-lookup.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import { loadVisibleApproval } from "./approval-visible-record.js";
@@ -221,13 +224,13 @@ export function createApprovalHandlers(
       using sessionAccess = await prepareApprovalSessionAccess({
         client,
         getCfg: context.getRuntimeConfig,
-        sources: history.records.map((record) => record.source),
+        sources: history.records.map(readOperatorApprovalRequestSource),
       });
       authority.assertCurrent();
       const cfg = context.getRuntimeConfig();
       const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
-        if (!sessionAccess.canAccess(record.source)) {
+        if (!sessionAccess.canAccess(readOperatorApprovalRequestSource(record))) {
           return [];
         }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);

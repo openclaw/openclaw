@@ -44,6 +44,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
     decisionModels: [],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
+    modelRequired: false,
     thinkingLevel: "off",
     thinkingOverridden: true,
     fastMode: false,
