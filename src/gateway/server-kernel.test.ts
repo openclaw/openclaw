@@ -626,6 +626,9 @@ describe("createGatewayKernel", () => {
     try {
       await fixture.configure();
       kernel = await fixture.open();
+      // Full startup commits the reloader's config; shutdown persists markers only after that.
+      const config = kernel.gatewayRequestContext.getRuntimeConfig();
+      kernel.runtimeState.configReloader.getCommittedRuntimeConfig = () => config;
       const markers = vi.spyOn(restartResume, "persistRunningSessionsForRestart");
       const subagents = vi.spyOn(subagentRegistry, "terminateLiveSubagentsForShutdown");
       for (const chunk of rotatedChunks) {
