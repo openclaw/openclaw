@@ -162,15 +162,17 @@ async function expectHeaderCopy(
     },
   }[active];
   const header = page.locator(".plugins-hub-header");
-  const title = header.getByRole("heading", { level: 1, includeHidden: compactWorkshop });
-  expect(await title.textContent()).toBe(expected.title);
+  const heading = header.getByRole("heading", { level: 1, includeHidden: compactWorkshop });
+  expect(await heading.textContent()).toBe(expected.title);
   // The phone's floating header carries the title, leaving it for assistive tech.
   const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
   if (compactWorkshop) {
     // In the compact Workshop header the learning controls replace the intro row.
     expect(await header.locator(".hub-page-header__title").isHidden()).toBe(true);
     if (floatingHeader) {
-      expect(await page.locator(".topbar-page-title").innerText()).toBe(expected.title);
+      const topbarTitle = page.locator(".topbar-page-title");
+      await topbarTitle.waitFor({ state: "visible" });
+      expect(await topbarTitle.textContent()).toBe(expected.title);
     }
     const learningMode = header.getByRole("button", { name: "Skill Workshop learning mode" });
     await learningMode.click();
