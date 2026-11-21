@@ -65,6 +65,7 @@ import {
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import * as sessionsSendExecutor from "./sessions-send-executor.js";
 import * as sessionsSendFollowup from "./sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import * as sessionsSendDelivery from "./sessions-send-tool.delivery.js";
@@ -253,6 +254,39 @@ describe("sessions_send dispatch admission", () => {
     resetGatewayWorkAdmission();
     await state.cleanup();
   });
+
+  it.each([{ sessionKey: targetSessionKey }, { label: "synthetic-label" }])(
+    "returns a schema-valid result when admission outlives its deadline: %o",
+    async (target) => {
+      const execution = vi
+        .spyOn(sessionsSendExecutor, "executeSessionsSend")
+        .mockReturnValue(new Promise(() => {}));
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const tool = createTool();
+        const pending = tool.execute("admission-deadline", {
+          ...target,
+          message: "Continue the task",
+        });
+        await vi.advanceTimersByTimeAsync(30_000);
+        const { details } = await pending;
+        expect(details).toMatchObject({
+          runId,
+          status: "error",
+          error: expect.stringContaining("the message may have been accepted"),
+        });
+        expect(details).toEqual(
+          "sessionKey" in target
+            ? expect.objectContaining(target)
+            : expect.not.objectContaining({ sessionKey: expect.anything() }),
+        );
+        expect(Value.Check(tool.outputSchema!, details)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        execution.mockRestore();
+      }
+    },
+  );
 
   it("applies peer preferences to new notifications without revoking accepted events", async () => {
     const callGateway = vi.fn();
