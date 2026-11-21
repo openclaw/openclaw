@@ -13,6 +13,13 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+
+export function runPluginServiceStartup<T>(run: () => T): T {
+  return runOutsideOperatorToolGatewayAuthority(() =>
+    runOutsidePluginRuntimeGenerationScope(() => pluginInstanceInvocation.exit(run)),
+  );
+}
 
 export function createPluginServiceSchedulerRunner(owner: {
   registry: PluginRegistry;
