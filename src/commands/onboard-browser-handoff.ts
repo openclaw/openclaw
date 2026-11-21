@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
+import { resolveControlUiBrowser } from "../infra/control-ui-browser.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
@@ -118,7 +119,8 @@ export async function runBrowserHatchHandoff(params: {
     return false;
   }
   const browserSupport = await detectBrowserOpenSupport();
-  const canOpenBrowser = browserSupport.ok;
+  const browser = browserSupport.ok ? await resolveControlUiBrowser() : { canOpen: false };
+  const canOpenBrowser = browserSupport.ok && browser.canOpen;
   let target: BrowserHatchTarget;
   try {
     const config = params.config;
@@ -200,13 +202,18 @@ export async function runBrowserHatchHandoff(params: {
   }
 
   let opened = false;
+  if (browser.notice) {
+    await params.prompter.note(browser.notice, t("wizard.guided.browserHandoffTitle"));
+  }
   if (canOpenBrowser) {
     try {
       // The handoff URL carries the one-time pairing credential in its
       // fragment. Open it through a private file handoff so the credential
       // never appears in a browser-opener process argument, where another
       // OS user could read it from /proc on default procfs hosts.
-      opened = await openUrlPrivately(browserUrl);
+      opened = browser.openOptions
+        ? await openUrlPrivately(browserUrl, browser.openOptions)
+        : await openUrlPrivately(browserUrl);
     } catch {
       opened = false;
     }

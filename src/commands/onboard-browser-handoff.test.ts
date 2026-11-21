@@ -8,6 +8,7 @@ import * as gatewayCall from "../gateway/call.js";
 import * as uiLinks from "../gateway/control-ui-links.js";
 import * as browserHandoff from "../infra/browser-handoff.js";
 import * as browserOpen from "../infra/browser-open.js";
+import * as browserChoice from "../infra/control-ui-browser.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import * as handoff from "./control-ui-handoff.js";
 import { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
@@ -20,6 +21,7 @@ function createMocks() {
     hasVerifiedControlUiLoopbackAlias: vi.spyOn(handoff, "hasVerifiedControlUiLoopbackAlias"),
     detectBrowserOpenSupport: vi.spyOn(browserOpen, "detectBrowserOpenSupport"),
     openUrlPrivately: vi.spyOn(browserHandoff, "openUrlPrivately"),
+    resolveControlUiBrowser: vi.spyOn(browserChoice, "resolveControlUiBrowser"),
     resolveAdvertisedControlUiLinks: vi.spyOn(uiLinks, "resolveAdvertisedControlUiLinks"),
   };
 }
@@ -64,6 +66,7 @@ beforeEach(async () => {
   }));
   sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: false });
   sharedMocks.openUrlPrivately.mockResolvedValue(true);
+  sharedMocks.resolveControlUiBrowser.mockResolvedValue({ canOpen: true });
 });
 
 afterEach(() => {
@@ -264,3 +267,16 @@ it.each(["suppressed", "disabled", "document", "abort", "presence", "bootstrap"]
     }
   },
 );
+
+it("uses the selected browser while retaining the connected-client proof", async () => {
+  const openOptions = { browserCommand: ["/usr/bin/firefox"] };
+  sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
+  sharedMocks.resolveControlUiBrowser.mockResolvedValue({
+    canOpen: true,
+    openOptions,
+    notice: "Opening Firefox for this session.",
+  });
+  expect(await runHandoff()).toBe(true);
+  expect(sharedMocks.openUrlPrivately).toHaveBeenCalledWith(browserUrl, openOptions);
+  expect(displayedNotes()).toContain("Dashboard connected");
+});

@@ -1,6 +1,6 @@
 import { isWSLEnv } from "./wsl.js";
 
-export function isRemoteEnvironment(): boolean {
+export function isRemoteEnvironment(options?: { wsl?: boolean }): boolean {
   return Boolean(
     process.env.SSH_CLIENT ||
     process.env.SSH_TTY ||
@@ -10,6 +10,6 @@ export function isRemoteEnvironment(): boolean {
     (process.platform === "linux" &&
       !process.env.DISPLAY &&
       !process.env.WAYLAND_DISPLAY &&
-      !isWSLEnv()),
+      !(options?.wsl ?? isWSLEnv())),
   );
 }

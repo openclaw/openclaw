@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { openLocalFile } from "./browser-open.js";
+import { openLocalFile, type BrowserOpenOptions } from "./browser-open.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import {
   createPrivateWindowsDirectory,
@@ -74,7 +74,10 @@ async function removeHandoffDirectory(directory: string): Promise<void> {
  * handoff document; only that document's file path reaches the browser opener.
  * Returns true when the handoff document was handed off successfully.
  */
-export async function openUrlPrivately(targetUrl: string): Promise<boolean> {
+export async function openUrlPrivately(
+  targetUrl: string,
+  options?: BrowserOpenOptions,
+): Promise<boolean> {
   const parsed = URL.parse(targetUrl);
   if (parsed?.protocol !== "http:" && parsed?.protocol !== "https:") {
     return false;
@@ -124,7 +127,9 @@ export async function openUrlPrivately(targetUrl: string): Promise<boolean> {
     return false;
   }
 
-  const opened = await openLocalFile(filePath).catch(() => false);
+  const opened = await (options ? openLocalFile(filePath, options) : openLocalFile(filePath)).catch(
+    () => false,
+  );
   if (!opened) {
     await removeHandoffDirectory(directory);
     return false;
