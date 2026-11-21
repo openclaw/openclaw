@@ -40,7 +40,10 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 `api.registerLearnContribution(...)` adds a plugin to `/learn` turns. The
 contribution names its `medium` (`"skills"` or `"memory"`), the `toolNames` it
 writes with, and optional `requiredToolNames` that must all be allowed. OpenClaw
-checks the tools against the turn's tool policy; when the contribution can
+rejects sandboxed turns unless the contribution opts into `sandboxCompatible`.
+This opt-in only permits the contribution to reach the existing tool-policy check;
+the plugin's tools must still authorize their own writes. OpenClaw checks the
+tools against the turn's tool policy; when the contribution can
 learn, it calls `buildGuidance({ availableTools, media })` and adds the returned
 `lines` to the prompt and `appendix` blocks after the closing instruction.
 OpenClaw owns the prompt frame and the routing rule between media, and orders

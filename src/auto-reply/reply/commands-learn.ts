@@ -92,7 +92,7 @@ function buildLearnPrompt(request: string, active: readonly ActiveLearnContribut
 
 const LEARN_COMMAND_PREFIX = "/learn";
 const LEARN_UNAVAILABLE_REPLY =
-  "/learn can't save anything on this agent: no learning tools are available here. They need a non-sandboxed session, a model and harness with tool support, and a tool policy that allows them.";
+  "/learn can't save anything on this agent: no learning tools are available here. They need a non-sandboxed session or a sandbox-compatible learning plugin, a model and harness with tool support, and a tool policy that allows them.";
 
 // "/learn <subcommand> [args]": the first word, then the raw remainder from its separator on.
 const SUBCOMMAND_PATTERN = /^([^\s;:,]+)([\s;:,].*)?$/s;
@@ -127,7 +127,7 @@ function parseLearnCommand(raw: string): LearnCommand | null {
 
 /**
  * Resolves which contributors can learn on this turn. All need a harness that exposes OpenClaw
- * tools and a non-sandboxed session; each needs a policy that allows its required tools.
+ * tools and a compatible session; each needs a policy that allows its required tools.
  */
 async function resolveActiveContributors(
   params: HandleCommandsParams,
@@ -153,12 +153,12 @@ async function resolveActiveContributors(
         }
       : {}),
   });
-  // Learned skills live on the host under the agent dir, and memory providers deny
-  // sandboxed callers, so a sandboxed session can learn into neither.
-  if (sandboxRuntime.sandboxed) {
+  const eligibleContributors = sandboxRuntime.sandboxed
+    ? contributors.filter((contributor) => contributor.contribution.sandboxCompatible)
+    : contributors;
+  if (eligibleContributors.length === 0) {
     return [];
   }
-
   try {
     if (
       resolveRunToolSurfaceBlock({
@@ -194,7 +194,7 @@ async function resolveActiveContributors(
       // Manifest tool-profile grants (for example a memory plugin's tools) match real runs.
       pluginMetadataSnapshot: await resolvePluginMetadataSnapshotAsync({ config: params.cfg }),
     });
-    return contributors.flatMap((contributor) => {
+    return eligibleContributors.flatMap((contributor) => {
       const { toolNames, requiredToolNames } = contributor.contribution;
       const availableTools = new Set(
         explainToolPolicyAvailability({
