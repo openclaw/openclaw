@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { inventory, loadInventorySources } from "./database-worker-inventory.mjs";
+import { type inventory, loadInventorySources } from "./database-worker-inventory.mjs";
 import { baseInventory } from "./lib/database-worker-inventory-cache.mts";
+import {
+  InventoryProcessError,
+  inventoryInSubprocess,
+} from "./lib/database-worker-inventory-process.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   reportNativeTypeScriptPhase,
@@ -53,9 +57,13 @@ export function main(
       new Map(rows.filter((row) => row.tier === tier).map((row) => [row.file, row.calls.length]));
     const sources = loadInventorySources(root, "", args.staged);
     reportNativeTypeScriptPhase(trace, "head.sources", { files: sources.size });
-    const head = inventory(root, "", args.staged, sources, {
-      observer: trace && ((phase, facts) => trace(`head.${phase}`, facts)),
-    });
+    const head = inventoryInSubprocess(
+      root,
+      "",
+      args.staged,
+      sources,
+      trace && ((phase, facts) => trace(`head.${phase}`, facts)),
+    );
     const baseline = baseInventory(root, base, { sources, rows: head }, trace);
     const before = counts(baseline);
     const after = counts(head);
@@ -95,7 +103,7 @@ export function main(
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    return 1;
+    return error instanceof InventoryProcessError ? error.exitCode : 1;
   } finally {
     reportNativeTypeScriptPhase(trace, "ratchet.terminal", { outcome });
   }

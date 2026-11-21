@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
 import { inventory, loadInventorySources } from "../../scripts/database-worker-inventory.mjs";
-import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
+import * as inventoryProcess from "../../scripts/lib/database-worker-inventory-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -188,7 +188,7 @@ it("normalizes Windows discovery before SQLite exclusions and source loading", (
 it("reuses identical source snapshots while keeping head analysis fresh and invalidating changed bases", () => {
   const source = "executeSqliteQuerySync(query);\n";
   const { root, git, write } = fixture({ "src/runtime.ts": source });
-  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  const inspect = vi.spyOn(inventoryProcess, "inventoryInSubprocess");
 
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   write("src/runtime.ts", source.repeat(2));
@@ -229,11 +229,52 @@ it.each(["contents", "added path", "renamed path"])(
     } else {
       fs.renameSync(file, path.join(root, "src/renamed.ts"));
     }
-    const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+    const inspect = vi.spyOn(inventoryProcess, "inventoryInSubprocess");
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(inspect).toHaveBeenCalledTimes(2);
   },
 );
+
+it("isolates the captured snapshot without rereading changed disk bytes and retains phase diagnostics", () => {
+  const { root, write } = sourceFixture({
+    "src/runtime.ts": "executeSqliteQuerySync(query);",
+  });
+  const sources = loadInventorySources(root);
+  write("src/runtime.ts", "executeSqliteQuerySync(query); executeSqliteQuerySync(query);");
+  const phases: string[] = [];
+  const rows = inventoryProcess.inventoryInSubprocess(root, "", false, sources, (phase) =>
+    phases.push(phase),
+  );
+  // The transport must preserve every classifier field, not just the ratcheted count.
+  expect(rows).toEqual(inventory(root, "", false, sources));
+  expect(rows.map(({ file, tier, calls }) => ({ file, tier, calls: calls.length }))).toEqual([
+    { file: "src/runtime.ts", tier: "T1", calls: 1 },
+  ]);
+  expect(phases).toContain("semantic.graph-classification");
+});
+
+it("preserves termination exit status across the snapshot process boundary", async () => {
+  const { root, errors } = fixture({ "src/runtime.ts": "export {};" });
+  const actual = await vi.importActual<typeof childProcess>("node:child_process");
+  vi.mocked(childProcess.spawnSync).mockImplementation((command, args, options) =>
+    args?.includes("--snapshot")
+      ? {
+          pid: 0,
+          output: [],
+          status: null,
+          signal: "SIGTERM",
+          stdout: "",
+          stderr: "snapshot terminated",
+        }
+      : actual.spawnSync(command, args, options),
+  );
+  try {
+    expect(main(root, ["--base", "HEAD"])).toBe(143);
+    expectError(errors, "snapshot terminated");
+  } finally {
+    vi.mocked(childProcess.spawnSync).mockReset();
+  }
+});
 
 it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
   const { root } = sourceFixture({

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { inventory, loadInventorySources } from "../database-worker-inventory.mjs";
+import { type inventory, loadInventorySources } from "../database-worker-inventory.mjs";
 import {
   acquireBuildArtifactLock,
   finalizeBuildStepCache,
@@ -11,6 +11,7 @@ import {
   restoreBuildStepCacheOutputs,
   type BuildCacheStep,
 } from "./build-artifact-cache.mts";
+import { inventoryInSubprocess } from "./database-worker-inventory-process.mts";
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 import {
   reportNativeTypeScriptPhase,
@@ -23,6 +24,7 @@ const analyzerFiles = [
   "scripts/check-database-worker-ratchet.mts",
   "scripts/database-worker-inventory.mjs",
   "scripts/lib/database-worker-inventory-cache.mts",
+  "scripts/lib/database-worker-inventory-process.mts",
   "scripts/lib/database-worker-compat.mts",
   "scripts/lib/personal-credential-writer-guard.mts",
   "scripts/lib/native-typescript.mts",
@@ -60,7 +62,7 @@ export function baseInventory(
   const commit = git(`${ref}^{commit}`);
   if (analyzerSignature() !== loadedAnalyzerSignature) {
     reportNativeTypeScriptPhase(trace, "reuse", { outcome: "changed-analyzer" });
-    return inventory(root, commit, false, undefined, { observer: trace });
+    return inventoryInSubprocess(root, commit, false, undefined, trace);
   }
   // The semantic project denies disk fallback and embeds its config in the analyzer.
   // A whole-tree key conservatively includes every source path, byte and membership change.
@@ -105,7 +107,7 @@ export function baseInventory(
     reportNativeTypeScriptPhase(trace, "equality");
     const rows = identical
       ? current.rows
-      : inventory(root, commit, false, sources, { observer: trace });
+      : inventoryInSubprocess(root, commit, false, sources, trace);
     reportNativeTypeScriptPhase(trace, "reuse", { outcome: identical ? "identical" : "analyzed" });
     if (identical) {
       console.log("SQLite worker snapshots identical: reusing fresh current-tree analysis.");
