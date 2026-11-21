@@ -1,7 +1,6 @@
 import Foundation
 import OpenClawKit
 import Testing
-@testable import OpenClaw
 @testable import OpenClawChatUI
 
 struct ChatSessionsCodingTests {
@@ -260,7 +259,7 @@ struct ChatSessionsCodingTests {
     @Test @MainActor func `ios nested live row adopts history without changing presentation identity`() async throws {
         let model = OpenClawChatViewModel(
             sessionKey: "main",
-            transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
+            transport: ToolResultIngestionTransport())
         defer { model.detachTransport() }
         var liveEnvelope = Self.nestedEnvelope
         liveEnvelope["__openclaw"] = ["id": "nested-row", "runId": "earlier-run"]
