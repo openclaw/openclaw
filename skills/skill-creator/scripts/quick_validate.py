@@ -30,7 +30,12 @@ def _strip_scalar_comment(value: str) -> str:
     if value.startswith("#"):
         return ""
     # Only a leading quote delimits a quoted scalar; apostrophes in plain text do not.
-    return re.sub(r"""^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^'"].*?)[ \t]+#.*$""", r"\1", value)
+    return re.sub(
+        r"""^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^'"].*?)[ \t]+#.*$""",
+        r"\1",
+        value,
+        flags=re.DOTALL,
+    )
 
 
 def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]:
@@ -54,7 +59,11 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
             if not block_scalar:
                 if not current_value:
                     stripped = _strip_scalar_comment(stripped)
-                elif not current_value.startswith(("'", '"')):
+                elif current_value.startswith(("'", '"')):
+                    # The closing quote on a continuation can be followed by a YAML comment.
+                    parsed[current_key] = _strip_scalar_comment(f"{current_value}\n{stripped}")
+                    continue
+                else:
                     # Quotes on a plain scalar's continuation are literal text.
                     stripped = re.sub(r"[ \t]+#.*$", "", stripped)
             parsed[current_key] = f"{current_value}\n{stripped}" if current_value else stripped
