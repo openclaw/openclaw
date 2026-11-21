@@ -8,6 +8,7 @@ import type {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { SignalSender } from "../identity.js";
 
 type SignalEnvelope = {
   sourceNumber?: string | null;
@@ -36,6 +37,9 @@ export type SignalDataMessage = {
   message?: string | null;
   attachments?: Array<SignalAttachment>;
   viewOnce?: boolean | null;
+  expiresInSeconds?: number | null;
+  remoteDelete?: SignalDeleteTarget | null;
+  adminDelete?: SignalDeleteTarget | null;
   mentions?: Array<SignalMention> | null;
   groupInfo?: {
     groupId?: string | null;
@@ -69,6 +73,18 @@ type SignalAttachment = {
   size?: number | null;
 };
 
+type SignalDeleteTarget = {
+  targetTimestamp?: number | null;
+  targetSentTimestamp?: number | null;
+};
+
+export type SignalHistoryEntry = HistoryEntry & {
+  imageSource?: {
+    sender: SignalSender;
+    attachments: SignalAttachment[];
+  };
+};
+
 export type SignalReceivePayload = {
   envelope?: SignalEnvelope | null;
   exception?: { message?: string } | null;
@@ -96,7 +112,7 @@ export type SignalEventHandlerDeps = {
   accountId: string;
   blockStreaming?: boolean;
   historyLimit: number;
-  groupHistories: Map<string, HistoryEntry[]>;
+  groupHistories: Map<string, SignalHistoryEntry[]>;
   textLimit: number;
   dmPolicy: DmPolicy;
   allowFrom: string[];
