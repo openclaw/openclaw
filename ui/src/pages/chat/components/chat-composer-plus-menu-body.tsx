@@ -71,13 +71,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     ([id, label]): MenuItem => ({
       id: `plugin:${id}`,
       label,
-      icon: (
-        <PluginArtwork
-          pluginId={id}
-          fallback={<Icon name="plug" />}
-          class="agent-chat__plugin-menu-icon"
-        />
-      ),
+      icon: <PluginArtwork pluginId={id} fallback={<Icon name="plug" />} />,
       details: menuChevron(),
       class: "agent-chat__capability-menu-item",
       closeOnSelect: false,
@@ -98,7 +92,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
           {
             kind: "group",
             id: "root-list",
-            class: "agent-chat__plugin-menu-scroll",
+            class: "chat-plugin-menu-scroll",
             items: rows,
           },
         ]
@@ -296,7 +290,7 @@ export function ChatComposerPlusMenuBody(props: ChatComposerPlusMenuResolvedProp
         {
           kind: "group",
           id: "plugin-options",
-          class: "agent-chat__plugin-menu-scroll",
+          class: "chat-plugin-menu-scroll",
           items: actions.map((action) => ({
             id: `action:${action.key}`,
             label: action.running ? `${t("common.cancel")}: ${action.label}` : action.label,
