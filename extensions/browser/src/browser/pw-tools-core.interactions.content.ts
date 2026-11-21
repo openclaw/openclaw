@@ -308,6 +308,26 @@ function screenshotLocator(page: Page, ref?: string, element?: string): Locator 
   return ref ? refLocator(page, ref) : element ? page.locator(element).first() : undefined;
 }
 
+async function startScreenshotScreencast(page: Page): Promise<(() => Promise<void>) | undefined> {
+  const session = await page
+    .context()
+    .newCDPSession(page)
+    .catch(() => undefined);
+  if (!session) {
+    return;
+  }
+  session.on("Page.screencastFrame", ({ sessionId }) => {
+    void session.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  await session
+    .send("Page.startScreencast", { format: "jpeg", quality: 1, maxWidth: 1, maxHeight: 1 })
+    .catch(() => {});
+  return async () => {
+    await session.send("Page.stopScreencast").catch(() => {});
+    await session.detach().catch(() => {});
+  };
+}
+
 async function capturePageScreenshot(
   page: Page,
   opts: ScreenshotOptions,
@@ -317,8 +337,8 @@ async function capturePageScreenshot(
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
   }
-  // Headless background tabs never produce a frame, so the native capture would
-  // never settle and keep this page's transition queue busy. Match the raw CDP path.
+  // Headless background tabs need activation before native capture, as in the raw
+  // CDP path. Known-headed tabs use a screencast below to avoid stealing focus.
   if (opts.headless !== false) {
     await page.bringToFront().catch(() => {});
   }
@@ -332,6 +352,10 @@ async function capturePageScreenshot(
   // Resolve a fixed handle with a bounded wait: an unbounded Locator screenshot
   // could keep retrying a missing selector after the caller has already timed out.
   const element = await locator?.elementHandle({ timeout: preparation.timeout });
+  // A small DevTools screencast makes a hidden headed Chrome tab produce frames
+  // without changing the active tab. Keep it alive through native capture and restoration.
+  const stopScreencast =
+    opts.headless === false ? await startScreenshotScreencast(page) : undefined;
   try {
     await element?.scrollIntoViewIfNeeded(preparation);
     opts.signal?.throwIfAborted();
@@ -394,7 +418,11 @@ async function capturePageScreenshot(
         });
       }
     } finally {
-      await element?.dispose();
+      try {
+        await element?.dispose();
+      } finally {
+        await stopScreencast?.();
+      }
     }
   }
 }

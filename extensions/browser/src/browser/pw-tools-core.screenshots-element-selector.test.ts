@@ -67,24 +67,34 @@ describe("pw-tools-core", () => {
     expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 0 });
   });
   it.each([
-    [undefined, ["bringToFront", "screenshot"]],
-    [false, ["screenshot"]],
-  ])(
-    "activates the tab before capture unless Chrome is headed (headless=%s)",
-    async (headless, calls) => {
-      const order: string[] = [];
-      setPwToolsCoreCurrentPage({
-        bringToFront: async () => void order.push("bringToFront"),
-        screenshot: async () => {
-          order.push("screenshot");
-          return Buffer.from("P");
-        },
-      });
-      const opts = { ...target, headless };
-      await mod.takeScreenshotViaPlaywright(opts);
-      expect(order).toEqual(calls);
+    { headless: undefined, expected: ["bringToFront", "screenshot"] },
+    { headless: true, expected: ["bringToFront", "screenshot"] },
+    {
+      headless: false,
+      expected: ["Page.startScreencast", "screenshot", "Page.stopScreencast", "detach"],
     },
-  );
+  ])("uses the right background capture policy for headless=$headless", async (testCase) => {
+    const order: string[] = [];
+    const session = {
+      on: vi.fn(),
+      send: async (method: string) => void order.push(method),
+      detach: async () => void order.push("detach"),
+    };
+    setPwToolsCoreCurrentPage({
+      context: () => ({ newCDPSession: async () => session }),
+      bringToFront: async () => void order.push("bringToFront"),
+      screenshot: async () => {
+        order.push("screenshot");
+        return Buffer.from("P");
+      },
+    });
+    const { buffer } = await mod.takeScreenshotViaPlaywright({
+      ...target,
+      headless: testCase.headless,
+    });
+    expect(buffer.toString()).toBe("P");
+    expect(order).toEqual(testCase.expected);
+  });
 
   it("rejects fullPage for element or ref screenshots", async () => {
     setPwToolsCoreCurrentRefLocator({ screenshot: vi.fn(async () => Buffer.from("R")) });
