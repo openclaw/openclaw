@@ -34,6 +34,7 @@ import {
 } from "./session-cost-usage-quarters.worker.js";
 import {
   createUsageCostCollectionAccess,
+  matchesUsageCostSqliteMutation,
   usageRefreshInputs,
 } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
@@ -367,10 +368,8 @@ export async function executeUsageCostWorker(
     const checkpoint = cached?.envelope?.checkpoint;
     return !(
       source.kind === "sqlite" &&
-      source.generation !== undefined &&
       checkpoint?.kind === "sqlite" &&
-      checkpoint.mtimeMs === source.mtimeMs &&
-      (checkpoint.generation ?? null) === source.generation &&
+      matchesUsageCostSqliteMutation(checkpoint, source) &&
       cached?.envelope?.projection &&
       cached.row.bodyBytes === cached.envelope.body.storedBytes &&
       !rebuildByPath.has(filePath)

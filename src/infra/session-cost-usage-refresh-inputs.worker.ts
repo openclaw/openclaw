@@ -142,6 +142,16 @@ export function usageRefreshInputs(databasePath: string) {
   };
 }
 
+export function matchesUsageCostSqliteMutation(
+  checkpoint: UsageCostSqliteCheckpoint,
+  mutation: { mtimeMs: number; generation?: string | null },
+): boolean {
+  return (
+    checkpoint.mtimeMs === mutation.mtimeMs &&
+    (checkpoint.generation ?? null) === mutation.generation
+  );
+}
+
 export function createUsageCostCollectionAccess(params: {
   input: UsageCostWorkerInput;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
@@ -229,12 +239,7 @@ export function createUsageCostCollectionAccess(params: {
         const checkpoint = checkpoints[index];
         const mutation = mutations[index];
         // Unchanged durable rollups already own these exact statistics.
-        if (
-          checkpoint &&
-          mutation &&
-          checkpoint.mtimeMs === mutation.mtimeMs &&
-          (checkpoint.generation ?? null) === mutation.generation
-        ) {
+        if (checkpoint && mutation && matchesUsageCostSqliteMutation(checkpoint, mutation)) {
           result[index] = {
             eventCount: checkpoint.eventCount,
             maxSeq: checkpoint.maxSeq,
