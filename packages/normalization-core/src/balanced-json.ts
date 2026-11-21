@@ -53,6 +53,7 @@ function extractStrictJsonFragments(
     const discovery = raw[index];
     lineStart =
       discovery === "\n" ||
+      (opts.recoverAtLineStart === true && discovery === "\r") ||
       (lineStart && (discovery === " " || discovery === "\t" || discovery === "\r"));
     // Discovery selects eligible openings, never structure or string ownership.
     // Otherwise hidden quotes could turn a string interior into a child record.
@@ -157,8 +158,11 @@ function extractBalancedJsonAt(
 ): BalancedJsonFragment | null {
   const openers = opts.openers ?? (["{", "["] as const);
   let start = offset;
-  let lineStart = offset === 0 || raw[offset - 1] === "\n";
-  if (!opts.skipQuotedOpeners) {
+  let lineStart =
+    offset === 0 ||
+    raw[offset - 1] === "\n" ||
+    (opts.recoverAtLineStart === true && raw[offset - 1] === "\r");
+  if (!opts.skipQuotedOpeners && !opts.recoverAtLineStart) {
     while (start < raw.length && !isJsonOpeningDelimiter(raw[start], openers)) {
       const char = raw[start];
       lineStart = char === "\n" || (lineStart && (char === " " || char === "\t" || char === "\r"));
@@ -178,7 +182,10 @@ function extractBalancedJsonAt(
   for (let index = start; index < raw.length; index += 1) {
     const char = raw[index];
     const atLineStart = lineStart;
-    lineStart = char === "\n" || (lineStart && (char === " " || char === "\t" || char === "\r"));
+    lineStart =
+      char === "\n" ||
+      (opts.recoverAtLineStart === true && char === "\r") ||
+      (lineStart && (char === " " || char === "\t" || char === "\r"));
     if (inString) {
       if (opts.recoverAtLineStart && (char === "\n" || char === "\r")) {
         // Literal line breaks cannot belong to a JSON string. Keep completed
