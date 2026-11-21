@@ -13,7 +13,10 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import {
+  SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "./sqlite-json.js";
 import type { SharedAuthStoreOwnership } from "./types.js";
 
 const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
@@ -51,7 +54,10 @@ class InvalidSharedAuthStoreOwnershipError extends Error {
   }
 }
 
-export function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
+export function parseSharedAuthStoreOwnership(
+  value: unknown,
+  authorizationOrigin?: unknown,
+): SharedAuthStoreOwnership {
   if (value === undefined) {
     return { location: "legacy-main" };
   }
@@ -60,6 +66,12 @@ export function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOw
     Object.keys(value).length === 1 &&
     (value.location === "legacy-main" || value.location === "state-db")
   ) {
+    if (value.location === "state-db" && authorizationOrigin !== undefined) {
+      if (typeof authorizationOrigin !== "string" || !authorizationOrigin.trim()) {
+        throw new InvalidSharedAuthStoreOwnershipError(authorizationOrigin);
+      }
+      return { location: "state-db", authorizationOrigin };
+    }
     return { location: value.location };
   }
   throw new InvalidSharedAuthStoreOwnershipError(value);
@@ -73,13 +85,17 @@ export function getPreparedSharedAuthStoreOwnership(
   );
 }
 
-function cacheSharedOwnership(databasePath: string, read: () => unknown): SharedAuthStoreOwnership {
+function cacheSharedOwnership(
+  databasePath: string,
+  value: unknown,
+  authorizationOrigin: unknown,
+): SharedAuthStoreOwnership {
   if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
     throw new Error(
       "Shared auth store ownership cache exceeded its process root limit; restart OpenClaw.",
     );
   }
-  const ownership = parseSharedAuthStoreOwnership(read());
+  const ownership = parseSharedAuthStoreOwnership(value, authorizationOrigin);
   sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
   return ownership;
 }
@@ -107,10 +123,14 @@ export async function resolveSharedAuthStoreOwnershipAsync(
   if (cached) {
     return cached;
   }
-  const value = await readConfigMachineStateAsync(
-    SHARED_AUTH_STORE_STATE_KEY,
-    { path: databasePath, env: context.environment },
-    { artifactPreservingReadOnly: isArtifactPreservingStateRead() },
+  const [value, authorizationOrigin] = await Promise.all(
+    [SHARED_AUTH_STORE_STATE_KEY, SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY].map((key) =>
+      readConfigMachineStateAsync(
+        key,
+        { path: databasePath, env: context.environment },
+        { artifactPreservingReadOnly: isArtifactPreservingStateRead() },
+      ),
+    ),
   );
   context.admission.assertCurrent();
   // An explicit commit/reload while this read waited remains the authoritative owner.
@@ -118,7 +138,7 @@ export async function resolveSharedAuthStoreOwnershipAsync(
   if (current) {
     return current;
   }
-  return cacheSharedOwnership(databasePath, () => value);
+  return cacheSharedOwnership(databasePath, value, authorizationOrigin);
 }
 
 /** Prepare cold ownership once; warm lifecycle entries consume the published fact directly. */
@@ -141,6 +161,11 @@ export function inspectSharedAuthStoreOwnership(
       { env },
       { artifactPreservingReadOnly: true },
     ),
+    readConfigMachineState<unknown>(
+      SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY,
+      { env },
+      { artifactPreservingReadOnly: true },
+    ),
   );
 }
 
@@ -158,13 +183,17 @@ export async function reloadSharedAuthStoreOwnership(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<SharedAuthStoreOwnership> {
   const context = captureOpenClawStateWorkerContext({ env });
-  const value = await readConfigMachineStateAsync(
-    SHARED_AUTH_STORE_STATE_KEY,
-    { path: context.admission.databasePath, env: context.environment },
-    { artifactPreservingReadOnly: isArtifactPreservingStateRead() },
+  const [value, authorizationOrigin] = await Promise.all(
+    [SHARED_AUTH_STORE_STATE_KEY, SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY].map((key) =>
+      readConfigMachineStateAsync(
+        key,
+        { path: context.admission.databasePath, env: context.environment },
+        { artifactPreservingReadOnly: isArtifactPreservingStateRead() },
+      ),
+    ),
   );
   context.admission.assertCurrent();
-  const ownership = parseSharedAuthStoreOwnership(value);
+  const ownership = parseSharedAuthStoreOwnership(value, authorizationOrigin);
   sharedAuthStoreOwnershipByDatabasePath.set(context.admission.databasePath, ownership);
   return ownership;
 }
