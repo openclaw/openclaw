@@ -93,11 +93,11 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     ]);
   });
 
-  it("collects configured security audit suppressions as a dangerous flag", () => {
+  it("does not collect security audit suppressions as a dangerous flag", () => {
     const flags = collectEnabledInsecureOrDangerousFlagsFromContracts({
       security: { audit: { suppressions: [{ checkId: "plugins.code_safety" }] } },
     });
-    expect(flags).toContain("security.audit.suppressions configured (1)");
+    expect(flags).toStrictEqual([]);
   });
 
   it("keeps legacy list indices for id-less dangerous sandbox rows", () => {
