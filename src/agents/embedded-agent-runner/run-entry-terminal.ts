@@ -46,11 +46,40 @@ export function resolveRunEntryTerminalOutcome(params: {
   result: EmbeddedAgentRunResult;
   fallbackExhausted: boolean;
 }): EmbeddedAgentRunEntryTerminal["outcome"] {
-  const meta = params.result.meta;
+  const { meta, payloads } = params.result;
+  const errorOnlyReply =
+    meta.terminalReply === undefined &&
+    meta.stopReason === undefined &&
+    !meta.finalAssistantVisibleText?.trim() &&
+    !meta.yielded &&
+    !meta.intentionalTerminalCompletion &&
+    !meta.continuationPending &&
+    payloads?.every((payload) => payload.isError === true)
+      ? payloads[0]
+      : undefined;
   return buildAgentRunTerminalOutcomeFromLifecycleEvent({
-    phase: params.fallbackExhausted || meta.error ? "error" : "end",
-    data: { ...meta, error: meta.error?.message },
+    phase: params.fallbackExhausted || meta.error || errorOnlyReply ? "error" : "end",
+    data: { ...meta, error: meta.error?.message ?? errorOnlyReply?.text },
   });
+}
+
+export function resolveRunEntryFallbackClassification(
+  result: EmbeddedAgentRunResult,
+  classification: ModelFallbackResultClassification,
+  canFallback?: () => boolean,
+) {
+  const stopReason = result.meta.modelFallbackStopReason;
+  if (stopReason) {
+    return { stopReason };
+  }
+  const retryClassification = canFallback?.() === false ? undefined : classification;
+  if (retryClassification) {
+    return retryClassification;
+  }
+  const terminal = resolveRunEntryTerminalOutcome({ result, fallbackExhausted: false });
+  return terminal.status === "ok"
+    ? retryClassification
+    : { stopReason: "returned_terminal_error" as const };
 }
 
 export function canAdvanceContextEngineTurn(params: {

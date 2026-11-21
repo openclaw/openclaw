@@ -164,7 +164,7 @@ export function registerRunEntryFailureTests(state: {
           });
           expect(
             await params.classifyResult?.({ result, ...fallback, attempt: 2, total: 3 }),
-          ).toBeNull();
+          ).toEqual(errorResult ? { stopReason: "returned_terminal_error" } : null);
           expect(child.requesterTurnRunId).toBe(identity.runId);
           return { outcome: "completed", result, ...fallback, attempts: [] };
         });

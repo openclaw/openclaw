@@ -18,6 +18,7 @@ import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import { resetStickyRateLimitFallbacksForTest } from "../model-fallback-sticky.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
+import type { EmbeddedAgentRunResult } from "./types.js";
 
 // Provider I/O and plugin preparation are fixtures; fallback decisions and durable writes are real.
 // mock-isolation: Candidate outcomes are explicit; exclude ambient credential-store discovery.
@@ -52,6 +53,8 @@ describe("run entry durable fallback notices", () => {
       omitSessionKey?: boolean;
       abortSignal?: AbortSignal;
       unadmittedPrimary?: boolean;
+      lastFallback?: string;
+      backupResult?: EmbeddedAgentRunResult;
     } = {},
   ) {
     const identity = {
@@ -86,7 +89,7 @@ describe("run entry durable fallback notices", () => {
           cfg,
           provider: "openai",
           model: "gpt-4.1-mini",
-          fallbacksOverride: ["anthropic/claude-haiku-3-5"],
+          fallbacksOverride: options.lastFallback ? [backup, options.lastFallback] : [backup],
         },
         identity: {
           ...identity,
@@ -120,11 +123,43 @@ describe("run entry durable fallback notices", () => {
               reason: "rate_limit",
             });
           }
-          return makeResult({ provider, model });
+          return provider === "anthropic" && options.backupResult
+            ? options.backupResult
+            : makeResult({ provider, model });
         },
       });
     return { scope, entry, candidates, steps, run, [Symbol.dispose]: () => admission.close() };
   }
+
+  it.each([true, false])(
+    "keeps a terminal error with recorded metadata=%s without reporting success or replaying the turn",
+    async (recorded) => {
+      const message = "OpenClaw couldn't finish this reply.";
+      using f = await fixture({
+        lastFallback: "minimax/minimax-m3",
+        backupResult: {
+          payloads: [{ text: message, isError: true }],
+          meta: {
+            durationMs: 10,
+            ...(recorded
+              ? {
+                  replayInvalid: true,
+                  stopReason: "error",
+                  error: { kind: "incomplete_turn", message, fallbackSafe: false },
+                }
+              : {}),
+          },
+        },
+      });
+
+      const result = await f.run();
+
+      expect(result.terminal.outcome.status).toBe("error");
+      expect(result.result.payloads).toEqual([{ text: message, isError: true }]);
+      expect(f.candidates).toEqual([primary, backup]);
+      expect(f.steps.map((step) => step.fallbackStepFinalOutcome)).toEqual(["next_fallback"]);
+    },
+  );
 
   it("persists a real transition once, preserving callbacks and source-session binding", async () => {
     using f = await fixture();

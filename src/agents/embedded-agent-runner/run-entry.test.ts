@@ -342,7 +342,9 @@ describe("runEmbeddedAgentEntry", () => {
     async (settlement) => {
       const committed = settlement === "committed side effect";
       usePrimaryFallback(async (params, result) => {
-        expect(await classify(params, result)).toBe(committed ? undefined : null);
+        expect(await classify(params, result)).toEqual(
+          committed ? undefined : { stopReason: "returned_terminal_error" },
+        );
       });
       const run = await runEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },

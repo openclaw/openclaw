@@ -55,6 +55,7 @@ import {
   canAdvanceContextEngineTurn,
   mergeRunEntryExecutionTrace,
   preserveFollowupResultForDelivery,
+  resolveRunEntryFallbackClassification,
   resolveRunEntryTerminalOutcome,
 } from "./run-entry-terminal.js";
 import type {
@@ -338,11 +339,11 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           ? {}
           : {
               classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
-                result.result.meta.modelFallbackStopReason
-                  ? { stopReason: result.result.meta.modelFallbackStopReason }
-                  : canFallback?.() === false
-                    ? undefined
-                    : result.classification,
+                resolveRunEntryFallbackClassification(
+                  result.result,
+                  result.classification,
+                  canFallback,
+                ),
               mergeExhaustedResult: ({
                 latestResult,
                 preferredResult,
