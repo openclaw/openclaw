@@ -1144,6 +1144,8 @@ console.log(JSON.stringify(value));
 
     type OwnershipScenario = {
       label: string;
+      securityWorkflow?: boolean;
+      hiddenContexts?: number;
       status?: string;
       conclusion?: string | null;
       runPatch?: Record<string, unknown>;
@@ -1199,6 +1201,55 @@ console.log(JSON.stringify(value));
     it.each<OwnershipScenario>([
       timeout("running replacement", { status: "in_progress", conclusion: null }),
       green("successful replacement"),
+      green("cancelled CodeQL matrix placeholder", {
+        securityWorkflow: true,
+        oldConclusion: "CANCELLED",
+        newCheckName: "Security High (core-auth-secrets)",
+        expectedRun: 301,
+      }),
+      ownership("current CodeQL matrix failure", {
+        securityWorkflow: true,
+        oldConclusion: "CANCELLED",
+        newCheckName: "Security High (core-auth-secrets)",
+        newCheckConclusion: "FAILURE",
+        expectedRun: 301,
+        output: "Security High (core-auth-secrets)",
+      }),
+      ownership("unbound CodeQL replacement", {
+        securityWorkflow: true,
+        oldConclusion: "CANCELLED",
+        newCheckName: "Security High (core-auth-secrets)",
+        runPatch: { pull_requests: [] },
+        expectedRun: 301,
+        output: "Security High (${{ matrix.category }})",
+      }),
+      ...[
+        ownership("running CodeQL replacement", { status: "in_progress", conclusion: null }),
+        ownership("failed CodeQL replacement", { conclusion: "failure" }),
+        ownership("wrong CodeQL workflow", { runPatch: { workflow_id: 30 } }),
+        ownership("wrong CodeQL head", { runPatch: { head_sha: "b".repeat(40) } }),
+        ownership("wrong CodeQL event", { runPatch: { event: "workflow_dispatch" } }),
+        ownership("wrong CodeQL suite", { runPatch: { check_suite_id: 999 } }),
+        ownership("unbound previous CodeQL run", { previousPatch: { pull_requests: [] } }),
+        ownership("incomplete CodeQL rollup", {
+          hiddenContexts: 1,
+          exitCode: 16,
+          output: "TIMEOUT",
+        }),
+        ownership("unresolved CodeQL check", {
+          newCheckConclusion: "UNKNOWN",
+          exitCode: 16,
+          output: "TIMEOUT",
+        }),
+      ].map((entry) =>
+        Object.assign(entry, {
+          securityWorkflow: true,
+          oldConclusion: "CANCELLED" as const,
+          newCheckName: "Security High (core-auth-secrets)",
+          expectedRun: 301,
+          output: entry.output ?? "Security High (${{ matrix.category }})",
+        }),
+      ),
       timeout("ci-run slow final run", { completion: "ci-run", slowFinalRun: true }),
       timeout("ci-run slow watch PR read", { completion: "ci-run", slowWatchPr: true }),
       ...[33].map((oldRunCount) => ({
@@ -1381,6 +1432,8 @@ console.log(JSON.stringify(value));
     ])(
       "preserves replacement ownership for $label",
       async ({
+        securityWorkflow = false,
+        hiddenContexts = 0,
         status = "completed",
         conclusion = "success",
         runPatch,
@@ -1407,7 +1460,7 @@ console.log(JSON.stringify(value));
         output = "FAILING checks=old matrix shard",
       }) => {
         const identity = {
-          workflow_id: 10,
+          workflow_id: securityWorkflow ? 20 : 10,
           event: "pull_request",
           head_sha: sha,
           pull_requests: [association()],
@@ -1459,15 +1512,36 @@ console.log(JSON.stringify(value));
               ]
             : []),
         ];
+        if (securityWorkflow) {
+          nodes[0]!.name = "Security High (${{ matrix.category }})";
+          for (const check of nodes) {
+            check.checkSuite!.workflowRun!.workflow!.databaseId = 20;
+          }
+        }
         const pr = {
           state: "OPEN",
           mergeable: true,
           headRefOid: sha,
           statusCheckRollup: contextPage(nodes, rollupState),
         };
+        pr.statusCheckRollup.contexts.totalCount += hiddenContexts;
         const listedRuns = olderRunOutsidePage
           ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
-          : [run, previous];
+          : securityWorkflow
+            ? [
+                {
+                  ...run,
+                  id: 301,
+                  workflow_id: 10,
+                  check_suite_id: 30_000,
+                  pull_requests: [association()],
+                  status: "completed",
+                  conclusion: "success",
+                },
+                run,
+                previous,
+              ]
+            : [run, previous];
         for (let index = 1; index < oldRunCount; index += 1) {
           nodes.push(
             ownedCheck(
@@ -1522,7 +1596,7 @@ else if (${completion !== "ci-run"} && args[0] === "api" && args[1] === "graphql
 else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { total_count: ${olderRunOutsidePage ? 21 : 2}, workflow_runs: runs };
 else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
   if (${slowMetadata}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-  value = previousRuns[100 - Number(args[1].split("/").at(-1))];
+  value = previousRuns[100 - Number(args[1].split("/").at(-1))] ?? runs.find((run) => run.id === Number(args[1].split("/").at(-1)));
 }
 else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
@@ -1540,11 +1614,24 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         expect(result.stdout).toContain(output);
         expect(
           result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
-        ).toHaveLength(olderRunOutsidePage && expectedMetadataReads > 0 ? 1 : 0);
+        ).toHaveLength(
+          (securityWorkflow && !hiddenContexts) ||
+            (olderRunOutsidePage && expectedMetadataReads > 0)
+            ? 1
+            : 0,
+        );
         const metadataReads = result.calls.filter((call) =>
           call[1]?.startsWith("repos/openclaw/openclaw/actions/runs/"),
         );
-        expect(metadataReads).toHaveLength(olderRunOutsidePage ? expectedMetadataReads : 0);
+        expect(metadataReads).toHaveLength(
+          securityWorkflow
+            ? hiddenContexts
+              ? 0
+              : 2
+            : olderRunOutsidePage
+              ? expectedMetadataReads
+              : 0,
+        );
         let readsThisPoll = 0;
         for (const call of result.calls) {
           if (call[0] === "run" && call[1] === "view") {
