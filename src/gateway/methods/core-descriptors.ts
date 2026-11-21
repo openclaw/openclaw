@@ -118,7 +118,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
       shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
     },
   ],
-  ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
+  ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7", { startup: true }],
   ["models.authLogout", "models-auth-status", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["tools.catalog", "tools-catalog", "operator.read", "<=2026.7"],
   ["tools.effective", "tools-effective", "operator.read", "<=2026.7", { startup: true }],
