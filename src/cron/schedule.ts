@@ -10,6 +10,8 @@ import type { CronSchedule } from "./types.js";
 
 const CRON_EVAL_CACHE_MAX = 512;
 const DAY_MS = 86_400_000;
+// Croner patterns default to a 1970 start year; probing earlier cannot yield runs.
+const CRON_PROBE_FLOOR_MS = Date.UTC(1970, 0, 1);
 const cronEvalCache = new Map<string, Cron>();
 const cronTimezoneFormatters = new WeakMap<Cron, Intl.DateTimeFormat>();
 
@@ -280,6 +282,47 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     : undefined;
 }
 
+/**
+ * Latest run strictly before refMs, for expressions croner cannot walk backward.
+ * Croner 10.x recurseBackward throws `TypeError` when the decrement crosses a
+ * month shorter than the pattern's day-of-month (e.g. `0 0 29 2 *` walking back
+ * across non-leap February, or impossible `0 0 31 2 *`). nextRun resolves the
+ * same expressions, so binary-search the latest instant whose next run is still
+ * before refMs: nextRun is monotone non-decreasing, and the search needs at most
+ * log2(refMs - floor) probes regardless of how densely the expression matches
+ * (a forward walk from the first hit would enumerate every dense occurrence,
+ * e.g. every second of Feb 29 for `* * * 29 2 *`).
+ */
+function previousRunBeforeMsByNextRunProbe(cron: Cron, refMs: number): number | undefined {
+  const floorMs = Math.min(CRON_PROBE_FLOOR_MS, refMs);
+  const nextAfter = (instantMs: number) => cron.nextRun(new Date(instantMs))?.getTime();
+  const firstMs = nextAfter(floorMs);
+  // No run in (floorMs, refMs) at all: probing earlier cannot change the answer.
+  if (firstMs === undefined || firstMs >= refMs) {
+    return undefined;
+  }
+  let lowMs = floorMs; // invariant: nextAfter(lowMs) < refMs
+  let highMs = refMs; // invariant: nextAfter(highMs) >= refMs
+  while (highMs - lowMs > 1) {
+    const midMs = lowMs + Math.floor((highMs - lowMs) / 2);
+    const nextMs = nextAfter(midMs);
+    if (nextMs !== undefined && nextMs < refMs) {
+      lowMs = midMs;
+    } else {
+      highMs = midMs;
+    }
+  }
+  return nextAfter(lowMs);
+}
+
+function previousRunBeforeMs(cron: Cron, refMs: number): number | undefined {
+  try {
+    return cron.previousRuns(1, new Date(refMs))[0]?.getTime();
+  } catch {
+    return previousRunBeforeMsByNextRunProbe(cron, refMs);
+  }
+}
+
 /** Computes the previous cron-expression run timestamp before now. */
 export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind !== "cron" || asDateTimestampMs(nowMs) === undefined) {
@@ -290,7 +333,7 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
     return undefined;
   }
   const { cron, timezone } = resolvedCron;
-  let previousMs = cron.previousRuns(1, new Date(nowMs))[0]?.getTime();
+  let previousMs = previousRunBeforeMs(cron, nowMs);
   if (
     previousMs !== undefined &&
     previousMs < nowMs &&
@@ -304,7 +347,7 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
     const transitionMs = findCronTimezoneTransitionMs(firstCurrentOccurrenceMs, nowMs, timezone);
     if (transitionMs !== undefined) {
       const overlapEndMs = transitionMs + nowMs - firstCurrentOccurrenceMs;
-      const candidateMs = cron.previousRuns(1, new Date(overlapEndMs))[0]?.getTime();
+      const candidateMs = previousRunBeforeMs(cron, overlapEndMs);
       if (candidateMs !== undefined) {
         previousMs = candidateMs;
       }
@@ -325,10 +368,9 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
       return undefined;
     }
     const beforeTransition = new Date(transitionMs - 1_000);
-    const candidate = matchesCronOccurrence(cron, beforeTransition)
-      ? beforeTransition
-      : cron.previousRuns(1, beforeTransition)[0];
-    const candidateMs = candidate?.getTime();
+    const candidateMs = matchesCronOccurrence(cron, beforeTransition)
+      ? beforeTransition.getTime()
+      : previousRunBeforeMs(cron, beforeTransition.getTime());
     if (candidateMs === undefined || candidateMs >= previousMs) {
       return undefined;
     }
