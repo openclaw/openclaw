@@ -68,7 +68,9 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import {
   buildPreparedContext,
+  makeClaudePreparedContext,
   type PreparedContextOverrides,
+  withParams,
 } from "./cli-runner/prepared-context.test-support.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
@@ -117,13 +119,6 @@ function createSessionFixture(params?: {
   return { dir, sessionFile: sessionTarget.sessionKey, sessionTarget, storePath };
 }
 
-function withParams(
-  context: PreparedCliRunContext,
-  overrides: Partial<PreparedCliRunContext["params"]>,
-): PreparedCliRunContext {
-  return { ...context, params: { ...context.params, ...overrides } };
-}
-
 function sessionParams(
   sessionTarget: SessionTranscriptRuntimeTarget,
   workspaceDir: string,
@@ -134,12 +129,6 @@ function sessionParams(
     sessionTarget,
     workspaceDir,
   };
-}
-
-function makeClaudePreparedContext(
-  overrides: PreparedContextOverrides = {},
-): PreparedCliRunContext {
-  return buildPreparedContext({ provider: "claude-cli", model: "opus", ...overrides });
 }
 
 function capturedContext(

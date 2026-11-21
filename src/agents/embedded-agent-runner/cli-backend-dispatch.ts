@@ -211,6 +211,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       imageOrder: params.imageOrder,
       media: params.media,
       provider: eligibility.provider,
+      modelProvider: params.provider,
       model: params.model,
       ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
         ? { requesterModel: { provider: params.provider, model: params.model } }

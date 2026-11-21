@@ -307,7 +307,7 @@ async function runPreparedCliAgentOwned(
     });
 
   const finishAgentEndHook = (messages: unknown[], error?: string) =>
-    runCliAgentEndHook(params, {
+    runCliAgentEndHook(context, {
       event: {
         messages,
         success: error === undefined,
