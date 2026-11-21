@@ -10,6 +10,7 @@ import type {
   NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
+import { DEFAULT_INBOUND_MEDIA_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--no-usage-statistics",
@@ -99,6 +100,12 @@ export function normalizeChromeMcpOptions(
       fileURLToPath(resolveRuntimeDependencyEntrypointUrl("chromeDevtoolsMcp", import.meta.url)),
       "--experimentalVision",
       ...commonArgs,
+      // The server otherwise permits only its OS temp directory, which need
+      // not contain either upload source accepted by the browser route.
+      "--filesystemRoot",
+      DEFAULT_UPLOAD_DIR,
+      "--filesystemRoot",
+      DEFAULT_INBOUND_MEDIA_DIR,
       ...trailingArgs,
     ],
   };
