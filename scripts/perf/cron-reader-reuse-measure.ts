@@ -18,7 +18,7 @@ import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type * as Projection from "../../src/cron/run-history-detail.js";
 import type * as Store from "../../src/cron/store.js";
@@ -31,6 +31,7 @@ import type {
 } from "../../src/cron/store/run-history.types.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import type * as Roles from "../../src/infra/database-engine/admission-scope.js";
+import type * as Entrypoints from "../../src/infra/runtime-process-url.js";
 import type * as Diagnostics from "../../src/infra/worker-cpu.js";
 import type * as Native from "../../src/infra/worker-native-lifecycle.js";
 import type * as Singletons from "../../src/shared/global-singleton.js";
@@ -269,6 +270,7 @@ async function main() {
     role: "installDatabaseProcessRole",
     save: "saveCronJobsStoreWithRevisionByKey",
     record: "recordCronRun",
+    resolveWorker: "resolveRuntimeProcessEntrypointUrl",
   };
   const counts = new Map<string, number>();
   // Measured children consume prepared metadata: reading bundles here would
@@ -326,6 +328,7 @@ async function main() {
   const role = resolve(exportNames.role);
   const save = resolve(exportNames.save);
   const record = resolve(exportNames.record);
+  const resolveWorker = resolve(exportNames.resolveWorker);
   const workerEntry = "dist/cron/store/read-only.worker.js";
   const workerPath = path.join(buildRoot, workerEntry);
   if (receipt) {
@@ -384,7 +387,10 @@ async function main() {
       | undefined,
     sampledPeakRssBytes: 0,
     rssSamples: 0,
-    observedWorkerPaths: [] as string[],
+    resolvedWorkerEntry: "",
+    observedCronWorker: undefined as
+      | { script: string; startedBefore: number; startedAfter: number }
+      | undefined,
     nativeWorkersAbsent: false,
     brokerJoined: false,
     complete: false,
@@ -419,6 +425,11 @@ async function main() {
     const readInventory = await load<typeof Reads.inspectCronJobsReadOnly>(inventory);
     const readHistory = await load<typeof Reads.readCronRunHistoryRecords>(history);
     const project = await load<typeof Projection.cronRunRecordToRunLogEntry>(projection);
+    const resolveWorkerEntry =
+      await load<typeof Entrypoints.resolveRuntimeProcessEntrypointUrl>(resolveWorker);
+    const resolvedWorkerPath = fileURLToPath(resolveWorkerEntry("cronReadOnly"));
+    assert.equal(resolvedWorkerPath, workerPath, "cron must resolve the selected compiled worker");
+    report.resolvedWorkerEntry = path.relative(buildRoot, resolvedWorkerPath);
     installRole("gateway");
     report.imports = elapsed(imports);
     source = capture({ runtimeGeneration: undefined });
@@ -460,26 +471,19 @@ async function main() {
       const loaded = await readSelected(STORE_KEY);
       const selectedTiming = elapsed(operation);
       verify("selected", loaded);
-      const paths = source!.activeWorkerPaths();
-      assert(
-        paths.includes(workerPath),
-        "actual native source must own the selected compiled cron worker",
-      );
-      assert(
-        paths.every(
-          (entry): entry is string =>
-            typeof entry === "string" &&
-            entry.startsWith(`${dist}${path.sep}`) &&
-            !entry.endsWith(".ts"),
-        ),
-        "source worker or foreign build detected",
-      );
-      report.observedWorkerPaths = [
-        ...new Set([
-          ...report.observedWorkerPaths,
-          ...paths.map((entry) => path.relative(buildRoot, entry)),
-        ]),
-      ].toSorted(lexical);
+      if (report.cycles.length === 0) {
+        // Ordinary cron pools use direct Workers, not retained native handles.
+        // Keep observed script starts separate from the resolved full entry path.
+        const script = "read-only.worker.js";
+        const startedBefore =
+          report.lifecycleBefore!.workerLifecycle.find((entry) => entry.script === script)
+            ?.started ?? 0;
+        const startedAfter =
+          snapshot!().workerLifecycle.find((entry) => entry.script === script)?.started ?? 0;
+        assert.equal(startedBefore, 0, "cron worker must start within this fresh child");
+        assert(startedAfter > startedBefore, "compiled cron worker must actually start");
+        report.observedCronWorker = { script, startedBefore, startedAfter };
+      }
       operation = clock();
       const inspected = await readInventory(process.env);
       const inventoryTiming = elapsed(operation);
