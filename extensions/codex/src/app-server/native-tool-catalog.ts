@@ -4,6 +4,7 @@ import { isCodexAppServerLiveThreadProtected, withCodexClientWorkspace } from ".
 import { readCodexWorkspaceSessionMeta } from "./client-workspace-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
@@ -23,7 +24,7 @@ export function hasCodexNativeToolCatalog(
   return binding?.connectionScope === "supervision" && !binding.pendingSupervisionBranch;
 }
 
-function hasProtectedManagedCatalog(
+function hasRetainedManagedCatalog(
   binding: CodexAppServerThreadBinding,
   client: CodexAppServerClient,
 ): boolean {
@@ -31,11 +32,12 @@ function hasProtectedManagedCatalog(
     binding.connectionScope !== "supervision" &&
     !binding.pendingSupervisionBranch &&
     binding.clientId === client.getInstanceId() &&
-    isCodexAppServerLiveThreadProtected(client, binding.threadId)
+    (isCodexAppServerLiveThreadProtected(client, binding.threadId) ||
+      codexNativeSubagentMonitorRuntime.hasPendingCatalogCustody(client, binding.threadId))
   );
 }
 
-/** Native declarations outlive a caller's executors while its children still own the parent. */
+/** Native declarations outlive executors while child work or completion delivery owns the parent. */
 export async function loadCodexAttemptNativeToolCatalog(
   params: Omit<Parameters<typeof loadCodexNativeToolCatalog>[0], "binding" | "client"> & {
     binding: CodexAppServerThreadBinding | undefined;
@@ -78,7 +80,7 @@ export async function loadCodexAttemptNativeToolCatalog(
   try {
     params.signal.throwIfAborted();
     params.assertCurrent();
-    if (!retained || !hasProtectedManagedCatalog(binding, retained.client)) {
+    if (!retained || !hasRetainedManagedCatalog(binding, retained.client)) {
       return undefined;
     }
     return await loadCodexNativeToolCatalog({ ...params, binding, client: retained.client });
@@ -186,21 +188,25 @@ export async function loadCodexNativeToolCatalog(params: {
           appServerVersion: client.getServerVersion(),
           runtimeIdentity,
         });
-  if (
-    (!hasCodexNativeToolCatalog(binding) && !hasProtectedManagedCatalog(binding, client)) ||
-    !binding.dynamicToolsFingerprint ||
-    !home ||
-    binding.appServerRuntimeFingerprint !== runtimeFingerprint
-  ) {
-    throw new Error(
-      "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
-    );
-  }
+  const assertCatalogOwner = () => {
+    if (
+      (!hasCodexNativeToolCatalog(binding) && !hasRetainedManagedCatalog(binding, client)) ||
+      !binding.dynamicToolsFingerprint ||
+      !home ||
+      binding.appServerRuntimeFingerprint !== runtimeFingerprint
+    ) {
+      throw new Error(
+        "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
+      );
+    }
+    return home;
+  };
+  const verifiedHome = assertCatalogOwner();
   const metadata = await withCodexClientWorkspace(client, (state, maxCachedSessions) =>
     readCodexWorkspaceSessionMeta(
       client,
       state,
-      path.join(home, "sessions"),
+      path.join(verifiedHome, "sessions"),
       binding.rolloutPath,
       binding.threadId,
       maxCachedSessions,
@@ -208,6 +214,7 @@ export async function loadCodexNativeToolCatalog(params: {
   );
   const consume = () => {
     assertCurrent();
+    assertCatalogOwner();
     return parseCodexNativeToolCatalog(metadata, binding.threadId, binding.dynamicToolsFingerprint);
   };
   return params.authority ? await params.authority.withCurrent(consume) : consume();

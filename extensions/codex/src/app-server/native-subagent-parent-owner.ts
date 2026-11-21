@@ -457,6 +457,23 @@ export function readNativeSubagentObservations(
   return { coverage: "live", children, truncated };
 }
 
+/** Execution retention ends at terminal work, independently of pending completion delivery. */
+export function hasNativeChildExecution(
+  children: ReadonlyMap<string, ChildState>,
+  parentThreadId?: string,
+): boolean {
+  for (const child of children.values()) {
+    if (
+      (parentThreadId === undefined || child.parentThreadId === parentThreadId) &&
+      !child.terminal &&
+      !child.settledWithoutCompletion
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // This requester still owns these completions across native parent-thread rotation.
 // This completion query is separate from read-only observations of terminal turns.
 export function listNativePendingChildren(
