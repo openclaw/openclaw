@@ -17,6 +17,34 @@ const RECALL_INTENT_PATTERNS = [
   /\bremind\s+(?:me|us)\s+(?:what|which|who|where|why|how)\b/iu,
 ];
 
+// Italian: completed discussions need a we/you auxiliary (plain "ho detto"
+// narrates the user's own day), an interrogative, or a sentence-initial
+// past-habit question (so "il computer che usavo" stays narration). "Ti
+// ricordi di + X" is left to the recall model, since object spelling can't tell
+// a name ("Cesare") from a remember-to verb; future cues suppress reminders.
+const IT_END = String.raw`(?![\p{L}\p{N}_])`;
+const IT_SAID = String.raw`(?:deciso|detto|discusso|parlato|concordato|scelto|usato|menzionato|stabilito)${IT_END}`;
+const IT_WHEN = String.raw`(?:ieri(?:\s+sera)?|(?:l['’]altro\s+ieri|ieri\s+l['’]altro)|l['’](?:altra|ultima)\s+volta|la\s+scorsa\s+volta|(?:la\s+settimana|il\s+mese|l['’]anno)\s+scors[oa]|nei\s+(?:mesi|giorni|anni)\s+scorsi|nelle\s+settimane\s+scorse|(?:\d+|un|una|due|tre|quattro|cinque|qualche|alcuni|alcune)\s+(?:giorn[oi]|settiman[ae]|mes[ei]|ann[oi])\s+fa|tempo\s+fa)${IT_END}`;
+const IT_WE_SAID = String.raw`(?:abbiamo|avevamo|avevi|hai|avete|avevate)\s+(?:gi[àa]\s+)?${IT_SAID}`;
+const IT_PAST_RECALL = [
+  String.raw`(?:cosa|che(?:\s+cosa)?|quando|dove|perch[eé]|chi|qual[ei])\s+(?:abbiamo|avevamo|avevi|avevo|hai|ho|avete|avevate|si\s+era)\s+(?:gi[àa]\s+)?${IT_SAID}`,
+  String.raw`${IT_WHEN}.{0,30}${IT_WE_SAID}`,
+  String.raw`${IT_WE_SAID}.{0,30}${IT_WHEN}`,
+  String.raw`(?<=^|[.!?¿;]\s)(?:cosa|che|qual[ei])(?:\s+\p{L}+){0,3}\s+(?:usavo|usavi|usavamo|preferivo|preferivi|preferivamo)${IT_END}`,
+].join("|");
+
+const ITALIAN_RECALL_INTENT_PATTERNS = {
+  intent: new RegExp(
+    String.raw`(?<![\p{L}\p{N}_])(?:${IT_PAST_RECALL}|(?:ti|vi)\s+(?:ricordi|ricordate)${IT_END}|ricordami\s+(?:cosa|che|quando|dove|perch[eé]|come|chi|qual[ei])${IT_END})`,
+    "iu",
+  ),
+  future: new RegExp(
+    String.raw`(?<![\p{L}\p{N}_])(?:domani|dopodomani|stasera|stanotte|pi[ùu]\s+tardi|fra\s+poco|presto|in\s+futuro|(?:la\s+)?prossim[oaie]|oggi\s+pomeriggio|(?:tra|fra)\s+(?:\d+|un|una|due|tre|quattro|cinque|qualche)\s+(?:minut[oi]|or[ae]|giorn[oi]|settiman[ae]|mes[ei]|ann[oi]))${IT_END}`,
+    "iu",
+  ),
+  retrospective: new RegExp(String.raw`(?<![\p{L}\p{N}_])(?:${IT_PAST_RECALL})`, "iu"),
+};
+
 // Future reminders stay quiet unless a completed past discussion or decision
 // shows that its future topic is itself the subject of retrospective recall.
 const LOCALIZED_RECALL_INTENT_PATTERNS = [
@@ -87,6 +115,7 @@ const LOCALIZED_RECALL_INTENT_PATTERNS = [
     retrospective:
       /(?<![\p{L}\p{N}_])(?:(?:haben|hatten|hab|habe|hast|habt|hatte|hattest|hattet)\s+(?:wir|ich|du|ihr|Sie)\b.{0,60}?(?<![\p{L}\p{N}_])(?:besprochen|gesprochen|geredet|entschieden|beschlossen|ausgemacht|vereinbart|geplant|gesagt|erz(?:ä|ae)hlt|erw(?:ä|ae)hnt|diskutiert)|(?:wir|ich|du|ihr|Sie)\b.{0,60}?(?<![\p{L}\p{N}_])(?:besprochen|gesprochen|geredet|entschieden|beschlossen|ausgemacht|vereinbart|geplant|gesagt|erz(?:ä|ae)hlt|erw(?:ä|ae)hnt|diskutiert)\s+(?:haben|hatten|hab|habe|hast|habt|hatte|hattest|hattet))(?![\p{L}\p{N}_])/iu,
   },
+  ITALIAN_RECALL_INTENT_PATTERNS,
 ];
 
 export function hasRecallIntent(message: string): boolean {
