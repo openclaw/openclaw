@@ -1,0 +1,4 @@
+# Exact net growth for opt-in Sparkle artifact export regression coverage.
+# Covers isolated staging/export, full-only fallback, signed metadata checks,
+# and output preservation; native Sparkle installation remains a separate gate.
+97
