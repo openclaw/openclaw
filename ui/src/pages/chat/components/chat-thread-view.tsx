@@ -105,11 +105,10 @@ type ChatThreadInput = {
 };
 
 export function ChatThread(input: ChatThreadInput) {
-  // Use the existing warm-frame hold to split pane and transcript construction.
-  // Cached route handoffs still render immediately.
+  // The document hold owns this split: live metadata can retire `restoring`
+  // before the cached transcript mounts. Cached route handoffs stay immediate.
   const initialRestoring = Boolean(input.props.restoring);
   const heldWarmBoot =
-    initialRestoring &&
     document.documentElement.getAttribute("data-openclaw-warm-frame") === "holding";
   const initialReady =
     (initialRestoring && !heldWarmBoot) || Boolean(input.props.initialSubmission);
