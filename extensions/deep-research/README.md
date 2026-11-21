@@ -4,6 +4,14 @@ A default-enabled, lazy bundled research tool. Existing plugin allowlists and to
 The running Gateway must provide session-work authority. If the service reports
 missing session-work support, update OpenClaw and restart the Gateway; reloading
 the plugin alone cannot add the missing host capability.
+
+Ask in normal chat, such as “Do deep research comparing these documents, no web,
+with at most 8 model calls.” The agent can select `deep_research` directly using
+the conversation’s sources and budget; no skill, picker, or slash syntax is needed.
+Selection guidance excludes quick general answers, explanations, quoted/code
+mentions, and requests not to research. It is not a deterministic intent classifier
+or permission grant; only a returned job receipt establishes acceptance.
+
 Supply a question; the host selects its configured model and isolated agent runtime.
 An explicit model override requires the existing plugin LLM policy permission.
 The controller uses `llm.complete` with `execution.mode: "isolated-agent-runtime"`
