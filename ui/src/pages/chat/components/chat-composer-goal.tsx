@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -48,7 +48,7 @@ type ChatGoalProps = {
   resumeBusy?: boolean;
   resumeRecovery?: ChatGoalRecovery;
   connected?: boolean;
-  onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
+  onGoalAction?: (goalId: string, action: ChatGoalAction, note?: string) => void;
   onGoalEdit?: (goal: SessionGoal) => void;
   onExpandedChange: (expanded: boolean) => void;
 };
@@ -68,6 +68,9 @@ type GoalPresentationProps = Pick<
 
 /** Shared eligibility and callbacks; the parent supplies native write availability. */
 export function ChatGoalActions(props: GoalPresentationProps) {
+  const [resumeNote, setResumeNote] = createSignal("");
+  const [resumeNoteError, setResumeNoteError] = createSignal("");
+  let noteField: HTMLInputElement | undefined;
   const visibleAction = (action: (typeof goalActions)[number]) =>
     !props.resumeRecovery &&
     props.canAct &&
@@ -112,9 +115,20 @@ export function ChatGoalActions(props: GoalPresentationProps) {
                   onClick={() => {
                     if (action === "edit") {
                       props.onGoalEdit?.(props.goal);
-                    } else {
-                      props.onGoalAction?.(props.goal.id, action);
+                      return;
                     }
+                    if (action === "resume" && props.goal.status === "blocked") {
+                      const note = resumeNote().trim();
+                      if (!note) {
+                        setResumeNoteError(t("chat.goals.resumeNoteRequired"));
+                        noteField?.focus();
+                        return;
+                      }
+                      setResumeNoteError("");
+                      props.onGoalAction?.(props.goal.id, action, note);
+                      return;
+                    }
+                    props.onGoalAction?.(props.goal.id, action);
                   }}
                 >
                   <Icon name={goalActionIcons[action]} />
@@ -125,6 +139,29 @@ export function ChatGoalActions(props: GoalPresentationProps) {
           </>
         )}
       </For>
+      <Show when={props.goal.status === "blocked" && visibleAction("resume")}>
+        <label class="agent-chat__goal-resume-note-label">
+          {t("chat.goals.resumeNote")}
+          <input
+            ref={(element) => {
+              noteField = element;
+            }}
+            class="agent-chat__goal-resume-note"
+            type="text"
+            value={resumeNote()}
+            aria-invalid={resumeNoteError() ? "true" : undefined}
+            onInput={(event) => {
+              setResumeNote(event.currentTarget.value);
+              setResumeNoteError("");
+            }}
+          />
+        </label>
+        <Show when={resumeNoteError()}>
+          <span class="agent-chat__goal-resume-note-error" role="alert">
+            {resumeNoteError()}
+          </span>
+        </Show>
+      </Show>
     </span>
   );
 }

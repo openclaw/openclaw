@@ -152,11 +152,11 @@ describe("session goals", () => {
     },
   );
 
-  it("lets users resume blocked goals", async () => {
+  it("resumes a blocked goal only with a note", async () => {
     await startGoal();
     await setStatus("blocked", 20, "waiting on CI");
-    const resumed = await setStatus("active", 30);
-    expect(resumed).toMatchObject({ status: "active", lastStatusNote: "waiting on CI" });
+    await expect(setStatus("active", 30, " ")).rejects.toThrow("resume note");
+    expect((await setStatus("active", 40, "CI done")).lastStatusNote).toBe("CI done");
   });
 
   it("formats a readable status summary with command hints", () => {
@@ -172,7 +172,7 @@ describe("session goals", () => {
     );
     expect(text).toContain("Goal\nStatus: blocked\nObjective: land the PR");
     expect(text).toContain("Token budget: 12k/30k");
-    expect(text).toContain("Commands: /goal resume, /goal edit <objective>, /goal clear");
+    expect(text).toContain("Commands: /goal resume <note>, /goal edit <objective>, /goal clear");
   });
 
   it("rewords the objective without touching status or token accounting", async () => {

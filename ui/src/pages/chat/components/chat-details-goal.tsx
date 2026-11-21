@@ -38,7 +38,7 @@ export type ChatDetailsGoalProps = {
   canAct: boolean;
   resumeBusy?: boolean;
   recovery?: ChatGoalRecovery;
-  onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
+  onGoalAction?: (goalId: string, action: ChatGoalAction, note?: string) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
   /** Reads the native owner's failure after submission settles. */
   getGoalSubmitError?: () => string | null | undefined;

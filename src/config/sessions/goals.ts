@@ -93,10 +93,11 @@ function resolveGoalCommandHint(status: SessionGoalStatus): string {
     case "active":
       return "/goal edit <objective>, /goal pause, /goal complete, /goal clear";
     case "paused":
-    case "blocked":
     case "usage_limited":
     case "budget_limited":
       return "/goal resume, /goal edit <objective>, /goal clear";
+    case "blocked":
+      return "/goal resume <note>, /goal edit <objective>, /goal clear";
     case "complete":
       return "/goal resume, /goal clear";
   }

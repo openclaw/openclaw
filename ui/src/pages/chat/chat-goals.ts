@@ -13,6 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type {
+  ChatGoalAction,
   ChatGoalDraft,
   ChatGoalMutationAction,
   ChatGoalRecovery,
@@ -405,6 +406,21 @@ export async function submitChatGoalDraft(
   );
 }
 
+function resumeNote(action: ChatGoalMutationAction): string | undefined {
+  const note = action.action === "resume" ? action.note?.trim() : undefined;
+  return note || undefined;
+}
+
+export function chatGoalPaneCallbacks(state: ChatHost) {
+  return {
+    goalRecovery: chatGoalRecovery(state),
+    onGoalAction: (goalId: string, action: ChatGoalAction, note?: string) => {
+      const trimmed = note?.trim();
+      void mutateChatGoal(state, trimmed ? { goalId, action, note: trimmed } : { goalId, action });
+    },
+  };
+}
+
 export async function mutateChatGoal(
   host: ChatHost,
   action?: ChatGoalMutationAction,
@@ -459,6 +475,8 @@ export async function mutateChatGoal(
       ("action" in params ? params.action : "clear") !== action.action ||
       ((action.action === "edit" || action.action === "replace") &&
         (!("objective" in params) || params.objective !== action.objective)) ||
+      (action.action === "resume" &&
+        ("note" in params ? params.note : undefined) !== resumeNote(action)) ||
       (action.action === "replace" &&
         (!("action" in params) ||
           params.action !== "replace" ||
@@ -502,7 +520,13 @@ export async function mutateChatGoal(
               }
             : action.action === "edit"
               ? { ...identity, action: "edit", objective: action.objective }
-              : { ...identity, action: action.action },
+              : action.action === "resume"
+                ? {
+                    ...identity,
+                    action: "resume",
+                    ...(resumeNote(action) ? { note: resumeNote(action) } : {}),
+                  }
+                : { ...identity, action: action.action },
       pending: false,
     };
     const validate =
