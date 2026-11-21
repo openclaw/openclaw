@@ -15,7 +15,7 @@ const skillRoot = path.resolve("skills/meme-maker");
 const scriptPath = path.join(skillRoot, "scripts/meme.mjs");
 const template = templates.find((entry) => entry.id === "two-buttons")!;
 
-function renderFixture(format: "svg" | "png", isolated = false) {
+function renderFixture(format: "svg" | "png", isolated = false, texts = ["Fish & chips"]) {
   const root = createTempDir("openclaw-meme-maker-");
   const cache = path.join(root, "cache");
   const imageDir = path.join(cache, "openclaw/meme-maker");
@@ -41,13 +41,31 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
     testNodeExecPath,
-    ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
+    [
+      "--import",
+      hook,
+      script,
+      "render",
+      template.id,
+      ...texts.flatMap((text) => ["--text", text]),
+      "--out",
+      out,
+    ],
     { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );
   return { image, out, result };
 }
 
 describe("meme-maker local rendering", () => {
+  it("rejects captions that exceed the template's available boxes", async () => {
+    const { out, result } = renderFixture("svg", true, ["First", "Second", "Third", "Extra"]);
+    await expect(result).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("has 3 caption boxes, but got 4 captions"),
+    });
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
   it("writes a self-contained SVG with escaped, box-centered text without optional rendering dependencies", async () => {
     const { image, out, result } = renderFixture("svg", true);
     const { stdout } = await result;
