@@ -19,16 +19,18 @@ import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
 const oldVersion = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
 
-it("reports a real sync child's SIGTERM as interrupted and refuses Doctor repair", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await state.writeConfig({ plugins: { enabled: false } });
-    const source = openOpenClawStateDatabase({ env: state.env }).path;
-    await closeStateDatabaseForTest();
-    const original = fs.readFileSync(source);
-    const preload = state.path("interrupt-read.mjs");
-    fs.writeFileSync(
-      preload,
-      `import fs from "node:fs";
+it.skipIf(process.platform === "win32")(
+  "reports a real sync child's SIGTERM as interrupted and refuses Doctor repair",
+  async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
+      const source = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeStateDatabaseForTest();
+      const original = fs.readFileSync(source);
+      const preload = state.path("interrupt-read.mjs");
+      fs.writeFileSync(
+        preload,
+        `import fs from "node:fs";
 const read = fs.readSync;
 fs.readSync = (fd, ...args) => {
   const count = read(fd, ...args);
@@ -37,27 +39,28 @@ fs.readSync = (fd, ...args) => {
   }
   return count;
 };`,
-    );
-    vi.stubEnv(
-      "NODE_OPTIONS",
-      `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
-    );
-    onTestFinished(() => {
-      vi.unstubAllEnvs();
+      );
+      vi.stubEnv(
+        "NODE_OPTIONS",
+        `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
+      );
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      const failure = await prepareDoctorDatabasePreflight({ scope: "state" }).catch(
+        (cause: unknown) => cause,
+      );
+      expect(failure).toMatchObject({
+        name: "DoctorUnreadableStateDatabaseError",
+        cause: { cause: { signal: "SIGTERM" } },
+      });
+      expect(String(failure)).toContain("state database inspection was interrupted");
+      expect(String(failure)).toContain("rerun the command");
+      expect(String(failure)).not.toContain("restore this file");
+      expect(fs.readFileSync(source)).toEqual(original);
     });
-    const failure = await prepareDoctorDatabasePreflight({ scope: "state" }).catch(
-      (cause: unknown) => cause,
-    );
-    expect(failure).toMatchObject({
-      name: "DoctorUnreadableStateDatabaseError",
-      cause: { cause: { signal: "SIGTERM" } },
-    });
-    expect(String(failure)).toContain("state database inspection was interrupted");
-    expect(String(failure)).toContain("rerun the command");
-    expect(String(failure)).not.toContain("restore this file");
-    expect(fs.readFileSync(source)).toEqual(original);
-  });
-});
+  },
+);
 
 it.each([false, true])(
   "keeps an idle WAL agent store's update generation when preserving sources: %s",
