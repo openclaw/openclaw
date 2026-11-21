@@ -9,6 +9,8 @@ import {
   type CdpActionTimeouts,
   type CdpDocumentIdentities,
 } from "./cdp-page-session.js";
+import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { CdpSocketError } from "./cdp-websocket.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -20,6 +22,7 @@ import {
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 import { redactSensitiveAXNodeValues } from "./sensitive-field-values.js";
+import { BrowserTargetCrashedError } from "./target-crash.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
 export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
@@ -36,6 +39,43 @@ export async function getDocumentIdentitiesViaCdp(opts: {
     commandTimeoutMs: opts.timeoutMs ?? 5000,
     ...(opts.lookup ? { lookup: opts.lookup } : {}),
   });
+}
+
+/**
+ * Fail fast when a listed target cannot answer a page-level command. A crashed
+ * renderer leaves the target listed but never replies, so the caller would
+ * otherwise wait out the full action budget. Page.getFrameTree stays inside the
+ * renderer-owned command stream, which distinguishes a dead tab from a healthy
+ * one without running page JavaScript.
+ */
+export async function assertCdpTargetResponsive(opts: {
+  wsUrl: string;
+  lookup?: typeof dnsLookupCb;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS;
+  try {
+    await withCdpSocket(
+      opts.wsUrl,
+      async (send) => {
+        await send("Page.getFrameTree");
+      },
+      {
+        commandTimeoutMs: timeoutMs,
+        handshakeTimeoutMs: timeoutMs,
+        handshakeRetries: 0,
+        ...(opts.lookup ? { lookup: opts.lookup } : {}),
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      },
+    );
+  } catch (err) {
+    opts.signal?.throwIfAborted();
+    if (err instanceof CdpSocketError && err.kind === "timeout") {
+      throw new BrowserTargetCrashedError();
+    }
+    // A failed handshake is not crash evidence; let the action report its own error.
+  }
 }
 
 export async function captureScreenshot(opts: {

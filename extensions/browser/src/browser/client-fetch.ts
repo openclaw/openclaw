@@ -29,6 +29,7 @@ import {
 } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { getBrowserRequestScope } from "./request-scope.js";
+import { BROWSER_TARGET_CRASHED_MESSAGE, isBrowserTargetCrashMessage } from "./target-crash.js";
 
 // Application-level error from the browser control service (service is reachable
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
@@ -112,6 +113,9 @@ const BROWSER_TOOL_PERSISTENT_MODEL_HINT =
 const BROWSER_TOOL_TRANSIENT_MODEL_HINT =
   "This may be a transient browser error. Retry the browser tool once. " +
   "If the same error persists, use an alternative approach or inform the user that the browser is currently unavailable.";
+const BROWSER_TOOL_TARGET_CRASHED_MODEL_HINT =
+  "The tab crashed or stopped responding; the browser and other tabs are still available. " +
+  "Open the page again in a new tab, or retry this target once the page settles.";
 
 // Retry history already lives in the model transcript. Keep this classifier stateless so one
 // session's transient failure cannot suppress browser retries in another session.
@@ -173,6 +177,7 @@ function appendBrowserToolModelHint(message: string, hint: string): string {
   const messageWithoutHints = message
     .replaceAll(BROWSER_TOOL_PERSISTENT_MODEL_HINT, "")
     .replaceAll(BROWSER_TOOL_TRANSIENT_MODEL_HINT, "")
+    .replaceAll(BROWSER_TOOL_TARGET_CRASHED_MODEL_HINT, "")
     .trim();
   return `${messageWithoutHints} ${hint}`;
 }
@@ -217,6 +222,17 @@ function resolveBrowserServiceModelHint(
   }
   if (message.includes(BROWSER_TOOL_TRANSIENT_MODEL_HINT)) {
     return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
+  }
+  if (message.includes(BROWSER_TOOL_TARGET_CRASHED_MODEL_HINT)) {
+    return BROWSER_TOOL_TARGET_CRASHED_MODEL_HINT;
+  }
+  // A crashed tab is a tab-scoped failure: the browser and its other tabs still work.
+  // Service errors already carrying that guidance keep their single copy.
+  if (message.includes(BROWSER_TARGET_CRASHED_MESSAGE)) {
+    return undefined;
+  }
+  if (isBrowserTargetCrashMessage(message)) {
+    return BROWSER_TOOL_TARGET_CRASHED_MODEL_HINT;
   }
   if (status === 401 || BROWSER_PERSISTENT_FAILURE_RE.test(message)) {
     return BROWSER_TOOL_PERSISTENT_MODEL_HINT;
