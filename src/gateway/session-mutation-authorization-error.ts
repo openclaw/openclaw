@@ -13,6 +13,27 @@ export class SessionMutationAuthorizationChangedError extends Error {
   }
 }
 
+/** Only endpoint position and the policy owner's public category may leave followup custody. */
+export class SessionFollowupAccessError extends SessionMutationAuthorizationChangedError {
+  readonly denial: {
+    phase: "admission" | "revocation";
+    endpoint: "parent" | "child";
+    code: string;
+  };
+
+  constructor(denial: SessionFollowupAccessError["denial"]) {
+    const message =
+      denial.phase === "admission"
+        ? `Followup ${denial.endpoint} session admission was denied (${denial.code}).`
+        : `Followup ${denial.endpoint} session access was revoked (${denial.code}).`;
+    super({
+      code: denial.code,
+      message: `${message} Ask an authorized operator to check continuation access for both conversations.`,
+    });
+    this.denial = denial;
+  }
+}
+
 /** Callers retain their live policy checks; only the forbidden envelope is shared. */
 export function sessionMutationForbiddenError(
   message: string,

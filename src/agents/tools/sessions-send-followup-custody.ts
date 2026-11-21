@@ -5,6 +5,7 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "../../gateway/operator-role-policy.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { SessionFollowupAccessError } from "../../gateway/session-mutation-authorization-error.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -106,6 +107,7 @@ export async function prepareSessionsSendFollowup(params: {
       assertInvocation?.();
       captured.assertCurrent();
     }
+    let admitted = false;
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (released) {
@@ -117,7 +119,7 @@ export async function prepareSessionsSendFollowup(params: {
       }
       const currentConfig = getRuntimeConfig();
       // The prepared reader owns canonical routing, physical store and incarnation fencing.
-      for (const read of facts) {
+      for (const [index, read] of facts.entries()) {
         const currentFacts = read.readCurrent(currentConfig);
         const current = currentFacts.target;
         if (!current?.entry || current.entry.archivedAt !== undefined) {
@@ -146,11 +148,17 @@ export async function prepareSessionsSendFollowup(params: {
           },
         );
         if (denied) {
-          throw new FollowupAccessChangedError("Followup session access was revoked.");
+          // Never retain the policy message/details: hidden-session errors can contain keys.
+          throw new SessionFollowupAccessError({
+            phase: admitted ? "revocation" : "admission",
+            endpoint: index === 0 ? "parent" : "child",
+            code: denied.code,
+          });
         }
       }
     };
     assertCurrent();
+    admitted = true;
     const watchedKeys = new Set(
       facts.flatMap((read) => {
         const target = read.readCurrent(cfg).target;
@@ -165,7 +173,10 @@ export async function prepareSessionsSendFollowup(params: {
         assertCurrent();
       } catch (error) {
         // Pending metadata remains fenced. A committed denial is irreversible for this capture.
-        if (error instanceof FollowupAccessChangedError) {
+        if (
+          error instanceof FollowupAccessChangedError ||
+          error instanceof SessionFollowupAccessError
+        ) {
           revoked.abort(error);
         }
       }

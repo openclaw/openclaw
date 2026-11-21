@@ -1,6 +1,7 @@
 /** Same-process custody for a followup's result across committed yield cohorts. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { raceWithTimeout } from "@openclaw/retry";
+import { SessionFollowupAccessError } from "../../../gateway/session-mutation-authorization-error.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -88,7 +89,12 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
 
   private constructor(readonly request: FollowupRequest) {
     this.execution = { runId: request.runId, settled: createDeferredCore(), yielded: false };
-    this.revoked = () => this.close(new Error("Followup completion authority was revoked."));
+    this.revoked = () =>
+      this.close(
+        request.custody.signal.reason instanceof SessionFollowupAccessError
+          ? request.custody.signal.reason
+          : new Error("Followup completion authority was revoked."),
+      );
     void this.result.promise.catch(() => {});
   }
 
