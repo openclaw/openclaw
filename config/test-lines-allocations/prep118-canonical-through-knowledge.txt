@@ -1,9 +1,10 @@
-1279
+1248
 # Exact net LF growth of listed canonical source adaptations; existing controls retained.
 # Baseline 81d3ee3faf729dc319dbbfeb5ffb72f3ab7825b4; canonical snapshot 339cdfcf0ab40c6be3e7ae6b163d31f40b9d423d.
 # Credit is valid only with the complete listed batch, including negative deltas.
 # Subsequent selected-source deduction: 00cf098df2a917fa5187acb5bb6ded75476d04d6 -13 fix(mattermost): deliver ordinary button clicks once (#201973); source 66fc4d8848c5ab6ff3d29c8c5d093cfc5a95de7d.
-# Original listed batch 1292 minus Mattermost test simplification 13 = 1279; no baseline or test changes.
+# Subsequent selected-source deduction: 1ac61645dc785776a4015ddbbc0e2e9ea0974189 -31 fix(msteams): runtime-independent reply renderer (#202368); source b24f06fa8e15d92c5952212f73ba1d0d71973a85.
+# Original listed batch 1292 minus Mattermost 13 and Teams 31 = 1248; no baseline or test changes.
 # fbea2919e294b2619b8678930471cd6524f68dad -4 fix(cli): prevent config writes from empty builder options (#190896)
 # 876f6a55a711be4fdecda0434ac53108f7d54664 -2 fix: accept multiline JSON from streaming providers (#195019)
 # 159c85ca9b1d3fc1b8c66ee9a41912c645316432 -1 fix(google-meet): follow Calendar event pagination (#194103)
