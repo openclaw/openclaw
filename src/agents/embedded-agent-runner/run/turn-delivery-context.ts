@@ -15,6 +15,7 @@ type TurnDeliveryFacts = {
   chatType?: ChatType;
   channel?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  privateCompletion?: boolean;
   requireExplicitMessageTarget?: boolean;
   messageToolFinalByDefault?: boolean;
 };
@@ -45,7 +46,7 @@ export function buildTurnDeliveryContextFragments(
   const session = resolveSessionPromptDelivery(facts);
   const turnMode = facts.sourceReplyDeliveryMode ?? "automatic";
   const lines: string[] = [];
-  if (turnMode !== session.sourceReplyDeliveryMode) {
+  if (!facts.privateCompletion && turnMode !== session.sourceReplyDeliveryMode) {
     lines.push(
       turnMode === "message_tool_only"
         ? "This turn's final text is private. A visible reply to the current source MUST use `message(action=send)` (or a final reaction with `message(action=react, final=true)`); without the tool the user gets nothing."
