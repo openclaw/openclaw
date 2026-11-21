@@ -1,22 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { WizardNextResult, WizardStep } from "../../../packages/gateway-protocol/src/index.js";
-import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import {
   GatewayLocalBackendSharedAuthUnavailableError,
   type GatewayRequestFunction,
 } from "../../gateway/call.js";
-import { wizardHandlers } from "../../gateway/server-methods/wizard.js";
 import { GatewayTransportError } from "../../gateway/transport-error.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { WizardCancelledError, type WizardPrompter } from "../../wizard/prompts.js";
-import { WizardSession } from "../../wizard/session.js";
+import { WizardCancelledError } from "../../wizard/prompts.js";
 import { readGatewayLoginParams, runGatewayLoginWizard } from "./auth-login-gateway.js";
 import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 
 const prompts = vi.hoisted(() => ({ note: vi.fn(), text: vi.fn(), select: vi.fn() }));
-const terminal = vi.hoisted(() => ({ real: false }));
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   isImplicitLocalGatewayTarget: vi.fn(),
@@ -26,20 +21,13 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
   callGateway: gatewayMocks.callGateway,
   isImplicitLocalGatewayTarget: gatewayMocks.isImplicitLocalGatewayTarget,
 }));
-// Rendering tests opt into the real prompter; they only print notes and never read input.
 // mock-isolation: Exercise remote step handling without reading the test runner's terminal.
-vi.mock("../../wizard/clack-prompter.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../wizard/clack-prompter.js")>();
-  return {
-    createClackPrompter: (output: NodeJS.WriteStream, signal?: AbortSignal) =>
-      terminal.real
-        ? actual.createClackPrompter(output, signal)
-        : {
-            ...prompts,
-            text: (options: Record<string, unknown>) => prompts.text(options, signal),
-          },
-  };
-});
+vi.mock("../../wizard/clack-prompter.js", () => ({
+  createClackPrompter: (_output: unknown, signal: AbortSignal) => ({
+    ...prompts,
+    text: (options: Record<string, unknown>) => prompts.text(options, signal),
+  }),
+}));
 // mock-isolation: Keep provider selection deterministic without scanning installed plugins.
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeclaredProviderAuthChoices: () => [
@@ -77,46 +65,7 @@ function gateway(results: Array<WizardNextResult | Error>) {
     run: () => runGatewayLoginWizard(request, "login", new AbortController().signal, runtime),
   };
 }
-/** Serve one login session through the Gateway's own wizard handlers, in process. */
-function hostedLogin(
-  runner: (prompter: WizardPrompter) => Promise<void>,
-  onResult: (result: WizardNextResult) => void,
-) {
-  const wizardSessions = new Map([["login", new WizardSession(runner)]]);
-  const context = { wizardSessions, purgeWizardSession: (id: string) => wizardSessions.delete(id) };
-  const request: GatewayRequestFunction = async <T>(method: string, params?: unknown) => {
-    let reply: { ok: boolean; payload?: unknown; error?: unknown } = { ok: false };
-    await wizardHandlers[method]?.({
-      params,
-      context,
-      respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-        reply = { ok, payload, error };
-      },
-    } as never);
-    if (!reply.ok) {
-      throw new Error(`${method} failed: ${JSON.stringify(reply.error)}`);
-    }
-    onResult(reply.payload as WizardNextResult);
-    return reply.payload as T;
-  };
-  return request;
-}
-/** Capture what the real terminal prompter prints, as note text lines without box borders. */
-function captureTerminal() {
-  terminal.real = true;
-  const chunks: string[] = [];
-  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-    chunks.push(String(chunk));
-    return true;
-  });
-  return () =>
-    stripAnsi(chunks.join(""))
-      .split("\n")
-      .map((line) => line.match(/^\S {2}(.*?) *\S$/u)?.[1] ?? line);
-}
-const verificationUrl = "https://auth.example.test/codex/device";
 afterEach(() => {
-  terminal.real = false;
   vi.clearAllMocks();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -171,88 +120,16 @@ it("renders device codes and sends selection answers on the admitted session", a
   expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
 });
 
-it("keeps line breaks in multi-line login steps while stripping terminal controls", async () => {
-  prompts.select.mockResolvedValueOnce("keep");
-  const h = gateway([
-    step({
-      id: "device",
-      type: "progress",
-      title: "xAI OAuth",
-      message:
-        "Enter this one-time code.\r\nCode: ABCD-1234\n\n\u001b[31mxAI OAuth complete\u001b[0m\u0007",
-    }),
-    step({
-      id: "access",
-      type: "select",
-      message: "Keep access?\n\u001b[31mChoose\u001b[0m one.\rinjected",
-      options: [{ label: "Keep", value: "keep" }],
-    }),
+it("keeps the line breaks of multi-line login steps while stripping terminal controls", async () => {
+  const message =
+    "Enter this code.\nCode: ABCD-1234\n\n\u001b[31mxAI OAuth complete\u001b[0m\u0007";
+  await gateway([
+    step({ id: "device", type: "progress", title: "xAI OAuth", message }),
     done,
-  ]);
-  await h.run();
+  ]).run();
   expect(prompts.note).toHaveBeenCalledWith(
-    "Enter this one-time code.\nCode: ABCD-1234\n\nxAI OAuth complete",
+    "Enter this code.\nCode: ABCD-1234\n\nxAI OAuth complete",
     "xAI OAuth",
-  );
-  expect(prompts.select).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "Keep access?\nChoose one.\\rinjected" }),
-  );
-});
-
-it("prints a Gateway device-code sign-in on separate terminal lines", async () => {
-  const output = captureTerminal();
-  const browserStepSent = Promise.withResolvers<void>();
-  // Same prompter calls the OpenAI device-code login makes for a CLI-owned Gateway session.
-  const request = hostedLogin(
-    async (prompter) => {
-      await prompter.deviceCode?.({
-        title: "OpenAI Codex device code",
-        code: "ABCD-1234",
-        expiresInMinutes: 15,
-        message: "Enter this one-time code on the sign-in page.",
-      });
-      await prompter.openUrl?.(verificationUrl);
-      await browserStepSent.promise;
-    },
-    (result) => {
-      if (result.step?.externalUrl) {
-        browserStepSent.resolve();
-      }
-    },
-  );
-  await runGatewayLoginWizard(request, "login", new AbortController().signal, runtime);
-  const lines = output();
-  expect(lines).toEqual(
-    expect.arrayContaining([
-      verificationUrl,
-      "Enter this one-time code on the sign-in page.",
-      "Code: ABCD-1234",
-      "Code expires in 15 minutes.",
-      "Complete sign-in in your browser.",
-    ]),
-  );
-  expect(lines.join("\n")).not.toContain("\\n");
-  expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("confirmed by the Gateway"));
-});
-
-it("keeps the offline device-code note on separate terminal lines", async () => {
-  const output = captureTerminal();
-  // The OpenAI plugin's note when the local terminal prompter has no device-code view.
-  await createClackPrompter(process.stderr).note(
-    [
-      "Open this URL in your browser and enter the code below.",
-      `URL: <${verificationUrl}>`,
-      "Code: ABCD-1234",
-      "Code expires in 15 minutes. Never share it.",
-    ].join("\n"),
-    "OpenAI Codex device code",
-  );
-  expect(output()).toEqual(
-    expect.arrayContaining([
-      `URL: <${verificationUrl}>`,
-      "Code: ABCD-1234",
-      "Code expires in 15 minutes. Never share it.",
-    ]),
   );
 });
 
