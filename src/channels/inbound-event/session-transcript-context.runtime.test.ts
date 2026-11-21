@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import {
+  readRecentUserAssistantTextForSession,
+  readRecentUserAssistantTurnsForSession,
+} from "../../config/sessions/transcript.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
 // mock-isolation: Supply transcript rows without real session state; the adjacent SQLite suite covers persistence.
@@ -40,6 +43,7 @@ function chatWindow(messages: object[], overrides: Partial<WindowEntry> = {}) {
 describe("session transcript inbound context", () => {
   beforeEach(() => {
     readRecent.mockReset();
+    vi.mocked(readRecentUserAssistantTurnsForSession).mockImplementation(readRecent);
   });
 
   async function merged(
