@@ -168,6 +168,8 @@ export type SessionCatalogGroupsParams = {
 };
 
 export type RenderableSessionSection = SidebarVisibleSections["sections"][number];
+/** Older roster pages as the continuation of the one section that shows them. */
+export type RosterContinuation = { hasMore: boolean; loading: boolean; auto: boolean };
 export type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
   effectiveSessionsGrouping(): SidebarSessionsGrouping;

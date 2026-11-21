@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import {
   presenceViewerActivity,
@@ -7,7 +7,6 @@ import {
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
@@ -23,59 +22,20 @@ import type {
   SessionCatalogRenderSnapshot,
 } from "./app-sidebar-session-render-types.ts";
 import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
-import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
+import {
+  renderSessionSection as SessionSection,
+  RosterLoadMoreButton,
+} from "./app-sidebar-session-section-render.tsx";
 import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-function RosterLoadMore(props: {
-  host: SidebarSessionListHost;
-  hasMore: boolean;
-  loading: boolean;
-}) {
-  const [button, setButton] = createSignal<HTMLButtonElement>();
-  // One page per entry into view: the button has to leave and come back before
-  // the next load, so a page whose rows land off-screen or a failed load never
-  // turns into a request loop. The button stays as the manual fallback.
-  // Grouped and people-sorted views place older rows inside earlier sections,
-  // so they keep the explicit button. The flat list mostly appends; when
-  // Created order or catalog sections put a page above the fold, this still
-  // loads at most one page per entry into view.
-  createIntersectionObserver(
-    () => {
-      const target = button();
-      return target ? [target] : [];
-    },
-    (entries) => {
-      const host = props.host;
-      if (
-        host.effectiveSessionsGrouping() === "none" &&
-        host.effectiveSessionSortMode() !== "people" &&
-        entries.some((entry) => entry.isIntersecting)
-      ) {
-        void host.loadMoreSidebarSessions();
-      }
-    },
-  );
-  return (
-    <Show when={props.hasMore}>
-      <div class="sidebar-session-pagination sidebar-session-pagination--roster">
-        <button
-          ref={setButton}
-          type="button"
-          class="sidebar-session-pagination__button"
-          aria-label={
-            props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")
-          }
-          disabled={props.loading}
-          aria-busy={props.loading ? "true" : "false"}
-          onClick={() => void props.host.loadMoreSidebarSessions()}
-        >
-          {props.loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
-          {props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-        </button>
-      </div>
-    </Show>
-  );
+/** The flat list is one native section, so older roster pages continue at that
+ *  section's end. Grouped views place a page's rows across sections. */
+function flatListSectionId(params: Parameters<typeof renderSessionList>[0]): string | undefined {
+  return params.host.effectiveSessionsGrouping() === "none" &&
+    params.sections.some((section) => section.id === "ungrouped")
+    ? "ungrouped"
+    : undefined;
 }
 
 function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
@@ -127,7 +87,21 @@ function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) 
                 )
               }
             >
-              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
+              <SessionSection
+                host={host()}
+                section={section()}
+                personHeaders={personHeaders()}
+                roster={
+                  section().id === flatListSectionId(params)
+                    ? {
+                        hasMore: params.nativeSessionsHaveMore,
+                        loading: params.nativeSessionsLoading,
+                        // People order places older rows between existing ones.
+                        auto: host().effectiveSessionSortMode() !== "people",
+                      }
+                    : undefined
+                }
+              />
             </Show>
           }
         >
@@ -159,11 +133,11 @@ export function renderSessionList(params: {
     host,
     <div class="sidebar-recent-sessions">
       {renderSessionListBody(params)}
-      <RosterLoadMore
-        host={host()}
-        hasMore={params.nativeSessionsHaveMore}
-        loading={params.nativeSessionsLoading}
-      />
+      <Show when={params.nativeSessionsHaveMore && flatListSectionId(params) === undefined}>
+        <div class="sidebar-session-pagination sidebar-session-pagination--roster">
+          <RosterLoadMoreButton host={host()} loading={params.nativeSessionsLoading} />
+        </div>
+      </Show>
       {renderPersonalSessionEmpty(
         host(),
         params.empty && params.sections.every((section) => section.totalRowCount === 0),
