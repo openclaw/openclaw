@@ -44,7 +44,10 @@ import {
 } from "./openclaw-state-db-readonly-reuse.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { existingPathOrUndefined, resolveDatabasePath } from "./openclaw-state-db.paths.js";
-import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  hasAdmittedMaintenanceLiveAuthorityReads,
+} from "./openclaw-state-maintenance-context.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import {
   isStateReadReply,
@@ -60,10 +63,7 @@ import {
   runRetainedReadScope,
   runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
-import {
-  prepareOpenClawStateReadSnapshotSource,
-  type StateReadSnapshotSource,
-} from "./openclaw-state-read-snapshot-source.js";
+import { prepareOpenClawStateReadSnapshotSource } from "./openclaw-state-read-snapshot-source.js";
 import type {
   OpenClawStateReadReceipt,
   OpenClawStateReadOptions,
@@ -71,6 +71,7 @@ import type {
   OpenClawStateReadOnlyDatabase,
   StateReadScopeOptions,
   RetainedReadScope,
+  OpenClawStateReadSnapshotScope,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
@@ -84,19 +85,7 @@ const disposableStateReads = resolveGlobalSingleton(
 
 const stateSnapshotReads = resolveGlobalSingleton(
   Symbol.for("openclaw.stateSnapshotReads"),
-  () =>
-    new AsyncLocalStorage<
-      RetainedReadScope & {
-        readSource(): StateReadSnapshotSource | undefined;
-        prepareSource?: () => Promise<void>;
-        forkSource: Awaited<
-          ReturnType<typeof prepareOpenClawStateReadSnapshotSource>
-        >["forkSource"];
-        recoverRollbackJournal: () => void;
-        env: NodeJS.ProcessEnv;
-        callerSignal?: AbortSignal;
-      }
-    >(),
+  () => new AsyncLocalStorage<OpenClawStateReadSnapshotScope>(),
 );
 
 function exitStateReadSnapshot<T>(operation: () => T): T {
@@ -163,7 +152,6 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
   options: StateReadScopeOptions = {},
 ): Promise<T> {
-  const live = isLiveStateRead();
   const inheritedSignal = resolveStateReadCallerSignal();
   const callerSignal =
     options.signal && inheritedSignal
@@ -172,6 +160,10 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   callerSignal?.throwIfAborted();
   const postgres = isStatePostgres();
   const pathname = resolveOpenClawStateReadPath(options);
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  const live =
+    isLiveStateRead() ||
+    Boolean(maintenance && hasAdmittedMaintenanceLiveAuthorityReads(maintenance, pathname));
   const current = stateSnapshotReads.getStore();
   const lazy = options.lazy === true && !postgres && !live;
   if (
@@ -265,6 +257,11 @@ export async function withDisposableOpenClawStateReads<T>(
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   // PostgreSQL reads use the admitted connection's read-only transaction, never a copied anchor.
   if (isStatePostgres() || isLiveStateRead()) {
+    return false;
+  }
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  // Doctor already owns this source and admitted native reads after its backup boundary.
+  if (maintenance && hasAdmittedMaintenanceLiveAuthorityReads(maintenance, pathname)) {
     return false;
   }
   // Live owners already hold the WAL family; explicit snapshots select their own source.
