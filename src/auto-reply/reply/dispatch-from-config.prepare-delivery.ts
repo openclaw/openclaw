@@ -309,7 +309,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       }
     }
     if (hasAskUserPayload(payload) && !effectiveAbortSignal?.aborted && !result?.delivered) {
-      throw new Error("ask_user prompt delivery failed");
+      const failure = result?.error ?? result?.reason;
+      throw new Error(`ask_user prompt delivery failed${failure ? `: ${failure}` : ""}`, {
+        cause: result?.cause,
+      });
     }
     return result;
   };
