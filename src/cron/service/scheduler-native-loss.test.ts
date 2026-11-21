@@ -3,7 +3,7 @@ import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { setupCronRegressionFixtures } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerReply, SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createCronServiceWithStateForTest, createNoopLogger } from "../service.test-harness.js";
 import { waitForCronRunQueue } from "./run-queue.js";
@@ -22,17 +22,40 @@ for (const loseReplacement of [false, true]) {
       delivered.resolve();
       return { status: "ok" as const };
     });
+    const startedAt = performance.now();
+    const events: { elapsedMs: number; phase: string; worker?: number; ok?: boolean }[] = [];
+    let droppedEvents = 0;
+    const record = (phase: string, worker?: number, ok?: boolean) => {
+      if (events.length === 64) {
+        events.shift();
+        droppedEvents += 1;
+      }
+      events.push({ elapsedMs: performance.now() - startedAt, phase, worker, ok });
+    };
+    const log = createNoopLogger();
+    log.warn.mockImplementation((_fields, message) => {
+      if (message === "cron: worker recovery failed") {
+        record("recovery.failed");
+      }
+    });
+    log.info.mockImplementation((_fields, message) => {
+      if (message === "cron: scheduler reconnected after native worker loss") {
+        record("recovery.reconnected");
+      }
+    });
     const { cron, state } = createCronServiceWithStateForTest({
       scheduler,
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
-      log: createNoopLogger(),
+      log,
       enqueueSystemEvent: vi.fn(),
       runSessionEvent,
       runIsolatedAgentJob: vi.fn(),
     });
     const workers: Worker[] = [];
+    const observed = new Map<Worker, { id: number; pending: Map<number, string> }>();
+    const removeListeners: (() => void)[] = [];
     // Observe and interrupt the real transport, retaining the scheduler and database owners.
     // oxlint-disable-next-line typescript/unbound-method -- Preserve the real Worker receiver.
     const postMessage = Worker.prototype.postMessage;
@@ -43,7 +66,36 @@ for (const loseReplacement of [false, true]) {
     ) {
       const starts =
         request.type === "execute" && deserialize(request.input).type === "cron.schedulerStart";
+      if (request.type === "open" || starts) {
+        let entry = observed.get(this);
+        if (!entry) {
+          const id = observed.size + 1;
+          const pending = new Map<number, string>();
+          entry = { id, pending };
+          observed.set(this, entry);
+          const reply = (result: SqliteWorkerReply) => {
+            const phase = pending.get(result.id);
+            if (phase) {
+              pending.delete(result.id);
+              record(phase + ".reply", id, result.ok);
+            }
+          };
+          const exit = () => record("native.exit", id);
+          this.on("message", reply);
+          this.once("exit", exit);
+          removeListeners.push(() => {
+            this.off("message", reply);
+            this.off("exit", exit);
+          });
+        }
+        const phase = starts ? "schedulerStart" : "open";
+        entry.pending.set(request.id, phase);
+      }
       postMessage.call(this, request, transferList);
+      const entry = observed.get(this);
+      if ((request.type === "open" || starts) && entry) {
+        record(starts ? "schedulerStart.sent" : "open.sent", entry.id);
+      }
       if (starts && !workers.includes(this)) {
         workers.push(this);
         if (workers.length === 2 && loseReplacement) {
@@ -66,9 +118,25 @@ for (const loseReplacement of [false, true]) {
       expect(original).toBeInstanceOf(Worker);
       await original!.terminate();
       expect(original!.threadId).toBe(-1);
-      await vi.waitFor(() => expect(workers).toHaveLength(loseReplacement ? 3 : 2), {
-        timeout: 3_000,
-      });
+      record("recovery.wait");
+      try {
+        await vi.waitFor(() => expect(workers).toHaveLength(loseReplacement ? 3 : 2), {
+          timeout: 3_000,
+        });
+      } catch (error) {
+        // Transport replies do not prove lease admission; native exits do not prove callback delivery.
+        console.error(
+          "[cron-native-loss]",
+          JSON.stringify({
+            elapsedMs: performance.now() - startedAt,
+            expectedStarts: loseReplacement ? 3 : 2,
+            observedStarts: workers.length,
+            droppedEvents,
+            events,
+          }),
+        );
+        throw error;
+      }
       await withinTest(delivered.promise, signal);
       await waitForCronRunQueue(state);
       expect(runSessionEvent).toHaveBeenCalledOnce();
@@ -76,6 +144,9 @@ for (const loseReplacement of [false, true]) {
         (await cron.list({ includeDisabled: true })).some((entry) => entry.id === job.id),
       ).toBe(false);
     } finally {
+      for (const remove of removeListeners) {
+        remove();
+      }
       capture.mockRestore();
       cron.stop();
       await state.schedulerDrain;
