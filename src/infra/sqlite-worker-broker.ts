@@ -154,8 +154,9 @@ export class SqliteWorkerBroker {
       ? findReusableSqliteWorkerClient(this.stores.values(), snapshot.databasePath)
       : undefined;
     let preparation: Awaited<ReturnType<typeof prepareSqliteWorkerDatabaseAdmission>> | undefined;
-    return this.inputAdmission
-      .open(
+    let opening: Promise<SqliteWorkerStore<Operations> | undefined>;
+    try {
+      opening = this.inputAdmission.open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
         snapshot.databasePath,
         async () => {
@@ -177,11 +178,15 @@ export class SqliteWorkerBroker {
           preparation = await prepareSqliteWorkerDatabaseAdmission(snapshot);
           return { readIdentities: new Map([[snapshot.databasePath, preparation.identity]]) };
         },
-      )
-      .catch((error: unknown) => {
-        this.clients.delete(client);
-        throw error;
-      });
+      );
+    } catch (error) {
+      this.clients.delete(client);
+      return Promise.reject(toErrorObject(error, "SQLite worker input could not be serialized"));
+    }
+    return opening.catch((error: unknown) => {
+      this.clients.delete(client);
+      throw error;
+    });
   }
 
   private async openAdmitted<Operations extends SqliteWorkerOperations>(
