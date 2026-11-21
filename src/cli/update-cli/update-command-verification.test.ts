@@ -724,6 +724,7 @@ async function gitReleaseRestart() {
   const verify = (gitReleaseRestartMode?: RestartParams["gitReleaseRestartMode"]) =>
     restartGateway({
       gitReleaseRestartMode,
+      requireRunningServiceAfterRestart: false, // The update did not stop the resident.
       opts: withRun("release-handoff", { assertCurrent: () => controller.signal.throwIfAborted() }),
       timeoutMs: 60_000,
       onVerified,
@@ -736,6 +737,15 @@ async function gitReleaseRestart() {
     });
   return { service, incumbent, successor, onVerified, verify, trial };
 }
+
+it("does not settle a native Git restart from a listener after the managed service stops", async () => {
+  const { service, incumbent, verify, onVerified, trial } = await gitReleaseRestart();
+  lease.mockReturnValue(incumbent);
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
+  expect(await verify("native")).toBe("restart-health-failed");
+  expect(onVerified).not.toHaveBeenCalled();
+  await fs.access(trial);
+});
 
 it.each([
   ["native", "same", false, "ok"],

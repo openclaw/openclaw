@@ -72,29 +72,30 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       } as const;
       const successor = { ...incumbent, owner: "after", pid: 2345 };
       const unchanged = { status: "unverified", incumbentPid: incumbent.pid };
-      const options = {
-        serviceEnv: {},
-        gatewayPort: incumbent.port,
-        allowGitReleaseRestartSignal: true,
-      };
+      const waitForHandoff = (allowGitReleaseRestartSignal = true) =>
+        waitForGitReleaseSuccessor({
+          serviceEnv: {},
+          gatewayPort: incumbent.port,
+          allowGitReleaseRestartSignal,
+        });
+      const spyOnLease = () => vi.spyOn(gatewayOwner, "readGatewayOwnerLease");
+      const spyOnSignal = () => vi.spyOn(process, "kill");
       const unreadable = () => {
         throw new Error("owner lease temporarily unavailable");
       };
-      beforeEach(() => {
-        vi.useFakeTimers();
-      });
+      beforeEach(() => void vi.useFakeTimers());
       afterEach(() => {
         vi.restoreAllMocks();
         vi.useRealTimers();
       });
       it("does not verify the incumbent while the restart is deferred for active work", async () => {
-        const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
+        const owner = spyOnLease().mockReturnValue(incumbent);
         const start = performance.now();
         owner.mockReturnValueOnce({ ...incumbent, state: "unknown", startedAt: null });
         owner.mockImplementation(() =>
           performance.now() - start === 35_000 ? { ...incumbent, state: "unknown" } : incumbent,
         );
-        const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        const kill = spyOnSignal().mockImplementation(() => {
           expect(performance.now() - start).toBeGreaterThan(35_000);
           owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "new-receipt" });
           setTimeout(() => {
@@ -104,9 +105,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           return true;
         });
         const verified = vi.fn();
-        const wait = waitForGitReleaseSuccessor(options).then((result) =>
-          verified(result, owner()?.pid),
-        );
+        const wait = waitForHandoff().then((result) => verified(result, owner()?.pid));
         await vi.advanceTimersByTimeAsync(90_000);
         expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
         expect(verified).not.toHaveBeenCalled();
@@ -117,26 +116,28 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       it.each([undefined, "earlier-receipt"])(
         "does not extend the wait on delivery alone (prior receipt: %s)",
         async (prior) => {
-          vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
-            ...incumbent,
-            externalRestartReceipt: prior,
-          });
-          const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-          const wait = waitForGitReleaseSuccessor(options);
+          spyOnLease().mockReturnValue({ ...incumbent, externalRestartReceipt: prior });
+          const kill = spyOnSignal().mockReturnValue(true);
+          const wait = waitForHandoff();
           await vi.advanceTimersByTimeAsync(90_000);
           await expect(wait).resolves.toEqual(unchanged);
           expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
         },
       );
-      it.each([true, false])(
-        "keeps observing until the original deadline after SIGUSR2 gets ESRCH (successor arrives: %s)",
-        async (successorArrives) => {
-          const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
-          const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-            throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+      it.each([
+        ["ESRCH", true],
+        ["ESRCH", false],
+        ["EPERM", true],
+        ["EPERM", false],
+      ] as const)(
+        "keeps observing until the original deadline after SIGUSR2 gets %s (successor arrives: %s)",
+        async (code, successorArrives) => {
+          const owner = spyOnLease().mockReturnValue(incumbent);
+          const kill = spyOnSignal().mockImplementation(() => {
+            throw Object.assign(new Error("signal not delivered"), { code });
           });
           const finished = vi.fn();
-          void waitForGitReleaseSuccessor(options).then(finished);
+          void waitForHandoff().then(finished);
           await vi.advanceTimersByTimeAsync(35_000);
           // A still-visible lease cannot justify retrying or acknowledging an undelivered signal.
           owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "another-request" });
@@ -153,12 +154,9 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         },
       );
       it("does not signal or spend the deferral budget when external restarts are disabled", async () => {
-        const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
-        const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-        const wait = waitForGitReleaseSuccessor({
-          ...options,
-          allowGitReleaseRestartSignal: false,
-        });
+        const owner = spyOnLease().mockReturnValue(incumbent);
+        const kill = spyOnSignal().mockReturnValue(true);
+        const wait = waitForHandoff(false);
         await vi.advanceTimersByTimeAsync(50_000);
         owner.mockReturnValue({ ...incumbent, owner: "watcher-successor", pid: 2345 });
         await vi.advanceTimersByTimeAsync(1_000);
@@ -169,11 +167,9 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         "recovers an incumbent whose %s predates an unreadable first poll",
         async (timestamp) => {
           const started = Date.now();
-          const owner = vi
-            .spyOn(gatewayOwner, "readGatewayOwnerLease")
-            .mockImplementation(unreadable);
-          const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-          const wait = waitForGitReleaseSuccessor(options);
+          const owner = spyOnLease().mockImplementation(unreadable);
+          const kill = spyOnSignal().mockReturnValue(true);
+          const wait = waitForHandoff();
           await vi.advanceTimersByTimeAsync(10_000);
           owner.mockReturnValue({
             ...incumbent,
@@ -201,12 +197,12 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         "observes only to the original deadline if the initial incumbent cannot be established: %s",
         async (_scenario, read) => {
           const started = Date.now();
-          vi.spyOn(gatewayOwner, "readGatewayOwnerLease")
+          spyOnLease()
             .mockImplementation(() => read(started))
             .mockImplementationOnce(unreadable);
-          const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+          const kill = spyOnSignal().mockReturnValue(true);
           const finished = vi.fn();
-          void waitForGitReleaseSuccessor(options).then(finished);
+          void waitForHandoff().then(finished);
           await vi.advanceTimersByTimeAsync(89_000);
           expect(finished).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1_000);
@@ -215,13 +211,10 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         },
       );
       it("honors command-scope cancellation while the initial owner lease remains unreadable", async () => {
-        vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockImplementation(unreadable);
-        const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+        spyOnLease().mockImplementation(unreadable);
+        const kill = spyOnSignal().mockReturnValue(true);
         const controller = new AbortController();
-        const wait = withCommandProcessScope(
-          () => waitForGitReleaseSuccessor(options),
-          controller.signal,
-        );
+        const wait = withCommandProcessScope(waitForHandoff, controller.signal);
         await vi.advanceTimersByTimeAsync(1_000);
         controller.abort();
         await expect(wait).rejects.toThrow();

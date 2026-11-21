@@ -206,6 +206,8 @@ export async function maybeRestartService(
   }
   let activation = {
     ...params,
+    requireRunningServiceAfterRestart:
+      params.requireRunningServiceAfterRestart || params.gitReleaseRestartMode === "native",
     allowGitReleaseRestartSignal: params.gitReleaseRestartMode === "signal",
     signal: run?.deadline?.signal,
     // A default update step must not truncate a Windows service's cold-start budget.
