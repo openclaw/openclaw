@@ -7,6 +7,7 @@ import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { coerceErrorMessage as formatLiveOpenAIError } from "openclaw/plugin-sdk/error-runtime";
+import { describeImageWithModel } from "openclaw/plugin-sdk/media-understanding";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -405,16 +406,15 @@ describeLive("openai plugin live", () => {
   it("describes a deterministic image through the registered media provider", async () => {
     const { mediaProviders } = await registerOpenAIPlugin();
     const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
+    const describeImage = mediaProvider.describeImage ?? describeImageWithModel;
 
     const cfg = createLiveConfig();
     const agentDir = await createTempAgentDir();
 
     try {
-      let description:
-        | Awaited<ReturnType<NonNullable<typeof mediaProvider.describeImage>>>
-        | undefined;
+      let description: Awaited<ReturnType<typeof describeImage>>;
       try {
-        description = await mediaProvider.describeImage?.({
+        description = await describeImage({
           buffer: createReferencePng(),
           fileName: "reference.png",
           mime: "image/png",

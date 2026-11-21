@@ -6,14 +6,8 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   capabilities: ["image", "audio"],
   defaultModels: { image: "gpt-6-astra", audio: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL },
   autoPriority: { image: 20, audio: 20 },
-  async describeImage(req) {
-    const { describeImageWithModel } = await import("openclaw/plugin-sdk/media-understanding");
-    return describeImageWithModel(req);
-  },
-  async describeImages(req) {
-    const { describeImagesWithModel } = await import("openclaw/plugin-sdk/media-understanding");
-    return describeImagesWithModel(req);
-  },
+  describeImage: undefined,
+  describeImages: undefined,
   async transcribeAudio(req) {
     const { transcribeOpenAiAudio } = await import("./audio-transcription.js");
     return transcribeOpenAiAudio(req);
