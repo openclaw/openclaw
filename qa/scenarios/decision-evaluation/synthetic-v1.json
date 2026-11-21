@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "fixtureId": "decision-evaluation-synthetic-v1",
+  "cases": [
+    {"id":"color","groupId":"color-repeat-1","batch":{"state":"synthetic","questions":{"color":{"type":"choice","criteria":{"blue":"Blue","red":"Red"}}}},"reference":{"status":"reviewed","expectations":{"color":{"kind":"choice","acceptable":["red"]}},"provenance":{"source":"synthetic-reviewed-v1"}}},
+    {"id":"square","batch":{"state":"synthetic","questions":{"square":{"type":"boolean","criteria":{"true":"Square","false":"Not square"}}}},"reference":{"status":"reviewed","expectations":{"square":{"kind":"boolean","expected":true,"operator":"gte","threshold":0.8}},"provenance":{"source":"synthetic-reviewed-v1"}}},
+    {"id":"mark","batch":{"state":"synthetic","questions":{"mark":{"type":"score","criteria":["poor","fair","good","excellent"]}}},"reference":{"status":"reviewed","expectations":{"mark":{"kind":"score","interval":{"min":1.5,"max":2}}},"provenance":{"source":"synthetic-reviewed-v1"}}},
+    {"id":"unreviewed","groupId":"unscored-example","batch":{"state":"synthetic","questions":{"choice":{"type":"choice","criteria":{"a":"A","b":"B"}}}},"reference":{"status":"unreviewed","note":"Reference intentionally withheld."}},
+    {"id":"disputed","batch":{"state":"synthetic","questions":{"choice":{"type":"choice","criteria":{"a":"A","b":"B"}}}},"reference":{"status":"disputed","note":"Reviewers disagree."}}
+  ],
+  "outcomes": [
+    {"caseId":"color","status":"ok","result":{"model":"synthetic-decision-model","answers":{"color":{"type":"choice","choice":"blue","probabilities":{"blue":0.81,"red":0.18},"confidence":0.42}},"usage":{"inputTokens":120,"outputTokens":18}},"provenance":{"providerId":"synthetic","rubricVersion":"v1","runtimeGeneration":"fixture"}},
+    {"caseId":"square","status":"ok","result":{"model":"synthetic-decision-model","answers":{"square":{"type":"boolean","probabilityTrue":0.9}},"usage":{"inputTokens":120,"outputTokens":12}},"provenance":{"providerId":"synthetic","rubricVersion":"v1","runtimeGeneration":"fixture"}},
+    {"caseId":"mark","status":"ok","result":{"model":"synthetic-decision-model","answers":{"mark":{"type":"score","score":1.8,"probabilities":[0.05,0.15,0.7,0.1]}},"usage":{"inputTokens":120,"outputTokens":20}},"provenance":{"providerId":"synthetic","rubricVersion":"v1","runtimeGeneration":"fixture"}},
+    {"caseId":"unreviewed","status":"ok","result":{"model":"synthetic-decision-model","answers":{"choice":{"type":"choice","choice":"a","probabilities":{"a":0.6,"b":0.4}}}},"provenance":{"providerId":"synthetic","rubricVersion":"v1","runtimeGeneration":"fixture"}},
+    {"caseId":"disputed","status":"ok","result":{"model":"synthetic-decision-model","answers":{"choice":{"type":"choice","choice":"b","probabilities":{"a":0.4,"b":0.6}}}},"provenance":{"providerId":"synthetic","rubricVersion":"v1","runtimeGeneration":"fixture"}}
+  ]
+}
