@@ -1,4 +1,140 @@
 {
   "schema": "openclaw.release-validation-waivers/v1",
-  "waivers": []
+  "waivers": [
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Operator accepts Kova performance threshold findings, including memory, for this release; retain raw results and require execution and evidence integrity.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "pluginPrereleaseIndependent",
+      "jobName": "checks-node-extensions-shard-4 (node)",
+      "reason": "Operator accepts the investigated ClawRouter failure for this release; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "plugin-prerelease-suite",
+          "stepName": "Verify plugin prerelease suite",
+          "causes": [
+            "plugin-prerelease-extensions ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-22 (node)",
+      "reason": "Operator accepts the investigated Doctor failure for this release; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-43 (node)",
+      "reason": "Operator accepts the investigated config deletion failure for this release; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-14 (bun)",
+      "reason": "Operator accepts the investigated Bun handoff failure for this release; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "reason": "Operator accepts the investigated MiniMax live test failure for this release; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-worker-e2e-2 (node)",
+      "reason": "Operator accepts the skill cancellation and replacement failure after the same test passed locally; preserve the original failure and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (node)",
+      "reason": "Operator accepts the scheduler recovery failure after the same tests passed locally; preserve the original failure and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-27 (bun)",
+      "reason": "Operator accepts the approval delivery and drain failure after the same test passed locally; preserve the original failure and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    }
+  ]
 }
