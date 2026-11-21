@@ -34,7 +34,7 @@ import { createComposerMobileInteraction } from "./chat-composer-mobile-interact
 import { ChatComposerPluginContributions } from "./chat-composer-plugin-contributions.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
+import * as regions from "./chat-composer-regions.tsx";
 import { presentComposerTasks } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { ComposerTaskSlot } from "./chat-composer-task-slot.tsx";
@@ -334,9 +334,9 @@ export function renderChatComposerView(
           </div>
           <ComposerQuestionDock panel={context().questionPanelProps} />
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}
-          <ComposerProgress composer={props} shown={context().showComposerProgress} />{" "}
+          <regions.ComposerProgress composer={props} shown={context().showComposerProgress} />{" "}
           <Show when={!props.mobileComposer}>
-            <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
+            <regions.ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
           </Show>
           <Show when={!resumeRecovery() && props.goalRecovery}>
             {(recovery) => (
@@ -407,10 +407,10 @@ export function renderChatComposerView(
         {props.mobileApprovalContent}
       </div>
       <Show when={props.mobileComposer}>
-        <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
+        <regions.ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
       </Show>
       {showComposerInput() ? (
-        <ComposerInputScope>
+        <regions.ComposerInputScope>
           <div
             class={[
               "agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar",
@@ -624,6 +624,7 @@ export function renderChatComposerView(
               </div>
             </div>
 
+            <regions.ComposerWorkspaceNotice {...props} />
             <div class="agent-chat__composer-footer">
               <div class="agent-chat__composer-lead agent-chat__composer-meta">
                 <ChatComposerPlusMenu
@@ -673,12 +674,11 @@ export function renderChatComposerView(
                     const Controls = dynamic(() => controls().component);
                     return (
                       <>
-                        {" "}
                         <div class="agent-chat__composer-controls">
                           <ComposerContent>
                             <Controls model={controls().model} />
                           </ComposerContent>
-                        </div>{" "}
+                        </div>
                       </>
                     );
                   }}
@@ -691,12 +691,12 @@ export function renderChatComposerView(
             </div>
           </div>
           <ComposerWidthEdge options={() => props} shell={() => shell} />
-        </ComposerInputScope>
+        </regions.ComposerInputScope>
       ) : memberWelcome.active() ? (
         memberWelcome.step()
-      ) : props.disabledBanner?.kind === "composer-replacement" ? (
-        disabledBanner
-      ) : undefined}
+      ) : (
+        <regions.ComposerUnavailable composer={props}>{disabledBanner}</regions.ComposerUnavailable>
+      )}
     </div>
   );
 }

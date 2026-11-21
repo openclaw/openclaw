@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import * as sandbox from "../agents/sandbox/context.js";
+import * as checkout from "../agents/worktrees/checkout-materialize.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -119,11 +120,11 @@ it("explains a removed active session worktree without a snapshot before prepari
   }
 });
 
-it(
-  "restores saved work on chat.send before the agent and Review consume it",
+it.each(["snapshot", "fresh"])(
+  "refuses chat.send until explicit workspace restore (%s)",
   { timeout: 90_000 },
-  async () => {
-    const state = await createProductState("chat-auto-restore-worktree");
+  async (mode) => {
+    const state = await createProductState("chat-explicit-restore-worktree");
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     const requests: string[] = [];
     const failures: unknown[] = [];
@@ -135,8 +136,9 @@ it(
         responseId: randomUUID(),
       });
     });
-    const sessionKey = "agent:main:auto-restored-worktree";
-    const startup: unknown[] = [];
+    const sessionKey = "agent:main:explicit-restore-worktree";
+    let restoring = false;
+    const readyEvent = createDeferredCore();
     const failed = createDeferredCore<string>();
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
@@ -151,10 +153,10 @@ it(
           models: model.models,
           plugins: { enabled: false, slots: { memory: "none" } },
           tools: { profile: "minimal" },
-          gateway: { auth: { mode: "token", token: "synthetic-auto-restore-worktree" } },
+          gateway: { auth: { mode: "token", token: "synthetic-explicit-restore-worktree" } },
         },
         configPath: state.configPath,
-        token: "synthetic-auto-restore-worktree",
+        token: "synthetic-explicit-restore-worktree",
         scopes: ["operator.admin", "operator.read", "operator.write"],
         onEvent(event) {
           const payload = event.payload;
@@ -162,11 +164,13 @@ it(
             return;
           }
           if (
-            event.event === "agent" &&
-            payload.stream === "run_status" &&
-            isRecord(payload.data)
+            restoring &&
+            event.event === "sessions.changed" &&
+            isRecord(payload.session) &&
+            isRecord(payload.session.worktreeState) &&
+            payload.session.worktreeState.status === "ready"
           ) {
-            startup.push(payload.data.phase);
+            readyEvent.resolve();
           }
           if (event.event === "chat" && payload.state === "error") {
             failed.resolve(String(payload.errorMessage));
@@ -183,6 +187,7 @@ it(
           worktreeSource: "empty",
         },
       );
+      await client.request("sessions.subscribe", {});
       const saved = path.join(created.worktree.path, "saved-task.txt");
       await fs.writeFile(saved, "saved work survives cleanup\n");
       expect(await client.request("worktrees.remove", { id: created.worktree.id })).toMatchObject({
@@ -192,7 +197,40 @@ it(
         "worktree was removed",
       );
       await expect(fs.access(saved)).rejects.toMatchObject({ code: "ENOENT" });
-      startup.length = 0;
+      if (mode === "fresh") {
+        await updateRegistryWorktree(process.env, created.worktree.id, { snapshotRef: undefined });
+      }
+      expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
+        session: { worktreeState: { status: "removed", restore: mode } },
+      });
+      expect(await client.request("sessions.list", { rowMode: "sidebar" })).toMatchObject({
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            key: sessionKey,
+            worktreeState: { status: "removed", restore: mode },
+          }),
+        ]),
+      });
+      await client.request("chat.send", {
+        sessionKey,
+        message: "Do not restore silently.",
+        deliver: false,
+        idempotencyKey: randomUUID(),
+      });
+      expect(await failed.promise).toContain("This session's worktree was removed");
+      expect(requests).toHaveLength(0);
+      await expect(fs.access(saved)).rejects.toMatchObject({ code: "ENOENT" });
+      restoring = true;
+      using materialize = vi.spyOn(checkout, "materializeManagedWorktree");
+      await Promise.all([
+        client.request("worktrees.restore", { id: created.worktree.id }),
+        client.request("worktrees.restore", { id: created.worktree.id }),
+      ]);
+      expect(materialize).toHaveBeenCalledOnce();
+      await readyEvent.promise;
+      expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
+        session: { worktreeState: { status: "ready" } },
+      });
       const run = await client.request<{ runId: string }>("chat.send", {
         sessionKey,
         message: "Continue the saved task.",
@@ -207,30 +245,27 @@ it(
         ),
       ).toMatchObject({ status: "ok" });
       expect(requests).toHaveLength(1);
-      expect(startup).toContain("preparing_workspace");
       expect(failures).toEqual([]);
-      expect(await fs.readFile(saved, "utf8")).toBe("saved work survives cleanup\n");
-      expect(await client.request("sessions.diff", { sessionKey })).toMatchObject({
-        files: expect.arrayContaining([expect.objectContaining({ path: "saved-task.txt" })]),
-      });
+      if (mode === "snapshot") {
+        expect(await fs.readFile(saved, "utf8")).toBe("saved work survives cleanup\n");
+        expect(await client.request("sessions.diff", { sessionKey })).toMatchObject({
+          files: expect.arrayContaining([expect.objectContaining({ path: "saved-task.txt" })]),
+        });
+      } else {
+        await expect(fs.access(saved)).rejects.toMatchObject({ code: "ENOENT" });
+      }
       await client.request("worktrees.remove", { id: created.worktree.id });
       await updateRegistryWorktree(process.env, created.worktree.id, {
         snapshotRef: "refs/openclaw/snapshots/unavailable",
       });
-      await client.request("chat.send", {
-        sessionKey,
-        message: "Continue again.",
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      });
-      expect(await failed.promise).toContain(
-        "Automatic worktree restore failed (snapshot-invalid)",
-      );
+      await expect(
+        client.request("worktrees.restore", { id: created.worktree.id }),
+      ).rejects.toThrow("snapshot-invalid");
       expect(requests).toHaveLength(1);
     } finally {
       if (gateway) {
         await disconnectGatewayClient(gateway.client);
-        await gateway.server.close({ reason: "worktree auto-restore proof complete" });
+        await gateway.server.close({ reason: "explicit worktree restore proof complete" });
       }
       await closeProvider(providerServer);
       vi.unstubAllEnvs();

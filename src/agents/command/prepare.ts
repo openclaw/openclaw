@@ -381,12 +381,12 @@ export async function prepareAgentCommandExecution(
   }
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
   const worktreeSource =
-    sessionKey && sessionEntryRaw?.archivedAt === undefined && sessionEntryRaw?.worktree
+    sessionKey && sessionEntryRaw?.worktree
       ? await resolveSessionWorktree({
           binding: sessionEntryRaw.worktree,
           sessionKey,
           assertCurrent: assertPreparationCurrent,
-          restore: { signal: abortSignal, runId: opts.runId?.trim() || sessionId },
+          turn: true,
         }).then((prepared) =>
           prepared ? { record: prepared.worktree, context: prepared.context } : undefined,
         )

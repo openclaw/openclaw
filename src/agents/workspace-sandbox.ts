@@ -35,7 +35,6 @@ export type WorkspaceSandboxParams = Pick<
   | "requireWorkspaceOnly"
   | "workspaceDir"
 > & {
-  runId?: string;
   admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
   /** Placement execution policy never supplies Gateway-side filesystem or media roots. */
   placementSandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>;
@@ -145,12 +144,12 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
       },
       assertCurrent,
     );
-    if (entry?.archivedAt === undefined && entry?.worktree) {
+    if (entry?.worktree) {
       const prepared = await resolveSessionWorktree({
         binding: entry.worktree,
         sessionKey,
         assertCurrent,
-        restore: { signal: params.abortSignal, runId: params.runId },
+        turn: true,
       });
       preparedWorktreePath = prepared?.worktree.path;
     }

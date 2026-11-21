@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
@@ -22,6 +23,10 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import {
+  resolveGatewaySessionActiveModel,
+  sameFallbackModelFacts,
+} from "./session-row-model-facts.js";
 import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
@@ -42,21 +47,19 @@ export type ProjectionOptions = {
   placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
 };
 
-export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
+type SessionRowSharedFacts = {
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
+  worktree?: ManagedWorktreeRecord | null;
 };
+
+export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & SessionRowSharedFacts;
 
 /** Undefined shared facets await their owner; null is acknowledged absence. */
 export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
-  Partial<
-    Pick<
-      PreparedSessionRowDatabaseFacts,
-      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
-    >
-  >;
+  Partial<SessionRowSharedFacts>;
 
 export function isPreparedSessionRowDatabaseFacts(
   facts: RetainedSessionRowDatabaseFacts | undefined,
@@ -66,7 +69,8 @@ export function isPreparedSessionRowDatabaseFacts(
     facts.acpMeta !== undefined &&
     facts.runtimeOwnership !== undefined &&
     facts.runtimeOwnershipDependencies !== undefined &&
-    facts.repositoryWorkspace !== undefined
+    facts.repositoryWorkspace !== undefined &&
+    (!facts.entry?.worktree || facts.worktree !== undefined)
   );
 }
 
@@ -422,7 +426,7 @@ export function publishTranscriptFields(
   context: SessionListRowContext,
 ): boolean {
   // Same-generation metadata may change while transcript work is awaiting publication.
-  const fallbackModel = rowProjection.resolveGatewaySessionActiveModel({
+  const fallbackModel = resolveGatewaySessionActiveModel({
     cfg,
     agentId: row.agentId,
     sessionId: row.entry.sessionId,
@@ -456,15 +460,6 @@ export function sort<T extends EntryRow>(rows: T[], sortBy: Query["sortBy"]): T[
   return sortBy === null
     ? rows
     : rows.toSorted((a, b) => compareSessionEntryPairs([a.key, a.entry], [b.key, b.entry], sortBy));
-}
-
-function sameFallbackModelFacts(previous: Row["storedEntry"], current: SessionEntry) {
-  return (
-    previous?.modelProvider === current.modelProvider &&
-    previous?.model === current.model &&
-    previous?.lastRunId === current.lastRunId &&
-    isDeepStrictEqual(previous?.fallbackNotice, current.fallbackNotice)
-  );
 }
 
 export function first(candidates: Row[], storePaths: Iterable<string>) {

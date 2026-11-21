@@ -221,6 +221,7 @@ export type OpenClawStateReadCommand =
       type: "sessionRows.sharedFacts";
       entries: readonly {
         acp?: AcpSessionReadInput;
+        worktreeId?: string;
         repositoryWorkspace?: RepositoryWorkspaceOwner & { workspaceId: string };
       }[];
     }

@@ -110,3 +110,44 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
     </Show>
   );
 }
+
+const WorktreeRestoreNotice = lazy(() => import("./chat-worktree-restore-notice.tsx"), {
+  export: "ChatWorktreeRestoreNotice",
+});
+
+export function ComposerWorkspaceNotice(props: ChatComposerProps) {
+  return (
+    <Show
+      when={
+        props.selectedSession?.worktreeState?.status === "removed"
+          ? props.selectedSession.worktree?.id
+          : undefined
+      }
+      keyed
+    >
+      <ChatLazyBoundary>
+        <WorktreeRestoreNotice
+          selectedSession={props.selectedSession}
+          contextGateway={props.contextGateway}
+          connected={props.connected}
+        />
+      </ChatLazyBoundary>
+    </Show>
+  );
+}
+
+export function ComposerUnavailable(props: {
+  composer: ChatComposerProps;
+  children: import("@solidjs/web").JSX.Element;
+}) {
+  return (
+    <Show
+      when={props.composer.selectedSession?.worktreeState?.status === "removed"}
+      fallback={
+        props.composer.disabledBanner?.kind === "composer-replacement" ? props.children : undefined
+      }
+    >
+      <ComposerWorkspaceNotice {...props.composer} />
+    </Show>
+  );
+}

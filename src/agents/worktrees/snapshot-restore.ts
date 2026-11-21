@@ -59,7 +59,7 @@ function requireManagedWorktreeRestoreRecord(
   id: string,
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
-  if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
+  if (!record) {
     throw new WorktreeRecordNotFoundError(`worktree ${id} is not restorable`);
   }
   return record;
@@ -350,7 +350,7 @@ async function restoreSnapshot(
       record = { ...record, removedAt: Date.now() };
     }
   }
-  if (!record?.snapshotRef || record.removedAt === undefined) {
+  if (record.removedAt === undefined) {
     throw new Error(`worktree ${params.id} is not restorable`);
   }
   const admitCapacity = async (requiredPaths: readonly string[]) => {
@@ -361,7 +361,9 @@ async function restoreSnapshot(
     capacityAdmitted = true;
   };
   await requireSpace(record.path, repository);
-  const provisionedState = await getRegistryWorktreeProvisionedState(env, record.id);
+  const provisionedState = record.snapshotRef
+    ? await getRegistryWorktreeProvisionedState(env, record.id)
+    : [];
   params.commitGuard?.();
   if (provisionedState === undefined) {
     throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
@@ -386,27 +388,35 @@ async function restoreSnapshot(
     signal: params.signal,
     rollbackGuard: params.rollbackGuard,
   };
+  // Missing snapshots explicitly restore a fresh checkout; invalid saved snapshots never fall back.
+  const branchRef = `refs/heads/${record.branch}`;
+  const retainedBranch =
+    !record.snapshotRef &&
+    (await runGit(record.repoRoot, ["show-ref", "--verify", "--quiet", branchRef], gitOptions));
+  if (retainedBranch && retainedBranch.code !== 0 && retainedBranch.code !== 1) {
+    throw commandError("git show-ref retained worktree branch", retainedBranch);
+  }
+  const targetRef =
+    record.snapshotRef ??
+    (retainedBranch && retainedBranch.code === 0 ? branchRef : record.baseRef);
   const snapshotResult = await runGit(
     record.repoRoot,
-    ["rev-parse", "--verify", `${record.snapshotRef}^{commit}`],
+    ["rev-parse", "--verify", `${targetRef}^{commit}`],
     gitOptions,
   );
   if (snapshotResult.code !== 0) {
     throw new WorktreeRestoreError(
-      "snapshot-invalid",
-      "Worktree snapshot is missing or invalid; restore the source repository snapshot before retrying",
-      {
-        cause: commandError("git rev-parse snapshot", snapshotResult),
-      },
+      record.snapshotRef ? "snapshot-invalid" : "base-invalid",
+      record.snapshotRef
+        ? "Worktree snapshot is missing or invalid; restore the source repository snapshot before retrying"
+        : "Recorded branch and base are unavailable; restore the source repository or start a new conversation",
+      { cause: commandError("git rev-parse restore target", snapshotResult) },
     );
   }
   const snapshot = snapshotResult.stdout.trim();
-  const exact = await readExactStateSnapshot(
-    record.repoRoot,
-    snapshot,
-    record.snapshotRef,
-    gitOptions,
-  );
+  const exact = record.snapshotRef
+    ? await readExactStateSnapshot(record.repoRoot, snapshot, record.snapshotRef, gitOptions)
+    : undefined;
   if (
     exact &&
     (exact.branch !== record.branch ||
@@ -507,7 +517,10 @@ async function restoreSnapshot(
   try {
     parent = await requireGit(
       record.repoRoot,
-      ["rev-parse", worktreeSnapshotBase(record.snapshotRef!, snapshot)],
+      [
+        "rev-parse",
+        record.snapshotRef ? worktreeSnapshotBase(record.snapshotRef, snapshot) : snapshot,
+      ],
       gitOptions,
     );
   } catch (error) {

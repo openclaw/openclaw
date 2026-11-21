@@ -11,9 +11,9 @@
  * the state broker are child processes and excluded. Filesystem caches are warm. A large
  * agent DB is present, but run leases only use the state registry; workspace preparation
  * also reads its exact session. Report the actual filesystem, never infer btrfs.
- * --restore measures the next workspace preparation after real snapshot removal,
+ * --restore measures explicit restoration after real snapshot removal,
  * then 20 warm preparations. Before the timed window, wait for paced deletion to
- * finish. Baseline must refuse; candidate must restore the exact saved files.
+ * finish. Both baseline and candidate must restore the exact saved files.
  * Run A/A and five serial A/B pairs on the same owned fixture, using unique report paths.
  */
 import assert from "node:assert/strict";
@@ -151,7 +151,7 @@ try {
       await workspace();
       const saved = path.join(workspaceDir, "saved-task.txt");
       fs.writeFileSync(saved, "synthetic saved work\n");
-      assert((await service.remove({ id, reason: "synthetic-next-turn" })).removed);
+      assert((await service.remove({ id, reason: "synthetic-explicit-restore" })).removed);
       const parent = path.dirname(workspaceDir);
       const deletionDeadline = Date.now() + 120_000;
       while (fs.readdirSync(parent).some((name) => name.startsWith(".openclaw-removing-"))) {
@@ -171,7 +171,11 @@ try {
         let failure: unknown;
         try {
           for (let index = 0; index < iterations; index++) {
-            await workspace();
+            if (phase === "restore") {
+              await service.restore({ id });
+            } else {
+              await workspace();
+            }
           }
         } catch (error) {
           failure = error;
@@ -181,7 +185,7 @@ try {
         const mainUsed = process.threadCpuUsage(mainCpu);
         const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocation;
         measurements.push({
-          owner: "workspace",
+          owner: phase === "restore" ? "worktrees.restore" : "workspace",
           phase,
           iterations,
           wallMs,
@@ -191,13 +195,7 @@ try {
           outcome: failure ? "refused" : "ready",
           load,
         });
-        if (baseline && phase === "restore") {
-          assert(failure instanceof Error && failure.message.includes("worktree was removed"));
-          assert(!fs.existsSync(saved));
-          await service.restore({ id });
-        } else {
-          assert.equal(failure, undefined);
-        }
+        assert.equal(failure, undefined);
         assert.equal(fs.readFileSync(saved, "utf8"), "synthetic saved work\n");
         assert.equal(fs.statSync(path.join(workspaceDir, "d0/f0.txt")).size, 18_432);
       }

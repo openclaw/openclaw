@@ -70,7 +70,7 @@ export class WorktreeRecordNotFoundError extends Error {}
 
 export class WorktreeRestoreError extends Error {
   constructor(
-    readonly reason: "no-snapshot" | "snapshot-invalid" | "conflict",
+    readonly reason: "snapshot-invalid" | "base-invalid" | "conflict",
     message: string,
     options?: ErrorOptions,
   ) {
