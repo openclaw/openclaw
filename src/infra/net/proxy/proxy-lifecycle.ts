@@ -10,6 +10,7 @@ import type {
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
 import { applyProcessEnvKeys } from "../../process-env.js";
+import { matchesNoProxy } from "../proxy-env.js";
 import { loadProxyline } from "../proxyline-runtime.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
@@ -39,8 +40,16 @@ export type ProxyHandle = {
 const PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] as const;
 const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY"] as const;
 const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8";
-const managedLoopbackBypassPolicy: ProxylineBypassPolicy = ({ url }) =>
-  getActiveManagedProxyLoopbackMode() === "gateway-only" && isLoopbackProxyUrl(url);
+const managedBypassPolicy: ProxylineBypassPolicy = ({ url }) =>
+  getActiveManagedProxyLoopbackMode() === "gateway-only" &&
+  (isLoopbackProxyUrl(url) || matchesNoProxy(url, { NO_PROXY: resolveExplicitProxyBypasses() }));
+
+function resolveExplicitProxyBypasses(): string {
+  return (process.env["OPENCLAW_PROXY_NO_PROXY"] ?? "")
+    .split(/[,\s]+/)
+    .filter((entry) => entry && entry !== "*")
+    .join(",");
+}
 const PROXY_ACTIVE_KEYS = [
   "OPENCLAW_PROXY_ACTIVE",
   "OPENCLAW_PROXY_LOOPBACK_MODE",
@@ -84,8 +93,12 @@ function applyProxyEnv(
   } else {
     delete process.env["OPENCLAW_PROXY_CA_FILE"];
   }
+  const noProxy =
+    loopbackMode === "gateway-only"
+      ? [LOOPBACK_NO_PROXY, resolveExplicitProxyBypasses()].filter(Boolean).join(",")
+      : "";
   for (const key of NO_PROXY_ENV_KEYS) {
-    process.env[key] = loopbackMode === "gateway-only" ? LOOPBACK_NO_PROXY : "";
+    process.env[key] = noProxy;
   }
 }
 
@@ -167,7 +180,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
     proxyUrl,
     ...(proxyTls ? { proxyTls } : {}),
     ifActive: "reuse-compatible",
-    bypassPolicy: managedLoopbackBypassPolicy,
+    bypassPolicy: managedBypassPolicy,
     undici: MANAGED_PROXY_UNDICI_OPTIONS,
   });
   forceResetGlobalDispatcher({ preserveProxylineManaged: true });
@@ -199,7 +212,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       proxyUrl,
       ...(proxyTls ? { proxyTls } : {}),
       ifActive: "replace",
-      bypassPolicy: managedLoopbackBypassPolicy,
+      bypassPolicy: managedBypassPolicy,
       undici: MANAGED_PROXY_UNDICI_OPTIONS,
     });
     forceResetGlobalDispatcher({ preserveProxylineManaged: true });

@@ -76,7 +76,7 @@ The proxy URL scheme describes the hop from OpenClaw to the proxy, not to the fi
 
 Destination TLS is independent of proxy-endpoint TLS: for an HTTPS destination, OpenClaw always asks the proxy for a `CONNECT` tunnel and starts destination TLS through that tunnel.
 
-In the default `gateway-only` mode, loopback HTTP and WebSocket requests connect directly. This includes `localhost`, literal IPv4/IPv6 loopback addresses, and ephemeral listeners used by the native Codex inference relay. OpenClaw installs this rule in the shared routing owner and replaces `no_proxy`/`NO_PROXY` with loopback-only entries for native child processes. External destinations still use the proxy; inherited bypasses for other destinations do not apply. On shutdown, OpenClaw restores the prior proxy environment and resets cached routing state. The explicit `proxy` and `block` modes continue to clear `no_proxy`/`NO_PROXY`.
+In the default `gateway-only` mode, loopback HTTP and WebSocket requests connect directly. This includes `localhost`, literal IPv4/IPv6 loopback addresses, and ephemeral listeners used by the native Codex inference relay. OpenClaw installs this rule in the shared routing owner and replaces `no_proxy`/`NO_PROXY` with the managed bypass list for native child processes. By default, that list contains only loopback entries. External destinations still use the proxy; inherited bypasses for other destinations do not apply. On shutdown, OpenClaw restores the prior proxy environment and resets cached routing state. The explicit `proxy` and `block` modes continue to clear `no_proxy`/`NO_PROXY`.
 
 Some plugins own a custom transport that needs its own proxy wiring even with process-level routing active. Telegram's Bot API client uses its own HTTP/1 undici dispatcher and separately honors process proxy env plus the `OPENCLAW_PROXY_URL` fallback.
 
@@ -109,7 +109,17 @@ that verification.
 
 Update canary `/startupz` and `/readyz` checks use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
 
-Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These environment bypass lists do not override managed proxy policy.
+Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These ambient environment bypass lists do not override managed proxy policy.
+
+For managed mode, set `OPENCLAW_PROXY_NO_PROXY` in the Gateway's environment
+to explicitly opt specific destinations out of the proxy. For example,
+`OPENCLAW_PROXY_NO_PROXY=.svc.cluster.local` trusts the Kubernetes service DNS
+suffix for direct connections. It uses the same host, suffix, and port syntax
+as `NO_PROXY`, but ignores a standalone `*` entry rather than allowing all
+traffic to go direct. The entries are added to both child-process bypass
+variables in `gateway-only` mode. The `proxy` and `block` modes ignore
+this setting. Only list trusted destinations that should not be filtered by the
+forward proxy; application-level destination checks still apply.
 
 ### WebChat or Codex fails after upgrading
 

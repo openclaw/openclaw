@@ -76,7 +76,11 @@ function inheritProxy(inheritedUrl: string, caFile?: string) {
 describe("startProxy", () => {
   const envKeysToClean = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"]
     .flatMap((key) => [key, key.toUpperCase()])
-    .concat(["ACTIVE", "CA_FILE", "LOOPBACK_MODE", "URL"].map((key) => `OPENCLAW_PROXY_${key}`));
+    .concat(
+      ["ACTIVE", "CA_FILE", "LOOPBACK_MODE", "NO_PROXY", "URL"].map(
+        (key) => `OPENCLAW_PROXY_${key}`,
+      ),
+    );
   const writeTempCa = useProxyCaFiles();
 
   beforeEach(() => {
@@ -175,6 +179,24 @@ describe("startProxy", () => {
     expect(process.env["NO_PROXY"]).not.toContain("corp.example.com");
     expect(process.env["no_proxy"]).toBe(process.env["NO_PROXY"]);
   });
+
+  it.each(["gateway-only", "proxy", "block"] as const)(
+    "projects only explicit bypasses in gateway-only mode (%s)",
+    async (loopbackMode) => {
+      vi.stubEnv("OPENCLAW_PROXY_NO_PROXY", "*, .svc.cluster.local");
+      vi.stubEnv("no_proxy", "ambient.example");
+      await startProxy({ proxyUrl, loopbackMode });
+      const noProxy = process.env["no_proxy"] ?? "";
+      expect(noProxy).toBe(process.env["NO_PROXY"]);
+      expect(noProxy).not.toContain("ambient.example");
+      expect(noProxy.split(",")).not.toContain("*");
+      if (loopbackMode === "gateway-only") {
+        expect(noProxy.split(",")).toContain(".svc.cluster.local");
+      } else {
+        expect(noProxy).toBe("");
+      }
+    },
+  );
 
   it("reuses inherited Proxyline routing and replaces it when startProxy takes ownership", async () => {
     inheritProxy("http://127.0.0.1:3111");

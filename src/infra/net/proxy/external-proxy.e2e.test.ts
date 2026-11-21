@@ -229,6 +229,34 @@ describe("SSRF external proxy routing", () => {
     expect(seenConnectTargets).toEqual(["gateway.example.com:443"]);
   });
 
+  it("routes only explicitly allowed service destinations directly", async () => {
+    const targetPort = await listen(createServer(respond(218, "from cluster service")));
+    const seenTargets: string[] = [];
+    const proxyPort = await listen(
+      createServer((request, response) => {
+        seenTargets.push(new URL(request.url ?? "").href);
+        response.writeHead(403).end("proxy denied");
+      }),
+    );
+    await runNodeModule(
+      `
+        const direct = await nodeGet("http://cognee.test.svc.cluster.local:${targetPort}/health", {
+          family: 4,
+          lookup: (_hostname, _options, done) => done(null, "127.0.0.1", 4),
+        });
+        assert.deepEqual(direct, { status: 218, body: "from cluster service" });
+        const denied = await nodeGet("http://ambient.example.invalid/health");
+        assert.equal(denied.status, 403);
+      `,
+      {
+        OPENCLAW_PROXY_URL: `http://127.0.0.1:${proxyPort}`,
+        OPENCLAW_PROXY_NO_PROXY: "*,.svc.cluster.local",
+        no_proxy: "ambient.example.invalid",
+      },
+    );
+    expect(seenTargets).toEqual(["http://ambient.example.invalid/health"]);
+  });
+
   it("preserves the target TLS hostname for Node HTTPS requests through the managed proxy", async () => {
     await withTestDir(
       { prefix: "openclaw-discord-tls-", parentDir: resolvePreferredOpenClawTmpDir() },
