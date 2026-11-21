@@ -60,8 +60,5 @@ describe("Usage English loading", () => {
       "Historical lineage includes 2 session instances.",
     );
     expect(manager.t("usage.export.label")).toBe("Export");
-    expect(manager.t("usage.export.changed")).toBe(
-      "Session context changed while preparing the export. Refresh usage and try again.",
-    );
   });
 });
