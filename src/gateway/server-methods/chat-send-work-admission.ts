@@ -34,13 +34,11 @@ import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import { broadcastChatError } from "./chat-broadcast.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
-import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
   prepareChatSendRetryComparison,
   resolveChatSendRequestConflict,
@@ -615,47 +613,6 @@ export function assertChatSendExclusiveAdmission(
         : "goal-session-busy",
     );
   }
-}
-
-/** Prepare accepted input from its own admitted policy, not its submitting turn's lifetime. */
-export async function prepareChatSendInputAuthorization(
-  options: GatewayRequestHandlerOptions,
-  { admission, session }: { admission: AdmittedChatSend; session: PreparedChatSendSession },
-  release: (() => void) | undefined,
-) {
-  const { client, sessionMutationAuthorization: authorization } = options;
-  const authority = admission.operatorAuthority;
-  if (!client || !authorization || !authority) {
-    return { authorization, release };
-  }
-  const retained = await resolveSessionMutationAuthorizationAsync({
-    client: {
-      ...client,
-      connect: { ...client.connect, scopes: [...authority.scopes] },
-      internal: { ...client.internal, operatorRunAuthority: authority },
-    },
-    context: options.context,
-    method: "chat.send",
-    requestParams: options.params,
-    expectedTarget: {
-      agentId: session.agentId,
-      sessionKey: session.sessionKey,
-      sessionId: admission.admittedSessionId,
-      storePath: session.storePath,
-    },
-    assertInvocationCurrent: () => {
-      options.sessionMutationCommitGuard?.();
-      admission.assertWorkAdmissionCurrent();
-    },
-  });
-  if (retained.error) {
-    throw new SessionMutationAuthorizationChangedError(retained.error);
-  }
-  if (!retained.authorization) {
-    throw new Error("Accepted chat input sharing authority is unavailable");
-  }
-  release?.();
-  return { authorization: retained.authorization, release: retained.authorization.release };
 }
 
 export function createChatSendPendingInputAdmission({

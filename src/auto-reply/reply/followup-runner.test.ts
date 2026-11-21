@@ -511,14 +511,16 @@ describe("createFollowupRunner", () => {
     new GatewayOperatorAccessUnavailableError(),
     new Error("internal SDK assertion failure"),
   ])("defers an unrecorded authority refusal without a failure notice (%s)", async (failure) => {
-    const authority = createTestOperatorAuthority({
+    // This source assertion fails without recording operator revocation.
+    const authority = {
+      canonicalIdentity: null,
       profileId: "guest",
       scopes: ["operator.write"],
       signal: new AbortController().signal,
       assertCurrent() {
         throw failure;
       },
-    });
+    };
     turn.queued.operatorAuthority = authority;
     const deliver = attachSource(turn);
     state.admit.mockImplementationOnce(async () => {

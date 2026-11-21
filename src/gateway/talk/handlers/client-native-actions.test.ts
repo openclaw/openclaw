@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../../../ui/src/lib/chat/message-extract.ts";
 import {
   getEmbeddedRunAttachment,
@@ -416,13 +417,13 @@ describe("native Talk action ownership through public plugin registration", () =
     },
   );
 
-  it.each([
+  it.for([
     ["closed", "closed"],
     ["returned A-to-B-to-A", "reassigned"],
     ["identical registration replay", "open"],
   ] as const)(
     "checks the controlling call at real final insertion while the backend stays live (%s)",
-    async (scenario, transition) => {
+    async ([scenario, transition], { signal }) => {
       const { session } = await createTestSession();
       const { response: providerStream, release: finish } = holdAssistantResponse("Task finished.");
       const answer = createAssistant(testModel, "Task finished.");
@@ -478,7 +479,8 @@ describe("native Talk action ownership through public plugin registration", () =
             });
             const text = "use the release branch instead";
             socket.serverEvent(nativeDelegation("final-insertion-control", text));
-            await delivered.promise;
+            await vi.waitFor(() => expect(steering).toHaveBeenCalledOnce());
+            await withinTest(delivered.promise, signal);
             if (transition === "closed") {
               expect(socket.readyState).toBe(upstream.NativeSocket.CLOSED);
             } else if (replacementVoiceSessionId) {
@@ -492,7 +494,6 @@ describe("native Talk action ownership through public plugin registration", () =
                 ),
               );
             }
-            expect(steering).toHaveBeenCalledOnce();
             expect(insertionsBeforeTransition).toBe(0);
             expect(getActiveNativeAttempt(activeRun.sessionId)).toBe(handle);
             expect(ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(activeRun.runId)).toBe(registration);

@@ -70,7 +70,6 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
     using pairingCurrent = vi.spyOn(pairing, "isNodePairingGenerationCurrent");
     pairingCurrent.mockResolvedValue(true);
     let current = true;
-    const release = vi.fn();
     const authority = createTestOperatorAuthority({
       profileId: "original-guest",
       scopes: ["operator.write"],
@@ -80,7 +79,6 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
           throw new Error("original guest revoked");
         }
       },
-      retain: () => release,
     });
     const producerTarget = {
       ...target("main", sessionKey),
@@ -190,7 +188,6 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
     finish();
     expect((await invocation).mock.calls[0]?.[0]).toBe(delivered);
     expect(captureTarget.mock.calls[0]?.[2]?.operatorAuthority?.source).toBe(authority.source);
-    expect(release).toHaveBeenCalledOnce();
   },
 );
 

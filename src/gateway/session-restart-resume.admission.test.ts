@@ -452,7 +452,7 @@ it.each([true, false])(
       registry.gatewayAccessPolicies.push({
         pluginId: original.pluginId,
         source: "fixture",
-        policy: { authorize, resume: () => grant },
+        policy: { authorize },
       });
       const previous = captureActivePluginRegistrySnapshot();
       stageActivePluginRegistry(registry, null, "default");

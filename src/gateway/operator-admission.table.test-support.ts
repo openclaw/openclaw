@@ -88,7 +88,9 @@ export class AdmissionCase {
     readonly signal: AbortSignal,
     state: OpenClawTestState,
   ) {
-    this.identity = loadOrCreateDeviceIdentity({ path: state.path(this.id, "credentials.sqlite") });
+    this.identity = loadOrCreateDeviceIdentity({
+      path: state.path(this.id, "client", "credentials.sqlite"),
+    });
   }
   terminal(runId: string) {
     let result = this.terminals.get(runId);

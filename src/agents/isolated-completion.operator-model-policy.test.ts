@@ -142,13 +142,14 @@ it("keeps admitted completions and siblings alive while the next start uses curr
   const second = work.track(() => runPluginCompletion(authority, "model-b"));
   try {
     await waitForStart(started.promise, first, second);
-    setPolicy({ allow: ["test-provider/model-b"] });
+    const modelPolicy = setPolicy({ allow: ["test-provider/model-b"] });
     expect([signals.get("model-a")?.aborted, signals.get("model-b")?.aborted]).toEqual([
       false,
       false,
     ]);
     expect(() => authority.assertCurrent()).not.toThrow();
-    await expect(runPluginCompletion(authority, "model-a")).rejects.toMatchObject(denied);
+    const nextAuthority = createTestOperatorAuthority({ ...authority, modelPolicy });
+    await expect(runPluginCompletion(nextAuthority, "model-a")).rejects.toMatchObject(denied);
     finishA.resolve();
     await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
     finishB.resolve();

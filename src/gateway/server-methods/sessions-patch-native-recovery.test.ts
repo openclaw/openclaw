@@ -131,7 +131,11 @@ it("retains admitted native policy and checks runtime availability at commit", a
   expect(result.validate?.()).toBeUndefined();
   policy = { models: [], allows: () => true };
   expect(result.validate?.()).toBeUndefined();
-  expect(await prepare(unrestricted(), true, cfg, { operatorAuthority: authority })).toMatchObject({
+  expect(
+    await prepare(unrestricted(), true, cfg, {
+      operatorAuthority: createTestOperatorAuthority({ ...authority, modelPolicy: policy }),
+    }),
+  ).toMatchObject({
     ok: false,
     error: { message: expect.stringContaining("cannot enforce your operator role") },
   });

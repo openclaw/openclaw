@@ -57,10 +57,7 @@ import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import {
-  createChatSendPendingInputAdmission,
-  prepareChatSendInputAuthorization,
-} from "./chat-send-work-admission.js";
+import { createChatSendPendingInputAdmission } from "./chat-send-work-admission.js";
 import { prepareChatSendAckTiming } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -79,9 +76,18 @@ export async function handleChatSendWithStorage(
 ): Promise<void> {
   const { req, respond, context, client, hasCurrentClientAuthority, sessionMutationCommitGuard } =
     handlerOptions;
-  let { sessionMutationAuthorization } = handlerOptions;
-  let releaseSessionAuthorization =
+  const { sessionMutationAuthorization } = handlerOptions;
+  // Prepared sharing facts keep their original source after the submitting turn closes.
+  const releaseOperatorSource = client?.internal?.operatorRunAuthority?.retain?.();
+  const releaseSharing =
     sessionMutationAuthorization?.takeRelease?.() ?? sessionMutationAuthorization?.release;
+  const releaseSessionAuthorization = () => {
+    try {
+      releaseSharing?.();
+    } finally {
+      releaseOperatorSource?.();
+    }
+  };
   using diagnostics =
     readChatSendDiagnostics(handlerOptions) ?? startChatSendDiagnostics(context.logGateway);
   const setup = await prepareAndAdmitChatSend(
@@ -100,6 +106,7 @@ export async function handleChatSendWithStorage(
   }
   storage?.retain();
   const { request, session, admission } = setup;
+  const requestAuthority = readGatewayRequestMutationAuthority(handlerOptions);
   admission.setPendingInputCleanup(() => releaseSessionAuthorization?.());
   using admittedCleanup = {
     dispatched: false,
@@ -182,10 +189,9 @@ export async function handleChatSendWithStorage(
   let dashboardAuthority: Awaited<ReturnType<typeof createChatSendDashboardAuthority>> | undefined;
   let setupFailure: unknown;
   try {
-    ({ authorization: sessionMutationAuthorization, release: releaseSessionAuthorization } =
-      await prepareChatSendInputAuthorization(handlerOptions, setup, releaseSessionAuthorization));
     const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
+      requestAuthority.assertAdmittedInputCurrent?.();
       if (sessionRoutingChanged(context.getRuntimeConfig())) {
         throw new Error("Session routing changed before input admission; refresh and retry.");
       }
@@ -615,7 +621,7 @@ export async function handleChatSendWithStorage(
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
     admission.markInputAccepted();
-    if (readGatewayRequestMutationAuthority(handlerOptions).family === "worker") {
+    if (requestAuthority.family === "worker") {
       acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     }
     if (!admission.codexGoalAdmission) {

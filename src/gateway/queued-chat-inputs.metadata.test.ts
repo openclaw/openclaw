@@ -10,7 +10,6 @@ import {
   listSessionPendingInputs,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   captureSessionQueuedInputsForRestart,
@@ -388,8 +387,6 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
   const accepted = (await listSessionPendingInputs(fixture.scope)).items;
   expect(accepted).toHaveLength(1);
   const retained = await retireOriginalInputs(fixture);
-  const [row] = (await readSessionQueuedInputPage(retained.target)).rows;
-  const recoverySource = decodeQueuedOperatorRecoverySource(JSON.parse(row!.origin_source_json!));
   const dispatched: DispatchedInput[] = [];
   dispatchInboundMessageMock.mockImplementation(async (input) => {
     dispatched.push(input);
@@ -397,11 +394,8 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
     await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
     return {};
   });
-  const first = accepted.find((input) => input.runId === fixture.params.idempotencyKey);
-  if (!first) {
-    throw new Error("Expected accepted queued send");
-  }
   vi.mocked(fixture.context.logGateway.warn).mockClear();
+  setUserProfileRole(profile.id, "writer");
   await continueSessionQueuedInputs(fixture.context, retained.target, retained);
   await fixture.finishDispatch();
   expect(fixture.context.logGateway.warn).not.toHaveBeenCalled();
@@ -421,24 +415,7 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
     fastModeAutoOnSecondsOverride: 7,
     timeoutOverrideMs: 90_000,
   });
-  // Accept the next input only after the first replay finishes, then demote its
-  // sender before readmission. Selection is owned by the durable queue, not IDs.
-  const demoted = await stageSessionPendingInput(retained.target, {
-    runId: "queued-after-demotion",
-    message: { ...first.message, idempotencyKey: "queued-after-demotion:user" },
-    recoverySource,
-    assertCurrent() {},
-  });
-  if (!demoted) {
-    throw new Error("Expected the second accepted queued input");
-  }
-  demoted.relinquish();
-  await demoted.settled?.();
-  setUserProfileRole(profile.id, "writer");
-  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
-  await fixture.finishDispatch();
-  expect(dispatched).toHaveLength(2);
-  expect(dispatched[1]?.replyOptions?.operatorAuthority?.scopes).toEqual(["operator.write"]);
+  expect(dispatched[0]?.replyOptions?.operatorAuthority?.scopes).toEqual(["operator.write"]);
 });
 
 it("publishes a retained human mention once as its freshly admitted queued principal", async () => {

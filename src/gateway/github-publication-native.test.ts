@@ -23,6 +23,7 @@ import { registerPublicationCredentialFixture } from "./github-publication-crede
 import { prepareGitHubPublicationWorkerIdentity } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
+  capturePublicationGuest,
   createRequesterPublicationFixture,
   publicationGuestEmail as email,
 } from "./github-publication-requester.test-support.js";
@@ -414,9 +415,13 @@ describe("combined native publication proof", () => {
         await native.revokeCustody();
       }
       const restarted = f.restart();
-      const retry = restarted.requestForSessionV2(
-        f.request("combined-retry", scenario === "different-requester" ? f.maintainer : f.guest),
-      );
+      const retry = (async () => {
+        const requester =
+          scenario === "different-requester"
+            ? f.maintainer
+            : (await capturePublicationGuest(f)).requester;
+        return restarted.requestForSessionV2(f.request("combined-retry", requester));
+      })();
       if (scenario === "allowed" || scenario === "read-throttled") {
         await expect(retry).resolves.toMatchObject({
           status: "published",

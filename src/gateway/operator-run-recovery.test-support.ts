@@ -244,11 +244,6 @@ export function withRecovery(
   });
 }
 
-export function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.assertCurrent).toThrow();
-  expect(authority.signal?.aborted).toBe(true);
-}
-
 export async function restoreFixture(fixture: RecoveryFixture) {
   const source = expectDefined(await fixture.restore(), "restored operator source");
   return { ...source, [Symbol.dispose]: source.release };

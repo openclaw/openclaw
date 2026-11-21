@@ -59,20 +59,19 @@ beforeEach(() => {
 
 function operator() {
   let allowed = true;
-  const authority = createTestOperatorAuthority({
-    profileId: "avatar-operator",
-    scopes: ["operator.admin"],
-    assertCurrent: () => {},
-    get modelPolicy() {
-      return prepareOperatorModelPolicy({
-        cfg,
-        policy: { allow: allowed ? ["test-provider/allowed"] : [] },
-        manifestPlugins: [],
+  return {
+    get authority() {
+      return createTestOperatorAuthority({
+        profileId: "avatar-operator",
+        scopes: ["operator.admin"],
+        assertCurrent: () => {},
+        modelPolicy: prepareOperatorModelPolicy({
+          cfg,
+          policy: { allow: allowed ? ["test-provider/allowed"] : [] },
+          manifestPlugins: [],
+        }),
       });
     },
-  });
-  return {
-    authority,
     revokeModel: () => {
       allowed = false;
     },

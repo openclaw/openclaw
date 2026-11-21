@@ -212,9 +212,7 @@ export function claimSessionEventOccurrenceInput(params: {
   return { occurrence, occurrences, occurrenceId, eventText, ownership };
 }
 
-export function resolveSessionEventExecRequestOwners(
-  options: Pick<SessionEventOptions, "occurrences">,
-) {
+function resolveSessionEventExecRequestOwners(options: Pick<SessionEventOptions, "occurrences">) {
   return options.occurrences
     ? [
         ...new Set(

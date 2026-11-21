@@ -181,7 +181,9 @@ export async function prepareOperatorAdmission(
           ? facts.snapshot.openclawIdPrincipal
           : gateway?.openclawIdPrincipal;
     if (principal) {
-      await prepareOpenClawIdTunnelPrincipalLookup();
+      await prepareOpenClawIdTunnelPrincipalLookup().catch(() => {
+        throw new GatewayOperatorAccessUnavailableError();
+      });
     }
     const device = gateway?.device ?? (facts.kind === "live" ? facts.authority.device : undefined);
     const paired = device
@@ -263,14 +265,25 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       if (config.gateway?.openclawId?.enabled === false) {
         throw new GatewayOperatorRecoveryAuthorizationError();
       }
-      if (readOpenClawIdTunnelPrincipal(principal.peerKey) === null) {
-        if (config.gateway?.openclawId?.enabled) {
-          throw new GatewayOperatorAccessUnavailableError();
+      try {
+        if (readOpenClawIdTunnelPrincipal(principal.peerKey) === null) {
+          if (config.gateway?.openclawId?.enabled) {
+            throw new GatewayOperatorAccessUnavailableError();
+          }
+          throw new GatewayOperatorRecoveryAuthorizationError();
         }
-        throw new GatewayOperatorRecoveryAuthorizationError();
-      }
-      if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-        throw new GatewayOperatorRecoveryAuthorizationError();
+        if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+          throw new GatewayOperatorRecoveryAuthorizationError();
+        }
+      } catch (error) {
+        if (
+          error instanceof GatewayOperatorRecoveryAuthorizationError ||
+          error instanceof GatewayOperatorAccessUnavailableError
+        ) {
+          throw error;
+        }
+        // A failed membership read is not evidence that the principal was revoked.
+        throw new GatewayOperatorAccessUnavailableError();
       }
     }
     const binding = live?.canonicalIdentity;

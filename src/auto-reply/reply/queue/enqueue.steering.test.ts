@@ -148,7 +148,9 @@ it.each([new GatewayOperatorAccessUnavailableError(), new Error("internal SDK as
   async (error) => {
     const [first, second] = [source("first"), source("second")];
     let refusing = false;
-    second.operatorAuthority = createTestOperatorAuthority({
+    // This source assertion fails without recording operator revocation.
+    second.operatorAuthority = {
+      canonicalIdentity: null,
       profileId: "fixture",
       scopes: ["operator.write"],
       signal: new AbortController().signal,
@@ -158,7 +160,7 @@ it.each([new GatewayOperatorAccessUnavailableError(), new Error("internal SDK as
           throw error;
         }
       },
-    });
+    };
     const { delivered, drained } = recordDelivery(1);
     const firstReservation = await queue.admit(first);
     const secondAdmission = queue.reserve(second).admit();

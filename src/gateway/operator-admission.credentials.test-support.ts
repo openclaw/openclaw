@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import https from "node:https";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -293,7 +294,6 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       }
       return result;
     });
-  const emit = https.Server.prototype.emit;
   const transport = vi.spyOn(https.Server.prototype, "emit").mockImplementation(function (
     this: https.Server,
     event: string | symbol,
@@ -313,7 +313,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         });
       }
     }
-    return emit.call(this, event, ...args);
+    return EventEmitter.prototype.emit.call(this, event, ...args);
   });
   // Fixed daemon I/O only: production attribution still verifies the forwarded identity.
   const whois = vi.spyOn(tailscale, "readTailscaleWhoisIdentity").mockResolvedValue({
@@ -414,7 +414,7 @@ export async function prepareAdmissionOperator(
       assertCurrent: () => c.consent.signal.throwIfAborted(),
     };
     if (c.row.credential === "principal") {
-      assert(factory.registerPrincipalRecovery);
+      assert(factory.registerPrincipalRecovery !== undefined);
       await factory.registerPrincipalRecovery(async () =>
         c.consentCurrent
           ? { ...principal, recoveryId: c.id, operatorScopeCeiling: c.ingressScopeCeiling }
@@ -497,6 +497,7 @@ export async function prepareAdmissionOperator(
 }
 
 export async function revokeAdmissionSource(fixture: AdmissionFixture, c: AdmissionCase) {
+  assert(c.row.ingress !== "live", "Live admission revocation must use its credential producer");
   const next = structuredClone(fixture.config);
   if (c.row.credential === "plugin-grant") {
     revokePluginAccessGrant(c);

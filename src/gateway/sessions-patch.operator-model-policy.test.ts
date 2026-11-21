@@ -70,7 +70,7 @@ function fixture(defaultOnly = false) {
     const before = structuredClone(initial);
     const result = await projectSessionsPatchEntry({
       cfg,
-      operatorAuthority,
+      operatorAuthority: createTestOperatorAuthority({ ...operatorAuthority, modelPolicy }),
       existingEntry: initial,
       isLabelInUse: () => false,
       storeKey: key,

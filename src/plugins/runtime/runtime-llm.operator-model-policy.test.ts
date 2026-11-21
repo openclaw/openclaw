@@ -584,10 +584,8 @@ describe("operator model policy on plugin completions", () => {
       });
       const work = new AsyncWorkScope();
       const llm = completion();
-      const run = (model: string) =>
-        work.track(() =>
-          asOperator(authority, () => llm.complete({ ...request("direct"), model })),
-        );
+      const run = (model: string, source = authority) =>
+        work.track(() => asOperator(source, () => llm.complete({ ...request("direct"), model })));
       const first = run("model-a");
       // Vitest's manual mock loader shares import callstacks; overlap provider work after import.
       const second = waitForWork(firstStarted.promise, first).then(() => run("model-b"));
@@ -597,7 +595,14 @@ describe("operator model policy on plugin completions", () => {
         expect(signals.get("model-a")?.aborted).toBe(false);
         expect(signals.get("model-b")?.aborted).toBe(false);
         expect(() => authority.assertCurrent()).not.toThrow();
-        await expectDenied(run("model-a"), expect.stringContaining("cannot use this model"));
+        const nextAuthority = createTestOperatorAuthority({
+          ...operatorSource,
+          modelPolicy: policy,
+        });
+        await expectDenied(
+          run("model-a", nextAuthority),
+          expect.stringContaining("cannot use this model"),
+        );
         finishA.resolve();
         await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
         finishB.resolve();

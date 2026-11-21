@@ -71,7 +71,9 @@ it.each([false, true])(
       const cancellation = new AbortController();
       const failure = new Error("internal SDK assertion failure");
       run.abortSignal = cancellation.signal;
-      const authority = createTestOperatorAuthority({
+      // Only the source cancellation below records revocation, not this assertion.
+      const authority = {
+        canonicalIdentity: null,
         profileId: "steering-requester",
         scopes: ["operator.write"],
         signal: new AbortController().signal,
@@ -83,7 +85,7 @@ it.each([false, true])(
             throw failure;
           }
         },
-      });
+      };
       run.operatorAuthority = authority;
       const followup = vi.fn(async () => {});
       try {

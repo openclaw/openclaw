@@ -23,6 +23,11 @@ import { createSessionGoal, updateSessionGoalStatus } from "../config/sessions/g
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { runOutsideOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import type { RespondFn } from "./server-methods/types.js";
 
 export function registerGoalAutomaticContinuationCases(
@@ -237,19 +242,28 @@ export function registerGoalAutomaticContinuationCases(
     Object.assign(process, { notifyOnExitEmptySuccess: true });
     const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId };
     const caller = { agentId, sessionKey, requesterOrigin };
-    await withoutGatewayToolCallerIdentity(() =>
-      withGatewayToolCallerIdentity(
-        silent ? { ...caller, sessionEventDelivery: false as const } : caller,
-        () => prepareExecExitNotification(process, false, false),
+    const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+    // This Telegram exec is independent of the UI request executing the held model.
+    await runOutsideOperatorToolGatewayAuthority(() =>
+      withPluginRuntimeGatewayContextResolver(
+        resolveGatewayContext,
+        () =>
+          withoutGatewayToolCallerIdentity(async () => {
+            await withGatewayToolCallerIdentity(
+              silent ? { ...caller, sessionEventDelivery: false as const } : caller,
+              () => prepareExecExitNotification(process, false, false),
+            );
+            addSession(process);
+            try {
+              markExited(process, 0, null, "completed");
+              await maybeNotifyOnExit(process, "completed", false);
+            } finally {
+              deleteSession(id);
+            }
+          }),
+        { inheritRequestScope: false },
       ),
     );
-    addSession(process);
-    try {
-      markExited(process, 0, null, "completed");
-      await maybeNotifyOnExit(process, "completed", false);
-    } finally {
-      deleteSession(id);
-    }
   };
   it.each([
     { name: "owner", senderId: "456", silent: false, owner: true },

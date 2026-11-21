@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { assert, expect } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
@@ -84,8 +85,10 @@ export function preparePluginAccessGrant(fixture: AdmissionFixture, c: Admission
     };
   }
   api.registerGatewayAccessPolicy(policy);
-  const registration = builder.registry.gatewayAccessPolicies[0];
-  assert(registration);
+  const registration = expectDefined(
+    builder.registry.gatewayAccessPolicies[0],
+    "Registered plugin access policy",
+  );
   registry.plugins.push(record);
   owner.restore();
   owners.set(c, owner);

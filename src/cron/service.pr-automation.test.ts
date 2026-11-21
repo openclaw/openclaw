@@ -510,12 +510,16 @@ it.each([
         idempotencyKey: "repair-publication",
       }),
     );
-    if (inlineRevocation) {
-      // Publication already started, but revoked browsers cannot receive its disclosure frame.
+    if (mode === "direct-inline-device") {
+      // Removing the browser's device closes its transport, not the admitted publication.
       expect(response).toEqual({});
     } else {
       expect(response.ok, JSON.stringify(response)).toBe(true);
       publication = asRecord(response.payload);
+      if (inlineRevocation) {
+        // A role change applies at the next start; this admitted request returns its result.
+        expect(publication).toMatchObject({ status: "published", headCommit: pr.head.sha });
+      }
     }
   }
   if (inlineRevocation) {

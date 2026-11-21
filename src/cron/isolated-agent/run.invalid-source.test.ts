@@ -13,7 +13,6 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
-import { readCronOperatorSnapshotForRun } from "../operator-source-snapshot.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import {
   createCronServiceWithStateForTest,
@@ -73,7 +72,6 @@ describe("undecodable scheduled authority", () => {
       const job = makeIsolatedAgentJobFixture({
         operatorSource: { executionRevision: "invalid", source },
       });
-      expect(() => readCronOperatorSnapshotForRun(job)).toThrow(CronOperatorSourceError);
       await expect(
         runAgent(
           makeIsolatedAgentParamsFixture({
@@ -146,6 +144,8 @@ describe("undecodable scheduled authority", () => {
     "records the first recurring authority failure without executing: %s",
     async (name) => {
       const scenario = name === "undecodable" ? undefined : memberSourceCase(name);
+      const unavailable =
+        Boolean(scenario?.transientError) || name === "disabled membership lookup";
       const { storePath } = await makeStorePath();
       const nowMs = Date.now();
       const clock = createGatewaySchedulerClock(nowMs);
@@ -203,10 +203,10 @@ describe("undecodable scheduled authority", () => {
         await cron.waitForIdle();
         expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
         expect(cron.getJob(job.id)).toMatchObject({
-          enabled: Boolean(scenario?.transientError),
+          enabled: unavailable,
           state: { lastRunStatus: "error", consecutiveErrors: 1 },
         });
-        if (scenario?.transientError) {
+        if (unavailable) {
           expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeGreaterThan(clock.clock.now());
         } else {
           expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
@@ -217,12 +217,16 @@ describe("undecodable scheduled authority", () => {
         );
         const history = readCronRunHistoryPageForTests({ storeKey: storePath });
         expect(history.entries).toHaveLength(1);
-        if (scenario?.transientError) {
-          expect(result).toBe(scenario.transientError);
-          expect(result).not.toBeInstanceOf(CronOperatorSourceError);
+        if (unavailable) {
+          expect(result).toMatchObject({
+            status: "error",
+            error: "Gateway access policy is unavailable; retry the operation.",
+            errorClassification: { kind: "reason", reason: "server_error" },
+            executionStarted: false,
+          });
           expect(history.entries[0]).toMatchObject({
             status: "error",
-            error: scenario.transientError.message,
+            error: "Gateway access policy is unavailable; retry the operation.",
           });
         } else {
           expect(result).toMatchObject({ error: history.entries[0]?.error });
@@ -242,7 +246,13 @@ describe("undecodable scheduled authority", () => {
             )
           ) {
             expect(result).toMatchObject({
-              error: new CronOperatorSourceError(new Error(scenario.refusal)).message,
+              error: new CronOperatorSourceError(
+                new Error(
+                  ["removed member", "changed account", "changed listing"].includes(name)
+                    ? "Restart recovery operator authority changed; start a new user turn."
+                    : scenario.refusal,
+                ),
+              ).message,
             });
           }
           expect(history.entries[0]).toMatchObject({

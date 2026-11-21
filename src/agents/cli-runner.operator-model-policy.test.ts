@@ -97,7 +97,7 @@ describe("CLI operator model execution", () => {
     },
   );
 
-  it("cancels a removed logical model and rejects late output without revoking a surviving model", async () => {
+  it("keeps admitted CLI output and surviving models available after a logical model is removed", async () => {
     const cfg = {
       agents: { defaults: { model: { primary: "fixture/a", fallbacks: ["fixture/b"] } } },
     };
@@ -141,7 +141,7 @@ describe("CLI operator model execution", () => {
     executePreparedCliRun.mockImplementationOnce(async (prepared) => {
       started.resolve(prepared.params.abortSignal);
       await complete.promise;
-      return { text: "removed model output" };
+      return { text: "admitted model output" };
     });
     executePreparedCliRun.mockResolvedValue({ text: "surviving model output" });
     const admission = prepareSystemAgentRunAdmission(
@@ -169,13 +169,11 @@ describe("CLI operator model execution", () => {
       for (const listener of listeners) {
         listener();
       }
-      expect(signal?.aborted).toBe(true);
+      expect(signal?.aborted).toBe(false);
       expect(sourceAbort.signal.aborted).toBe(false);
       expect(authority.assertCurrent).not.toThrow();
       complete.resolve();
-      expect(await outcome).toMatchObject({
-        message: expect.stringContaining("operator role cannot use this model"),
-      });
+      expect(await outcome).toMatchObject({ payloads: [{ text: "admitted model output" }] });
       expect(cleanup).toHaveBeenCalledOnce();
       expect(listeners.size).toBe(0);
 

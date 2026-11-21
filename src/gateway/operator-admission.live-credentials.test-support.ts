@@ -161,7 +161,7 @@ export async function prepareLiveCredentialProducer(
         case "live-device-key-changed": {
           const { publicKey } = generateKeyPairSync("ed25519");
           const replacementKey = publicKeyRawBase64UrlFromPem(
-            publicKey.export({ type: "spki", format: "pem" }).toString(),
+            publicKey.export({ type: "spki", format: "pem" }),
           );
           const before = await withPairedDeviceRecords(undefined, (devices) => {
             const device = devices[c.identity.deviceId];
