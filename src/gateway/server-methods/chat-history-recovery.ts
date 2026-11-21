@@ -1,4 +1,3 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveActiveEmbeddedRunOwnerForOperation } from "../../agents/embedded-agent-runner/runs.js";
 import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
 import {
@@ -8,7 +7,11 @@ import {
 import { projectInFlightRunSnapshot } from "../chat-inflight-snapshot.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunState } from "../server-chat-state.js";
-import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
+import {
+  chatHistoryUnavailableError,
+  type ChatHistoryMethod,
+  resolveSessionHistoryUnavailableMessage,
+} from "../session-history-error.js";
 import {
   captureGatewayScopeMatcher,
   captureSessionStoreScopeMatcher,
@@ -84,27 +87,14 @@ export function resolveEmbeddedAgentRunRecoverySnapshot(
   });
 }
 
-export type ChatHistoryMethod =
-  | "chat.history"
-  | "chat.startup"
-  | "chat.message.get"
-  | "chat.predict"
-  | "chat.pendingInputs.dismiss";
+export type { ChatHistoryMethod } from "../session-history-error.js";
 
 export function respondChatHistoryUnavailable(
   method: ChatHistoryMethod,
   respond: RespondFn,
   message: string,
 ): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, message, {
-      details: { method },
-      retryable: true,
-      retryAfterMs: 250,
-    }),
-  );
+  respond(false, undefined, chatHistoryUnavailableError(method, message));
 }
 
 export function respondChatHistoryReadError(
