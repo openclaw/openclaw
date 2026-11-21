@@ -1,0 +1,4 @@
+92
+# Selected source b9aa2b7e6cd264f1572506042944a7c335403295 (#202618), adapted as 0378f462bc13dbebe0774cc3ce3f7d0654c69f56 and integrated e3ae33c39f0acf2b78eee83e8402f689f4e53af3.
+# Exact LF delta: new Gateway first-read regression +91 and retained auth-login controls +1.
+# Existing baseline and tests unchanged by this accounting companion; no unselected-source credit.
