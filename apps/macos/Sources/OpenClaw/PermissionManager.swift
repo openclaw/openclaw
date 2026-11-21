@@ -192,10 +192,9 @@ enum PermissionManager {
             SystemSettingsURLSupport.openPrivacySettings(for: .speechRecognition)
         }
         if status == .notDetermined, interactive, !Task.isCancelled, isCurrent() {
-            await withUnsafeContinuation { (cont: UnsafeContinuation<Void, Never>) in
-                SFSpeechRecognizer.requestAuthorization { _ in
-                    DispatchQueue.main.async { cont.resume() }
-                }
+            await withUnsafeContinuation { (continuation: UnsafeContinuation<Void, Never>) in
+                // TCC calls back off the main actor; isolation must be safe at callback entry.
+                SFSpeechRecognizer.requestAuthorization { @Sendable _ in continuation.resume() }
             }
         }
         return SFSpeechRecognizer.authorizationStatus() == .authorized
