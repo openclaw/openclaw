@@ -20,6 +20,8 @@ export type LocalWorkspaceBaselineDocument = {
   rawManifest: string;
   manifestRef: string;
   buildCacheInputs: string[];
+  /** Producer-created layout added to an immutable template before initial publication. */
+  preparedDirectories?: string[];
 };
 
 export type LocalWorkspaceManifestAction =

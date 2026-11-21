@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath } from "../config/paths.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { sleep } from "../utils/sleep.js";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
@@ -24,6 +26,7 @@ import {
   sweepPackageReleaseTemporaryLinks,
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import {
   readBuiltGatewayBuildId,
   readBuiltRuntimeCommit,
@@ -370,34 +373,107 @@ export async function collectGitReleases(params: {
   return collected;
 }
 
-/**
- * The serving Gateway restarts itself once its maintenance tick (30 s) sees the link
- * move. Wait for a new Gateway owner before verifying; after 35 s, ask it to restart
- * (SIGUSR2), which also covers a plugin-only restart where the link did not move.
- */
-export async function waitForGitReleaseSuccessor(
-  env: NodeJS.ProcessEnv,
-  signal?: AbortSignal,
-): Promise<void> {
-  const ownerPid = () => {
+/** Wait for this release's resident to leave, not merely for delivery of SIGUSR2.
+ * Only the resident can say whether its running policy admitted a deferred restart. */
+export async function waitForGitReleaseSuccessor(params: {
+  serviceEnv: NodeJS.ProcessEnv;
+  gatewayPort: number;
+  allowGitReleaseRestartSignal?: boolean;
+  signal?: AbortSignal;
+}): Promise<
+  { status: "no-incumbent" | "changed" } | { status: "unverified"; incumbentPid?: number }
+> {
+  const signal = resolveCommandProcessSignal(params.signal);
+  signal?.throwIfAborted();
+  const readOwner = () => {
     try {
-      return readGatewayOwnerLease({ env, current: true })?.pid;
+      return readGatewayOwnerLease({ env: params.serviceEnv, current: true });
     } catch {
-      return undefined;
+      return null; // Unreadable is not the same as a confirmed absent lease.
     }
   };
-  const servingPid = ownerPid();
-  for (let waited = servingPid ? 0 : 90; waited < 90; waited++) {
-    if (waited === 35) {
-      try {
-        process.kill(servingPid!, "SIGUSR2");
-      } catch {
-        // A Gateway that already exited has a successor coming.
-      }
+  const start = performance.now();
+  const waitStartedAtMs = Date.now();
+  let incumbent = readOwner();
+  if (incumbent === undefined || incumbent?.state === "dead") {
+    return { status: "no-incumbent" };
+  }
+  if (incumbent && incumbent.port !== params.gatewayPort) {
+    return { status: "unverified" };
+  }
+  const signalAt = start + 35_000; // The watcher normally checks the installation every 30s.
+  let until = start + 90_000; // Old residents do not publish a receipt.
+  let sentAt: number | undefined;
+  let previousReceipt: string | undefined;
+  let maySignal = params.allowGitReleaseRestartSignal === true;
+  while (performance.now() < until) {
+    await sleep(Math.min(1_000, until - performance.now()), signal);
+    const current = readOwner();
+    if (current === undefined || current?.state === "dead") {
+      // Supervised replacement normally has a gap between leases. Never nudge the
+      // departed owner, but keep looking for its successor within the same budget.
+      maySignal = false;
+      continue;
     }
-    await sleep(1_000, signal);
-    if (ownerPid() !== servingPid) {
-      return;
+    if (!current || current.port !== params.gatewayPort) {
+      continue;
+    }
+    if (!incumbent) {
+      // After an unreadable first poll, only a lease that demonstrably predates
+      // the wait can identify the incumbent. A new arrival is not ours to signal.
+      const predatesWait = [current.listeningAt, current.heartbeatAt].some(
+        (at) => at !== undefined && at < waitStartedAtMs,
+      );
+      if (!predatesWait) {
+        continue;
+      }
+      incumbent = current;
+    }
+    if (
+      current.state === "live" &&
+      current.owner !== incumbent.owner &&
+      (current.pid !== incumbent.pid ||
+        (current.startedAt !== null &&
+          incumbent.startedAt !== null &&
+          current.startedAt !== incumbent.startedAt))
+    ) {
+      return { status: "changed" };
+    }
+    const now = performance.now();
+    if (
+      current.state !== "live" ||
+      current.pid !== incumbent.pid ||
+      current.owner !== incumbent.owner ||
+      (incumbent.startedAt !== null && current.startedAt !== incumbent.startedAt)
+    ) {
+      // A transient inconclusive poll at the watcher boundary must not signal an
+      // unknown owner. A subsequent fresh live match may still receive our one request.
+      continue;
+    }
+    if (maySignal && sentAt === undefined && now >= signalAt) {
+      signal?.throwIfAborted();
+      previousReceipt = current.externalRestartReceipt;
+      try {
+        process.kill(incumbent.pid, "SIGUSR2");
+      } catch {
+        // Undelivered is not accepted: don't retry or extend the deadline. The watcher
+        // can still replace the incumbent independently within the original budget.
+        maySignal = false;
+        continue;
+      }
+      sentAt = now;
+    } else if (
+      sentAt !== undefined &&
+      current.externalRestartReceipt &&
+      current.externalRestartReceipt !== previousReceipt
+    ) {
+      // A receipt is evidence to wait, never permission to signal or evidence of readiness.
+      // Anchor the budget to our single request, even if other signals arrive later.
+      until =
+        sentAt + resolveGatewayRestartDeferralTimeoutMs() + GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS;
     }
   }
+  return incumbent
+    ? { status: "unverified", incumbentPid: incumbent.pid }
+    : { status: "unverified" };
 }

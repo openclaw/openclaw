@@ -19,6 +19,7 @@ import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import {
   commandError,
   worktreePathExists,
@@ -626,7 +627,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         // A lost registration cannot validate it; remove the settled clone while
         // its template reader is still held, so the same PR can provision again.
         rollbackGuard();
-        await fs.rm(options.destination, { recursive: true, force: true });
+        await nativeWorktreeFilesystem.remove(options.destination, { commitGuard: rollbackGuard });
         throw error;
       }
       await assertRegistration(rollbackOptions);
@@ -645,7 +646,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         throw error;
       }
       rollbackGuard();
-      await fs.rm(options.destination, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(options.destination, { commitGuard: rollbackGuard });
       rollbackGuard();
       await fs.mkdir(options.destination);
       rollbackGuard();

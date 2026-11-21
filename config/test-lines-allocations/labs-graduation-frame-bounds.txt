@@ -1,0 +1,3 @@
+4
+# Preserve measured Labs and Templates bounds from the existing real-Gateway screenshot frames.
+# Required clean/annotated proof reuses the same capture; no additional scenario or Gateway boot.

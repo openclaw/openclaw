@@ -50,12 +50,12 @@ import {
 import type { TranscriptReadRequests } from "./store-worker-contract.js";
 import type { TranscriptAppendScheduler } from "./store-worker.types.js";
 import type { TranscriptWriteOperations } from "./store-write.worker-contract.js";
-import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptSourceLocator,
   TranscriptUtterance,
+  TranscriptsSummary,
 } from "./types.js";
 
 export type * from "./store-types.js";

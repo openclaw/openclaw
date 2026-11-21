@@ -179,6 +179,8 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   expect(JSON.stringify(state.chatToolMessages)).not.toContain("First stdout line.");
   // No new stdout follows the toggle: admission must recover the quiet command.
   setInline(true);
+  // The first enable loads the inline renderer before requesting live tool output.
+  await vi.dynamicImportSettled();
   await expect.poll(() => state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
   await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
   const recovery = chatHistoryRequests(state).historyLoad;

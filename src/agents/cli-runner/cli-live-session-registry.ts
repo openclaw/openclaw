@@ -330,9 +330,11 @@ export function createCliLiveSessionCapability(params: {
       credentialFingerprint: context.preparedBackend.secretInput?.fingerprint,
       // A warm child keeps the login it started with. Reuse it only while the native owner
       // this run was prepared under is the one it was started under.
-      nativeLoginOwnerHash: context.cliHistoryWriter?.bindsNativeLogin
-        ? sha256Hex(context.cliHistoryWriter.authFingerprint)
-        : undefined,
+      nativeLoginOwnerHash:
+        context.cliHistoryAdmission?.bindsNativeLogin &&
+        context.cliHistoryAdmission.accountFingerprint
+          ? sha256Hex(context.cliHistoryAdmission.accountFingerprint)
+          : undefined,
       skillsFingerprint,
       env: Object.keys(params.env)
         .toSorted()

@@ -40,12 +40,18 @@ it("screenshots a ref locator", async () => {
 });
 it.each([
   [undefined, ["bringToFront", "screenshot"]],
-  [false, ["screenshot"]],
+  [false, ["Page.startScreencast", "screenshot", "Page.stopScreencast", "detach"]],
 ])(
-  "activates the tab before capture unless Chrome is headed (headless=%s)",
+  "renders a background tab for capture without taking focus in headed Chrome (headless=%s)",
   async (headless, calls) => {
     const order: string[] = [];
+    const session = {
+      on: () => {},
+      send: async (method: string) => void order.push(method),
+      detach: async () => void order.push("detach"),
+    };
     setPwToolsCoreCurrentPage({
+      context: () => ({ newCDPSession: async () => session }),
       bringToFront: async () => void order.push("bringToFront"),
       screenshot: async () => {
         order.push("screenshot");

@@ -186,6 +186,7 @@ suite.define(() => {
           await page.getByRole("switch", { name: "Decision assistance", exact: true }).waitFor();
           const labsSurface = page.locator("openclaw-labs-page .settings-section");
           const labsFrame = await takeControlUiScreenshotFrame(page, labsSurface, [labsSurface], {
+            elements: [labsSurface],
             animations: "disabled",
           });
           await writeFile(path.join(artifacts, "labs-after-clean.png"), labsFrame.png);
@@ -209,6 +210,7 @@ suite.define(() => {
           await page.getByRole("heading", { name: "Research Briefing", exact: true }).waitFor();
           const templates = page.locator("[data-templates-explore]");
           const templatesFrame = await takeControlUiScreenshotFrame(page, templates, [templates], {
+            elements: [templates],
             animations: "disabled",
           });
           await writeFile(path.join(artifacts, "templates-after-clean.png"), templatesFrame.png);
@@ -281,6 +283,8 @@ suite.define(() => {
               viewport: page.viewportSize(),
               scale: await page.evaluate(() => devicePixelRatio),
               bounds: frame.elements.map((element) => element.bounds),
+              labsBounds: labsFrame.elements.map((element) => element.bounds),
+              templatesBounds: templatesFrame.elements.map((element) => element.bounds),
             }),
           );
           console.info(`GRADUATION_PROOF=${artifacts}`);
