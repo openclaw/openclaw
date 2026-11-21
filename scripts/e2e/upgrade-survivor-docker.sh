@@ -449,13 +449,19 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
           --recurse-submodules=no --filter=blob:none origin $git_missing
       fi
     done
+    git_package_spec="${OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC:-openclaw@latest}"
+    # `current` installs this checkout's packed package, so its own updater runs the switch.
+    if [ "$git_package_spec" = current ]; then
+      PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
+      git_package_spec=/tmp/openclaw-current.tgz
+    fi
     UPGRADE_SCENARIO_ARGS+=(
       -v "$source_git:/tmp/openclaw-source.git:ro"
       -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA=$baseline_sha"
       -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_LABEL=$git_baseline_label"
       -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_ROUTE=${OPENCLAW_UPGRADE_SURVIVOR_GIT_ROUTE:-baseline}"
       -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_KILL_POINTS=${OPENCLAW_UPGRADE_SURVIVOR_GIT_KILL_POINTS:-stage build publish link-switch launcher-restore}"
-      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC:-openclaw@latest}"
+      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC=$git_package_spec"
     )
   elif [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] || [ "$CANDIDATE_RAW" = "current" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"

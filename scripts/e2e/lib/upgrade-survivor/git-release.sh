@@ -6,9 +6,11 @@
 #   service reaches the candidate by the baseline's own updater, then the candidate's
 #   updater runs every remaining update.
 # - no-service: a checkout of the candidate with no service updates through a release.
-# - package-to-git: a published package with a service switches to the Git checkout. The
-#   first switch targets a crash commit and must fall back to the npm package; the retried
-#   switch then succeeds.
+# - package-to-git: a package with a service switches to the Git checkout. With the
+#   candidate's own package (OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC=current), its
+#   updater runs the switch: the first switch targets a crash commit and must fall back to
+#   the npm package, then the retried switch succeeds. A published package's updater runs
+#   the switch with its own code; its result is recorded.
 
 git_release_lib="$PWD/scripts/e2e/lib/upgrade-survivor"
 git_release_helper="$git_release_lib/git-release.mjs"
@@ -751,9 +753,11 @@ run_git_release_package_to_git() {
   phase git-package-request git_release_request package record
   phase git-checkout-candidate git_release_checkout "$CANDIDATE_SPEC"
   export OPENCLAW_GIT_DIR="$git_checkout"
-  phase git-package-crash-switch git_release_package_crash
-  phase git-package-crash-observe git_release_request package-crash record
-  git -C "$git_upstream" update-ref refs/heads/main "$git_release_good_tip"
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC:-}" = /tmp/openclaw-current.tgz ]; then
+    phase git-package-crash-switch git_release_package_crash
+    phase git-package-crash-observe git_release_request package-crash record
+    git -C "$git_upstream" update-ref refs/heads/main "$git_release_good_tip"
+  fi
   phase git-package-switch git_release_package_switch
   phase git-package-switch-observe git_release_request package-switch record
   phase git-package-second-update git_release_package_second
