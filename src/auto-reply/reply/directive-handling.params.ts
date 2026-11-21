@@ -22,7 +22,7 @@ export type HandleDirectiveOnlyParams = {
   elevatedAllowed: boolean;
   elevatedFailures?: Array<{ gate: string; key: string }>;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;

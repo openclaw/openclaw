@@ -35,7 +35,8 @@ type SessionAuthProfilePreservationParams = {
   cfg: OpenClawConfig;
   agentDir: string;
   entry: SessionEntry;
-  currentProvider: string;
+  /** Undefined when the session had no model before this selection. */
+  currentProvider?: string;
   provider: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Presence records completed preparation, including authoritative credential absence. */

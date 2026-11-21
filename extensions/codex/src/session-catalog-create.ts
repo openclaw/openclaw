@@ -19,15 +19,15 @@ export function resolveCodexCatalogCreateSession(
   const agentId = requestedAgentId ?? resolveDefaultAgentId(config);
   const defaultModel = modelConfig.resolveDefaultModelForAgent({ cfg: config, agentId });
   const modelRef =
-    defaultModel.provider === "openai"
+    defaultModel?.provider === "openai"
       ? `${defaultModel.provider}/${defaultModel.model}`
       : CODEX_CATALOG_DEFAULT_MODEL_REF;
   const allowed = modelConfig.resolveAllowedModelRef({
     cfg: config,
     catalog: [],
     raw: modelRef,
-    defaultProvider: defaultModel.provider,
-    defaultModel: defaultModel.model,
+    defaultProvider: defaultModel?.provider ?? "openai",
+    defaultModel: defaultModel?.model,
     agentId,
   });
   return "error" in allowed

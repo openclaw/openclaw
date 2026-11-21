@@ -115,9 +115,8 @@ async function createStatusModelContextResolver(cfg: OpenClawConfig) {
 function resolveConfiguredStatusModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
-  defaultModel: string;
   agentId?: string;
-}): { provider: string; model: string } {
+}): { provider: string; model: string } | undefined {
   return resolveConfiguredModelRef(
     {
       ...params,
@@ -154,12 +153,12 @@ function resolveStatusModelLookupRef(params: {
 }
 
 function resolveSessionModelRef(
-  resolved: { provider: string; model: string },
+  resolved: { provider: string; model: string } | undefined,
   entry?:
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
-): { provider: string; model: string } {
-  const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
+): { provider: string; model: string } | undefined {
+  const defaultProvider = resolved?.provider || DEFAULT_PROVIDER;
   const overrideModel = normalizeOptionalString(entry?.modelOverride);
   const provider = normalizeOptionalString(
     overrideModel ? entry?.providerOverride : entry?.modelProvider,

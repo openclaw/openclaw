@@ -108,7 +108,6 @@ function resolveConfiguredRefForTest(
   return resolveConfiguredModelRef({
     cfg,
     defaultProvider: "openai",
-    defaultModel: "gpt-5.4",
     ...options,
   });
 }
@@ -592,13 +591,12 @@ it.each([
   [
     "custom provider behind empty default overlay",
     { openai: [], "local-provider": ["local-good"] },
-    "missing-default-model",
     ref("local-provider", "local-good"),
   ],
-  ["hardcoded fallback", { "empty-provider": [] }, "gpt-5.4", ref("openai", "gpt-5.4")],
-] as const)("resolves %s", (_name, providers, defaultModel, expected) => {
+  ["no configured model", { "empty-provider": [] }, undefined],
+] as const)("resolves %s", (_name, providers, expected) => {
   const cfg = config({}, undefined, providerModels(providers));
-  expect(resolveConfiguredRefForTest(cfg, { defaultModel })).toEqual(expected);
+  expect(resolveConfiguredRefForTest(cfg)).toEqual(expected);
 });
 
 it("normalizes retired nested Gemini ids in exact configured provider refs", () => {
@@ -612,7 +610,6 @@ it("normalizes retired nested Gemini ids in exact configured provider refs", () 
   expect(
     resolveConfiguredRefForTest(cfg, {
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
       allowPluginNormalization: false,
     }),
   ).toEqual(ref("kilocode", "google/gemini-3.1-pro-preview"));

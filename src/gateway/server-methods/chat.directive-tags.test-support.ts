@@ -6,7 +6,6 @@ import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   loadExactSessionEntryCandidates,
@@ -105,7 +104,7 @@ export function createExpectedAcpUserTurn(params: {
     idempotencyKey: params.idempotencyKey,
     __openclaw: {
       chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      modelSelection: { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL },
+      modelSelection: {},
       requesterOrigin: {
         sessionKey: "agent:main:main",
         messageProvider: "webchat",

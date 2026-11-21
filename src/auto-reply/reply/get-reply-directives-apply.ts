@@ -83,7 +83,7 @@ export async function applyInlineDirectiveOverrides(params: {
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: HandleDirectiveOnlyParams["aliasIndex"];
   provider: string;
   model: string;

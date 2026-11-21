@@ -155,6 +155,10 @@ export async function prepareUpstreamForkCurrentGuard(params: {
         ? "required"
         : undefined;
     const sourceModel = resolveSessionModelRef(currentConfig, sourceEntry, source.agentId);
+    if (!sourceModel) {
+      // No configured model: no native runtime to restrict; the child's first send reports it.
+      return;
+    }
     const policyHarness =
       currentForkHarness.harness.executionEnvironment === "host-only"
         ? currentForkHarness.harness

@@ -141,7 +141,7 @@ export async function supportedSpawnModelChoice(
   const selection = {
     cfg: params.cfg,
     agentId: params.agentId,
-    defaultProvider: defaults.provider,
+    defaultProvider: defaults?.provider ?? "openai",
   };
   const selected = params.resolvedRef
     ? { ref: params.resolvedRef }
