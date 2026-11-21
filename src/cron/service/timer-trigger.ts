@@ -200,6 +200,22 @@ export function resolveTransientCronRetryDecision(params: {
   };
 }
 
+/**
+ * A run's execution error only doubles as a delivery error when the run could
+ * have dispatched; a run that reports it never attempted outbound delivery has
+ * no delivery error of its own, so the execution error stays with the run.
+ */
+export function resolveDeliveryDiagnosticError(result: {
+  deliveryError?: string;
+  deliveryAttempted?: boolean;
+  error?: string;
+}): string | undefined {
+  if (result.deliveryError !== undefined) {
+    return result.deliveryError;
+  }
+  return result.deliveryAttempted === false ? undefined : result.error;
+}
+
 export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
