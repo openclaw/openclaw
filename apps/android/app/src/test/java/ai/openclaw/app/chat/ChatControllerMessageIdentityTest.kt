@@ -16,13 +16,21 @@ class ChatControllerMessageIdentityTest {
   @Test
   fun reconcileMessageIdsKeepsCanonicalEntryIdentityFromReload() {
     val previous =
-      textMessage(id = "stable-compose-id", role = "user", text = "hello", timestampMs = 10, entryId = "old-entry")
+      textMessage(id = "stable-compose-id", role = "user", text = "hello", timestampMs = 10)
     val incoming = previous.copy(id = "temporary-id", entryId = "canonical-entry")
 
     val reconciled = reconcileMessageIds(listOf(previous), listOf(incoming)).single()
 
     assertEquals("stable-compose-id", reconciled.id)
     assertEquals("canonical-entry", reconciled.entryId)
+  }
+
+  @Test
+  fun distinctCanonicalEntriesCannotCollapseOnIdenticalTextAndTimestamp() {
+    val first = textMessage("first-ui", "assistant", "same", 10, entryId = "first")
+    val second = first.copy(id = "second-ui", entryId = "second")
+    assertEquals(listOf("first-ui", "second-ui"), reconcileMessageIds(listOf(first), listOf(first, second)).map { it.id })
+    assertEquals("first-ui", reconcileMessageIds(listOf(first), listOf(first.copy(id = "new", content = listOf(ChatMessageContent(text = "changed"))))).single().id)
   }
 
   private val json = Json { ignoreUnknownKeys = true }

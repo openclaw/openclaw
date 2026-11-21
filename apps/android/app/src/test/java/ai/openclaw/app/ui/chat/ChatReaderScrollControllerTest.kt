@@ -60,6 +60,36 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
+  fun olderPrependAndRemoteUserTurnPreserveSavedReadingAnchor() {
+    val prompt = user("prompt")
+    val reply = assistant("reply")
+    val before = timeline(prompt, reply)
+    val reading =
+      initialChatReaderTransition(before, "gateway|agent|session").state.copy(
+        followTarget = null,
+        readingItemKey = "message:reply",
+        readingOffset = 37,
+      )
+    val prepended = timeline(user("older"), prompt, reply)
+    val older = reading.onTimelineChanged(prepended)
+    assertEquals(before.latestContentVersion, prepended.latestContentVersion)
+    assertNull(older.scrollIndex)
+    assertFalse(older.state.hasNewerContent)
+    val saver = createChatReaderStateSaver("gateway|agent|session")
+    val saved = with(saver) { SaverScope { true }.save(older.state) }
+    val restored = requireNotNull(saver.restore(requireNotNull(saved)))
+    val remote = restored.onTimelineChanged(timeline(user("older"), prompt, reply, user("remote")))
+    assertNull(remote.scrollIndex)
+    assertNull(remote.state.followTarget)
+    assertTrue(remote.state.hasNewerContent)
+    assertEquals("message:reply", remote.state.readingItemKey)
+    assertEquals(37, remote.state.readingOffset)
+    val explicit = remote.state.jumpToLatest(timeline(prompt, reply, user("remote")))
+    assertEquals(0, explicit.scrollIndex)
+    assertNull(explicit.state.readingItemKey)
+  }
+
+  @Test
   fun newUserTurnFollowsLatestContentWhileStreaming() {
     val previous = initialChatReaderTransition(timeline(assistant("assistant-1"))).state
     val active = activeTimeline(user("user-1"), stream = null)

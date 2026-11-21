@@ -128,8 +128,6 @@ internal fun prepareChatHistory(
     latestUserMessageVersion = latestUser?.let(::stableMessageVersion),
     rawHistoryVersionPrefix =
       buildString {
-        append(messages.size)
-        append(':')
         append(latest?.id.orEmpty())
         append(':')
         append(latest?.role.orEmpty())
@@ -353,6 +351,7 @@ private fun stableMessageVersion(message: ChatMessage): String {
   val role = message.role.trim().lowercase()
   val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
   if (idempotencyKey.isNotEmpty()) return "$role:idempotency:$idempotencyKey"
+  message.entryId?.let { return "$role:entry:$it" }
 
   return buildString {
     append(role)
