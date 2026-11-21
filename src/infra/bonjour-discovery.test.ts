@@ -57,7 +57,7 @@ describe("bonjour-discovery", () => {
       "dns-sd -B _openclaw-gw._tcp local.":
         "Add 2 3 local. _openclaw-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway\nAdd 2 3 local. _openclaw-gw._tcp. Laptop Gateway\n",
       [`dns-sd -B _openclaw-gw._tcp ${WIDE_AREA_DOMAIN}`]: `Add 2 3 ${WIDE_AREA_DOMAIN} _openclaw-gw._tcp. Tailnet Gateway\n`,
-      [`dns-sd -L ${studioInstance} _openclaw-gw._tcp local.`]: `${studioInstance}._openclaw-gw._tcp. can be reached at studio.local:18789\ntxtvers=1 displayName=Peter\\226\\128\\153s\\032Mac\\032Studio lanHost=studio.local gatewayPort=18789 sshPort=22\n`,
+      [`dns-sd -L ${studioInstance} _openclaw-gw._tcp local.`]: `${studioInstance}._openclaw-gw._tcp. can be reached at studio.local:18789\n txtvers=1 displayName=Peter’s\\ Mac\\ Studio lanHost=studio.local gatewayPort=18789 sshPort=22\n`,
       "dns-sd -L Laptop Gateway _openclaw-gw._tcp local.":
         "Laptop Gateway._openclaw-gw._tcp. can be reached at laptop.local:18789\ntxtvers=1 displayName=Laptop lanHost=laptop.local gatewayPort=18789 sshPort=22\n",
       [`dns-sd -L Tailnet Gateway _openclaw-gw._tcp ${WIDE_AREA_DOMAIN}`]:
@@ -86,6 +86,25 @@ describe("bonjour-discovery", () => {
         ),
       ),
     ).toEqual(new Set([1234]));
+  });
+
+  it.each(["txtvers=1 ", ""])("decodes native TXT records with prefix %j once", async (prefix) => {
+    const instance = "TXT Gateway";
+    const txt =
+      prefix +
+      String.raw`displayName=Literal\ \\\\032\ and\ \\\\x0A cliPath=/opt/Synthetic\ Tools/bin\\\\openclaw role=gateway probeControl=left\\x0Aright`;
+    mockCommands("darwin", {
+      "dns-sd -B _openclaw-gw._tcp local.": `Add 2 3 local. _openclaw-gw._tcp. ${instance}\n`,
+      [`dns-sd -L ${instance} _openclaw-gw._tcp local.`]: `${instance} can be reached at gateway.local:18789\n ${txt}\n`,
+    });
+
+    const beacon = getOnlyBeacon(await discoverGatewayBeacons({ timeoutMs: 800 }));
+    expect(beacon).toMatchObject({
+      displayName: String.raw`Literal \032 and \x0A`,
+      cliPath: String.raw`/opt/Synthetic Tools/bin\openclaw`,
+      role: "gateway",
+      txt: { probeControl: "left\nright" },
+    });
   });
 
   it("shares the caller deadline across DNS-SD resolutions and fallback discovery", async () => {

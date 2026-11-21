@@ -97,6 +97,15 @@ function decodeDnsSdEscapes(value: string): string {
   return Buffer.concat(parts).toString("utf8");
 }
 
+function decodeDnsSdTxtEscapes(value: string): string {
+  // ShowTXTRecord uses shell escapes, four backslashes, and two-backslash hex escapes.
+  return value.replace(
+    /\\\\\\\\|\\\\x([0-9a-f]{2})|\\(.)/gi,
+    (_match, hex: string | undefined, escaped: string | undefined) =>
+      hex !== undefined ? String.fromCharCode(Number.parseInt(hex, 16)) : (escaped ?? "\\"),
+  );
+}
+
 function parseDigSrv(stdout: string): { host: string; port: number } | null {
   // dig +short SRV: "0 0 18790 host.domain."
   const line = stdout
@@ -157,7 +166,10 @@ function parseTailscaleStatusIPv4s(stdout: string): string[] {
   return uniqueStrings(out);
 }
 
-function parseTxtTokens(tokens: string[]): Record<string, string> {
+function parseTxtTokens(
+  tokens: string[],
+  decodeValue?: (value: string) => string,
+): Record<string, string> {
   const txt: Record<string, string> = {};
   for (const token of tokens) {
     const idx = token.indexOf("=");
@@ -165,7 +177,8 @@ function parseTxtTokens(tokens: string[]): Record<string, string> {
       continue;
     }
     const key = token.slice(0, idx).trim();
-    const value = decodeDnsSdEscapes(token.slice(idx + 1).trim());
+    const rawValue = token.slice(idx + 1);
+    const value = decodeValue ? decodeValue(rawValue) : decodeDnsSdEscapes(rawValue.trim());
     if (!key) {
       continue;
     }
@@ -230,15 +243,15 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
       continue;
     }
 
-    if (line.startsWith("txt") || line.includes("txtvers=")) {
-      const tokens = line.split(/\s+/).filter(Boolean);
-      txt = parseTxtTokens(tokens);
+    const tokens = raw.match(/(?:\\.|[^\s\\])+/g) ?? [];
+    if (tokens[0]?.includes("=")) {
+      txt = parseTxtTokens(tokens, decodeDnsSdTxtEscapes);
     }
   }
 
   beacon.txt = Object.keys(txt).length ? txt : undefined;
   if (txt.displayName) {
-    beacon.displayName = decodeDnsSdEscapes(txt.displayName);
+    beacon.displayName = txt.displayName;
   }
   if (txt.lanHost) {
     beacon.lanHost = txt.lanHost;
