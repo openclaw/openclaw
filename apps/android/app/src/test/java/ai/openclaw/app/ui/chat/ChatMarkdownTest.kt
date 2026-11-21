@@ -406,6 +406,23 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun imageAltTextKeepsInlineCodeLiteral() {
+    val annotated =
+      buildChatInlineMarkdown(
+        "![Open **`setup.json`** now](https://example.com/diagram.png)",
+      )
+
+    assertEquals("Open setup.json now", annotated.text)
+  }
+
+  @Test
+  fun imageAltTextKeepsCodeOnlyFallback() {
+    val annotated = buildChatInlineMarkdown("![`setup.json`](https://example.com/diagram.png)")
+
+    assertEquals("setup.json", annotated.text)
+  }
+
+  @Test
   fun parseDataImageDestinationAcceptsBoundedPayloads() {
     val parsed = parseDataImageDestination("data:image/png;base64,QUJD")
 
