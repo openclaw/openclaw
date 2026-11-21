@@ -191,8 +191,8 @@ run_prestart_gateway() {
 }
 
 run_prestart_cli() {
-  # During setup, avoid the shared-network openclaw-cli service because it
-  # requires the gateway container's network namespace to already exist. That
+  # During setup, avoid the openclaw-cli service because it joins the gateway
+  # container's network and PID namespaces, which must already exist. That
   # creates a circular dependency for config writes that are needed before the
   # gateway can start cleanly.
   # Host OPENCLAW_* paths are Compose bind-mount sources. Setup-time CLI writes
@@ -254,6 +254,23 @@ run_gateway_up() {
   up_args+=("$@")
 
   docker compose "${compose_args[@]}" "${up_args[@]}" openclaw-gateway
+}
+
+wait_for_gateway_health() {
+  # Once the Gateway owns state, openclaw-cli writes route to its listener and
+  # fail until it accepts connections.
+  local timeout_seconds=180
+  local deadline=$((SECONDS + timeout_seconds))
+  echo "Waiting for gateway health..."
+  until openclaw_host_timeout_cmd 15s docker compose "${COMPOSE_ARGS[@]}" \
+    exec -T openclaw-gateway node dist/docker-healthcheck.js >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+      echo "WARNING: Gateway did not report healthy within ${timeout_seconds}s; config writes may fail." >&2
+      echo "  Inspect it with: ${COMPOSE_HINT} logs openclaw-gateway" >&2
+      return 0
+    fi
+    sleep 1
+  done
 }
 
 resolve_offline_sandbox_images() {
@@ -893,6 +910,8 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
     SANDBOX_ENABLED=""
   fi
 fi
+
+wait_for_gateway_health
 
 # Apply sandbox config only if prerequisites are met.
 if [[ -n "$SANDBOX_ENABLED" ]]; then

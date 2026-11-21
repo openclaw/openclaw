@@ -649,6 +649,21 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).toContain("config set agents.defaults.sandbox.mode off");
   });
 
+  it("waits for Gateway health before runtime CLI config writes", async () => {
+    const { result, lines } = await runLoggedSetup();
+    expect(result.status).toBe(0);
+    const gatewayStart = lines.findIndex(isGatewayStartLine);
+    const healthWait = lines.findIndex((line) =>
+      line.includes(" exec -T openclaw-gateway node dist/docker-healthcheck.js"),
+    );
+    const firstRuntimeWrite = lines.findIndex((line) =>
+      /\brun\b.*\bopenclaw-cli config set\b/u.test(line),
+    );
+    expect(gatewayStart).toBeGreaterThanOrEqual(0);
+    expect(healthWait).toBeGreaterThan(gatewayStart);
+    expect(firstRuntimeWrite).toBeGreaterThan(healthWait);
+  });
+
   it("resets stale sandbox mode and overlay when sandbox is not active", async () => {
     await mkdir(path("scripts/docker/sandbox"), { recursive: true });
     await writeFile(path("scripts/docker/sandbox/Dockerfile"), "FROM scratch\n");
@@ -723,8 +738,11 @@ describe("scripts/docker/setup.sh", () => {
     const gateway = services["openclaw-gateway"];
     expect(services["openclaw-cli"]).toMatchObject({
       network_mode: "service:openclaw-gateway",
+      pid: "service:openclaw-gateway",
       depends_on: ["openclaw-gateway"],
     });
+    // docker-init warns on every run when it is not PID 1 in a shared PID namespace.
+    expect(services["openclaw-cli"]).not.toHaveProperty("init");
     const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
     expect(listenerPort).toBe("18789");
     expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);

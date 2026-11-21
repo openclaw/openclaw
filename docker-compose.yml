@@ -96,6 +96,9 @@ services:
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     network_mode: "service:openclaw-gateway"
+    # State writes must verify the running Gateway's lock holder, which needs its
+    # PID namespace; without it, config and channel writes are refused.
+    pid: "service:openclaw-gateway"
     env_file:
       - path: .env
         required: false
@@ -129,7 +132,8 @@ services:
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
     stdin_open: true
     tty: true
-    init: true
+    # No init here: the Gateway's init is PID 1 in the shared PID namespace and
+    # reaps orphans; a second docker-init would warn on every run.
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway

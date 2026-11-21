@@ -294,6 +294,16 @@ docker inspect --format '{{json .State.Health}}' "$GATEWAY_ID" >"$PROJECT_DIR/he
 assert_health_state "recovered healthy state" healthy "$PROJECT_DIR/health-recovered.json"
 assert_probe_endpoints "recovered probes" "$PROJECT_DIR/probes-recovered.json"
 
+echo "Writing config through the CLI sidecar while the Gateway runs..."
+"${COMPOSE[@]}" run -T --rm --no-deps openclaw-cli config set agents.defaults.sandbox.mode off
+CLI_WRITTEN_SANDBOX_MODE="$("${COMPOSE[@]}" exec -T openclaw-gateway node dist/index.js config get agents.defaults.sandbox.mode)"
+if [ "$CLI_WRITTEN_SANDBOX_MODE" != "off" ]; then
+  echo "CLI sidecar config write was not visible to the Gateway: $CLI_WRITTEN_SANDBOX_MODE" >&2
+  exit 1
+fi
+wait_for_gateway_health healthy 60
+echo "CLI sidecar config write reached the running Gateway."
+
 "${COMPOSE[@]}" logs --no-color openclaw-gateway >"$PROJECT_DIR/gateway-compose.log"
 if [ ! -s "$PROJECT_DIR/gateway-compose.log" ]; then
   echo "Compose gateway logs were empty" >&2
@@ -328,6 +338,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "gateway:healthJsonEnvelope=passed" \
   --detail "cli:wrongTokenRejected=passed" \
   --detail "cli:correctTokenAccepted=passed" \
-  --detail "cli:healthJsonEnvelope=passed"
+  --detail "cli:healthJsonEnvelope=passed" \
+  --detail "cli:configWriteWhileGatewayRuns=passed"
 
 echo "Docker Compose setup proof passed."
