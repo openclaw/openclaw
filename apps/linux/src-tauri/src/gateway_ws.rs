@@ -1,7 +1,7 @@
 use crate::gateway_control_auth::{Challenge, NativeControlSession};
 use crate::gateway_device_identity::{
-    GatewayAuth, GatewayDeviceIdentity, GatewayDeviceIdentityStore, CLIENT_DEVICE_FAMILY,
-    CLIENT_ID, CLIENT_MODE, CLIENT_PLATFORM, CLIENT_ROLE, CLIENT_SCOPES,
+    GatewayAuth, GatewayDeviceIdentity, GatewayDeviceIdentityStore, BOOTSTRAP_FULL_SCOPES,
+    CLIENT_DEVICE_FAMILY, CLIENT_ID, CLIENT_MODE, CLIENT_PLATFORM, CLIENT_ROLE, CLIENT_SCOPES,
 };
 #[cfg(target_os = "linux")]
 use crate::gateway_sleep::GatewaySleepRoute;
@@ -51,6 +51,8 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
 const SUSPEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const DRIVER_TICK: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+const MIN_RETRY_AFTER_DELAY: Duration = Duration::from_secs(1);
+const MAX_RETRY_AFTER_DELAY: Duration = Duration::from_secs(60);
 const PAIRING_REQUIRED_DETAIL_CODE: &str = "PAIRING_REQUIRED";
 const AUTH_TOKEN_MISSING_DETAIL_CODE: &str = "AUTH_TOKEN_MISSING";
 const AUTH_PASSWORD_MISSING_DETAIL_CODE: &str = "AUTH_PASSWORD_MISSING";
@@ -70,6 +72,7 @@ pub struct GatewayWsConfig {
     pub(crate) ws_url: String,
     pub(crate) token: Option<String>,
     pub(crate) password: Option<String>,
+    pub(crate) bootstrap_token: Option<String>,
     pub(crate) tls_fingerprint: Option<String>,
     pub(crate) node_identity_scope: String,
     ownership: GatewayOwnership,
@@ -88,9 +91,16 @@ impl GatewayWsConfig {
             ws_url,
             token,
             password,
+            bootstrap_token: None,
             tls_fingerprint,
             ownership,
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_bootstrap_token(mut self, bootstrap_token: Option<String>) -> Self {
+        self.bootstrap_token = bootstrap_token;
+        self
     }
 
     pub(crate) fn with_node_identity_scope(mut self, scope: String) -> Self {
@@ -338,6 +348,7 @@ struct RequestFailure {
     disconnect: bool,
     connect_details: ConnectErrorDetails,
     connect_state: Option<GatewayConnectionState>,
+    retry_after: Option<Duration>,
 }
 
 impl RequestFailure {
@@ -347,6 +358,7 @@ impl RequestFailure {
             disconnect: true,
             connect_details: ConnectErrorDetails::default(),
             connect_state: None,
+            retry_after: None,
         }
     }
 
@@ -363,6 +375,7 @@ impl RequestFailure {
             disconnect: false,
             connect_details: ConnectErrorDetails::from_value(details),
             connect_state: None,
+            retry_after: None,
         }
     }
 
@@ -375,8 +388,17 @@ impl RequestFailure {
     fn from_shared(error: SharedClientError) -> Self {
         match error {
             SharedClientError::Gateway {
-                message, details, ..
-            } => Self::method_with_details(message, details.as_ref()),
+                message,
+                details,
+                retry_after_ms,
+                ..
+            } => {
+                let mut failure = Self::method_with_details(message, details.as_ref());
+                failure.retry_after = retry_after_ms.filter(|ms| *ms > 0).map(|ms| {
+                    Duration::from_millis(ms).clamp(MIN_RETRY_AFTER_DELAY, MAX_RETRY_AFTER_DELAY)
+                });
+                failure
+            }
             SharedClientError::DispatchRejected(message) => {
                 Self::method_with_details(message, None)
             }
@@ -387,6 +409,13 @@ impl RequestFailure {
             error => Self::transport(error.to_string()),
         }
     }
+}
+
+fn reconnect_delay(attempt: u32, failure: Option<&RequestFailure>) -> Duration {
+    if let Some(delay) = failure.and_then(|failure| failure.retry_after) {
+        return delay;
+    }
+    shared_reconnect_backoff(attempt, MAX_RECONNECT_DELAY)
 }
 
 fn decode_response<T: DeserializeOwned>(method: &str, payload: Value) -> Result<T, RequestFailure> {
@@ -1113,7 +1142,7 @@ impl GatewayClient {
             if !self.driver_has_demand(&app) {
                 continue;
             }
-            let delay = shared_reconnect_backoff(reconnect_attempt, MAX_RECONNECT_DELAY);
+            let delay = reconnect_delay(reconnect_attempt, failure);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 command = receiver.recv() => {
@@ -1339,8 +1368,9 @@ impl GatewayClient {
         let store = store.as_ref().expect("gateway identity initialized");
         Ok((
             store.identity(),
-            store.select_auth(
+            store.select_auth_with_bootstrap(
                 &config.ws_url,
+                config.bootstrap_token.as_deref(),
                 config.token.as_deref(),
                 config.password.as_deref(),
             ),
@@ -1651,6 +1681,10 @@ fn connect_params(
     if inline_widgets_available {
         client_caps.push(INLINE_WIDGETS_CLIENT_CAPABILITY);
     }
+    let scopes: &[&str] = match auth {
+        GatewayAuth::BootstrapToken(_) => &BOOTSTRAP_FULL_SCOPES,
+        _ => &CLIENT_SCOPES,
+    };
     let mut params = json!({
         "minProtocol": MIN_CLIENT_PROTOCOL_VERSION,
         "maxProtocol": PROTOCOL_VERSION,
@@ -1665,12 +1699,12 @@ fn connect_params(
         "commands": [],
         "permissions": {},
         "role": CLIENT_ROLE,
-        "scopes": CLIENT_SCOPES
+        "scopes": scopes
     });
     if let Some(auth) = auth.json() {
         params["auth"] = auth;
     }
-    params["device"] = identity.signed_device(auth, nonce, signed_at_ms)?;
+    params["device"] = identity.signed_device_with_scopes(auth, nonce, signed_at_ms, scopes)?;
     Ok(params)
 }
 
@@ -4251,6 +4285,74 @@ esac
             serde_json::to_value(result).expect("serialized chat send result"),
             json!({ "sessionKey": "global", "agentId": "work", "runId": "run-1", "status": "started", "gatewayGeneration": 1 })
         );
+    }
+
+    #[test]
+    fn reconnect_delay_honors_bounded_retry_after_hints() {
+        let sleeping = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "sleeping".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(25_000),
+        });
+        assert_eq!(reconnect_delay(1, Some(&sleeping)), Duration::from_secs(25));
+
+        let waking = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "starting".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(3_000),
+        });
+        assert_eq!(reconnect_delay(6, Some(&waking)), Duration::from_secs(3));
+
+        let too_long = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "capped".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(300_000),
+        });
+        assert_eq!(reconnect_delay(1, Some(&too_long)), Duration::from_secs(60));
+
+        let too_short = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "minimum".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(50),
+        });
+        assert_eq!(reconnect_delay(1, Some(&too_short)), Duration::from_secs(1));
+
+        let plain = RequestFailure::transport("socket closed");
+        assert_eq!(reconnect_delay(1, Some(&plain)), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(3, Some(&plain)), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn connect_params_sign_bootstrap_token_with_bootstrap_scopes() {
+        let directory = std::env::temp_dir().join(format!(
+            "openclaw-linux-gateway-bootstrap-params-{}",
+            Uuid::new_v4()
+        ));
+        let store = GatewayDeviceIdentityStore::load_or_create(
+            directory.join("quickchat-gateway-device.json"),
+        )
+        .expect("create identity");
+        let auth = GatewayAuth::BootstrapToken("bootstrap-secret".to_string());
+        let params = connect_params(&store.identity(), &auth, "nonce-1", 1_800_000_000_000, true)
+            .expect("bootstrap connect params");
+        assert_eq!(
+            params["auth"],
+            json!({ "bootstrapToken": "bootstrap-secret" })
+        );
+        assert_eq!(params["scopes"], json!(BOOTSTRAP_FULL_SCOPES));
+        std::fs::remove_dir_all(directory).expect("cleanup identity fixture");
     }
 }
 

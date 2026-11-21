@@ -73,7 +73,7 @@ impl NativeControlSession {
             GatewayAuth::SharedToken(_) => method.is_none_or(|method| method == "token"),
             GatewayAuth::SharedPassword(_) => method.is_none_or(|method| method == "password"),
             GatewayAuth::DeviceToken(_) => method.is_none_or(|method| method == "device-token"),
-            GatewayAuth::None => false,
+            GatewayAuth::BootstrapToken(_) | GatewayAuth::None => false,
         };
         let auth = if compatible {
             auth
@@ -263,6 +263,13 @@ mod tests {
                     "a supplied but unaccepted credential must not become dashboard auth: {reported}");
             }
         }
+        assert!(NativeControlSession::from_hello(
+            GatewayAuth::BootstrapToken("one-time-bootstrap".into()),
+            Some("bootstrap-token"),
+            Some(scopes.clone()),
+            None,
+        )
+        .is_none());
         assert!(
             NativeControlSession::from_hello(GatewayAuth::None, None, Some(scopes), None).is_none()
         );
