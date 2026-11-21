@@ -1,0 +1,2 @@
+6
+# Existing command table verifies port/password forwarding with unchanged scopes and defaults.
