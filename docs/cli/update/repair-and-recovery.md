@@ -1468,6 +1468,11 @@ listed with `kind: "database-snapshot"`, their run id, and logical bytes:
 - `protected` / `orphan-database-snapshot`: a directory with a snapshot name
   beside a recorded snapshot that no listed update recorded.
   `--include-unmanifested` does not select it.
+- `failed` / `database-snapshot-retirement-failed`: removal did not finish. With
+  `database.postgres.recoveryCaptures: "server"`, a snapshot's export manifests name
+  capture schemas on the PostgreSQL server. Cleanup drops those schemas first, through
+  the configured connection, and keeps the snapshot directory when the drop fails. Fix
+  the connection, then run cleanup again.
 
 Older `doctor-*` directories classified as `candidate` are also safe to delete by
 hand while OpenClaw is stopped. Keep the newest retained copies and never manually

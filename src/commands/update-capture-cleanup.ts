@@ -326,6 +326,8 @@ export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
   assertCurrent: () => void;
+  /** Releases what the directory alone records; a failure keeps the directory. */
+  beforeRemove?: (item: RecoveryCleanupArtifact) => Promise<void>;
   onProgress?: (item: RecoveryCleanupArtifact, index: number) => void;
 }): Promise<void> {
   for (const [index, item] of params.selected.entries()) {
@@ -343,6 +345,8 @@ export async function retireUpdateCaptures(params: {
       ) {
         throw new Error("directory changed after selection");
       }
+      await params.beforeRemove?.(item);
+      params.assertCurrent();
       // The marker goes last: an interrupted removal stays attributed, so a rerun finishes it.
       for (const name of fs.readdirSync(item.path)) {
         if (name !== UPDATE_CAPTURE_PRIVACY_MARKER) {

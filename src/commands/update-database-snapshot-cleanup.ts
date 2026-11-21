@@ -1,6 +1,8 @@
 /** Pre-migration `.databases` snapshot directories update runs left behind, in update cleanup. */
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir, resolveUserPath } from "../infra/home-dir.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { readUpdateDatabaseSnapshotReceipt } from "../infra/update-database-snapshot-receipt.js";
@@ -70,10 +72,10 @@ export function collectUpdateDatabaseSnapshots(params: {
   // Snapshots beside a recorded one, from runs the ledger no longer lists, are reported too.
   const directories = new Set(owners.keys());
   for (const parent of new Set([...owners.keys()].map((directory) => path.dirname(directory)))) {
-    if (!fs.lstatSync(parent, { throwIfNoEntry: false })?.isDirectory()) {
-      continue;
-    }
     try {
+      if (!fs.lstatSync(parent, { throwIfNoEntry: false })?.isDirectory()) {
+        continue;
+      }
       for (const entry of params.scan?.directory(parent) ??
         fs.readdirSync(parent, { withFileTypes: true })) {
         if (entry.isDirectory() && isSnapshotName(entry.name)) {
@@ -81,7 +83,7 @@ export function collectUpdateDatabaseSnapshots(params: {
         }
       }
     } catch {
-      // An unreadable earlier install root still lists the snapshots its runs recorded.
+      // An unreadable or replaced earlier install root still lists the snapshots its runs recorded.
     }
   }
   for (const directory of [...directories].toSorted()) {
@@ -144,4 +146,42 @@ export function collectUpdateDatabaseSnapshots(params: {
     }
   }
   return { artifacts, identities };
+}
+
+/**
+ * Drops the PostgreSQL server captures a snapshot's export manifests name, as the update
+ * that owns a snapshot does before removing it. The manifests are the only record of those
+ * server schemas, so a failed drop must leave the directory for a later cleanup.
+ */
+export async function discardDatabaseSnapshotServerCaptures(
+  directory: string,
+  config: OpenClawConfig,
+): Promise<void> {
+  const exports: string[] = [];
+  const visit = (current: string) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      // A PostgreSQL store's export sits beside its anchor image as `<image>.postgres`.
+      if (entry.name.endsWith(".postgres")) {
+        exports.push(path.join(current, entry.name));
+      } else {
+        visit(path.join(current, entry.name));
+      }
+    }
+  };
+  visit(directory);
+  if (exports.length === 0) {
+    return;
+  }
+  try {
+    const { discardPostgresSchemaCaptures } = await import("../snapshot/database-backup.js");
+    await discardPostgresSchemaCaptures(config, exports);
+  } catch (error) {
+    throw new Error(
+      `PostgreSQL capture cleanup remains pending at ${directory}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
