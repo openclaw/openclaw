@@ -1,6 +1,7 @@
 import * as Checks from "../compiled/protocol.generated/validators-agents.js";
 import { createProtocolValidator } from "../protocol-validator.js";
 import * as S from "../schema-modules.js";
+import { ModelsAuthProfileRenameParamsSchema } from "../schema/model-auth-profile.js";
 
 export const validateAgentParams = createProtocolValidator(
   S.AgentParamsSchema,
@@ -73,6 +74,10 @@ export const validateModelsAuthLogoutParams = createProtocolValidator(
 export const validateModelsAuthOrderSetParams = createProtocolValidator(
   S.ModelsAuthOrderSetParamsSchema,
   Checks.isModelsAuthOrderSetParams,
+);
+export const validateModelsAuthProfileRenameParams = createProtocolValidator(
+  ModelsAuthProfileRenameParamsSchema,
+  Checks.isModelsAuthProfileRenameParams,
 );
 export const validateModelsAuthRefreshParams = createProtocolValidator(
   S.ModelsAuthRefreshParamsSchema,

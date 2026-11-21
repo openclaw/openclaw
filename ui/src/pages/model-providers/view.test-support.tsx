@@ -79,6 +79,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onProbe: () => undefined,
     onRequestLogout: () => undefined,
     onProfileOrderChange: () => undefined,
+    onRenameProfile: async () => true,
     onAddProviderToggle: () => undefined,
     onAddProviderKeyChange: () => undefined,
     onAddProvider: () => undefined,
