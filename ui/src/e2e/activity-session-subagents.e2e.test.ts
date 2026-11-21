@@ -27,7 +27,7 @@ suite.define(() => {
         const publication = {
           key: "agent:main:dashboard:publication-task",
           kind: "direct" as const,
-          displayName: "GitHub publication",
+          label: "GitHub publication",
           classification: "github-publication" as const,
           parentSessionKey: parent.key,
           updatedAt: Date.now(),
