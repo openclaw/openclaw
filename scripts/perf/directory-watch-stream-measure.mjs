@@ -162,45 +162,48 @@ if (workerData) {
 } else if (process.argv.includes("--producer")) {
   const ids = [];
   let buffered = "";
-  process.stdin.setEncoding("utf8").on("data", (chunk) => {
-    const lines = (buffered + chunk).split("\n");
-    buffered = lines.pop();
-    for (const line of lines) {
-      const request = JSON.parse(line);
-      if (request.run) {
-        void (async () => {
-          const cpu = process.cpuUsage();
-          for (let start = 0; start < events; start += batchEvents) {
-            const stamp = Number(process.hrtime.bigint()) / 1e6;
-            let output = "";
-            for (
-              let sequence = start;
-              sequence < Math.min(start + batchEvents, events);
-              sequence++
-            ) {
-              output +=
-                JSON.stringify({
-                  id: ids[sequence % roots],
-                  event: sequence % 3 === 0 ? "rename" : "change",
-                  filename: `${sequence % 2 ? ".git" : "dist"}/${sequence}${sequence === start ? `@${stamp}` : ""}`,
-                }) + "\n";
+  process.stdin.setEncoding("utf8").on(
+    "data",
+    /** @param {string} chunk */ (chunk) => {
+      const lines = (buffered + chunk).split("\n");
+      buffered = lines.pop();
+      for (const line of lines) {
+        const request = JSON.parse(line);
+        if (request.run) {
+          void (async () => {
+            const cpu = process.cpuUsage();
+            for (let start = 0; start < events; start += batchEvents) {
+              const stamp = Number(process.hrtime.bigint()) / 1e6;
+              let output = "";
+              for (
+                let sequence = start;
+                sequence < Math.min(start + batchEvents, events);
+                sequence++
+              ) {
+                output +=
+                  JSON.stringify({
+                    id: ids[sequence % roots],
+                    event: sequence % 3 === 0 ? "rename" : "change",
+                    filename: `${sequence % 2 ? ".git" : "dist"}/${sequence}${sequence === start ? `@${stamp}` : ""}`,
+                  }) + "\n";
+              }
+              if (!process.stdout.write(output)) {
+                await once(process.stdout, "drain");
+              }
+              await delay(1);
             }
-            if (!process.stdout.write(output)) {
-              await once(process.stdout, "drain");
-            }
-            await delay(1);
-          }
-          const used = process.cpuUsage(cpu);
-          process.stderr.write(
-            JSON.stringify({ producerCpuMs: (used.user + used.system) / 1000 }) + "\n",
-          );
-        })();
-      } else if (request.path) {
-        ids.push(request.id);
-        process.stdout.write(JSON.stringify({ id: request.id, event: "change" }) + "\n");
+            const used = process.cpuUsage(cpu);
+            process.stderr.write(
+              JSON.stringify({ producerCpuMs: (used.user + used.system) / 1000 }) + "\n",
+            );
+          })();
+        } else if (request.path) {
+          ids.push(request.id);
+          process.stdout.write(JSON.stringify({ id: request.id, event: "change" }) + "\n");
+        }
       }
-    }
-  });
+    },
+  );
   process.stdin.on("end", () => process.exit(0));
 } else {
   assert(
