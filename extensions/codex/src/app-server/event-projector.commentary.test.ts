@@ -18,6 +18,8 @@ import {
   type ProjectorNotification,
 } from "./event-projector.test-harness.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
+import { createClientHarness } from "./test-support.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -515,6 +517,302 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     ).toMatchObject({ explanation: "next", steps: [{ step: "patch", status: "in_progress" }] });
     expect(JSON.stringify(fixture.result(projector).messagesSnapshot)).not.toContain("Codex plan:");
   });
+
+  it("keeps a client-to-router reasoning burst linear for summary and content streams", async () => {
+    const MARKER = "REASONING_BURST:";
+    const chunks = Array.from({ length: 1024 }, (_, index) =>
+      (index === 0 ? MARKER : "").padEnd(16, "x"),
+    );
+    const expected = chunks.join("");
+    const ndjson =
+      [
+        ...chunks.map((delta) =>
+          JSON.stringify({
+            method: "item/reasoning/summaryTextDelta",
+            params: {
+              threadId: THREAD_ID,
+              turnId: TURN_ID,
+              itemId: "reason-summary",
+              summaryIndex: 0,
+              delta,
+            },
+          }),
+        ),
+        ...chunks.map((delta) =>
+          JSON.stringify({
+            method: "item/reasoning/textDelta",
+            params: {
+              threadId: THREAD_ID,
+              turnId: TURN_ID,
+              itemId: "reason-content",
+              contentIndex: 0,
+              delta,
+            },
+          }),
+        ),
+      ].join("\n") + "\n";
+    const reasoningByItem = new Map<string, { text: string; deltas: string; events: number }>();
+    const unsubscribe = subscribeAgentEvents((event) => {
+      if (event.stream !== "thinking") {
+        return;
+      }
+      const itemId = typeof event.data.itemId === "string" ? event.data.itemId : "";
+      const observed = reasoningByItem.get(itemId) ?? { text: "", deltas: "", events: 0 };
+      observed.text = typeof event.data.text === "string" ? event.data.text : "";
+      observed.deltas += typeof event.data.delta === "string" ? event.data.delta : "";
+      observed.events += 1;
+      reasoningByItem.set(itemId, observed);
+    });
+    let snapshots = 0;
+    let snapshotText = "";
+    let longWork = 0;
+    let collectLongWork = () => undefined;
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream: ({ text }) => {
+        snapshots += 1;
+        snapshotText = text ?? "";
+        collectLongWork();
+      },
+    });
+    const harness = createClientHarness();
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: THREAD_ID,
+      onNotification: (notification) => projector.handleNotification(notification),
+    });
+
+    try {
+      route.armTurn();
+      await route.bindTurn(TURN_ID);
+      const trimProbe = vi.spyOn(String.prototype, "trim");
+      const startsWithProbe = vi.spyOn(String.prototype, "startsWith");
+      const joinProbe = vi.spyOn(Array.prototype, "join");
+      try {
+        collectLongWork = () => {
+          for (const value of [...trimProbe.mock.contexts, ...startsWithProbe.mock.contexts]) {
+            if (
+              typeof value === "string" &&
+              value.length > MARKER.length &&
+              value.slice(0, MARKER.length) === MARKER
+            ) {
+              longWork += value.length;
+            }
+          }
+          for (const result of joinProbe.mock.results) {
+            const value = result.type === "return" ? result.value : undefined;
+            if (
+              typeof value === "string" &&
+              value.length > MARKER.length &&
+              value.slice(0, MARKER.length) === MARKER
+            ) {
+              longWork += value.length;
+            }
+          }
+          // Retaining probe arguments would itself keep every historical snapshot alive.
+          trimProbe.mockClear();
+          startsWithProbe.mockClear();
+          joinProbe.mockClear();
+        };
+
+        harness.process.stdout.write(ndjson);
+        await route.drain();
+        collectLongWork();
+        expect(snapshots).toBe(2048);
+      } finally {
+        trimProbe.mockRestore();
+        startsWithProbe.mockRestore();
+        joinProbe.mockRestore();
+      }
+
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "reasoning",
+            id: "reason-summary",
+            summary: [expected],
+            content: [],
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "reasoning",
+            id: "reason-content",
+            summary: [],
+            content: [expected],
+          },
+        }),
+      );
+      await projector.handleNotification(turnCompleted());
+
+      expect(snapshots).toBe(2048);
+      expect(snapshotText).toBe(`${expected}\n\n${expected}`);
+      expect(Object.fromEntries(reasoningByItem)).toEqual({
+        "reason-summary": { text: expected, deltas: expected, events: 1024 },
+        "reason-content": { text: expected, deltas: expected, events: 1024 },
+      });
+      expect(
+        fixture
+          .result(projector)
+          .messagesSnapshot.filter(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "thinking"),
+          ),
+      ).toMatchObject([
+        { content: [{ type: "thinking", thinking: expected }] },
+        { content: [{ type: "thinking", thinking: expected }] },
+      ]);
+      expect(longWork).toBeLessThan(expected.length * 2 * 4);
+    } finally {
+      route.release();
+      harness.client.close();
+      unsubscribe();
+    }
+  });
+
+  type ReasoningStep =
+    | ["c" | "s", string, number, string]
+    | ["complete" | "start", Record<string, unknown>];
+
+  const reasoningCases: Array<{
+    label: string;
+    steps: ReasoningStep[];
+    thinking: Array<[string, string, string]>;
+    snapshots: string[];
+    ends: number;
+  }> = [
+    {
+      label: "a hidden later section turns visible",
+      steps: [
+        ["c", "reason-1", 0, "A"],
+        ["c", "reason-1", 1, "  "],
+        ["c", "reason-1", 0, "b"],
+        ["c", "reason-1", 1, "x"],
+      ],
+      thinking: [
+        ["reason-1", "A", "A"],
+        ["reason-1", "Ab", "b"],
+        ["reason-1", "Ab\n\n  x", "\n\n  x"],
+      ],
+      snapshots: ["A", "Ab", "Ab\n\n  x"],
+      ends: 1,
+    },
+    {
+      label: "a summary append lands before visible content",
+      steps: [
+        ["s", "reason-1", 0, "S"],
+        ["c", "reason-1", 0, "C"],
+        ["s", "reason-1", 0, "s"],
+        ["c", "reason-1", 0, "c"],
+      ],
+      thinking: [
+        ["reason-1", "S", "S"],
+        ["reason-1", "S\n\nC", "\n\nC"],
+        ["reason-1", "Ss\n\nC", "Ss\n\nC"],
+        ["reason-1", "Ss\n\nCc", "c"],
+      ],
+      snapshots: ["S", "S\n\nC", "Ss\n\nC", "Ss\n\nCc"],
+      ends: 1,
+    },
+    {
+      label: "an earlier item grows after a later one is visible",
+      steps: [
+        ["c", "reason-1", 0, "one"],
+        ["c", "reason-2", 0, "two"],
+        ["c", "reason-1", 0, "!"],
+        ["c", "reason-2", 0, "?"],
+      ],
+      thinking: [
+        ["reason-1", "one", "one"],
+        ["reason-2", "two", "two"],
+        ["reason-1", "one!", "!"],
+        ["reason-2", "two?", "?"],
+      ],
+      snapshots: ["one", "one\n\ntwo", "one!\n\ntwo", "one!\n\ntwo?"],
+      ends: 1,
+    },
+    {
+      label: "a delta follows an authoritative replacement",
+      steps: [
+        ["c", "reason-1", 0, "original"],
+        ["complete", { type: "reasoning", id: "reason-1", summary: [], content: ["redacted"] }],
+        ["c", "reason-1", 0, "+more"],
+      ],
+      thinking: [
+        ["reason-1", "original", "original"],
+        ["reason-1", "redacted", "redacted"],
+        ["reason-1", "redacted+more", "+more"],
+      ],
+      snapshots: ["original", "redacted", "redacted+more"],
+      ends: 1,
+    },
+    {
+      label: "started sections take later deltas",
+      steps: [
+        ["start", { type: "reasoning", id: "reason-1", summary: ["Next"], content: [] }],
+        ["s", "reason-1", 0, " check"],
+      ],
+      thinking: [
+        ["reason-1", "Next", "Next"],
+        ["reason-1", "Next check", " check"],
+      ],
+      snapshots: ["Next", "Next check"],
+      ends: 1,
+    },
+    {
+      label: "whitespace-only reasoning never starts",
+      steps: [
+        ["s", "reason-1", 0, "  "],
+        ["c", "reason-1", 0, "\n"],
+      ],
+      thinking: [],
+      snapshots: [],
+      ends: 0,
+    },
+  ];
+
+  it.each(reasoningCases)(
+    "preserves reasoning events and snapshots when $label",
+    async (testCase) => {
+      const onReasoningStream = vi.fn();
+      const onReasoningEnd = vi.fn();
+      const { projector, onAgentEvent } = await fixture.observe({
+        onReasoningStream,
+        onReasoningEnd,
+      });
+      for (const step of testCase.steps) {
+        if (step[0] === "c" || step[0] === "s") {
+          const [kind, itemId, index, delta] = step;
+          await fixture.notify(
+            projector,
+            `item/reasoning/${kind === "c" ? "textDelta" : "summaryTextDelta"}`,
+            {
+              itemId,
+              [kind === "c" ? "contentIndex" : "summaryIndex"]: index,
+              delta,
+            },
+          );
+        } else if (step[0] === "start") {
+          await fixture.start(projector, step[1]);
+        } else {
+          await fixture.complete(projector, step[1]);
+        }
+      }
+      await fixture.finish(projector);
+
+      expect(
+        fixture
+          .events(onAgentEvent, "thinking")
+          .map((event) => [event.data.itemId, event.data.text, event.data.delta]),
+      ).toEqual(testCase.thinking);
+      expect(onReasoningStream.mock.calls.map(([payload]) => payload.text)).toEqual(
+        testCase.snapshots,
+      );
+      expect(onReasoningEnd).toHaveBeenCalledTimes(testCase.ends);
+    },
+  );
 
   it("streams native reasoning items without channel callbacks before the turn finishes", async () => {
     const listener = vi.fn();
