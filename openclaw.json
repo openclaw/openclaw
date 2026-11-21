@@ -3,14 +3,16 @@
     "mode": "local",
     "bind": "0.0.0.0",
     "port": 8080,
-    "publicOrigin": "https://open-claw.zeabur.app",
+    "publicOrigin": "https://api.open-claw.space",
     "trustedProxies": [
       "10.0.0.0/8",
       "172.16.0.0/12",
-      "192.168.0.0/16"
+      "192.168.0.0/16",
+      "100.64.0.0/10"
     ],
     "controlUi": {
       "allowedOrigins": [
+        "https://api.open-claw.space",
         "https://open-claw.zeabur.app",
         "http://localhost:5173"
       ]
