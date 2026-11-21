@@ -90,6 +90,7 @@ appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({
   settings: process.env.XCODE_XCCONFIG_FILE ? readFileSync(process.env.XCODE_XCCONFIG_FILE, "utf8") : undefined,
 }) + "\n");
 if (tool === "installer") {
+  if (mode.endsWith("install-failed")) process.exit(28);
   mkdirSync(args[0], { recursive: true });
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[0], "simslim"));
 } else if (tool === "uname") {
@@ -368,6 +369,20 @@ it.skipIf(process.platform === "win32")(
       expect(test.args).toContain("test-without-building");
       expect(test.args).not.toContain("test");
     }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "does not compile when the simulator preparation tool cannot be installed",
+  () => {
+    const { result, commands, environment } = runSimulatorStep(
+      "voice-slim-install-failed",
+      configuredSteps,
+    );
+    expect(result.status).toBe(28);
+    expect(argsFor(commands, "installer")).toHaveLength(1);
+    expect(argsFor(commands, "xcodebuild")).toHaveLength(0);
+    expect(environment).not.toContain("IOS_TEST_BUILD_PREPARED=true");
   },
 );
 
