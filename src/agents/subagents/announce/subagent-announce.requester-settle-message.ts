@@ -16,6 +16,7 @@ import { needsRequesterSettleFindings } from "./subagent-announce.requester-sett
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
+const PENDING_ROSTER_MAX = 5;
 
 export function buildRequesterSettleWakeMessage(params: {
   findings?: string;
@@ -79,10 +80,19 @@ export function buildRequesterSettleWakeMessage(params: {
       : routeNotices;
   const completionChannel = normalizeMessageChannel(params.completionChannel);
   const pending = params.pendingMembers ?? [];
+  // Name pending siblings by short identifiers only; their task text stays out of the prompt.
+  const pendingNames = pending
+    .slice(0, PENDING_ROSTER_MAX)
+    .map((child) =>
+      truncateUtf16Safe(child.label?.trim() || child.taskName?.trim() || child.runId, 80),
+    )
+    .concat(
+      pending.length > PENDING_ROSTER_MAX ? [`${pending.length - PENDING_ROSTER_MAX} more`] : [],
+    );
   return [
     ...(pending.length
       ? [
-          `[Subagent Context] These results are ready, but ${pending.length} other subagent(s) from this batch are still working: ${pending.map(describeChild).join("; ")}. Each remaining result arrives later as its own completion. If the request needs those results before you answer, call sessions_yield to wait for them; otherwise act on the ready results now without reporting the batch as finished.`,
+          `[Subagent Context] These results are ready, but ${pending.length} other subagent(s) from this batch are still working: ${pendingNames.join("; ")}. Each remaining result arrives later as its own completion. If the request needs those results before you answer, call sessions_yield to wait for them; otherwise act on the ready results now without reporting the batch as finished.`,
         ]
       : [
           params.descendantsUnsettled
@@ -127,14 +137,13 @@ export function describeChildrenEndedWithoutResult(labels: readonly string[]): s
   return `ended without a result: ${labels.length} stopped, killed, or deleted before finishing (${labels.join("; ")})`;
 }
 
-const describeChild = (child: SubagentRunRecord) =>
-  child.label?.trim() || child.taskName?.trim() || child.task.trim() || child.runId;
-
 // A cohort whose every member was stopped, killed, or deleted resolves with no result to review.
 function describeSettledBatch(children: readonly SubagentRunRecord[]): string {
   if (children.length === 0 || !children.every(isSubagentObligationRetired)) {
     return "[Subagent Context] Every subagent in this batch has now settled, including its descendants.";
   }
-  const labels = children.map(describeChild);
+  const labels = children.map(
+    (child) => child.label?.trim() || child.taskName?.trim() || child.task.trim() || child.runId,
+  );
   return `[Subagent Context] Every child in this batch ${describeChildrenEndedWithoutResult(labels)}.`;
 }
