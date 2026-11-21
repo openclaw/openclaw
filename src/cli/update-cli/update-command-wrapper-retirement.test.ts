@@ -11,8 +11,8 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import {
   exposeGlobalPackageThroughRelease,
   resolveGitReleaseCheckout,
-  retireStandaloneGitWrapper,
-} from "./update-command-git.js";
+} from "./update-command-git-links.js";
+import { retireStandaloneGitWrapper } from "./update-command-git.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const installerWrapper = (root: string) =>
