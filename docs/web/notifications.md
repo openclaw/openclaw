@@ -61,7 +61,7 @@ The detail levels are:
 
 - **Private** — generic attention text only.
 - **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
-- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload. [Notifications sent by plugins](#notifications-sent-by-plugins) show the sender's own short title and body at this level and at **Names only**.
+- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload. [Notifications sent by plugins](#notifications-sent-by-plugins) show the sender's own short title and body only at this level.
 
 For browser **Agent finished** alerts, **Names only** and **Detailed** include the
 current explicit session label when the event has exactly one authoritative
@@ -98,8 +98,10 @@ filter, and lock-screen detail apply to them as well. Categories you have not
 enabled block them.
 
 Only browsers bound to your profile can receive them. With **Private** detail
-(the default) you see the category's generic text. With **Names only** or
-**Detailed**, you see the sender's sanitized title and body on one line. When
+(the default) you see the category's generic text. With **Names only** you see
+the same generic text with the device and agent labels; the sender's own words
+never appear. Only with **Detailed** do you see the sender's sanitized title
+and body on one line. When
 named operator roles apply to the sender, only you or an operator with
 `operator.admin` can send to your profile.
 Clicking one opens an ordinary Control UI page; it never opens an approval,

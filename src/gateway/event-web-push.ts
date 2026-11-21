@@ -390,9 +390,9 @@ export function createEventWebPushDelivery(
 
 /**
  * Chooses lock-screen text for a profile-targeted send. This is the single switch point
- * for caller-provided text: Private recipients always get the category's generic text,
- * and other detail levels show sanitized caller text when given. To make every send
- * generic, return `generic` unconditionally and drop title/body from the request schema.
+ * for caller-provided text, which only a **Detailed** recipient sees. **Names only**
+ * (`identified`) gets the category's generic text with the permitted agent label, exactly
+ * like core attention alerts, and **Private** gets the generic text alone.
  */
 function resolveProfileWebPushText(
   params: Pick<WebPushSendParams, "category" | "title" | "body">,
@@ -403,15 +403,17 @@ function resolveProfileWebPushText(
   if (detailLevel === "private") {
     return generic;
   }
+  const labeledBody = agentLabel ? `${agentLabel}: ${generic.body}` : generic.body;
+  if (detailLevel !== "detailed") {
+    return { title: generic.title, body: labeledBody };
+  }
   // Lock screens show one line: flatten line breaks and other controls to spaces before
   // the shared sanitizer escapes the remaining spoofing characters.
   const flatten = (text: string | undefined) =>
     text?.replace(/ *[\p{Cc}\p{Zl}\p{Zp}][\p{Cc}\p{Zl}\p{Zp} ]*/gu, " ");
   return {
     title: normalizeWebPushDisplayLabel(flatten(params.title)) ?? generic.title,
-    body:
-      normalizeWebPushDisplayLabel(flatten(params.body), 240) ??
-      (agentLabel ? `${agentLabel}: ${generic.body}` : generic.body),
+    body: normalizeWebPushDisplayLabel(flatten(params.body), 240) ?? labeledBody,
   };
 }
 

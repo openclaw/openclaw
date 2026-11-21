@@ -220,11 +220,13 @@ Request fields:
   security decision: the approval (`approve`) and question (`ask`) documents
   and the device-pairing join namespace (a `j` segment anywhere in the path)
   are rejected, because those notifications have their own core delivery.
-- `title` (80 characters) and `body` (240 characters) are shown on one line.
-  Line breaks and other control characters become spaces; other invisible or
-  direction-changing characters are shown escaped. A **Private** device always
-  shows the category's generic text instead, and **Private** is the default
-  detail level.
+- `title` (80 characters) and `body` (240 characters) appear only on devices
+  set to **Detailed**, on one line. Line breaks and other control characters
+  become spaces; other invisible or direction-changing characters are shown
+  escaped. A **Names only** device shows the category's generic text with the
+  permitted labels (device label, agent id), and a **Private** device, the
+  default, shows the generic text alone. Do not rely on `title` or `body`
+  reaching the person.
 - `tag` collapses repeated notifications. `urgency` and `ttlSeconds` (default 300) pass to the push service.
 
 Result counts:
