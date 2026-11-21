@@ -8,7 +8,6 @@ const sharedWorktrees = registerSessionOrganizationSharedEnglish.catalog.worktre
 // Management dialogs load independently of session-menu copy.
 const enSessionOrganization = {
   sessionsView: {
-    searchSessions: "Search sessions",
     pullRequestCount: en.sessionsView.pullRequestCount,
     subagentPrefix: en.sessionsView.subagentPrefix,
     automationPrefix: en.sessionsView.automationPrefix,

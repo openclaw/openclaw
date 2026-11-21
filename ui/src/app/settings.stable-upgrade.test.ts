@@ -85,16 +85,20 @@ it("preserves stable browser settings without reviving retired navigation when s
 it.each(["stable", "personal-pins"])(
   "replays %s preferences without sending retired section edits",
   async (format) => {
+    const syncedSections = [
+      { id: "saved", label: "Saved on another device", sessionKeys: ["agent:main:server-only"] },
+    ];
     const existingPins = ["route:usage", "session:agent:main:saved"];
     if (format === "personal-pins") {
-      // The immediately preceding navigation owner already used this identity,
-      // unlike stable sidebarEntries. Its profile records have no groups field.
+      // Newer installations stored personal pins and sections in the same profile snapshot.
       localStorage.setItem(
         settingsKey,
         JSON.stringify({
           ...stableSettings,
           railShortcuts: ["route:cron"],
-          navigationByProfile: { a: { railShortcuts: existingPins.toReversed() } },
+          navigationByProfile: {
+            a: { railShortcuts: existingPins.toReversed(), personalSessionGroups: [group] },
+          },
         }),
       );
       localStorage.setItem(
@@ -113,11 +117,16 @@ it.each(["stable", "personal-pins"])(
         a: {
           "ui.themeMode": "light",
           "ui.fontUi": "lora",
+          "ui.personalSessionGroups": syncedSections,
           "ui.railShortcuts": existingPins,
         },
       },
       scope,
     );
+    const lastSeenKey = "openclaw.control.serverPrefs.v1:" + scope + ":profile:a";
+    if (format === "personal-pins") {
+      localStorage.setItem(lastSeenKey, JSON.stringify({ personalSessionGroups: [] }));
+    }
     const a = backend.connect("a");
     await a.refresh();
     expect(loadSettings()).not.toHaveProperty("personalSessionGroups");
@@ -126,9 +135,19 @@ it.each(["stable", "personal-pins"])(
     expect(backend.profiles.a).toEqual({
       "ui.themeMode": "light",
       "ui.fontUi": "geist",
+      "ui.personalSessionGroups": syncedSections,
       "ui.railShortcuts": format === "personal-pins" ? existingPins.toReversed() : existingPins,
     });
     expect(localStorage.getItem(pendingKey)).toBeNull();
+    if (format === "personal-pins") {
+      expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toHaveProperty(
+        "personalSessionGroups",
+        [],
+      );
+      expect(
+        JSON.parse(localStorage.getItem(settingsKey)!).navigationByProfile.a.personalSessionGroups,
+      ).toEqual([group]);
+    }
     resetServerUiPrefsSync();
     await backend.connect("a").refresh();
     expect(loadSettings()).toMatchObject({

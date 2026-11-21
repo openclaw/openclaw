@@ -585,9 +585,10 @@ Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
 
-Personal sidebar sections have been retired. Conversations from those sections
-stay in their original groups. Use **Pin session** for a personal shortcut or
-**Move to group** to change shared group membership.
+Personal sidebar sections have been retired. Their conversations are not deleted
+or moved. If an older conversation is no longer visible in the sidebar, find it
+in **Sessions** and use **Pin session** to keep it in view. **Move to group**
+still changes shared group membership.
 
 Dragging a session between shared sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
