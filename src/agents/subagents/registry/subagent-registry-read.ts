@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { preparePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
@@ -12,7 +12,6 @@ import {
   resolveRecordedRequester,
   resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
-import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import {
   getRecordedSubagentChildAuthority,
   getSubagentActivationRuns,
@@ -72,16 +71,22 @@ export type SubagentRootRequester = {
   storePath?: string;
 };
 
-/** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
+/** A logical session key may exist in more than one physical store. */
+export function restartSessionOwnerKey(owner: Required<SubagentRootRequester>): string {
+  return JSON.stringify([owner.agentId, owner.storePath, owner.sessionKey]);
+}
+
+/** Follow delegated ancestry until the exact owner of an independent turn. */
 export async function resolveRootSubagentRequester(
-  sessionKey: string,
-  agentId?: string,
-): Promise<SubagentRootRequester> {
-  let root: SubagentRootRequester = { sessionKey, agentId };
+  start: Required<SubagentRootRequester>,
+  cfg: OpenClawConfig,
+  chatRoots: ReadonlySet<string>,
+): Promise<Required<SubagentRootRequester>> {
+  let root = start;
   const visited = new Set<string>();
   for (;;) {
-    const identity = JSON.stringify([root.agentId, root.sessionKey]);
-    if (visited.has(identity)) {
+    const identity = restartSessionOwnerKey(root);
+    if (visited.has(identity) || chatRoots.has(identity)) {
       return root;
     }
     visited.add(identity);
@@ -95,11 +100,6 @@ export async function resolveRootSubagentRequester(
     }
     const session = await readSessionEntryReadOnlyInWorker({
       ...root,
-      storePath:
-        root.storePath ??
-        resolveSessionStorePathCore(getRuntimeConfigSnapshot()?.session?.store, {
-          agentId: authority.childAgentId,
-        }),
       projection: "list",
     });
     if (!matchesSubagentChildSessionIdentity(entry, session ?? null)) {
@@ -122,7 +122,7 @@ export async function resolveRootSubagentRequester(
     if (!parentAgentId) {
       return root;
     }
-    root = {
+    const requester = {
       sessionKey: parent,
       agentId: parentAgentId,
       storePath:
@@ -132,36 +132,24 @@ export async function resolveRootSubagentRequester(
             ? entry.controllerStorePath
             : undefined,
     };
+    root = { ...requester, storePath: await preparePhysicalSessionStorePath(requester, cfg) };
   }
 }
 
-export async function listLiveSubagentRootSessions(): Promise<SubagentRootRequester[]> {
-  const requests: Promise<SubagentRootRequester | undefined>[] = [];
+/** Snapshot live delegated inputs; restart selection resolves their ancestry. */
+export function* listLiveSubagentSessions(): Generator<
+  SubagentRootRequester & { sessionId?: string }
+> {
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
-    if (!entry || !isSubagentRunLive(entry)) {
-      continue;
+    if (entry && isSubagentRunLive(entry)) {
+      yield {
+        sessionKey: entry.childSessionKey,
+        agentId: entry.childAgentId,
+        sessionId: entry.childSessionIdentity?.sessionId,
+      };
     }
-    requests.push(
-      resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId).catch(
-        (error: unknown) => {
-          subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
-            sessionKey: entry.childSessionKey,
-            error,
-          });
-          return undefined;
-        },
-      ),
-    );
   }
-  const roots = new Map<string, SubagentRootRequester>();
-  for (const root of await Promise.all(requests)) {
-    if (!root) {
-      continue;
-    }
-    roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
-  }
-  return [...roots.values()];
 }
 
 function isWaitingSubagentRun(entry: SubagentRunRecord): boolean {
@@ -405,7 +393,7 @@ export function getSubagentSessionListRunByChildSessionKey(
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
-  options?: { excludeSuspendedDelivery?: boolean },
+  options?: { excludeSettledDelivery?: boolean },
 ): Promise<number> {
   assertCurrent();
   await prepareSubagentSessionListReadCache();

@@ -58,7 +58,9 @@ final class DashboardOpenClawIDSignIn: NSObject, WKScriptMessageHandlerWithReply
         self.webView = webView
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 720),
-            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false)
         window.title = "OpenClaw ID"
         window.isReleasedWhenClosed = false
         window.delegate = self

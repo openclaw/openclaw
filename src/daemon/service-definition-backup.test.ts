@@ -307,6 +307,8 @@ describe("service definition backup receipts", () => {
         environmentValueSources: { OPERATOR_SETTING: "file" },
         definitionTransaction: f.capture.hooks,
       });
+      // Staging reloads the manager; the restore's own reloads are what this test observes.
+      native.identity.mockClear();
       let receipt = await f.capture.finish();
       let loaded = await fs.readFile(f.sourcePath, "utf8");
       expect(loaded).toContain("EnvironmentFile=");

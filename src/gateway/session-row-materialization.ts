@@ -94,6 +94,7 @@ function sessionRowMaterializationMatches(
     row.permissionModePending === input.permissionModePending &&
     row.hasAutomation === input.hasAutomation &&
     equal(row.repository, input.repository) &&
+    row.worktreeState === input.worktreeState &&
     equal(row.swarm, input.includeSwarmSummary ? input.swarm : undefined) &&
     row.displayName === input.displayName &&
     row.derivedTitle === input.derivedTitle &&

@@ -65,6 +65,15 @@ function readBytePlusErrorMessage(error: unknown): string | undefined {
 }
 
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
+  const generateCapabilities = {
+    maxVideos: 1,
+    maxDurationSeconds: 12,
+    supportsAspectRatio: true,
+    supportsResolution: true,
+    supportsAudio: true,
+    supportsWatermark: true,
+  };
+  const { maxVideos, ...imageToVideoCapabilities } = generateCapabilities;
   return {
     id: "byteplus",
     label: "BytePlus",
@@ -77,23 +86,12 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         draft: "boolean",
         camera_fixed: "boolean",
       },
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: 12,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        supportsWatermark: true,
-      },
+      generate: generateCapabilities,
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
+        maxVideos,
         maxInputImages: 1,
-        maxDurationSeconds: 12,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        supportsWatermark: true,
+        ...imageToVideoCapabilities,
       },
       videoToVideo: {
         enabled: false,
