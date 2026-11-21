@@ -47,13 +47,6 @@
   text-align: center;
 }
 
-/* Keep the existing artwork slot while neighboring cards share their text tracks. */
-.lobsterdex-page__card::before {
-  grid-area: 1 / 1;
-  height: 94px;
-  content: "";
-}
-
 .lobsterdex-page__card--highlight {
   animation: lobsterdex-card-highlight 2s ease-out;
 }
@@ -84,7 +77,8 @@
   width: 90px;
   height: auto;
   aspect-ratio: 120 / 105;
-  grid-area: 1 / 1;
+  /* Center the sprite in its 94px artwork slot without an extra grid item. */
+  margin-block: calc((94px - 90px * 105 / 120) / 2);
   align-self: center;
   transform: none;
   pointer-events: none;
