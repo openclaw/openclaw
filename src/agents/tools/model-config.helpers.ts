@@ -136,6 +136,7 @@ export function hasAuthProfileForProvider(params: {
           capability: params.capability,
           mode: profileTypeToAuthMode(credential.type),
           authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
+          planType: credential.type === "oauth" ? credential.chatgptPlanType : undefined,
         }))
     );
   });
@@ -176,6 +177,8 @@ export function hasProviderAuthForTool(params: Parameters<typeof hasAuthForProvi
         capability: params.capability,
         mode: binding.mode,
         authFlow: binding.credential.type === "oauth" ? binding.credential.authFlow : undefined,
+        planType:
+          binding.credential.type === "oauth" ? binding.credential.chatgptPlanType : undefined,
       })
     ) {
       return false;
