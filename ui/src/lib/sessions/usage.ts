@@ -52,7 +52,7 @@ function formatUtcOffset(timezoneOffsetMinutes: number): string {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 }
 
-function buildSessionUsageDateParams(timeZone: "local" | "utc") {
+export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
   return timeZone === "utc"
     ? { mode: "utc" }
     : {
@@ -71,6 +71,7 @@ export function requestSessionUsage(
     limit?: number;
     includeContextWeight?: boolean;
     signal?: AbortSignal;
+    dateParams?: ReturnType<typeof buildSessionUsageDateParams>;
   },
 ): Promise<SessionsUsageResult> {
   const key = options?.key;
@@ -79,7 +80,7 @@ export function requestSessionUsage(
       ? { range: query.range }
       : { startDate: query.startDate, endDate: query.endDate }),
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
-    ...buildSessionUsageDateParams(query.timeZone),
+    ...(options?.dateParams ?? buildSessionUsageDateParams(query.timeZone)),
     ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
     groupBy: query.scope,
     ...(key

@@ -105,7 +105,10 @@ report. A session active on several selected days counts once. Text, creator,
 and hour filters also cover every matching session, including sessions beyond
 the visible page. The table loads 50 rows at a time; sorting and paging do not
 change chart totals. Selecting sessions narrows the charts while retaining the
-comparison table. JSON export loads the full matching report.
+comparison table. JSON export loads the full matching report. Its versioned
+`context` records the requested date range, effective timezone, grouping, agent,
+and active filters so saved reports can be compared without the original view.
+The data fields and CSV exports are unchanged.
 
 The overview uses a rebuildable usage projection maintained after committed
 transcript changes. A refresh that overlaps agent database creation joins that
