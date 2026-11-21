@@ -1,0 +1,2 @@
+# Observer regression: agent events emitted inside a held database writer must still reach the session observer (real store, ordered read).
+87
