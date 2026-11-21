@@ -35,6 +35,8 @@ const enChatCi = {
         "Couldn’t confirm the change. Refresh to check the current state before trying again.",
       automationScheduleDisabled: "Automatically disabled after {count} scheduling errors.",
       automationFailureDisabled: "Automatically disabled after {count} failed replies.",
+      automationSourceUnavailable:
+        "Turned off because the conversation or owner it runs as is no longer available. Restore it, then turn this automation back on.",
       automationLastError: "Couldn’t complete this automation: {error}",
       automationRetry: "Try again",
     },
