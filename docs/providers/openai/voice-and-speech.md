@@ -359,7 +359,8 @@ sidebarTitle: "Voice and speech"
     Discord does not add speaker-start cancellation or wait for a response-done
     event to play short replies. Explicit Discord `requireWakeName: true` or
     `consultPolicy: "always"` is rejected because GPT-Live cannot enforce those
-    host policies; its default uses automatic provider delegation. Each
+    host policies; its default uses automatic provider delegation, and
+    `consultPolicy: "substantive"` adds delegation guidance. Each
     speaker's delegated work retains their Discord identity and permissions.
     The shared OpenClaw agent conversation supplies room context, while each
     speaker's voice-model connection has separate acoustic conversation history.

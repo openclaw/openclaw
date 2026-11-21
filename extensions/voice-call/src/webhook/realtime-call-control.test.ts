@@ -224,6 +224,24 @@ it.each(["extended outbound", "inbound"])(
   },
 );
 it.each([false, true])(
+  "words substantive consult guidance for the routed model (native consult=%s)",
+  async (nativeConsult) => {
+    const { request } = await connectCall("CA-substantive", {
+      nativeConsult,
+      consultPolicy: "substantive",
+    });
+    if (nativeConsult) {
+      expect(request.instructions).toMatch(/^Be helpful\.\n\nDelegation policy:\n- Delegate every/);
+      expect(request.instructions).not.toContain("openclaw_agent_consult");
+    } else {
+      expect(request.instructions).toMatch(/^Be helpful\.\n\nConsult behavior:\n/);
+      expect(request.instructions).toContain(
+        "- Call openclaw_agent_consult before answering requests that need facts",
+      );
+    }
+  },
+);
+it.each([false, true])(
   "preserves outbound greeting timing (native consult=%s)",
   async (nativeConsult) => {
     const { request, triggerGreeting } = await connectCall("CA-opening", {

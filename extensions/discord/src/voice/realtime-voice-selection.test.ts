@@ -245,6 +245,26 @@ defineDiscordVoiceTests(
       },
     );
 
+    it.each(["auto", "substantive"] as const)(
+      "gives GPT-Live %s delegation guidance without the consult tool",
+      async (consultPolicy) => {
+        useNativeVoices();
+        const { entry, manager } = await createJoinedAgentProxyFixture({
+          config: { voice: { realtime: { consultPolicy } } },
+        });
+        try {
+          beginSpeakerTurn(entry).close();
+          const { instructions } = lastRealtimeBridge().bridgeParams;
+          expect(instructions).not.toContain("openclaw_agent_consult");
+          expect(instructions?.includes("Delegation policy:\n- Delegate every request")).toBe(
+            consultPolicy === "substantive",
+          );
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
+
     it("changes the room voice from an admitted guest's native delegation", async () => {
       useNativeVoices();
       const { entry, manager } = await createJoinedAgentProxyFixture();

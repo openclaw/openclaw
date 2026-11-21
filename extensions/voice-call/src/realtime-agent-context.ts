@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
-import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 
 export async function buildRealtimeVoiceInstructions(params: {
@@ -12,10 +11,9 @@ export async function buildRealtimeVoiceInstructions(params: {
 }): Promise<string> {
   const { config } = params;
   const contextConfig = config.realtime.agentContext;
-  const sections = [
-    params.baseInstructions,
-    buildRealtimeVoiceAgentConsultPolicyInstructions(config.realtime),
-  ];
+  // The consult-policy block depends on the routed model's capabilities; the
+  // realtime handler appends it once the session policy is resolved.
+  const sections = [params.baseInstructions];
   sections.push(
     await resolveRealtimeVoiceAgentContextInstructions({
       config: params.coreConfig,

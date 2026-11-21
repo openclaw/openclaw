@@ -29,7 +29,7 @@ Runtime behavior:
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - On models that support function tools, Voice Call exposes the built-in `openclaw_end_call` realtime tool. It takes no arguments or call ID; the active voice bridge binds it to the current call.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. GPT-Live uses native delegation to the same call-owned agent consult instead. The realtime model can delegate when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
-- `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
+- `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`, or, on GPT-Live, when it should delegate natively.
 - `realtime.idleHangupMs` ends an active call after neither side has produced speech for the configured positive number of milliseconds. The timer pauses while an agent consult is running. When unset, outbound calls use 30 seconds and inbound calls have no speech-idle timeout.
 - On hosts with the shared context resolver, Voice Call always tells the realtime model that it speaks for an OpenClaw agent that may have other sessions and work. `realtime.agentContext.enabled` is default-off and controls the additional configured identity and profile-file context. Supported older hosts retain the [legacy context behavior](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability cannot return session hits while ordinary memory hits remain available.
@@ -254,7 +254,9 @@ close and the inactivity backstop remain independent of it.
 
 `realtime.consultPolicy` guides the realtime model. `always` also enables a
 host transcript fallback when the provider does not consult, and is unsupported
-with GPT-Live:
+with GPT-Live. On GPT-Live, `substantive` asks the model to delegate the same
+requests natively and does not name `openclaw_agent_consult`, which GPT-Live
+does not have:
 
 | Policy        | Guidance                                                                                        |
 | ------------- | ----------------------------------------------------------------------------------------------- |

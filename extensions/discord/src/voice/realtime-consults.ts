@@ -11,6 +11,7 @@ import {
   type RealtimeVoiceAgentConsultRunner,
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceConsultPolicy,
   type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceSessionHarness,
   type RealtimeVoiceToolCallEvent,
@@ -76,7 +77,7 @@ export class DiscordRealtimeConsults {
   constructor(
     private readonly params: {
       accountId: string;
-      consultPolicy: () => "auto" | "always";
+      consultPolicy: () => RealtimeVoiceConsultPolicy;
       consultToolPolicy: () => RealtimeVoiceAgentConsultToolPolicy;
       consultToolsAllow: () => string[] | undefined;
       debounceMs: () => number | undefined;

@@ -130,7 +130,7 @@ export type DiscordVoiceAllowedChannelConfig = {
 
 export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
-export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
+export type DiscordVoiceRealtimeConsultPolicy = "auto" | "substantive" | "always";
 
 export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
 
@@ -148,7 +148,7 @@ export type DiscordVoiceRealtimeConfig = {
   instructions?: string;
   /** Tool policy for bidi realtime consult calls. */
   toolPolicy?: DiscordVoiceRealtimeToolPolicy;
-  /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
+  /** When the realtime model should hand turns to the OpenClaw agent: auto, substantive, or always. */
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
   /** OpenAI agent-proxy wake-name policy. Unset adapts to the room: off for one human, on for two or more. True always requires; false never requires. */
   requireWakeName?: boolean;

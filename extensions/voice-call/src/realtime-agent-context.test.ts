@@ -25,7 +25,6 @@ const identity = { name: "Claw Voice", emoji: ":claw:", theme: "bright" };
 function buildInstructions(
   workspace: string,
   context: Partial<VoiceCallConfig["realtime"]["agentContext"]> = {},
-  consultPolicy?: VoiceCallConfig["realtime"]["consultPolicy"],
 ) {
   const config = createVoiceCallBaseConfig();
   config.realtime.agentContext = {
@@ -34,7 +33,6 @@ function buildInstructions(
     files: ["SOUL.md"],
     ...context,
   };
-  config.realtime.consultPolicy = consultPolicy ?? config.realtime.consultPolicy;
   return buildRealtimeVoiceInstructions({
     baseInstructions: "Base voice instructions.",
     config,
@@ -59,16 +57,10 @@ describe("buildRealtimeVoiceInstructions", () => {
     await writeFile(path.join(workspace, "SOUL.md"), "Stay quick, direct, and warm.\n");
     await writeFile(path.join(workspace, "IDENTITY.md"), "Name: Claw Voice\nVibe: snappy\n");
     await writeFile(path.join(workspace, "VOICE.md"), "Custom voice preferences.");
-    const instructions = await buildInstructions(
-      workspace,
-      {
-        enabled: true,
-        files: ["VOICE.md", "SOUL.md", "IDENTITY.md", "../OUTSIDE.md", "missing.md"],
-      },
-      "substantive",
-    );
-    expect(instructions).toContain("Consult behavior:");
-    expect(instructions).toContain("Call openclaw_agent_consult before answering requests");
+    const instructions = await buildInstructions(workspace, {
+      enabled: true,
+      files: ["VOICE.md", "SOUL.md", "IDENTITY.md", "../OUTSIDE.md", "missing.md"],
+    });
     expect(instructions).toContain("- Name: Claw Voice");
     expect(instructions).toContain("- Theme: bright");
     expect(instructions).toContain("### SOUL.md\nStay quick, direct, and warm.");

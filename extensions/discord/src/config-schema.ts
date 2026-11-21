@@ -116,7 +116,7 @@ const DiscordVoiceAutoJoinSchema = DiscordVoiceAllowedChannelSchema.extend({
 });
 
 const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
-const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
+const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "substantive", "always"]);
 const DiscordVoiceRealtimeBootstrapContextFileSchema = z.enum([
   "IDENTITY.md",
   "USER.md",
