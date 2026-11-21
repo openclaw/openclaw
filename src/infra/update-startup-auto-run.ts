@@ -115,7 +115,7 @@ export async function runAutoUpdateCommand(
       return failure(outcome.reason, outcome.message);
     }
     recordPhase(params.runId, "restarting");
-    scheduleGatewayRestart({ reason: "update" });
+    scheduleGatewayRestart({ reason: "update.auto" });
     return { status: "handoff" };
   }
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {

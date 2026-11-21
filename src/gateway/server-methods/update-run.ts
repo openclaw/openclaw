@@ -127,7 +127,8 @@ async function runUpdateInBackground(
     });
     if (outcome.status === "pending") {
       recordPhase(runId, "restarting");
-      scheduleGatewayRestart({ reason: "update", sessionKey: options.sessionKey });
+      // A process-replacing reason: the next process starts through the release launcher.
+      scheduleGatewayRestart({ reason: "update.run", sessionKey: options.sessionKey });
     }
   } catch (error) {
     options.warn(`update.run ${runId} failed: ${String(error)}`);
