@@ -1226,6 +1226,30 @@ reload result, not immediate retention before background reacquisition. Both
 copies share that limitation; no stronger timing coverage is claimed. Targeted
 agents-other typecheck, lint, formatting and all three line-count ratchets pass.
 
+### Chat mention duplicate layer
+
+At `1ed570fb2b288299e2e2a99036d2b9b1e1953a3e`, removed seven declarations / ten
+expanded cases from `chat-send-pending-inputs.test.ts` that repeat the committed-mention
+suite under the same admission and SQLite fixture: 393 net test lines, with no
+production or shared-support changes. Keep guest lookup/authority,
+commit-time recipient notification, idle ACK ordering, approved-token handling,
+recipient identity and replay/cancellation coverage in `chat-send-mentions.test.ts`.
+Transfer the guest display name to prevent unrelated background session naming.
+Keep its dispatch-before-Inbox-disposal cleanup order. The real-WebSocket
+presence-audience suite retains the guest `presence.query` refusal.
+
+Independent review of the applied diff found no coverage gap. The new
+active-steer path does not apply to these ordinary input fixtures. Baseline:
+65 cases pass across both files; candidate: all 55 remaining cases pass. The
+real-WebSocket presence-audience case also passes. Disabling commit notification,
+cancellation refusal or submitted-recipient comparison makes the respective
+keeper fail its intended assertion; all production bytes were restored.
+Targeted gateway-methods typecheck, lint, formatting and all three line-count
+ratchets pass. These runs establish preservation, not a measured runtime saving.
+All candidate removal scan phases ran: unused files and script exports are clean;
+dependency and production/full-tree export scans report only UI workspace exports.
+The production dependency diagnostics reproduce on the untouched frozen base.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

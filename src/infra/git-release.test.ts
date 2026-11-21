@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
@@ -490,6 +491,34 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         // --no-restart never rewrites the definition, so the next start would run the checkout.
         service(entry);
         expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(false);
+        await withMockedPlatform("darwin", async () => {
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
+          // An interrupted conversion selected a trial without rebinding the loaded job.
+          await publishGitRelease({
+            prefix,
+            releaseRoot: await release(prefix, "1.0.0", ""),
+            trial: false,
+          });
+          await publishGitRelease({
+            prefix,
+            releaseRoot: await release(prefix, "2.0.0", ""),
+            trial: true,
+          });
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
+          // A later independent update must not adopt the unserved trial as its fallback.
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
+          service(await writeGitReleaseLauncher(prefix), true);
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+        });
+        await withMockedPlatform("linux", async () => {
+          service(entry);
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+        });
         // Once the unit names the launcher, switches need no definition write.
         await publishGitRelease({ prefix, releaseRoot: checkout, trial: false });
         service(await writeGitReleaseLauncher(prefix), true);
