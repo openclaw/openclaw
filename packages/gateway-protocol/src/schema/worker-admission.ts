@@ -33,6 +33,7 @@ import {
   workerErrorResponseSchema,
   workerRequestSchema,
   workerResponseSchema,
+  WorkerProviderToolCallIdSchema,
 } from "./worker-protocol-primitives.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "./worker-turn-admission.js";
 
@@ -357,7 +358,7 @@ const WorkerLiveThinkingPayloadSchema = closedObject({
 
 const WorkerLiveToolCommonProperties = {
   name: WorkerIdentifierSchema,
-  toolCallId: WorkerIdentifierSchema,
+  toolCallId: WorkerProviderToolCallIdSchema,
   hideFromChannelProgress: Type.Optional(Type.Literal(true)),
 };
 

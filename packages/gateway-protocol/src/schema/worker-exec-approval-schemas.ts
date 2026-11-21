@@ -1,6 +1,10 @@
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { WorkerIdentifierSchema, workerResponseSchema } from "./worker-protocol-primitives.js";
+import {
+  WorkerIdentifierSchema,
+  workerResponseSchema,
+  WorkerProviderToolCallIdSchema,
+} from "./worker-protocol-primitives.js";
 
 export const WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE = "worker-exec-approval-v1";
 export const WORKER_EXEC_APPROVAL_METHOD = "worker.exec.approval";
@@ -37,7 +41,7 @@ const Review = closedObject({
     shellWrapper: Type.Optional(Type.Boolean()),
   }),
 });
-const Common = { binding: Binding, toolCallId: WorkerIdentifierSchema };
+const Common = { binding: Binding, toolCallId: WorkerProviderToolCallIdSchema };
 export const WorkerExecApprovalParamsSchema = Type.Union([
   closedObject({ ...Common, operation: Type.Literal("review"), review: Review }),
   closedObject({
