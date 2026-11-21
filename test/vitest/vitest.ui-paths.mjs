@@ -208,6 +208,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/config-form.real-gateway.e2e.test.ts",
+  "ui/src/e2e/labs-graduation.real-gateway.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/cron-human-owner.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
