@@ -293,7 +293,7 @@ describe("config appearance preferences", () => {
 
     expect(normalizedText(container)).not.toContain("Default:");
     expect(shortcutRow.textContent).toContain(
-      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+      "Applies to desktop and iPad/iPhone hardware keyboards. On mobile software keyboards, Enter adds a new line; use Send.",
     );
     const enter = required(shortcutRow, 'input[value="enter"]', HTMLInputElement);
     const modifier = required(shortcutRow, 'input[value="modifier-enter"]', HTMLInputElement);

@@ -36,7 +36,7 @@ const enSettings = {
   chat: {
     sendShortcut: "Send shortcut",
     sendShortcutHint:
-      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+      "Applies to desktop and iPad/iPhone hardware keyboards. On mobile software keyboards, Enter adds a new line; use Send.",
     sendShortcutEnter: "Enter",
     followUpMode: "Follow-ups while the agent is working",
     followUpModeQueue: "Queue until the reply ends",

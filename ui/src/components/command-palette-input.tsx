@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled, Show } from "solid-js";
+import { clearCompositionEnd, recordCompositionEnd } from "../lib/ime.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
@@ -188,13 +189,18 @@ export function CommandPaletteInput(props: {
           onBeforeInput={(event) => props.onBeforeInput?.(event)}
           onSelect={(event) => props.onSelectionChange?.(event)}
           onPointerUp={(event) => props.onSelectionChange?.(event)}
+          onBlur={clearCompositionEnd}
           onKeyUp={(event) => {
+            clearCompositionEnd(event);
             if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
               props.onSelectionChange?.(event);
             }
           }}
           onCompositionStart={() => props.onCompositionStart?.()}
-          onCompositionEnd={() => props.onCompositionEnd?.()}
+          onCompositionEnd={(event) => {
+            recordCompositionEnd(event);
+            props.onCompositionEnd?.();
+          }}
           onInput={(event) => {
             props.onValueChange(event.currentTarget.value, event);
             updateLayout(true);
