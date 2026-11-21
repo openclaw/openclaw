@@ -1,0 +1,6 @@
+# OpenRouter routing-variant capability regression: net +271 lines vs c9ec846673e4e8aee83bed12160b56cfc0188392.
+# One shared production resolver/cache fixture covers routing/catalog/unknown suffixes,
+# exact and operator precedence, custom/missing bases, and an unchanged HTTP wire ID.
+# Existing focused provider contract owns integration; extension caller uses public SDK only.
+# Reuses the claimed listener and ordered cleanup helpers; no scalar/baseline change.
+271
