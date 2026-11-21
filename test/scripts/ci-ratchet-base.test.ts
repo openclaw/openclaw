@@ -2,11 +2,16 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { runWorkflowShellScript } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflow,
+  readWorkflowOutputs,
+  runWorkflowShellScript,
+} from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(fs.readFileSync(".github/workflows/ci.yml", "utf8"), {
@@ -54,6 +59,20 @@ it.each([false, true])("resolves the actual checkout comparison (merge tree=%s)"
   );
   expect(run.status, run.stderr).toBe(0);
   expect(fs.readFileSync(output, "utf8")).toBe(`sha=${merged ? expectedBase : fork}\n`);
+  const preflightOutputs = {
+    checkout_base_revision: expectDefined(readWorkflowOutputs(output).sha, "checkout ancestor"),
+    diff_base_revision: expectDefined(expectedBase, "planned diff base"),
+  };
+  expect(
+    evaluateWorkflow(workflow.jobs["control-ui-performance"].env.CHECKOUT_BASE_SHA, {
+      preflightOutputs,
+    }),
+  ).toBe(merged ? expectedBase : fork);
+  expect(
+    evaluateWorkflow(workflow.jobs["checks-baseline-ratchets"].env.CHECKOUT_BASE_SHA, {
+      preflightOutputs,
+    }),
+  ).toBe(expectedBase);
   if (merged) {
     expect(fs.existsSync(apiLog)).toBe(false);
   } else {
