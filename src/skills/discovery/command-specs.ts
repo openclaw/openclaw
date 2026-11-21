@@ -69,6 +69,21 @@ function resolveClaudeCommandRootDirs(rootDir: string): string[] {
 }
 
 function listMarkdownFilesRecursive(rootDir: string): string[] {
+  // A manifest may declare a single Markdown command file instead of a directory. The
+  // directory walker cannot enumerate a file root, so select it directly under the same
+  // dotfile + ".md" predicate and symlink policy it applies to directory entries.
+  let isRegularFile: boolean;
+  try {
+    isRegularFile = fs.lstatSync(rootDir).isFile();
+  } catch {
+    return [];
+  }
+  if (isRegularFile) {
+    const name = path.basename(rootDir);
+    return !name.startsWith(".") && Boolean(normalizeOptionalLowercaseString(name)?.endsWith(".md"))
+      ? [rootDir]
+      : [];
+  }
   return walkDirectorySync(rootDir, {
     symlinks: "skip",
     descend: ({ name }) => !name.startsWith("."),
@@ -82,7 +97,9 @@ function listMarkdownFilesRecursive(rootDir: string): string[] {
 }
 
 function toDefaultCommandName(rootDir: string, filePath: string): string {
-  const relativePath = path.relative(rootDir, filePath);
+  // A file used as the command root makes the relative path empty; fall back to the
+  // filename so a directly declared Markdown file still registers a command name.
+  const relativePath = path.relative(rootDir, filePath) || path.basename(filePath);
   const withoutExt = relativePath.replace(/\.[^.]+$/u, "");
   return withoutExt.split(path.sep).join(":");
 }
@@ -303,6 +320,7 @@ function assembleWorkspaceSkillCommandSpecs(
       if (!activationState.activated) {
         continue;
       }
+      const seenCommandFiles = new Set<string>();
       for (const relativeRoot of resolveClaudeCommandRootDirs(record.rootDir)) {
         const commandRoot = path.resolve(record.rootDir, relativeRoot);
         if (!fs.existsSync(commandRoot)) {
@@ -312,6 +330,13 @@ function assembleWorkspaceSkillCommandSpecs(
           continue;
         }
         for (const filePath of listMarkdownFilesRecursive(commandRoot)) {
+          // A declared file and the default `commands/` directory can resolve to the same
+          // file; register it once, matching the additive default-directory behavior.
+          const dedupeKey = canonicalizePath(filePath);
+          if (seenCommandFiles.has(dedupeKey)) {
+            continue;
+          }
+          seenCommandFiles.add(dedupeKey);
           let raw: string;
           try {
             raw = readRegularFileSync({
