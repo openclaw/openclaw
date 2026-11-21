@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { checkRelease } from "./check-release.js";
@@ -103,7 +104,7 @@ export async function prepareUpdate(params: {
         sha: params.sha,
       });
     } catch (error) {
-      return fail("no-target", `No update target: ${String((error as Error).message ?? error)}`);
+      return fail("no-target", `No update target: ${formatErrorMessage(error)}`);
     }
     recordPhase(
       params.runId,
@@ -215,7 +216,7 @@ export async function prepareUpdate(params: {
     return fail(
       "update-failed",
       "The update failed before anything changed. The current version is still running.",
-      String((error as Error).stack ?? error),
+      error instanceof Error && error.stack ? error.stack : formatErrorMessage(error),
     );
   } finally {
     if (staging) {
@@ -275,6 +276,7 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
     },
   );
   try {
+    // SAFETY: the child is this release's own `update check-release --json`, which writes checkRelease's result.
     const parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "") as Awaited<
       ReturnType<typeof checkRelease>
     >;

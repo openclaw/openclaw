@@ -62,6 +62,7 @@ export async function publishStaging(staging: Staging): Promise<string> {
 
 async function readJson<T>(file: string): Promise<T | null> {
   try {
+    // SAFETY: these files are written only by this module's own writers for the same type.
     return JSON.parse(await fs.readFile(file, "utf8")) as T;
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {

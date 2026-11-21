@@ -77,7 +77,7 @@ export async function announceReady(buildId: string | null): Promise<void> {
       message.type === "openclaw.trial" &&
       "trial" in message
     ) {
-      // The launcher is the only peer on this private Node IPC channel.
+      // SAFETY: the launcher is the only peer on this private Node IPC channel and sends its trial record.
       resolve(message.trial as Trial | null);
     }
   };
