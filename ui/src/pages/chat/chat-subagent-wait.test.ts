@@ -436,7 +436,7 @@ describe("chat waiting on subagents", () => {
       expect(
         container.querySelector("openclaw-working-phrase, details, .chat-subagent-activity"),
       ).toBeNull();
-      expect(container.textContent?.trim()).toBe("Wait for subagents");
+      expect(container.textContent?.trim()).toBe("Waiting for subagents");
       expect(container.querySelector("a, openclaw-elapsed-time")).toBeNull();
       expect(onOpenSessionLink).not.toHaveBeenCalled();
     },

@@ -40,6 +40,7 @@ it.each(["membership", "profile", "delivery", "after-prepare"] as const)(
     };
     const context: Parameters<typeof createGatewayConnectDeviceTokenPreparation>[0] = {
       configSnapshot: { gateway: { openclawId: { enabled: true }, roles: { definitions: {} } } },
+      hasBrowserOriginHeader: false,
       handler: { ingressAttribution: { kind: "direct" } },
     };
     const issue = vi.spyOn(tokens, "ensureDeviceToken").mockImplementation(async (params) => {

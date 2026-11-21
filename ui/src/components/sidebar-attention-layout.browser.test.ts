@@ -440,6 +440,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
     await page.elementLocator(row).hover();
     await expect.poll(() => style(dismiss).opacity).toBe("1");
+    expect(bounds(dismiss).right).toBe(bounds(part(shell, "mobile-close")).right);
     expect(style(age).visibility).toBe("hidden");
     expect({ row: bounds(row).height, title: bounds(part(shell, "entity")).width }).toEqual(before);
   });

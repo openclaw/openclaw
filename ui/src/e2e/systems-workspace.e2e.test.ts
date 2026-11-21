@@ -89,6 +89,79 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each([
+    { id: "gateway", reorder: false },
+    { id: "node:studio", reorder: false },
+    { id: "node:studio", reorder: true },
+  ])(
+    "keeps keyboard focus on $id across a background device refresh (reorder: $reorder)",
+    async ({ id, reorder }) => {
+      await suite.withPage(
+        { locale: "en-US", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const machines = (online: boolean) => ({
+            environments: [
+              { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
+              {
+                id: "node:studio",
+                type: "node",
+                label: "Studio Mac",
+                platform: "darwin",
+                status: online ? "available" : "unavailable",
+              },
+              ...(reorder
+                ? ["Workshop A", "Workshop B", "Workshop C"].map((label, index) => ({
+                    id: "node:workshop-" + index,
+                    type: "node",
+                    label,
+                    status: "available",
+                  }))
+                : []),
+            ],
+          });
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": machines(!reorder),
+          });
+          await page.goto(suite.server.baseUrl + "systems");
+          const list = page.locator(".systems-sidebar");
+          const node = list.getByRole("button", { name: /Studio Mac/ });
+          const target =
+            id === "gateway" ? list.getByRole("button", { name: /Gateway machine/ }) : node;
+          await target.focus();
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          expect(await target.evaluate((el) => el === document.activeElement)).toBe(true);
+          const original = await target.evaluateHandle((el) => el);
+          const order = () =>
+            list.locator(".systems-group .systems-machine__name").allTextContents();
+          if (reorder) {
+            expect((await order()).at(-1)).toBe("Studio Mac");
+          }
+          await gateway.setMethodResponse("environments.list", machines(reorder));
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
+          await expect
+            .poll(() => node.getAttribute("data-status"))
+            .toBe(reorder ? "available" : "unavailable");
+          if (reorder) {
+            expect((await order())[0]).toBe("Studio Mac");
+          }
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path:
+                suite.artifactDir +
+                "/system-focus-" +
+                (id === "gateway" ? "host" : "node") +
+                ".png",
+              animations: "disabled",
+            });
+          }
+          expect(await original.evaluate((el) => el === document.activeElement)).toBe(true);
+          await page.keyboard.press("Enter");
+          await expect.poll(() => target.getAttribute("aria-pressed")).toBe("true");
+        },
+      );
+    },
+  );
   it.each([390, 1280])(
     "keeps one useful Systems recovery message while reconnecting at %ipx",
     async (width) => {

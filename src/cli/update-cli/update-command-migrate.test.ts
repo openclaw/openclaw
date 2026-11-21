@@ -8,8 +8,11 @@ import { completeDoctorMigrationBackups } from "../../commands/doctor-migration-
 import { backupDoctorSqliteDatabases } from "../../commands/doctor-migration-backup.js";
 import { withDoctorSqliteMaintenanceLock } from "../../commands/doctor-sqlite-maintenance-lock.js";
 import * as doctorUi from "../../commands/doctor-ui.js";
+import * as contributions from "../../flows/doctor-health-contributions.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import * as ownedSnapshots from "../../infra/sqlite-readonly-location.js";
+import * as snapshots from "../../infra/sqlite-snapshot-source.js";
 import * as coldNavigation from "../../infra/state-migrations.cold-navigation.js";
 import * as databaseBackup from "../../infra/update-database-backup.js";
 import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-doctor-result.js";
@@ -37,6 +40,11 @@ import {
 } from "./update-command-migrate.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const nativeDoctorState = {
+  scenario: "minimal" as const,
+  env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+};
 
 const readText = (file: string) => fs.readFile(file, "utf8");
 
@@ -99,249 +107,238 @@ it.each(["current", "old-schema", "wrong-owner", "unregistered-old-schema"] as c
 );
 
 it("retires verified migration originals only after a later native update is accepted", async () => {
-  await withOpenClawTestState(
-    {
-      scenario: "minimal",
-      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
-    },
-    async (state) => {
-      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
-      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
-        healthz: null,
-        readyz: null,
-        coreReady: false,
-      });
-      const first = state.path("first-update", "native");
-      await updateMigrateCommand(first);
-      await closeOpenClawStateDatabaseAsync();
-      const source = state.statePath("state", "openclaw.sqlite");
-      const backup = await withDoctorSqliteMaintenanceLock({
-        env: state.env,
-        operation: "migration backup retention proof",
-        run: async (authority) => {
-          const result = await backupDoctorSqliteDatabases({
-            env: state.env,
-            pendingDatabasePaths: [source],
-            databasePaths: [source],
-            authority,
-          });
-          completeDoctorMigrationBackups(state.env, [source]);
-          return result.snapshots![0]!.path;
-        },
-      });
-      await updateFinishCommand(first);
-      expect((await fs.stat(backup)).size).toBeGreaterThan(0);
-      const second = state.path("second-update", "native");
-      await updateMigrateCommand(second);
-      // Migration alone must not release originals while the supervisor can roll back.
-      expect((await fs.stat(backup)).size).toBeGreaterThan(0);
-      await updateFinishCommand(second);
-      await expect(fs.stat(backup)).rejects.toMatchObject({ code: "ENOENT" });
-      const latest = listUpdateRuns({}, { env: state.env })[0]!;
-      expect(latest.steps).toContainEqual(
-        expect.objectContaining({
-          step: "diagnostic:recovery-artifact-cleanup",
-          detail: expect.stringContaining("Update backup cleanup removed 1 item ("),
-        }),
-      );
-      await updateFinishCommand(second);
-      expect(listUpdateRuns({}, { env: state.env })).toHaveLength(2);
-    },
-  );
+  await withOpenClawTestState(nativeDoctorState, async (state) => {
+    vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
+      healthz: null,
+      readyz: null,
+      coreReady: false,
+    });
+    const first = state.path("first-update", "native");
+    await updateMigrateCommand(first);
+    await closeOpenClawStateDatabaseAsync();
+    const source = state.statePath("state", "openclaw.sqlite");
+    const backup = await withDoctorSqliteMaintenanceLock({
+      env: state.env,
+      operation: "migration backup retention proof",
+      run: async (authority) => {
+        const result = await backupDoctorSqliteDatabases({
+          env: state.env,
+          pendingDatabasePaths: [source],
+          databasePaths: [source],
+          authority,
+        });
+        completeDoctorMigrationBackups(state.env, [source]);
+        return result.snapshots![0]!.path;
+      },
+    });
+    await updateFinishCommand(first);
+    expect((await fs.stat(backup)).size).toBeGreaterThan(0);
+    const second = state.path("second-update", "native");
+    await updateMigrateCommand(second);
+    // Migration alone must not release originals while the supervisor can roll back.
+    expect((await fs.stat(backup)).size).toBeGreaterThan(0);
+    await updateFinishCommand(second);
+    await expect(fs.stat(backup)).rejects.toMatchObject({ code: "ENOENT" });
+    const latest = listUpdateRuns({}, { env: state.env })[0]!;
+    expect(latest.steps).toContainEqual(
+      expect.objectContaining({
+        step: "diagnostic:recovery-artifact-cleanup",
+        detail: expect.stringContaining("Update backup cleanup removed 1 item ("),
+      }),
+    );
+    await updateFinishCommand(second);
+    expect(listUpdateRuns({}, { env: state.env })).toHaveLength(2);
+  });
 });
 
 it("preserves a recoverable cold-navigation deadline in native update receipts", async () => {
-  await withOpenClawTestState(
-    {
-      scenario: "minimal",
-      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
-    },
-    async (state) => {
-      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
-      const warning =
-        "Cold transcript navigation: migrated 2, pending 3; resumes on the next doctor run. Pending archives keep the existing cold-restore path.";
-      const migrate = vi.spyOn(coldNavigation, "migrateSessionColdNavigation").mockResolvedValue({
-        changes: [],
-        warnings: [warning],
-        warningDisposition: "recoverable",
-      });
-      const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
-      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const backupRoot = state.path("cold-navigation-recovery", "native");
-      await updateMigrateCommand(backupRoot);
-      expect(note).toHaveBeenCalledWith(expect.stringContaining(warning), "Doctor warnings");
-      expect(JSON.parse(await readText(`${backupRoot}.receipt.json`))).toMatchObject({
+  await withOpenClawTestState(nativeDoctorState, async (state) => {
+    vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+    const warning =
+      "Cold transcript navigation: migrated 2, pending 3; resumes on the next doctor run. Pending archives keep the existing cold-restore path.";
+    const migrate = vi.spyOn(coldNavigation, "migrateSessionColdNavigation").mockResolvedValue({
+      changes: [],
+      warnings: [warning],
+      warningDisposition: "recoverable",
+    });
+    const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const backupRoot = state.path("cold-navigation-recovery", "native");
+    await updateMigrateCommand(backupRoot);
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(warning), "Doctor warnings");
+    expect(JSON.parse(await readText(`${backupRoot}.receipt.json`))).toMatchObject({
+      status: "migrated",
+      warnings: expect.arrayContaining([warning]),
+    });
+    expect(output).toHaveBeenCalledWith(
+      expect.objectContaining({
         status: "migrated",
         warnings: expect.arrayContaining([warning]),
-      });
-      expect(output).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "migrated",
-          warnings: expect.arrayContaining([warning]),
-        }),
-      );
-      await updateMigrateCommand(state.path("next-deploy", "native"));
-      expect(migrate).toHaveBeenCalledTimes(2);
-      vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
-        healthz: null,
-        readyz: null,
-        coreReady: false,
-      });
-      await updateFinishCommand(backupRoot);
-      expect(listUpdateRuns({}, { env: state.env })).toContainEqual(
-        expect.objectContaining({
-          status: "succeeded",
-          steps: expect.arrayContaining([
-            expect.objectContaining({
-              step: expect.stringMatching(/^warning:doctor:/u),
-              detail: warning,
-            }),
-          ]),
-        }),
-      );
-      expect(output).toHaveBeenLastCalledWith(
-        expect.objectContaining({ status: "finished", warning: expect.stringContaining(warning) }),
-      );
-    },
-  );
+      }),
+    );
+    await updateMigrateCommand(state.path("next-deploy", "native"));
+    expect(migrate).toHaveBeenCalledTimes(2);
+    vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
+      healthz: null,
+      readyz: null,
+      coreReady: false,
+    });
+    await updateFinishCommand(backupRoot);
+    expect(listUpdateRuns({}, { env: state.env })).toContainEqual(
+      expect.objectContaining({
+        status: "succeeded",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            step: expect.stringMatching(/^warning:doctor:/u),
+            detail: warning,
+          }),
+        ]),
+      }),
+    );
+    expect(output).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "finished", warning: expect.stringContaining(warning) }),
+    );
+  });
 });
 
 it("migrates the Claws preference through candidate Doctor with a rollback original", async () => {
-  await withOpenClawTestState(
-    {
-      scenario: "minimal",
-      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
-    },
-    async (state) => {
-      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
-      await state.writeConfig({
-        plugins: { enabled: false },
-        gateway: {
-          mode: "local",
-          auth: { mode: "none" },
-          controlUi: {
-            enabled: false,
-            experimental: { customPlugins: true, chatBubbles: true, claws: true },
-          },
+  await withOpenClawTestState(nativeDoctorState, async (state) => {
+    vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+    await state.writeConfig({
+      plugins: { enabled: false },
+      gateway: {
+        mode: "local",
+        auth: { mode: "none" },
+        controlUi: {
+          enabled: false,
+          experimental: { customPlugins: true, chatBubbles: true, claws: true },
         },
-      });
-      const original = await readText(state.configPath);
-      const backupRoot = state.path("templates-recovery", "native");
-      const engineInspection = vi.spyOn(databaseEngine, "noteDatabaseEngines");
-      const progress = vi.spyOn(process.stderr, "write");
-      await updateMigrateCommand(backupRoot);
-      expect(
-        progress.mock.calls
-          .map(([line]) => String(line))
-          .filter((line) => /^Doctor: Update (migration [\w ]+|schema admission)\n$/.test(line)),
-      ).toEqual([
-        "Doctor: Update migration config admission\n",
-        "Doctor: Update migration schema preflight\n",
-        "Doctor: Update migration database backup\n",
-        "Doctor: Update schema admission\n",
-        "Doctor: Update migration schema verification\n",
-      ]);
-      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
-      expect(receipt.status).toBe("migrated");
-      expect(engineInspection).not.toHaveBeenCalled();
-      expect(receipt.deferredInspectionCheckIds).toContain("core/doctor/database-engine");
-      expect(receipt.configFiles).toContainEqual(
-        expect.objectContaining({ path: state.configPath, raw: original }),
-      );
-      expect(JSON.parse(await readText(state.configPath)).gateway.controlUi.experimental).toEqual({
-        customPlugins: true,
-        chatBubbles: true,
-        templates: true,
-      });
-    },
-  );
+      },
+    });
+    const original = await readText(state.configPath);
+    const backupRoot = state.path("templates-recovery", "native");
+    const engineInspection = vi.spyOn(databaseEngine, "noteDatabaseEngines");
+    const progress = vi.spyOn(process.stderr, "write");
+    const copies = [
+      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync"),
+      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation"),
+      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited"),
+      vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync"),
+      vi.spyOn(ownedSnapshots, "prepareSqliteReadOnlyLocationFromOwnedDatabase"),
+    ];
+    const checkCopies: number[] = [];
+    const runChecks = contributions.runDoctorHealthContributions;
+    vi.spyOn(contributions, "runDoctorHealthContributions").mockImplementation(async (...args) => {
+      copies.forEach((copy) => copy.mockClear());
+      await runChecks(...args);
+      checkCopies.push(...copies.map((copy) => copy.mock.calls.length));
+    });
+    await updateMigrateCommand(backupRoot);
+    expect(checkCopies).toEqual([0, 0, 0, 0, 0]);
+    expect(
+      progress.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => /^Doctor: Update (migration [\w ]+|schema admission)\n$/.test(line)),
+    ).toEqual([
+      "Doctor: Update migration config admission\n",
+      "Doctor: Update migration schema preflight\n",
+      "Doctor: Update migration database backup\n",
+      "Doctor: Update schema admission\n",
+      "Doctor: Update migration schema verification\n",
+    ]);
+    const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+    expect(receipt.status).toBe("migrated");
+    expect(engineInspection).not.toHaveBeenCalled();
+    expect(receipt.deferredInspectionCheckIds).toContain("core/doctor/database-engine");
+    expect(receipt.configFiles).toContainEqual(
+      expect.objectContaining({ path: state.configPath, raw: original }),
+    );
+    expect(JSON.parse(await readText(state.configPath)).gateway.controlUi.experimental).toEqual({
+      customPlugins: true,
+      chatBubbles: true,
+      templates: true,
+    });
+  });
 });
 
 it("migrates retired heartbeat config with its backed-up state only once", async () => {
-  await withOpenClawTestState(
-    {
-      scenario: "minimal",
-      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
-    },
-    async (state) => {
-      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
-      await state.writeConfig({
-        agents: {
-          defaults: {
-            heartbeat: {
-              every: "17m",
-              target: "none",
-              prompt: "Check the synthetic checklist.",
-              activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-            },
+  await withOpenClawTestState(nativeDoctorState, async (state) => {
+    vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+    await state.writeConfig({
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "17m",
+            target: "none",
+            prompt: "Check the synthetic checklist.",
+            activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
           },
-          entries: { main: { workspace: state.workspaceDir } },
         },
-        plugins: { enabled: false },
-        gateway: { mode: "local", controlUi: { enabled: false }, auth: { mode: "none" } },
-      });
-      const original = await readText(state.configPath);
-      const databasePath = openOpenClawStateDatabase().path;
-      await closeOpenClawStateDatabaseAsync();
-      {
-        using db = new DatabaseSync(databasePath);
-        // Schema 30 changed the scheduler contract, not the schema 29 table layout.
-        db.exec(`
+        entries: { main: { workspace: state.workspaceDir } },
+      },
+      plugins: { enabled: false },
+      gateway: { mode: "local", controlUi: { enabled: false }, auth: { mode: "none" } },
+    });
+    const original = await readText(state.configPath);
+    const databasePath = openOpenClawStateDatabase().path;
+    await closeOpenClawStateDatabaseAsync();
+    {
+      using db = new DatabaseSync(databasePath);
+      // Schema 30 changed the scheduler contract, not the schema 29 table layout.
+      db.exec(`
           PRAGMA user_version=29;
           UPDATE schema_meta SET schema_version=29 WHERE meta_key='primary';
           UPDATE config_machine_state SET value_json='29'
             WHERE state_key='state.schema.contentVersion';
         `);
-      }
-      const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
-      const backupRoot = state.path("heartbeat-recovery", "native");
-      await updateMigrateCommand(backupRoot);
-      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
-      expect(receipt.status).toBe("migrated");
-      expect(receipt.configFiles).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: state.configPath, raw: original }),
-        ]),
+    }
+    const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+    const backupRoot = state.path("heartbeat-recovery", "native");
+    await updateMigrateCommand(backupRoot);
+    const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+    expect(receipt.status).toBe("migrated");
+    expect(receipt.configFiles).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: state.configPath, raw: original })]),
+    );
+    const saved = JSON.parse(await readText(state.configPath));
+    expect(saved.agents.defaults).not.toHaveProperty("heartbeat");
+    const readJobs = () => {
+      using db = new DatabaseSync(databasePath, { readOnly: true });
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
       );
-      const saved = JSON.parse(await readText(state.configPath));
-      expect(saved.agents.defaults).not.toHaveProperty("heartbeat");
-      const readJobs = () => {
-        using db = new DatabaseSync(databasePath, { readOnly: true });
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_STATE_SCHEMA_VERSION,
-        );
-        return db
-          .prepare("SELECT job_json FROM cron_jobs ORDER BY job_id")
-          .all()
-          .map((row) => JSON.parse(String(row.job_json)));
-      };
-      const jobs = readJobs();
-      expect(jobs).toEqual([
-        expect.objectContaining({
-          agentId: "main",
-          enabled: true,
-          schedule: expect.objectContaining({ kind: "every", everyMs: 1_020_000 }),
-          activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-          payload: expect.objectContaining({
-            kind: "agentTurn",
-            message: "Check the synthetic checklist.",
-          }),
-          delivery: { mode: "none" },
+      return db
+        .prepare("SELECT job_json FROM cron_jobs ORDER BY job_id")
+        .all()
+        .map((row) => JSON.parse(String(row.job_json)));
+    };
+    const jobs = readJobs();
+    expect(jobs).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        enabled: true,
+        schedule: expect.objectContaining({ kind: "every", everyMs: 1_020_000 }),
+        activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+        payload: expect.objectContaining({
+          kind: "agentTurn",
+          message: "Check the synthetic checklist.",
         }),
-      ]);
-      await updateMigrateCommand(state.path("second-recovery", "native"));
-      expect(readJobs()).toEqual(jobs);
-      expect(
-        note.mock.calls.filter(([, title]) => title === "Heartbeat delivery changed"),
-      ).toHaveLength(1);
-      await updateRestoreCommand(backupRoot);
-      expect(await readText(state.configPath)).toBe(original);
-      using restored = new DatabaseSync(databasePath, { readOnly: true });
-      expect(restored.prepare("PRAGMA user_version").get()?.user_version).toBe(29);
-      expect(restored.prepare("SELECT count(*) AS count FROM cron_jobs").get()?.count).toBe(0);
-    },
-  );
+        delivery: { mode: "none" },
+      }),
+    ]);
+    await updateMigrateCommand(state.path("second-recovery", "native"));
+    expect(readJobs()).toEqual(jobs);
+    expect(
+      note.mock.calls.filter(([, title]) => title === "Heartbeat delivery changed"),
+    ).toHaveLength(1);
+    await updateRestoreCommand(backupRoot);
+    expect(await readText(state.configPath)).toBe(original);
+    using restored = new DatabaseSync(databasePath, { readOnly: true });
+    expect(restored.prepare("PRAGMA user_version").get()?.user_version).toBe(29);
+    expect(restored.prepare("SELECT count(*) AS count FROM cron_jobs").get()?.count).toBe(0);
+  });
 });
 
 it.each([
@@ -695,27 +692,19 @@ it.each(["server", "portable"] as const)(
       await state.writeConfig({ database: { postgres: { recoveryCaptures } } });
       vi.spyOn(doctor, "runDoctorHealthFlow").mockImplementation(async () => {});
       vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const captured: Array<{
-        stopped: boolean | undefined;
-        postgresSchemaCaptures: boolean | undefined;
-      }> = [];
       const backupSpy = vi
         .spyOn(databaseBackup, "createUpdateDatabaseBackup")
-        .mockImplementation(async (input) => {
-          captured.push({
-            stopped: input.stopped,
-            postgresSchemaCaptures: input.postgresSchemaCaptures,
-          });
-          throw new Error("stop migration after the backup input is captured");
-        });
+        .mockRejectedValue(new Error("stop migration after the backup input is captured"));
       const backupRoot = state.path("recovery-capture-policy", "native");
       await expect(updateMigrateCommand(backupRoot)).rejects.toThrow(
         "stop migration after the backup input is captured",
       );
-      expect(backupSpy).toHaveBeenCalledOnce();
-      expect(captured).toEqual([
-        { stopped: true, postgresSchemaCaptures: recoveryCaptures === "server" },
-      ]);
+      expect(backupSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          stopped: true,
+          postgresSchemaCaptures: recoveryCaptures === "server",
+        }),
+      );
     });
   },
 );

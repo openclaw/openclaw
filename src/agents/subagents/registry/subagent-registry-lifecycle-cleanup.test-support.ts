@@ -10,6 +10,7 @@ import { createTestAdmittedRunContext } from "../../admitted-run-context.test-su
 import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
+import { startControlProducer } from "./subagent-control-native.test-support.js";
 import * as ended from "./subagent-lifecycle-events.js";
 import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import { resolveAnnounceRetryDelayMs } from "./subagent-registry-helpers.js";
@@ -505,6 +506,57 @@ export function registerDeliveryRetryOwnerTests({
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it("keeps the announce deadline waiting for its live requester, then expires an orphan", async () => {
+    await useRetryTimers();
+    const finished = createDeferredCore<"retryable">();
+    const announce = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
+      async () => finished.promise,
+    );
+    using run = fixture(
+      {
+        requesterTurnRunId: "live-expiry-requester",
+        delivery: {
+          status: "pending",
+          requesterDelivery: { state: "waiting", blockingRunId: "live-expiry-requester" },
+        },
+      },
+      { runSubagentAnnounceFlow: announce },
+    );
+    const requester = startControlProducer(
+      run.entry.requesterSessionKey,
+      "expiry-requester",
+      "/synthetic/requester/sessions.json",
+      undefined,
+      "live-expiry-requester",
+    );
+    requester.operation.setPhase("running");
+    const progress = setInterval(
+      () => requester.operation.watchdog.progress("semantic", "requester-work"),
+      60_000,
+    );
+    const join = observeRootWork();
+    try {
+      run.controller.startSubagentAnnounceCleanupFlow(run.entry);
+      await waitForLifecycleState(() => expect(announce).toHaveBeenCalledOnce());
+      expect(run.read().delivery?.requesterDelivery).toMatchObject({
+        state: "waiting",
+        blockingRunId: "live-expiry-requester",
+      });
+      const signal = announce.mock.calls[0]![0].signal!;
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(requester.operation.result).toBeNull();
+      expect(signal.aborted).toBe(false);
+      await requester.finish();
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(signal.aborted).toBe(true);
+    } finally {
+      clearInterval(progress);
+      finished.resolve("retryable");
+      await requester.finish();
+      await join();
+    }
+  });
 
   it.each(["delivered", "expired", "expired during preparation"] as const)(
     "keeps a required final scheduled after detached cleanup failures (%s)",

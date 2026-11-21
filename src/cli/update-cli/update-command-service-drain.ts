@@ -188,6 +188,28 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
+  // Runtime recovery reruns a Gateway whose Node fails admission under another
+  // Node; the launcher stays the service's main process and its direct child
+  // serves the port and stops with the service.
+  const isServiceResident = async (pid: number | undefined) => {
+    const runtimePid = params.state.runtime?.pid;
+    if (pid === undefined || runtimePid === undefined) {
+      return false;
+    }
+    if (pid === runtimePid) {
+      return true;
+    }
+    if (!connection) {
+      return false;
+    }
+    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
+    assertResidentCurrent();
+    return (
+      usage.status === "busy" &&
+      usage.listeners.length > 0 &&
+      usage.listeners.every((listener) => listener.pid === pid && listener.ppid === runtimePid)
+    );
+  };
   const call = async <R>(
     method: string,
     args?: unknown,
@@ -249,7 +271,7 @@ export async function withGatewayMaintenanceDrain<T>(
       "status",
       { includeChannelSummary: false },
     );
-    if (typeof resident.pid === "number" && resident.pid === params.state.runtime?.pid) {
+    if (await isServiceResident(resident.pid)) {
       residentBudget = resident.shutdownBudget;
       verifiedResident = true;
     }
@@ -301,7 +323,7 @@ export async function withGatewayMaintenanceDrain<T>(
     if (explicitDrain) {
       const identity = await call<{ pid: number; processInstanceId: string }>("system.info", {});
       if (
-        identity.pid !== params.state.runtime?.pid ||
+        !(await isServiceResident(identity.pid)) ||
         typeof identity.processInstanceId !== "string" ||
         !identity.processInstanceId.trim()
       ) {
@@ -319,7 +341,7 @@ export async function withGatewayMaintenanceDrain<T>(
       try {
         if (!verifiedResident) {
           const identity = await call<{ pid: number }>("system.info", {});
-          if (identity.pid !== params.state.runtime?.pid) {
+          if (!(await isServiceResident(identity.pid))) {
             residentChanged = true;
             assertResidentCurrent();
           }

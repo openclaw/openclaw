@@ -28,6 +28,7 @@ import {
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
@@ -167,6 +168,22 @@ function steering(
   fixture.state.active = true;
   return { queueMessage, input, operation };
 }
+
+it.each(["rpc", "restart"])(
+  "settles a private completion interrupted by %s",
+  async (stopReason) => {
+    const fixture = setup("subagent_announce");
+    fixture.params.completionTarget = "parent";
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.dispatchDone.resolve({ status: "timeout", stopReason });
+    expect(await delivery).toMatchObject({
+      delivered: false,
+      disposition: stopReason === "restart" ? "retryable" : "intentional_non_delivery",
+    });
+    expect(fixture.send).not.toHaveBeenCalled();
+  },
+);
 
 function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.dispatch).toHaveBeenCalledTimes(dispatches);
@@ -347,11 +364,14 @@ it("delivers a text fallback on the current generation after its producer releas
   }
 });
 
-it("preserves the direct completion phase without replacing controller custody", async () => {
+it.each([false, true])("preserves a committed direct completion (restart=%s)", async (restart) => {
   const fixture = setup("agent_harness_completion");
   const expected = { delivered: true, path: "direct" };
   const { queueMessage, input } = steering(fixture, vi.fn());
-  fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
+  fixture.dispatchDone.resolve({
+    ...response([{ text: "Completed directly" }], sentDeliveryStatus),
+    ...(restart ? { status: "timeout", stopReason: "restart" } : {}),
+  });
   const result = await deliverSubagentAnnouncement({
     ...fixture.params,
     controllerInput: input,
@@ -582,6 +602,21 @@ it.each([
   [
     "cancelled requester turn",
     { status: "timeout", stopReason: "rpc", replaySafe: true },
+    { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "restart interruption after an unconfirmed send",
+    Object.assign(createAgentRunRestartAbortError(), { sentBeforeError: true }),
+    { disposition: "ambiguous", reason: "requester_aborted" },
+  ],
+  [
+    "thrown restart interruption",
+    createAgentRunRestartAbortError(),
+    { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "restart-interrupted requester turn",
+    { status: "timeout", stopReason: "restart" },
     { disposition: "retryable", reason: "requester_aborted" },
   ],
   [

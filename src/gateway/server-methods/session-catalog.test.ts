@@ -305,6 +305,7 @@ describe("session catalog Gateway methods", () => {
       sessions: ["owned", "missing", "external"].map((id) =>
         catalogSession(`${id}-thread`, {
           ...(id !== "external" ? { sessionKey: `agent:main:${id}` } : {}),
+          ...(id === "owned" ? { originalUrl: "https://source.example/chat/main/owned" } : {}),
           createdActor: { type: "human", id: "provider-spoof" },
         }),
       ),
@@ -334,6 +335,8 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
+        // A provider-supplied source link survives the same streamed and final projection.
+        originalUrl: "https://source.example/chat/main/owned",
         createdActor: {
           type: "agent",
           id: "worker-1",

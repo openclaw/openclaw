@@ -401,8 +401,12 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
     ...params,
     readOnly: params.readOnly ?? params.refreshFullCatalog !== true,
   };
+  // Published readers accept the owner after a config republish, so they must also find it here;
+  // an exact lookup would miss it and leave them with configured rows instead of its inventory.
   const publishedReadOnlyOwner = request.readOnly
-    ? getPreparedModelCatalogOwnerSnapshot(request)
+    ? configPolicy === "published"
+      ? getPublishedPreparedModelCatalogOwnerSnapshot(request)
+      : getPreparedModelCatalogOwnerSnapshot(request)
     : undefined;
   const { snapshot, run, release, refreshed } =
     await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
