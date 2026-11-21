@@ -15,26 +15,28 @@ function streamFixture(options: Partial<Parameters<typeof runXEvents>[0]> = {}) 
   const warning = vi.fn();
   const connected = Promise.withResolvers<void>();
   let stream!: ReadableStreamDefaultController<Uint8Array>;
-  const api = createXApiClient({
-    bearerToken: "bearer",
-    fetch: async (input) => {
-      if (input.endsWith("/oauth2/token")) {
-        return Response.json({ access_token: "access" });
-      }
-      if (input.endsWith("/stream")) {
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start: (value) => {
-              stream = value;
-            },
-          }),
-        );
-      }
-      return Response.json({ data: [] });
-    },
-  });
+  const api =
+    options.api ??
+    createXApiClient({
+      bearerToken: "bearer",
+      fetch: async (input) => {
+        if (input.endsWith("/oauth2/token")) {
+          return Response.json({ access_token: "access" });
+        }
+        if (input.endsWith("/stream")) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start: (value) => {
+                stream = value;
+              },
+            }),
+          );
+        }
+        return Response.json({ data: [] });
+      },
+    });
   const run = runXEvents({
-    api: options.api ?? api,
+    api,
     userId: "9",
     signal: abort.signal,
     bearerConfigured: true,
