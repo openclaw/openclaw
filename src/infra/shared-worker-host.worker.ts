@@ -29,8 +29,8 @@ if (!parentPort || !isRecord(workerData) || !(workerData.control instanceof Mess
 }
 const control = workerData.control;
 if (isRecord(workerData.databaseEngineSelection)) {
-  // SAFETY: The main thread sends its installed selection object unchanged.
   installDatabaseEngineSelection(
+    // SAFETY: The main thread sends its installed selection object unchanged.
     workerData.databaseEngineSelection as Parameters<typeof installDatabaseEngineSelection>[0],
   );
 }
