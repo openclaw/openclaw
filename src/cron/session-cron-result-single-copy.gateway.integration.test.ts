@@ -53,7 +53,13 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
   beforeAll(async () => {
     state = await createOpenClawTestState({
       label: `cron-single-copy-${api}`,
-      env: { ...createAuthorityGatewayTestEnv(), OPENCLAW_SKIP_CRON: undefined },
+      env: {
+        ...createAuthorityGatewayTestEnv(),
+        OPENCLAW_SKIP_CRON: undefined,
+        // Keep the synthetic provider local on hosts with an HTTP proxy.
+        NO_PROXY: "127.0.0.1,localhost,::1",
+        no_proxy: "127.0.0.1,localhost,::1",
+      },
     });
     endpoint = createServer((request: IncomingMessage, response: ServerResponse) => {
       void (async () => {
