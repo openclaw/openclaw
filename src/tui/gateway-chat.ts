@@ -106,10 +106,11 @@ function throwGatewayAuthResolutionError(reason: string): never {
   );
 }
 
-async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boolean> {
+async function hasStoredOriginDeviceAuth(deviceAuthScope: string | undefined): Promise<boolean> {
   try {
     const identity = await loadDeviceIdentityIfPresentAsync();
     return Boolean(
+      deviceAuthScope &&
       identity &&
       (
         await loadOriginDeviceToken({
@@ -733,14 +734,14 @@ async function resolveGatewayConnection(
       "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
     buildConnectionDetails: buildGatewayConnectionDetails,
   });
-  const hasStoredOriginAuth = Boolean(
-    bootstrap.deviceAuthScope && (await hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope)),
-  );
+  const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);
+  const canConnectWithoutSharedAuth =
+    Boolean(edgeAuthHeaders) || (await hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope));
   const missingSharedAuth =
     bootstrap.authFailureReason === "Missing gateway auth credentials." ||
     bootstrap.authFailureReason === "Missing gateway auth token." ||
     bootstrap.authFailureReason === "Missing gateway auth password.";
-  if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
+  if (bootstrap.authFailureReason && (!missingSharedAuth || !canConnectWithoutSharedAuth)) {
     // A local Gateway pairs this CLI at startup; without one, a token hint misdirects.
     if (missingSharedAuth && !hasExplicitGatewayTarget && activeLocalGatewayPort === undefined) {
       throw new Error(
@@ -753,7 +754,6 @@ async function resolveGatewayConnection(
     }
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
-  const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);
   return {
     url: bootstrap.url,
     deviceAuthScope: bootstrap.deviceAuthScope,

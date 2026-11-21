@@ -311,7 +311,7 @@ async function runProviderAuthMethod(
     profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
     existingProfiles: params.existingProfiles,
-    matchesPersonalAccount: params.method.matchesPersonalAccount,
+    method: params.method,
     allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
   const profiles = resolvedIdentity.profiles;
@@ -837,7 +837,7 @@ async function runModelsAuthLoginFlow(
   // matching may safely keep the old profile id for the same authenticated account.
   const existingProfiles = await snapshotReloginAuthProfiles({
     agentDir: context.agentDir,
-    matchesPersonalAccount: chosenMethod.matchesPersonalAccount,
+    method: chosenMethod,
   });
   const imported =
     !opts.credentialOnly && !opts.force && !opts.profileId && !opts.setDefault

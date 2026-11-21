@@ -13,6 +13,7 @@ import {
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
+import { readGatewayResourceDiagnostics } from "../server/resource-diagnostics.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
@@ -102,7 +103,12 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
   "diagnostics.lanes": ({ respond }) => {
     respond(
       true,
-      { ts: Date.now(), ...getCommandLaneDiagnostics(), ...getTrackedWorkerPoolSnapshot() },
+      {
+        ts: Date.now(),
+        ...getCommandLaneDiagnostics(),
+        ...getTrackedWorkerPoolSnapshot(),
+        resources: readGatewayResourceDiagnostics(),
+      },
       undefined,
     );
   },
