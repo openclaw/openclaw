@@ -58,6 +58,7 @@ describe("voice call command service realtime control", () => {
     expect(speakRealtime).toHaveBeenCalledWith(
       "call-1",
       expect.stringContaining("Ask for Tuesday"),
+      undefined,
     );
     call.state = "completed";
     await expect(

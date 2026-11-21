@@ -158,7 +158,11 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
         params.mode === "say"
           ? `Owner instruction for this call: say this now, verbatim, then listen. Answer: ${JSON.stringify(message)}`
           : `Owner instruction for this call: ${JSON.stringify(message)}. Apply this guidance from now on while respecting the call brief's disclosure and approval limits.`;
-      const result = rt.webhookServer.speakRealtime(callId, instruction);
+      const result = rt.webhookServer.speakRealtime(
+        callId,
+        instruction,
+        params.mode === "say" ? message : undefined,
+      );
       requireSuccess(result, "Steering failed");
       return { success: true };
     },
@@ -168,6 +172,7 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
       if (request.rt.config.realtime.enabled) {
         const realtimeResult = request.rt.webhookServer.speakRealtime(
           request.callId,
+          request.message,
           request.message,
         );
         if (realtimeResult.success) {

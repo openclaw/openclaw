@@ -1,0 +1,2 @@
+4
+# Extend existing native old-host ESM/CJS package loading proof with SHA-256 string/byte correctness when the SDK subpath is absent.

@@ -280,6 +280,8 @@ export function createRealtimeCallAudioController(params: {
   isOpen: () => boolean;
   isBlocked?: () => boolean;
   isOpening?: () => boolean;
+  /** Managed statements pause/resume instead of withholding caller audio. */
+  isOpeningInterruptible?: () => boolean;
   onAudibleOutput?: () => void;
   pendingMarkAcks: Map<string, () => void>;
   providerCallId: string;
@@ -288,6 +290,9 @@ export function createRealtimeCallAudioController(params: {
   let greetingPending = true;
   let greetingResponseDone = false;
   const isGreetingPlaying = (): boolean => {
+    if (params.isOpeningInterruptible?.()) {
+      return false;
+    }
     const playing = params.harness.talk.outputAudioActive || params.audioPacer.hasPlaybackAudio(0);
     if (greetingResponseDone && !playing) {
       greetingPending = false;
