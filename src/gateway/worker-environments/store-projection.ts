@@ -16,7 +16,10 @@ import {
   digestWorkerCredentialAuthority,
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
-import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
+import {
+  WorkerEnvironmentInventoryClosedError,
+  WorkerEnvironmentMutationPendingError,
+} from "./store-errors.js";
 import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
 export type WorkerEnvironmentNativePatch = Partial<
@@ -89,9 +92,7 @@ function createWorkerEnvironmentProjection(revocationListeners = new Set<(id: st
     const mutation = pending.get(id);
     const unchanged = mutation?.[`${authority}AuthorityUnchanged`];
     if (mutation && mutation.token !== ownAdmission.getStore() && !unchanged) {
-      throw new Error(
-        `Worker environment ${id} has an unsettled mutation; retry after it completes`,
-      );
+      throw new WorkerEnvironmentMutationPendingError(id, tail);
     }
   };
   const compare = (a: WorkerEnvironmentRecord, b: WorkerEnvironmentRecord) =>
