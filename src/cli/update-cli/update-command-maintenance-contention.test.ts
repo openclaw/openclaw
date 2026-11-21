@@ -17,7 +17,7 @@ import { createUpdateCommandExecutionGuards } from "./update-command-execution-g
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
 
-const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);

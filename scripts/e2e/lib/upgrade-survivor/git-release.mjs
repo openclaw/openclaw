@@ -21,7 +21,7 @@ const readlink = (file) => {
 const alive = (pid) => {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    return !/^Z/u.test(stat.slice(stat.lastIndexOf(") ") + 2));
+    return !stat.slice(stat.lastIndexOf(") ") + 2).startsWith("Z");
   } catch {
     return false;
   }
@@ -80,16 +80,16 @@ async function killAt(point, prefix, out, stdout, stderr, argv) {
     detached: true,
     stdio: ["ignore", fs.openSync(stdout, "w"), fs.openSync(stderr, "w")],
   });
-  const exited = new Promise((resolve) =>
-    child.once("exit", (code, signal) => resolve({ code, signal })),
-  );
-  let done = false;
+  const exited = new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const run = { done: false };
   void exited.then(() => {
-    done = true;
+    run.done = true;
   });
   const record = { point, linkBefore, command: argv.join(" ") };
   const fresh = () => releaseIds(prefix).find((id) => !before.has(id));
-  while (!done && Date.now() - started < 3_600_000) {
+  while (!run.done && Date.now() - started < 3_600_000) {
     const id = fresh();
     const root = id ? path.join(prefix, "releases", id, "openclaw") : null;
     const link = readlink(slot);
@@ -140,9 +140,11 @@ async function killAt(point, prefix, out, stdout, stderr, argv) {
       });
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
   }
-  if (!record.reached && !done) {
+  if (!record.reached && !run.done) {
     try {
       process.kill(-child.pid, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill
     } catch {}

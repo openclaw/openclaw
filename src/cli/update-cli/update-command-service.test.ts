@@ -933,7 +933,7 @@ describe("maybeRestartService", () => {
       const managedService = createMockGatewayService({
         isLoaded: async () => true,
         readCommand: async () => ({
-          programArguments: [process.execPath, entry, "gateway"],
+          programArguments: ["/usr/bin/node", entry, "gateway"],
           environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
         }),
         ...(serviceStarts === "stage-failed"
