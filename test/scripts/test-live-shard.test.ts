@@ -200,6 +200,14 @@ it("requires live shard report evidence for each selected file", () => {
 it.each([
   ["extensions/agentsapi/agentsapi-harness.live.test.ts", "OPENCLAW_LIVE_AGENTSAPI"],
   ["extensions/comfy/comfy.live.test.ts", "COMFY_LIVE_TEST"],
+  [
+    "extensions/codex/src/app-server/isolated-completion.acceptance.live.test.ts",
+    "OPENCLAW_LIVE_RESEARCH_ACCEPTANCE",
+  ],
+  [
+    "extensions/codex/src/app-server/isolated-completion.real-binary.live.test.ts",
+    "OPENCLAW_LIVE_CODEX_OUTPUT_SCHEMA",
+  ],
   ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
   [
     "src/gateway/gateway-personal-native-child-abort.live.test.ts",
