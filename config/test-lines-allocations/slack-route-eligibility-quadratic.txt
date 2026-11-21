@@ -1,0 +1,2 @@
+# Regression proof that one route-eligibility pass scans each prepared binding batch once.
+172

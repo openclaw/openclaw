@@ -270,10 +270,35 @@ export async function prepareConversationRouteEligibilitiesForAgent(params: {
     conversation,
   }));
   const releases: Array<() => void> = [];
+  // Row resolvers reread one prepared batch while classifying a pass and again while
+  // reading it. Those synchronous reads share one owner view; the next pass inspects
+  // again, so a receipt committed after this pass still invalidates ownership.
+  let eligibilityPhase: object | undefined;
   const inspectBindings = async (refs: Parameters<typeof prepareSessionBindingInspections>[0]) => {
     const snapshot = await prepareSessionBindingInspections(refs);
     releases.push(snapshot.dispose);
-    return () => snapshot.inspect();
+    let cached: ReturnType<typeof snapshot.inspect> | undefined;
+    let cachedPhase: object | undefined;
+    return () => {
+      if (eligibilityPhase && cached && cachedPhase === eligibilityPhase) {
+        return cached;
+      }
+      const inspected = snapshot.inspect();
+      if (eligibilityPhase) {
+        cached = inspected;
+        cachedPhase = eligibilityPhase;
+      }
+      return inspected;
+    };
+  };
+  const readEligibilityPhase = <T>(read: () => T): T => {
+    const previous = eligibilityPhase;
+    eligibilityPhase = {};
+    try {
+      return read();
+    } finally {
+      eligibilityPhase = previous;
+    }
   };
   try {
     const groups = new Map<
@@ -313,46 +338,54 @@ export async function prepareConversationRouteEligibilitiesForAgent(params: {
       }
       indexes.forEach((index, position) => resolvers.set(index, selected[position]!));
     }
-    const prepared = inputs.map((input, index) => {
-      const resolver = resolvers.get(index);
-      const owner = resolvePluginRouteOwner(input.config, input.conversation, resolver);
-      if (owner) {
-        return { kind: "plugin" as const, resolver };
-      }
-      const route = resolveConfiguredRouteOwner(
-        input.config,
-        input.conversation,
-        input.conversation.routeContext,
-      );
-      return route
-        ? {
-            kind: "binding" as const,
-            ...prepareGenericRoute({ ...input, route, context: input.conversation.routeContext }),
-          }
-        : { kind: "denied" as const };
-    });
+    const prepared = readEligibilityPhase(() =>
+      inputs.map((input, index) => {
+        const resolver = resolvers.get(index);
+        const owner = resolvePluginRouteOwner(input.config, input.conversation, resolver);
+        if (owner) {
+          return { kind: "plugin" as const, resolver };
+        }
+        const route = resolveConfiguredRouteOwner(
+          input.config,
+          input.conversation,
+          input.conversation.routeContext,
+        );
+        return route
+          ? {
+              kind: "binding" as const,
+              ...prepareGenericRoute({
+                ...input,
+                route,
+                context: input.conversation.routeContext,
+              }),
+            }
+          : { kind: "denied" as const };
+      }),
+    );
     const inspect = await inspectBindings(
       prepared.flatMap((entry) => (entry.kind === "binding" ? [entry.conversation] : [])),
     );
     return {
       read(): ConversationRouteEligibility[] {
-        for (const { channel, plugin } of plugins) {
-          if (channel && getLoadedChannelPlugin(channel) !== plugin) {
-            throw new Error("Conversation route owner changed. Retry the request.");
+        return readEligibilityPhase(() => {
+          for (const { channel, plugin } of plugins) {
+            if (channel && getLoadedChannelPlugin(channel) !== plugin) {
+              throw new Error("Conversation route owner changed. Retry the request.");
+            }
           }
-        }
-        const inspections = inspect();
-        let position = 0;
-        return prepared.map((entry, index) => {
-          if (entry.kind === "denied") {
-            return "denied";
-          }
-          const input = inputs[index]!;
-          const owner =
-            entry.kind === "plugin"
-              ? resolvePluginRouteOwner(input.config, input.conversation, entry.resolver)
-              : resolveInspectedGenericRouteOwner(entry.route, inspections[position++]!);
-          return owner ? finishRouteEligibility(input, owner) : "unavailable";
+          const inspections = inspect();
+          let position = 0;
+          return prepared.map((entry, index) => {
+            if (entry.kind === "denied") {
+              return "denied";
+            }
+            const input = inputs[index]!;
+            const owner =
+              entry.kind === "plugin"
+                ? resolvePluginRouteOwner(input.config, input.conversation, entry.resolver)
+                : resolveInspectedGenericRouteOwner(entry.route, inspections[position++]!);
+            return owner ? finishRouteEligibility(input, owner) : "unavailable";
+          });
         });
       },
       dispose() {
