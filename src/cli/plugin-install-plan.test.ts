@@ -8,6 +8,23 @@ import {
 import { resolveCatalogOfficialExternalNpmPackageTrust } from "../plugins/official-external-install-trust.js";
 
 describe("plugin install plan helpers", () => {
+  it("resolves Fortytwo and binds artifact integrity only to its pinned npm version", () => {
+    expect(resolvePluginInstallSourcePlan({ raw: "fortytwo", mode: "install" })).toMatchObject({
+      ok: true,
+      request: { source: "official", pluginId: "fortytwo" },
+    });
+    expect(resolveCatalogOfficialExternalNpmPackageTrust("fortytwo-openclaw@0.1.0")).toMatchObject({
+      pluginId: "fortytwo",
+      trustedSourceLinkedOfficialInstall: true,
+      expectedIntegrity:
+        "sha512-Mfr2j17wsGKHK6lJlciBarxCZ/W/aNTgtxUKohMQhLVtR7BZLY+LW5p/bBTqtkub2d69cJXU3obfsKL4mpiBFw==",
+    });
+    expect(resolveCatalogOfficialExternalNpmPackageTrust("fortytwo-openclaw@0.1.1")).toEqual({
+      pluginId: "fortytwo",
+      trustedSourceLinkedOfficialInstall: true,
+    });
+  });
+
   it.each([" ClAwHuB:demo@ "])(
     "rejects the malformed explicit ClawHub selector %s before npm fallback",
     (raw) => {
