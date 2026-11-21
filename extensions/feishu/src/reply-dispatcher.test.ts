@@ -9,7 +9,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-
 type StreamingSessionStub = {
   active: boolean;
   credentials: unknown;
@@ -113,7 +112,6 @@ import { createReplyAccount } from "./reply-dispatcher.test-support.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
 type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWithResult"]>>;
 const imageUrl = "https://example.com/image.png";
-
 function streamingCloseResult(source: {
   visibleReplySent: boolean;
   content?: string;
@@ -130,15 +128,12 @@ function streamingCloseResult(source: {
     ...(source.finalTextAccepted === false ? { finalTextAccepted: false } : {}),
   };
 }
-
 function streamingFailure(cause: Error, source: Parameters<typeof streamingCloseResult>[0]): Error {
   return createFeishuPartialReplyDeliveryError(cause, streamingCloseResult(source));
 }
-
 function visibleClose(content: string, messageId: string): StreamingCloseResult {
   return streamingCloseResult({ visibleReplySent: true, content, messageId });
 }
-
 afterAll(() => {
   vi.doUnmock("./accounts.js");
   vi.doUnmock("./runtime.js");
@@ -154,16 +149,14 @@ afterAll(() => {
 });
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
-
   type ReplyDispatcherPlan = ReturnType<typeof createFeishuReplyDispatcher>;
-
   type DeliveryPayload = Parameters<ReplyDispatcherPlan["delivery"]["deliver"]>[0];
+  type Delivered = ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
   type TypingDispatcherOptions = ReplyDispatcherPlan["dispatcherOptions"] &
     ReplyDispatcherPlan["delivery"] & {
-      final: (payload: DeliveryPayload) => ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
-      block: (payload: DeliveryPayload) => ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
+      final: (payload: DeliveryPayload) => Delivered;
+      block: (payload: DeliveryPayload, source?: number) => Delivered;
     };
-
   beforeEach(() => {
     vi.clearAllMocks();
     streamingStartBackoffUntilByAccount.clear();
@@ -191,11 +184,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     });
   });
-
   function useNonStreamingAutoAccount() {
     resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));
   }
-
   it("honors the account response prefix over channel and global defaults", async () => {
     useNonStreamingAutoAccount();
     const { result } = createDispatcherHarness({
@@ -215,7 +206,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({ text: "[account] reply" }),
     );
   });
-
   it("keeps card attribution on the selected-model prefix context", async () => {
     const { result, options } = createDispatcherHarness();
     expect(result.replyOptions.onReasoningStream).toBeUndefined();
@@ -233,7 +223,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       note: "Agent: agent | Model: gpt-5.6-luna | Provider: openai",
     });
   });
-
   it.each(["reply_payload_sending", "message_sending"])(
     "suppresses all pre-hook CardKit previews when %s is registered",
     async (hookName) => {
@@ -256,7 +245,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expectClosed("accepted final");
     },
   );
-
   function useNonStreamingBlockAccount() {
     resolveFeishuAccountMock.mockReturnValue(
       createReplyAccount("auto", "off", "feishu", {
@@ -264,7 +252,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }),
     );
   }
-
   function useStreamingBlockAccount() {
     resolveFeishuAccountMock.mockReturnValue(
       createReplyAccount("auto", "partial", "feishu", {
@@ -272,13 +259,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }),
     );
   }
-
   function makeTableText(count: number): string {
     return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
       "\n\n",
     );
   }
-
   function expectSend(
     mock: ReturnType<typeof vi.fn>,
     expected: Record<string, unknown>,
@@ -286,7 +271,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   ) {
     expect(mock.mock.calls[callIndex]?.[0]).toEqual(expect.objectContaining(expected));
   }
-
   function expectStreamingStartOptions(index: number, expected: Record<string, unknown>) {
     expect(stream(index).start.mock.calls[0]).toEqual([
       "oc_chat",
@@ -294,7 +278,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining(expected),
     ]);
   }
-
   function gate<T>() {
     const entered = createDeferred<void>();
     const { promise, resolve, reject } = createDeferred<T>();
@@ -304,28 +287,22 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     };
     return { started: entered.promise, resolve, reject, wait };
   }
-
   function expectNoStaticReply() {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   }
-
   function expectClosed(text: string, index = 0) {
     expect(stream(index).closeWithResult).toHaveBeenCalledWith(text, { note: "Agent: agent" });
   }
-
   function accepted(content: string, messageIds: string[]) {
     return { visibleReplySent: true, content, messageIds };
   }
-
   function partialDelivery(content: string, messageIds: string[]) {
     return { code: "CHANNEL_PARTIAL_DELIVERY", deliveryResult: accepted(content, messageIds) };
   }
-
   function createRuntimeLogger() {
     return { log: vi.fn(), error: vi.fn() } as never;
   }
-
   function createDispatcherHarness(overrides: Partial<ReplyDispatcherArgs> = {}) {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -337,7 +314,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     return { result, options: toTypingDispatcherOptions(result) };
   }
-
   async function holdMediaFinal(text: string) {
     const media = gate<{ messageId: string }>();
     sendMediaFeishuMock.mockImplementationOnce(media.wait);
@@ -346,7 +322,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await media.started;
     return { options, media, pending };
   }
-
   async function holdMediaPair(firstText: string, secondText = firstText) {
     const firstMedia = gate<{ messageId: string }>();
     const secondMedia = gate<{ messageId: string }>();
@@ -368,21 +343,19 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
     return { options, firstMedia, secondMedia, firstPending, secondPending };
   }
-
   function toTypingDispatcherOptions(result: ReplyDispatcherPlan): TypingDispatcherOptions {
     return {
       ...result.dispatcherOptions,
       ...result.delivery,
       final: (payload) => result.delivery.deliver(payload, { kind: "final" }),
-      block: (payload) => result.delivery.deliver(payload, { kind: "block" }),
+      block: (payload, source) =>
+        result.delivery.deliver(payload, { kind: "block", assistantMessageIndex: source }),
     };
   }
-
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
     expect(isRecord(value), `${label} must be an object`).toBe(true);
     return value as Record<string, unknown>;
   }
-
   function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string, argIndex = 0) {
     const call = mock.mock.calls[0];
     if (!call) {
@@ -390,7 +363,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     return call[argIndex];
   }
-
   function stream(instanceIndex: number): StreamingSessionStub {
     const instance = streamingInstances[instanceIndex];
     if (!instance) {
@@ -398,18 +370,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     return instance;
   }
-
   function firstStreamingCloseText(instanceIndex = 0): string {
     const close = stream(instanceIndex).closeWithResult;
     return String(firstMockArg(close, "streaming close"));
   }
-
   function streamingUpdateTexts(instanceIndex = 0): string[] {
     return stream(instanceIndex).update.mock.calls.map((call: unknown[]) =>
       typeof call[0] === "string" ? call[0] : "",
     );
   }
-
   it.each(["disabled", "stale seconds"])("suppresses typing for %s messages", async (reason) => {
     if (reason === "disabled") {
       resolveFeishuAccountMock.mockReturnValue(
@@ -424,7 +393,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onReplyStart?.();
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
-
   it.each([
     {
       name: "topic root",
@@ -462,7 +430,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it.each([
     { name: "serialized byte envelope", renderMode: "auto", oversized: true },
     { name: "six-table card fallback", renderMode: "card", oversized: false },
@@ -485,7 +452,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     }
   });
-
   it("budgets full metadata on every static card chunk", async () => {
     const account = resolveFeishuAccountMock();
     resolveFeishuAccountMock.mockReturnValue({
@@ -526,7 +492,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     expect(bodies.join("")).toBe(body);
   });
-
   it("passes mention-forward targets to non-streaming plain text replies without rewriting body text", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
@@ -540,7 +505,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
   });
-
   it("puts required bot mentions on every chunk and disables streaming cards", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
@@ -555,13 +519,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectSend(sendMessageFeishuMock, { text: "First ", mentions: requiredMentionTargets });
     expectSend(sendMessageFeishuMock, { text: "paragraph.", mentions: requiredMentionTargets }, 1);
   });
-
   const approvalPresentationText = [
     "Plugin bind approval required",
     "Allow Codex to bind this conversation?",
     "- Allow once: `/plugin allow`\n- Deny: `/plugin deny`",
   ].join("\n\n");
-
   const approvalPresentation = {
     title: "Plugin bind approval required",
     blocks: [
@@ -575,13 +537,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     ],
   };
-
   function presentationCardBodies() {
     return sendCardFeishuMock.mock.calls.map(
       (call) => requireRecord(call[0], "native card send").card,
     );
   }
-
   it("delivers changed legacy controls even without prose", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness();
@@ -597,7 +557,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.stringContaining("choice-b"),
     ]);
   });
-
   it("keeps a status-style fallback reply as its authored text", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness();
@@ -621,7 +580,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({ text: "Status: uptime 3h" }),
     );
   });
-
   it.each([false, true])(
     "retains media and accepted=%s controls after card failure",
     async (acceptedCard) => {
@@ -651,7 +609,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     },
   );
-
   it("includes the required peer-bot mention after sanitizing presentation content", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
@@ -669,7 +626,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(card).toContain("&lt;at id=ou_other&gt;&lt;/at&gt;");
     expect(delivered).toMatchObject({ visibleReplySent: true });
   });
-
   it("does not repeat fallback prose inside its native controls card", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness();
@@ -684,7 +640,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(card.split('"Deny"')).toHaveLength(2);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("keeps oversized block controls visible alongside voice media before the streaming final", async () => {
     useStreamingBlockAccount();
     sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "om_voice" });
@@ -707,8 +662,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     };
     const fallbackText = ["Pick a run", ...lines, `- ${label}: \`/open-run\``].join("\n\n");
     const finalText = "The run is ready.";
-    // Queue both logical payloads before automatic idle. A final may replace
-    // ordinary stream text, but it must not erase an earlier controls fallback.
+    // Queue both before idle so the final can replace prose but must retain the controls fallback.
     expect(dispatcher.sendBlockReply(payload)).toBe(true);
     expect(dispatcher.sendFinalReply({ text: finalText })).toBe(true);
     dispatcher.markComplete();
@@ -730,12 +684,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(settled?.messageIds).toContain("om_voice");
     expect(settled?.messageIds ?? []).not.toContain("om_stream");
   });
-
   type RecordedFeishuDelivery = {
     kind: "tool" | "block" | "final";
     delivery: Awaited<ReturnType<TypingDispatcherOptions["deliver"]>>;
   };
-
   function createRecordedFeishuDispatcher(onDelivered?: (kind: string) => void) {
     const { result, options } = createDispatcherHarness();
     const deliveries: RecordedFeishuDelivery[] = [];
@@ -755,7 +707,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     return { result, options, dispatcher, deliveries, entered };
   }
-
   it.each([
     {
       error: false,
@@ -805,7 +756,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     },
   );
-
   it("suppresses discarded block prose while retaining accepted media", async () => {
     sendMediaFeishuMock.mockResolvedValue({ messageId: "om-block-media" });
     sendCardFeishuMock.mockResolvedValue({ messageId: "om-final-controls" });
@@ -841,7 +791,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectNoStaticReply();
     expect(stream(0).discard).toHaveBeenCalledOnce();
   });
-
   it("retains the original preview receipt and media after failed cleanup", async () => {
     const obsoleteText = "```text\naccepted preview remains visible\n```";
     sendMediaFeishuMock.mockResolvedValue({ messageId: "om-block-media" });
@@ -885,7 +834,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("failed-cleanup")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each(["controls", "media"] as const)(
     "retains an idle-owned receipt when a later %s delivery overlaps close",
     async (kind) => {
@@ -972,7 +920,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it("suppresses internal block payload delivery", async () => {
     const { options } = createDispatcherHarness();
     await options.block({ text: "internal reasoning chunk" });
@@ -980,7 +927,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
-
   it("sends complete chunked blocks to the DM target", async () => {
     useNonStreamingBlockAccount();
     const runtime = getFeishuRuntimeMock();
@@ -1012,7 +958,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(0);
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each([
     {
       agentId: "agent",
@@ -1038,7 +983,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       );
     },
   );
-
   it.each(["⚠️ Exec failed", "The file is ready.\n\n⚠️ Exec failed"])(
     "retains the answer exactly once before error final %s",
     async (text) => {
@@ -1052,7 +996,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expectNoStaticReply();
     },
   );
-
   it.each(["auto", "card"] as const)(
     "settles an empty %s reply without static content",
     async (mode) => {
@@ -1072,36 +1015,152 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
+  // Strings preview, [text] blocks, [text, n] blocks of message n, [text, true] error finals. null
+  // idles, true holds, false rejects. Numbers close invisibly: 0 fails recovery, 1 succeeds, 3
+  // throws. 2 starts a message. Chunks end after a digit. Static sends in failing reject (false) or
+  // accept only that part of their text.
+  const failing: Record<string, string | false> = { "A2.": false, "G.": "G. A1.", "F.": "F." };
   it.each([
-    ["delta blocks", ["hello"], ["lo world"], "hellolo world"],
-    ["covered tail", ["First.\n\nLast."], ["First.", "\n\nLast."], "First.\n\nLast."],
-    ["sentence gap", ["First. Last."], ["First.", "Last."], "First. Last."],
-    ["repeated blocks", ["ha ha"], ["ha", " ha", "ha"], "ha haha"],
-    ["block-only repeats", [], ["ha", "ha"], "haha"],
+    ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
+    ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
+    ["sentence gap", ["First. Last.", ["First."], ["Last."]], ["First. Last."]],
+    ["repeated blocks", ["ha ha", ["ha"], [" ha"], ["ha"]], ["ha haha"]],
+    ["block-only repeats", [["ha"], ["ha"]], ["haha"]],
+    ["corrected snapshots", ["Old draft answer.", "Corrected answer.", "Old draft"], ["Old draft"]],
+    ["private reasoning", ["<thinking>private</thinking>\nvisible answer"], ["visible answer"]],
+    ["idle-closed cards", ["One.", ["One."], null, "One.\n\nTwo.", ["\n\nTwo."]], ["One.", "Two."]],
+    ["rejection", ["A.", ["A."], "A. X.", true, false, "A. X. E.", [" X. E."]], ["A. X.", "X. E."]],
+    ["late rejection", [["A."], "A. X.", true, "A. X. E.", ["Z."], false], ["A. X.", "X. E.Z."]],
+    ["late error", [["A."], "A. X.", true, "A. X. E.", ["E.F", true], false], ["A. X.", "E.F"]],
+    ["failed recovery", ["A. B.", ["A."], ["B."], 0, "A. B. C."], ["A. B.", "A. B. C."]],
+    ["indent", ["    a", ["    a"], null, "    a\n\n    b", ["\n\n    b"]], ["    a", "    b"]],
+    ["recover", ["A. B.", ["A."], ["B."], 1, "A. B. C."], ["A. B.", "C."]],
+    ["gap passes", ["A.", ["A."], 0, "A. B.", ["B."], 1, "A. B. C."], ["A.", "A. B.", "A. B. C."]],
+    ["cut", ["    a\n    b", true, false, "    a\n    b\n    c"], ["    a\n    b", "    b\n    c"]],
+    ["prefix", ["A1.A2.", ["A1.A2."], 1, "A1.A2.C."], ["A1.A2.", "A2.C."]],
+    ["repeat", ["X. Y. X.", ["X."], ["Y."], ["X."], 1, "X. Y. X. D."], ["X. Y. X.", "X. D."]],
+    ["twin", ["X.", ["X."], ["X."], 1, "X. D."], ["X.X.", "X. D."]],
+    ["full", ["F. F.", ["F."], ["F."], 1, "F. F. D."], ["F. F.", "F. D."]],
+    ["gap", ["G. A1.A2.", ["G."], ["A1.A2."], 1, "G. A1.A2. D."], ["G. A1.A2.", "G. A1.A2. D."]],
+    ["stale", ["A1.A2.", ["A1.A2."], 2, "A1. N", 1, "A1. N D."], ["A1.A2.\n\nA1. N", "A1. N D."]],
+    ["rw", ["Z", ["Z"], null, "BA1.A2.", ["A1.A2."], 1, "BA1.A2.C"], ["Z", "BA1.A2.", "BA1.A2.C"]],
+    ["two throws", ["X.", ["X."], 3, "X. X.", ["X."], 3, "X. X. D."], ["X.", "X.", "X. D."]],
+    ["next message", [["X."], 2, 3, "X. Y.", ["X."], 3, "X. Y. Z."], ["X.", "X. Y.", "X. Y. Z."]],
+    ["same message", [["X."], 3, "X.", ["X."], 3, "X. Z."], ["X.", "X.", "X. Z."]],
+    ["catch msg", [["F."], 3, 2, "F. Y.", ["F."], 3, "F. Y. Z."], ["F.", "F. Y.", "F. Y. Z."]],
+    ["gap msg", ["A2.X.", ["A2."], ["X."], 3, 2, "X.", ["X."], 3, "X.Z."], ["A2.X.", "X.", "X.Z."]],
+    ["fence", ["~~~a\nx", null, "~~~a\nxy", null, "~~~a\nxy\n~~~\nD"], ["~~~a\nx", "~~~a\ny", "D"]],
+    ["fence cut", ["~~~\nx\n~~", null, "~~~\nx\n~~~\n\nD"], ["~~~\nx\n~~", "D"]],
+    ["fence info", ["```a", null, "```a`b\nc"], ["```a", "`b\nc"]],
+    ["fence inner", ["~~~\n```\n    ~", null, "~~~\n```\n    ~~~"], ["~~~\n```\n    ~", "~~~\n~~"]],
+    ["fence text", ["````\n```\n``", null, "````\n```\n````y"], ["````\n```\n``", "````\n``y"]],
+    ["fence crlf", ["```\n```\r\n", null, "```\n```\r\n```\nD"], ["```\n```\r\n", "```\nD"]],
+    ["fence cr", ["~~~\rz\n```", null, "~~~\rz\n```\n```\nD"], ["~~~\rz\n```", "~~~\n```\nD"]],
+    ["fence ls", ["~~~\u2028\n```", null, "~~~\u2028\n```\n~~~\nD"], ["~~~\u2028\n```", "D"]],
+    ["partial msg", ["A.", 2, "A. B.", true, false, "A. B. C."], ["A.\n\nA. B.", "A. B. C."]],
+    ["partial held", ["A.", 2, "A. B.", true, "A. B. C.", false], ["A.\n\nA. B.", "A. B. C."]],
+    ["fence sep", ["~~~\n\u2028~~", null, "~~~\n\u2028~~~\nD"], ["~~~\n\u2028~~", "~~~\n~\nD"]],
+    ["fence cr end", ["~~~\nx\n", null, "~~~\nx\nf\r~~~\nD"], ["~~~\nx\n", "~~~\nf\r~~~\nD"]],
+    ["fence cr drop", ["~~~\nx\n", null, "~~~\nx\n~~~\rD\nE"], ["~~~\nx\n", "D\nE"]],
+    ["fence sol", ["~~~\n~~~\r```a", null, "~~~\n~~~\r```a`b\nD"], ["~~~\n~~~\r```a", "`b\nD"]],
+    ["fence eot", ["~~~\na\n~~~x", null, "~~~\na\n~~~xy"], ["~~~\na\n~~~x", "~~~\ny"]],
+    ["partial base", ["A. B.", "A", 2, "B.", true, false, "B. C."], ["A\n\nB.", "B. C."]],
+    ["partial start", ["A. X.", true, "A. X. E.", 2, "N.", false], ["A. X.", "A. X. E.\n\nN."]],
+    ["idle start", ["A. X.", null, "A. X. E.", 2, "N."], ["A. X.", "E.\n\nN."]],
+    ["fence cr indent", ["~~~\rx\r", null, "~~~\rx\r  y"], ["~~~\rx\r", "~~~\n  y"]],
+    ["partial 2", ["P", null, "PA", true, "PAE", 2, "PN", 2, false], ["P", "A", "AE\n\nPN"]],
+    ["old block", ["X.", 3, 2, "X. Y.", ["X.", 0], 3, "X. Y. Z."], ["X.", "X. Y.X.", "X. Y. Z."]],
+    ["mid block", [2, "B.", 2, "B. C.", ["B.", 1], 3, "B. C. D."], ["B.\n\nB. C.B.", "B. C. D."]],
+    ["two starts", ["X.", 3, 2, 2, "X. Y.", ["X.", 0], 3, "X. Y."], ["X.", "X. Y.X.", "X. Y."]],
+    ["offset", [2, "B.", ["B.", 2], 2, "X. Y.", ["X.", 2], 3, "X. Y."], ["B.\n\nX. Y.X.", "X. Y."]],
+    ["first block", [2, "X.", ["X.", 1]], ["X."]],
+    ["old shown", [2, "A. X.", ["A.", 1], null, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y."]],
+    ["old failed", [2, "A. X.", ["A.", 1], 3, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y.X."]],
+    ["partial old", [2, "A. X.", true, false, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y.X."]],
+    ["old unseen", [2, "A.", ["A.", 1], null, 2, "X. Y.", ["X.", 1], null], ["A.", "X. Y.X."]],
+    ["two old", [2, "A. X.", ["A.", 1], null, 2, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y."]],
+    ["open old", [2, "A. X.", ["A.", 1], 2, "X. Y.", ["X.", 1], null], ["A. X.\n\nX. Y."]],
     [
-      "corrected snapshots",
-      ["Old draft answer.", "Corrected answer.", "Old draft"],
-      [],
-      "Old draft",
+      "replaced rest",
+      [2, "A. B. X.", ["A.", 1], null, 2, "Y.", ["B.", 1], null, 2, "X. Z.", ["X.", 1]],
+      ["A. B. X.", "Y.B.", "X. Z."],
     ],
-    ["private reasoning", ["<thinking>private</thinking>\nvisible answer"], [], "visible answer"],
-  ] as const)("streams %s", async (_name, partials, blocks, expected) => {
+    ["restart lag", [2, "A. X.", ["A.", 1], null, 2, "Y.", ["X.", 1]], ["A. X.", "Y.X."]],
+    ["restart rw", [2, "A. X.", ["A.", 1], null, 2, "X. Y.", "Y.", ["X.", 1]], ["A. X.", "Y.X."]],
+    ["old indent", [2, "A    X", ["A", 1], null, 2, "    XY", ["    X", 1]], ["A    X", "    XY"]],
+    ["open indent", [2, "A    X", ["A", 1], 2, "    XY", ["    X", 1]], ["A    X\n\n    XY"]],
+    ["old twin", [2, "X.", ["X.", 1], null, 2, "Y.", ["X.", 1], null], ["X.", "Y.X."]],
+    ["tail", [2, "A. B. X.", ["A.", 1], 2, "X. Y.", ["B.", 1], ["X.", 1]], ["A. B. X.\n\nX. Y.B."]],
+    ["open gap", [2, "A. X.", ["A.", 1], 2, 2, "X. Y.", ["X.", 1]], ["A. X.\n\nX. Y."]],
+    ["open first", [2, "A. X.", 2, "X. Y.", ["A.", 1], ["X.", 1]], ["A. X.\n\nX. Y.A."]],
+    ["open twin", [2, "A. X.", ["A.", 1], 2, ["X.", 1], "X. Y.", ["X.", 1]], ["A. X.\n\nX. Y.X."]],
+    ["pair", [2, "A. B. X.", ["A.", 1], 2, "B. X.", ["B.", 1], ["X.", 1]], ["A. B. X.\n\nB. X."]],
+    ["used", [2, "X.", null, 2, "X. Y.", ["X.", 1], ["X.", 2]], ["X.", "X. Y.", "X."]],
+    ["fence head", ["~~~py", null, "~~~python\nx\n~~~"], ["~~~py", "~~~python\nx\n~~~"]],
+    ["fence tick", ["```", null, "```python\nx\n```"], ["```", "```python\nx\n```"]],
+    ["fence tail", ["A.\n```pytho", null, "A.\n```python\nx"], ["A.\n```pytho", "```python\nx"]],
+    ["fence sp", ["  ~~~", null, "  ~~~ py\nx\n~~~"], ["  ~~~", "  ~~~ py\nx\n~~~"]],
+    ["retry", [2, 2, "B.", ["B.", 1], 2, "C.", ["C.", 2]], ["B.\n\nC."]],
+    ["trade", [2, 2, ["A.", 1], ["X.", 1], "X. Y.", ["X.", 1], null, ["Y.", 1]], ["X. Y.", ""]],
+    ["retry gap", [2, 2, 2, "B.", ["B.", 1]], ["B."]],
+    ["block guard", [2, ["A.", 1], 2, "X.", ["X.", 1]], ["A.\n\nX.X."]],
+  ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
+    const close = gate<StreamingCloseResult>();
+    getFeishuRuntimeMock().channel.text.chunkMarkdownTextWithMode.mockImplementation(
+      (text: string) => text.split(/(?<=\d\.)/u),
+    );
+    sendStructuredCardFeishuMock.mockImplementation(async ({ text }: { text: string }) => {
+      const part = failing[text];
+      if (part !== undefined) {
+        throw part
+          ? streamingFailure(new Error("no"), { visibleReplySent: true, content: part })
+          : new Error("no");
+      }
+    });
     await options.onReplyStart?.();
-    for (const text of partials) {
-      result.replyOptions.onPartialReply?.({ text });
-    }
-    for (const text of blocks) {
-      await options.block({ text });
+    for (const event of events) {
+      if (event === null) {
+        await options.onIdle?.();
+      } else if (event === true) {
+        stream(streamingInstances.length - 1).closeWithResult.mockImplementationOnce(close.wait);
+        await Promise.race([options.onIdle?.(), close.started]);
+      } else if (event === false) {
+        const content = name === "cut" ? "    a\n" : name === "partial base" ? "A. B." : "A.";
+        const shown = { visibleReplySent: true, content, finalTextAccepted: false };
+        close.reject(streamingFailure(new Error("no"), shown));
+        await expect(options.onIdle?.()).rejects.toThrow("no");
+        if (name !== "cut" && !name.startsWith("partial")) {
+          expectSend(sendStructuredCardFeishuMock, { text: "A." });
+          expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+          expect(streamingInstances).toHaveLength(name === "rejection" ? 1 : 2);
+        }
+      } else if (event === 2) {
+        result.replyOptions.onAssistantMessageStart?.();
+      } else if (event === 3) {
+        streamingInstances.at(-1)?.closeWithResult.mockRejectedValueOnce(new Error("no"));
+        await expect(options.onIdle?.()).rejects.toThrow("no");
+      } else if (typeof event === "number") {
+        if (event === 0) {
+          sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("no"));
+        }
+        const current = stream(streamingInstances.length - 1);
+        current.closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
+        await options.onIdle?.();
+      } else if (typeof event === "string") {
+        result.replyOptions.onPartialReply?.({ text: event });
+      } else if (typeof event[1] === "number") {
+        void (await options.block({ text: event[0] }, event[1]))?.finalization?.catch(() => {});
+      } else {
+        const deliver = event[1] ? options.final : options.block;
+        void (await deliver({ text: event[0], isError: event[1] }))?.finalization?.catch(() => {});
+      }
     }
     await options.onIdle?.();
-    expect(streamingInstances).toHaveLength(1);
-    expect(stream(0).closeWithResult).toHaveBeenCalledTimes(1);
-    expectClosed(expected);
+    const closeCalls = streamingInstances.map((stub) => stub.closeWithResult.mock.calls);
+    expect(closeCalls).toEqual(cards.map((text) => [[text, { note: "Agent: agent" }]]));
   });
-
   it("keeps an over-limit block in its active streaming card", async () => {
     useStreamingBlockAccount();
     const text = makeTableText(6);
@@ -1118,7 +1177,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectNoStaticReply();
     expect(finalized).toMatchObject(accepted(text, ["om_stream"]));
   });
-
   it.each([false, true])(
     "keeps TTS caption visibility when already delivered=%s",
     async (visible) => {
@@ -1159,7 +1217,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it("discards partial streaming text when final replies send voice media", async () => {
     const { result, options } = createDispatcherHarness();
     result.replyOptions.onPartialReply?.({ text: "spoken reply" });
@@ -1179,7 +1236,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       audioAsVoice: true,
     });
   });
-
   it("preserves the no-provider-dispatch marker for media preparation failures", async () => {
     useNonStreamingAutoAccount();
     const marker = Object.assign(
@@ -1193,7 +1249,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       .catch((caught: unknown) => caught);
     expect(error).toBe(marker);
   });
-
   it("never sends media fallback text after an accepted attachment loses its receipt", async () => {
     useNonStreamingAutoAccount();
     const acceptedError = createChannelPartialDeliveryError(
@@ -1215,7 +1270,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("retains accepted chunk content when a later receipt is lost", async () => {
     useNonStreamingAutoAccount();
     const runtime = getFeishuRuntimeMock();
@@ -1234,7 +1288,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(error).toMatchObject(partialDelivery("firstsecond", ["om-first"]));
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
   });
-
   it.each(["media failure", "idle"])(
     "retains an accepted fallback prefix after %s",
     async (trigger) => {
@@ -1258,16 +1311,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         const error = delivery.catch((caught: unknown) => caught);
         await media.started;
         expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-        stream(0).closeWithResult.mockResolvedValueOnce({
-          visibleReplySent: false,
-        });
+        stream(0).closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
         media.reject(new Error("media failed"));
         await expect(error).resolves.toMatchObject(partialDelivery("first", ["om-first-static"]));
       } else {
         const delivered = await delivery;
-        stream(0).closeWithResult.mockResolvedValueOnce({
-          visibleReplySent: false,
-        });
+        stream(0).closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
         await options.onIdle?.();
         await expect(delivered?.finalization).rejects.toMatchObject(
           partialDelivery("first", ["om-first-static"]),
@@ -1276,7 +1325,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
     },
   );
-
   it("does not retry degraded-voice fallback as a failed media send", async () => {
     useNonStreamingAutoAccount();
     sendMediaFeishuMock.mockResolvedValueOnce({
@@ -1301,7 +1349,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       deliveryResult: { messageIds: ["om-media"], visibleReplySent: true },
     });
   });
-
   it("allows recovery after a final rewrite leaves only an earlier preview visible", async () => {
     const { result, options } = createDispatcherHarness();
     result.replyOptions.onPartialReply?.({ text: "accepted preview" });
@@ -1325,7 +1372,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(2);
     expectClosed("final answer", 1);
   });
-
   it.each([
     { name: "rejected final after visible preview", mode: "card", visible: true, rejected: true },
     { name: "accepted final before close failure", mode: "card", visible: true, rejected: false },
@@ -1346,7 +1392,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     const { options } = createDispatcherHarness();
     const delivery = await options.final({ text });
-    const duplicate = rejected ? await options.final({ text }) : undefined;
+    const repeat = rejected ? await options.final({ text }) : undefined;
     stream(0).closeWithResult.mockRejectedValueOnce(
       streamingFailure(new Error(error), {
         visibleReplySent: visible,
@@ -1358,9 +1404,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(options.onIdle?.()).rejects.toThrow(error);
     await expect(delivery?.finalization).rejects.toMatchObject(partialDelivery(text, [messageId]));
     if (rejected) {
-      await expect(duplicate?.finalization).rejects.toMatchObject(
-        partialDelivery(text, [messageId]),
-      );
+      await expect(repeat?.finalization).rejects.toMatchObject(partialDelivery(text, [messageId]));
     }
     if (recover) {
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ text }));
@@ -1375,7 +1419,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     }
   });
-
   it("retains a failed visible close for media-delayed finalization registration", async () => {
     const { options, media, pending } = await holdMediaFinal("accepted card");
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
@@ -1395,7 +1438,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it("waits for an in-flight close before recovering from companion media failure", async () => {
     const { options, media, pending } = await holdMediaFinal("accepted card");
     const deliveryErrorPromise = pending.catch((error: unknown) => error);
@@ -1417,7 +1459,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each([true, false])(
     "retains the native close error and its cause after media failure with visible=%s",
     async (visible) => {
@@ -1450,7 +1491,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(visible ? 0 : 1);
     },
   );
-
   it("preserves fallback-only nested-error precedence after media failure", async () => {
     const transportCause = new Error("socket closed");
     sendStructuredCardFeishuMock.mockRejectedValueOnce(
@@ -1467,7 +1507,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledOnce();
   });
-
   it("assigns an idle-closed card to its later matching final before media", async () => {
     const { result, options } = createDispatcherHarness();
     await options.onReplyStart?.();
@@ -1478,7 +1517,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(delivery).toMatchObject(accepted("accepted answer", ["om_stream", "om-media"]));
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it("shares one closed streaming settlement with every delayed payload owner", async () => {
     const { options, firstMedia, secondMedia, firstPending, secondPending } = await holdMediaPair(
       "first",
@@ -1498,7 +1536,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it("shares rejected-final recovery with media-delayed owners", async () => {
     sendStructuredCardFeishuMock.mockResolvedValueOnce({ messageId: "om-recovery" });
     const { options, firstMedia, secondMedia, firstPending, secondPending } =
@@ -1524,7 +1561,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
   });
-
   it("retains every accepted voice upload fallback when a later fallback fails", async () => {
     sendMediaFeishuMock
       .mockRejectedValueOnce(new Error("first upload failed"))
@@ -1554,7 +1590,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
   });
-
   it("does not leak local media paths in the upload failure fallback", async () => {
     const mediaPath = path.join(os.tmpdir(), "openclaw-feishu-reply-local-voice.mp3");
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
@@ -1564,7 +1599,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const fallbackText = String(firstMockArg(sendMessageFeishuMock, "message send params").text);
     expect(fallbackText).toBe("spoken reply\n\nMedia upload failed. Please try again.");
   });
-
+  const code = "```ts\ncode\n```";
   it.each([
     {
       name: "reasoning and answer",
@@ -1574,22 +1609,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expected: "> thinking step",
       duplicate: true,
     },
-    {
-      name: "reasoning only",
-      reasoning: ["deep thought"],
-      partial: undefined,
-      final: undefined,
-      expected: "> deep thought",
-      duplicate: false,
-    },
-    {
-      name: "empty reasoning",
-      reasoning: [""],
-      partial: "```ts\ncode\n```",
-      final: "```ts\ncode\n```",
-      expected: "",
-      duplicate: false,
-    },
+    { name: "reasoning only", reasoning: ["deep thought"], expected: "> deep thought" },
+    { name: "empty reasoning", reasoning: [""], partial: code, final: code },
   ])(
     "renders $name in the reasoning-enabled stream",
     async ({ reasoning, partial, final, expected, duplicate }) => {
@@ -1635,7 +1656,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(closed).toContain(final);
     },
   );
-
   it("uses streaming cards for thread replies and keeps topic metadata", async () => {
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
@@ -1652,7 +1672,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each([
     {
       name: "web_search",
@@ -1688,7 +1707,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expectClosed("final answer");
     },
   );
-
   it.each([
     { reason: "cancelled_by_reply_payload_sending_hook", recover: false },
     { reason: "channel_transform", recover: false },
@@ -1708,7 +1726,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("dispatch-complete")).resolves.toBe(recover);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(recover ? 1 : 0);
   });
-
   it.each([
     { failureKind: "final", recover: true },
     { failureKind: "block", recover: false },
@@ -1736,23 +1753,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendMessageFeishuMock).toHaveBeenCalledTimes(recover ? 1 : 0);
     },
   );
-
   it.each([
     { name: "newer silence", skippedIndex: 2, deliveryIndex: 1, rewritten: false, recover: false },
-    {
-      name: "unindexed failure",
-      skippedIndex: undefined,
-      deliveryIndex: undefined,
-      rewritten: false,
-      recover: true,
-    },
-    {
-      name: "rewritten later block",
-      skippedIndex: 1,
-      deliveryIndex: 2,
-      rewritten: true,
-      recover: true,
-    },
+    { name: "unindexed failure", rewritten: false, recover: true },
+    { name: "rewritten block", skippedIndex: 1, deliveryIndex: 2, rewritten: true, recover: true },
   ])(
     "preserves fallback ordering after $name",
     async ({ skippedIndex, deliveryIndex, rewritten, recover }) => {
@@ -1787,7 +1791,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it("waits for pending streaming close before no-visible-reply fallback", async () => {
     const { result, options } = createDispatcherHarness();
     const text = "```md\nvisible answer\n```";
@@ -1807,7 +1810,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(session.closeWithResult).toHaveBeenCalledWith(text, { note: "Agent: agent" });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("keeps visible reply state across repeated reply-start keepalives", async () => {
     const { result, options } = createDispatcherHarness();
     await options.onReplyStart?.();
@@ -1816,7 +1818,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("cleans streaming state even when close throws", async () => {
     const { options } = createDispatcherHarness();
     const firstDelivery = await options.final({ text: "```md\nfirst\n```" });
@@ -1833,7 +1834,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(2);
     expectClosed("```md\nsecond\n```", 1);
   });
-
   it("backs off streaming retries after start() throws (HTTP 400)", async () => {
     const errorMock = vi.fn();
     let shouldFailStart = true;
