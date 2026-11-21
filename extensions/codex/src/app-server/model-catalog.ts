@@ -1,11 +1,7 @@
 import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
-  resolveCodexAppServerAuthProfileId,
-  resolveCodexAppServerAuthProfileStore,
-} from "./auth-profile.js";
-import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
+import { createCodexAuthProfileSelection } from "./auth-profile-selection.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
@@ -18,11 +14,8 @@ import {
 import { probeCodexNativeAuth } from "./native-auth.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
-import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
-import {
-  captureSharedCodexAppServerCatalogLifetime,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+import { isCodexResponsesOAuthCredential } from "./responses-oauth-policy.js";
+import { isCodexAppServerIndeterminateRequestCancellationError } from "./rpc-error.js";
 
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
@@ -56,7 +49,12 @@ function codexAppServerModelsToCatalogEntries(
 }
 
 /** One harness registration owns its observations; none travel with worker snapshots. */
-export function createCodexAppServerModelCatalog(runtime: string) {
+export function createCodexAppServerModelCatalog(
+  runtime: string,
+  modelAuth: Parameters<typeof createCodexAuthProfileSelection>[0],
+) {
+  const { resolveCodexAppServerAuthProfileId, resolveCodexAppServerAuthProfileStore } =
+    createCodexAuthProfileSelection(modelAuth);
   type Observation = {
     pluginConfig: unknown;
     models?: ReadonlySet<string>;
@@ -67,17 +65,18 @@ export function createCodexAppServerModelCatalog(runtime: string) {
   const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
   const scopeKey = (params: AgentHarnessModelCatalogParams) =>
     JSON.stringify([params.agentId, params.agentDir, params.workspaceDir]);
-  let disposed = false;
+  // Cancellation must reach request admission even before the lazy client installs its disposer.
+  const lifetime = new AbortController();
   return {
     dispose() {
-      disposed = true;
+      lifetime.abort(new Error("Codex model catalog is disposed"));
     },
     read(
       params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
       pluginConfig: unknown,
     ) {
       const observation = scopes.get(params.config)?.get(scopeKey(params));
-      return !disposed &&
+      return !lifetime.signal.aborted &&
         params.provider === "openai" &&
         observation !== undefined &&
         observation.pluginConfig === pluginConfig &&
@@ -94,7 +93,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       params: AgentHarnessModelCatalogParams,
       pluginConfig: unknown,
     ): Promise<{ entries: ModelCatalogEntry[]; outcomes?: ProviderCatalogOutcome[] }> {
-      if (disposed) {
+      if (lifetime.signal.aborted) {
         return { entries: [] };
       }
       let observations = scopes.get(params.config);
@@ -133,13 +132,19 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const native = usesNativeHome
         ? await probeCodexNativeAuth({ pluginConfig: configured })
         : undefined;
-      if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
+      if (
+        (usesNativeHome && !native) ||
+        lifetime.signal.aborted ||
+        observations.get(key) !== observation
+      ) {
         return { entries: [] };
       }
       const { start } = options;
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
         {
+          requestScope: "control-plane",
+          signal: lifetime.signal,
           startOptions: start,
           pluginConfig: configured,
           config: params.config,
@@ -150,7 +155,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
             ? { authRequirement: "environment-api-key" as const }
             : {}),
         },
-        async (request, client) => {
+        async (request, lifecycle) => {
           try {
             // Codex serializes this read after login's delayed account/updated.
             // Drain startup before pinning the account revision for discovery.
@@ -158,7 +163,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
               method: "account/read",
               requestParams: { refreshToken: false },
             });
-            const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+            const isCurrent = lifecycle.captureCatalogLifetime();
             const listed = await listAllCodexAppServerModels({
               request,
               limit: 100,
@@ -185,14 +190,14 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
-              retireSharedCodexAppServerClientIfCurrent(client);
+              lifecycle.retireIfCurrent();
             }
             throw error;
           }
         },
       );
       // Publish only after the bounded operation settles; a late timed-out callback cannot publish.
-      if (disposed || observations.get(key) !== observation || !result.isCurrent()) {
+      if (lifetime.signal.aborted || observations.get(key) !== observation || !result.isCurrent()) {
         return { entries: [] };
       }
       observation.models = new Set(result.models.map((model) => model.id));

@@ -1,4 +1,4 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
 import type { CodexAppServerParseFailure } from "./client-message-decoder.js";

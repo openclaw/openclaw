@@ -2,6 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import * as modelAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   fixtureReceiptClientSource,
@@ -156,7 +157,7 @@ process.stdin.on("end", () => process.exit(0));
       await fs.mkdir(catalogHome, { recursive: true });
       const readAccount = async () =>
         JSON.parse(await fs.readFile(path.join(catalogHome, "catalog-account.json"), "utf8"));
-      const catalog = createCodexAppServerModelCatalog("codex");
+      const catalog = createCodexAppServerModelCatalog("codex", modelAuth);
       const params = { config, agentId: "main", agentDir, workspaceDir: root };
       const check = (value: unknown, label: string = mode) => expect.soft(value, label);
       try {
@@ -270,7 +271,7 @@ if (process.argv.includes("--native")) {
         entries: { main: { agentDir, workspace: workspaceDir } },
       },
     };
-    const catalog = createCodexAppServerModelCatalog("codex");
+    const catalog = createCodexAppServerModelCatalog("codex", modelAuth);
     const leases: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>>[] = [];
     let settled: Promise<unknown> | undefined;
     try {

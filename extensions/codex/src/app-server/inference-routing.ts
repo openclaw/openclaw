@@ -21,9 +21,10 @@ import {
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
-import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth-policy.js";
+import type { CodexResponsesOAuth } from "./responses-oauth.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv } from "./spawn-env.js";
 
 const loadSsrfRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/ssrf-runtime"));
 const loadInferenceProxy = createLazyRuntimeModule(() => import("./inference-proxy.js"));

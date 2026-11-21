@@ -41,8 +41,8 @@ import {
 import { reconcileCodexComputerUseStartArtifacts as reconcileArtifacts } from "./computer-use-artifacts.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
+import { resolveCodexAppServerSpawnEnv } from "./spawn-env.js";
 import { createClientHarness } from "./test-support.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const agentDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-");
 
@@ -149,9 +149,9 @@ const providerMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
-  const { saveAuthProfileStore } = actual;
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>();
+  const { saveAuthProfileStore } = await import("openclaw/plugin-sdk/agent-runtime");
   return {
     ...actual,
     resolveApiKeyForProfile: async (

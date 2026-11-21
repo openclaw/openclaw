@@ -36,6 +36,9 @@ const loadRuntimeArtifactConnection = createLazyRuntimeModule(
 const loadAppServerConfig = createLazyRuntimeModule(() => import("./src/app-server/config.js"));
 const loadUsage = createLazyRuntimeModule(() => import("./src/app-server/usage.js"));
 const loadModelCatalog = createLazyRuntimeModule(() => import("./src/app-server/model-catalog.js"));
+const loadModelAuth = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/provider-auth-runtime"),
+);
 const loadEffectiveMcpCatalog = createLazyRuntimeModule(
   () => import("./src/app-server/effective-mcp-catalog.js"),
 );
@@ -289,7 +292,14 @@ export function createCodexAppServerAgentHarness(
       if (disposed) {
         return { entries: [] };
       }
-      modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
+      if (!modelCatalog) {
+        const modelAuth = sessionRuntime?.modelAuth ?? (await loadModelAuth());
+        // A direct registration without a host runtime can be disposed during fallback loading.
+        if (disposed) {
+          return { entries: [] };
+        }
+        modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId, modelAuth);
+      }
       return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
     },
     readModelCatalogReadiness: (params) =>

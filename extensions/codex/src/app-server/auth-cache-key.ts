@@ -6,7 +6,7 @@ import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv } from "./spawn-env.js";
 
 export const CODEX_AUTH_JSON_FILENAME = "auth.json";
 export const CODEX_APP_SERVER_API_KEY_ENV_VARS = ["CODEX_API_KEY", "OPENAI_API_KEY"];

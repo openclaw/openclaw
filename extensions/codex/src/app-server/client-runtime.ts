@@ -1,4 +1,5 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";

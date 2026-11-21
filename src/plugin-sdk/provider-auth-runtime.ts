@@ -17,7 +17,27 @@ import { renderOAuthPage } from "../shared/oauth-page.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { withPersonalAuthProfileStore } from "../agents/auth-profiles/personal-store.js";
-export { withAuthProfileStoreAtEffect } from "../agents/auth-profiles/store-runtime.js";
+// Native auth consumers need credential ownership, not model and tool construction.
+export {
+  ensureAuthProfileStoreAsync,
+  findPersistedAuthProfileCredentialAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
+  withAuthProfileStoreAtEffect,
+} from "../agents/auth-profiles/store-runtime.js";
+export { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+export {
+  refreshOAuthCredentialForRuntime,
+  resolveApiKeyForProfile,
+} from "../agents/auth-profiles/oauth.js";
+export {
+  isPendingOAuthRefreshFence,
+  isSameOAuthRefreshGeneration,
+} from "../agents/auth-profiles/oauth-refresh-marker.js";
+export type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+} from "../agents/auth-profiles/types.js";
 export { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
 export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";

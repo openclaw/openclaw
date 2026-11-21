@@ -6,12 +6,14 @@ import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-ru
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
-  resolveDynamicToolCallTimeoutMs,
-  resolveDynamicToolServerRequestTimeoutMs,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
+import {
+  resolveDynamicToolCallTimeoutMs,
+  resolveDynamicToolServerRequestTimeoutMs,
+} from "./dynamic-tool-timeout.js";
 import {
   createBridge,
   createDynamicToolCall,

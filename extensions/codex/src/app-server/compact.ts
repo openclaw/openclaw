@@ -21,11 +21,7 @@ import {
   protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
-import {
-  CodexAppServerRpcError,
-  isCodexAppServerIndeterminateRequestCancellationError,
-  isCodexAppServerPrewriteRequestCancellationError,
-} from "./client.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   clearContextEngineProjectionBeforeNativeCompaction,
   settleCodexCompactionSubscription,
@@ -45,8 +41,12 @@ import { getCodexInferenceThreadQualification } from "./inference-routing.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { JsonObject } from "./protocol.js";
-import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
-import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth-policy.js";
+import {
+  CodexAppServerScopedRequestRejectedError,
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerPrewriteRequestCancellationError,
+} from "./rpc-error.js";
 import { prepareCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,

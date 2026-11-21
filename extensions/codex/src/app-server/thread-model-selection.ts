@@ -6,7 +6,7 @@ import type { CodexAppServerHomeScope } from "./config-contracts.js";
 import {
   CODEX_RESPONSES_OAUTH_PROVIDER,
   isCodexResponsesOAuthCredential,
-} from "./responses-oauth.js";
+} from "./responses-oauth-policy.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";

@@ -39,7 +39,7 @@ import {
   writeCompactionTestBinding,
   writeSupervisedTestBinding,
 } from "./compact.test-support.js";
-import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth-policy.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   clearCodexAppServerBindingForThread,

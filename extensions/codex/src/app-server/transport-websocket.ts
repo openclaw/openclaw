@@ -7,7 +7,8 @@ import { PassThrough, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { checkServerIdentity } from "node:tls";
 import { type ClientOptions, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
+import { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
+import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import type { CodexAppServerTransport } from "./transport.js";
 import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 

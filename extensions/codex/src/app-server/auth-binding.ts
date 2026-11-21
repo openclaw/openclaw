@@ -4,10 +4,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveApiKeyForProfile, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
-import {
-  isCodexResponsesOAuthCredential,
-  resolveCodexResponsesOAuthProfileFingerprint,
-} from "./responses-oauth.js";
+import { isCodexResponsesOAuthCredential } from "./responses-oauth-policy.js";
+import { resolveCodexResponsesOAuthProfileFingerprint } from "./responses-oauth.js";
 
 type CodexAppServerPreparedAuthBinding = {
   authProfileStore: AuthProfileStore;

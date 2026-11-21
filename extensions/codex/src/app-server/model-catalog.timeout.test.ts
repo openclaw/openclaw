@@ -1,3 +1,4 @@
+import * as modelAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { createModelFixture } from "./model-fixture.test-support.js";
@@ -8,8 +9,13 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared-client.js")>()),
   getLeasedSharedCodexAppServerClient: async () => ({ request: transport.request }),
   createIsolatedCodexAppServerClient: vi.fn(),
-  captureSharedCodexAppServerCatalogLifetime: () => () => true,
   releaseLeasedSharedCodexAppServerClient: transport.release,
+}));
+
+// mock-isolation: Timeout tests own a synthetic transport, not physical shared-client state.
+vi.mock("./shared-client-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client-lifecycle.js")>()),
+  captureSharedCodexAppServerCatalogLifetime: () => () => true,
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
 }));
 
@@ -59,7 +65,7 @@ describe("Codex catalog refresh deadline", () => {
   });
 
   it("allows native refresh fallback before publishing account-scoped readiness", async () => {
-    const owner = createCodexAppServerModelCatalog("codex");
+    const owner = createCodexAppServerModelCatalog("codex", modelAuth);
     const result = expect(owner.load(params, pluginConfig)).resolves.toEqual({
       entries: [expect.objectContaining({ id: model.id, nativeRuntime: "codex" })],
       outcomes: [{ provider: "openai", status: "ready", modelAccessPrograms: [] }],
@@ -80,7 +86,7 @@ describe("Codex catalog refresh deadline", () => {
   });
 
   it("honors an explicit shorter deadline and cannot publish a late result", async () => {
-    const owner = createCodexAppServerModelCatalog("codex");
+    const owner = createCodexAppServerModelCatalog("codex", modelAuth);
     const configured = { ...pluginConfig, discovery: { timeoutMs: 750 } };
     const rejected = expect(owner.load(params, configured)).rejects.toThrow(/timed out/);
     await advance(750);

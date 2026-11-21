@@ -7,7 +7,7 @@ import { resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
 import { isJsonObject } from "./protocol.js";
-import { isCodexResponsesOAuth } from "./responses-oauth.js";
+import { isCodexResponsesOAuth } from "./responses-oauth-policy.js";
 
 type CodexIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>

@@ -3,11 +3,11 @@ import {
   embeddedAgentLog,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import {
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
-} from "openclaw/plugin-sdk/provider-auth";
-import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createCodexAuthProfileSelection,
   type CodexAppServerAuthProfileLookup,

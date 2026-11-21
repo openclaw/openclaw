@@ -5,7 +5,7 @@ import {
   CodexAppServerScopedRequestRejectedError,
   requestCodexAppServerClientJson,
 } from "./request.js";
-import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth-policy.js";
 
 /** Validate an explicit Ultrafast selection against this turn's native model and client. */
 export async function resolveCodexUltrafastServiceTier(params: {

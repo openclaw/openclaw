@@ -35,7 +35,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth-policy.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {

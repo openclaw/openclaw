@@ -10,7 +10,7 @@ import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { buildCodexLoginStatusArgs, isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv } from "./spawn-env.js";
 
 const OPENAI_LOGIN_MODES: Readonly<Record<string, "oauth" | "token">> = {
   "Logged in using ChatGPT": "oauth",

@@ -44,7 +44,7 @@ import {
 } from "./plugin-thread-config-deadline.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
-import { isCodexResponsesOAuth } from "./responses-oauth.js";
+import { isCodexResponsesOAuth } from "./responses-oauth-policy.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,

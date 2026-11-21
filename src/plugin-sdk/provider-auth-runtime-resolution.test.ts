@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
-import { getRuntimeAuthForModel, resolveApiKeyForProvider } from "./provider-auth-runtime.js";
+import * as authRuntime from "./provider-auth-runtime.js";
 
 const runtime = vi.hoisted(() => ({
   provider:
@@ -44,8 +44,8 @@ it("resolves provider and model auth when runtime code has no physical file", as
   };
   const request = { model };
 
-  await expect(resolveApiKeyForProvider(provider)).resolves.toBe(credential);
-  await expect(getRuntimeAuthForModel(request)).resolves.toBe(credential);
+  await expect(authRuntime.resolveApiKeyForProvider(provider)).resolves.toBe(credential);
+  await expect(authRuntime.getRuntimeAuthForModel(request)).resolves.toBe(credential);
   expect(runtime.provider).toHaveBeenCalledWith(provider);
   expect(runtime.model).toHaveBeenCalledWith(request);
 });

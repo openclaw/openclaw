@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createModelFixture } from "./model-fixture.test-support.js";
 import { CodexAppServerScopedRequestRejectedError } from "./request.js";
-import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth-policy.js";
 import { withCodexAppServerFastModeServiceTier } from "./run-attempt-lifecycle.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { createClientHarness } from "./test-support.js";

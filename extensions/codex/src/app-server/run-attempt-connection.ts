@@ -43,7 +43,7 @@ import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { createCodexWorkerClientFactory } from "./node-app-server-transport.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
-import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth-policy.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import { scopeCodexRunBindingStore } from "./session-binding-scope.js";

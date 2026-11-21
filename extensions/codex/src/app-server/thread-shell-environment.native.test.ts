@@ -7,6 +7,7 @@ import { readCodexEffectiveConfig } from "./config-layer-policy.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
+import { withCodexAppServerGitConfig } from "./spawn-env.js";
 import {
   createParams,
   resetThreadLifecycleTestFixtures,
@@ -20,7 +21,6 @@ import {
 } from "./thread-native.test-support.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
-import { withCodexAppServerGitConfig } from "./transport-stdio.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");

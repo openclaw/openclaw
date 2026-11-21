@@ -19,11 +19,9 @@ import {
   validateCodexConfiguredConnectionCapture,
   type CodexConfiguredConnectionCapture,
 } from "./runtime-artifact-connection.js";
+import { resolveCodexAppServerSpawnEnv } from "./spawn-env.js";
 import type { CodexAppServerSpawnIdentity } from "./spawn-identity.js";
-import {
-  resolveCodexAppServerSpawnEnv,
-  resolveCodexAppServerSpawnInvocation,
-} from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnInvocation } from "./transport-stdio.js";
 
 const ARTIFACT_ID_PREFIX = "codex-app-server:v1:";
 const ARTIFACT_HASH_DOMAIN = "openclaw-codex-app-server-runtime-artifact-v1\0";

@@ -29,8 +29,8 @@ vi.mock("./client-runtime.js", () => ({
     },
   }),
 }));
-vi.mock("./client.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./client.js")>()),
+vi.mock("./rpc-error.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./rpc-error.js")>()),
   isCodexAppServerIndeterminateRequestCancellationError: () => false,
 }));
 vi.mock("./explicit-skill-input.js", () => ({ resolveCodexExplicitSkillInputs: async () => [] }));

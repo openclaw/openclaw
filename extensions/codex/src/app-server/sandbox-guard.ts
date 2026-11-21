@@ -8,49 +8,16 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexRemoteExecPlacementSandbox } from "./config-parsing.js";
 import type { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
+  isCodexControlPlaneMethod,
+  isCodexPolicyFreeControlPlaneMethod,
+} from "./control-plane-methods.js";
+import {
   formatCodexNativeNodeExecBlock,
   prepareCodexNativeExecutionPolicy,
   type resolveCodexNativeExecutionPolicy,
   type CodexNativeExecutionPolicy,
   type PreparedCodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
-
-const ALLOWED_CONTROL_PLANE_METHODS = new Set([
-  "account/rateLimits/read",
-  "account/read",
-  "app/installed",
-  "app/list",
-  "app/read",
-  "config/batchWrite",
-  "config/mcpServer/reload",
-  "config/read",
-  "config/value/write",
-  "environment/add",
-  "experimentalFeature/list",
-  "experimentalFeature/enablement/set",
-  "feedback/upload",
-  "hooks/list",
-  "initialize",
-  "marketplace/add",
-  "mcpServerStatus/list",
-  "model/list",
-  "plugin/install",
-  "plugin/installed",
-  "plugin/list",
-  "plugin/read",
-  "skills/list",
-  "thread/archive",
-  "thread/inject_items",
-  "thread/list",
-  "thread/metadata/update",
-  "thread/name/set",
-  "thread/read",
-  "thread/rollback",
-  "thread/unarchive",
-  "thread/unsubscribe",
-  "turn/interrupt",
-  "turn/steer",
-]);
 
 /** Returns a block message when a direct app-server method would bypass OpenClaw execution policy. */
 export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
@@ -65,9 +32,8 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   executionPolicy: CodexNativeExecutionPolicy;
   sandbox?: Pick<SandboxContext, "enabled"> | null;
 }): string | undefined {
-  const controlPlane = ALLOWED_CONTROL_PLANE_METHODS.has(params.method);
-  // Reloading MCP servers can start app-backed processes in the Codex app-server environment.
-  if (!controlPlane || params.method === "config/mcpServer/reload") {
+  const controlPlane = isCodexControlPlaneMethod(params.method);
+  if (!isCodexPolicyFreeControlPlaneMethod(params.method)) {
     const nodeExecBlock = resolveCodexNativeNodeExecBlock({
       config: params.config,
       sessionKey: params.sessionKey,
@@ -133,10 +99,7 @@ export async function prepareCodexAppServerDirectSandboxBypassBlock(
     "executionPolicy"
   >,
 ): Promise<PreparedCodexNativeBlock> {
-  if (
-    ALLOWED_CONTROL_PLANE_METHODS.has(params.method) &&
-    params.method !== "config/mcpServer/reload"
-  ) {
+  if (isCodexPolicyFreeControlPlaneMethod(params.method)) {
     return { block: undefined, async assertCurrent() {}, release() {} };
   }
   return prepareCodexNativeBlock(params, resolveCodexAppServerDirectSandboxBypassBlock);

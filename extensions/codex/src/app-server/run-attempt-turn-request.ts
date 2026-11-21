@@ -18,7 +18,6 @@ import {
 } from "./binding-connection.js";
 import { recordCodexTurnForkSettings } from "./client-fork-settings.js";
 import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
-import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
@@ -30,6 +29,7 @@ import type { CodexGetAccountResponse, CodexTurnStartResponse } from "./protocol
 import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
+import { isCodexAppServerIndeterminateRequestCancellationError } from "./rpc-error.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,

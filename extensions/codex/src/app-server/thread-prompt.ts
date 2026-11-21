@@ -23,7 +23,7 @@ import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
-import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth-policy.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 
 export type CodexThreadPromptContext = Pick<

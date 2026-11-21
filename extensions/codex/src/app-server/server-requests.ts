@@ -1,9 +1,9 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { addSafeTimeoutDelayGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-execution.js";
+import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-timeout.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import { isJsonObject, type JsonValue, type RpcRequest, type RpcResponse } from "./protocol.js";

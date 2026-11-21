@@ -24,7 +24,7 @@ import {
   CodexManagedHooksOnlyError,
 } from "./native-hook-relay.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
-import { isCodexResponsesOAuth } from "./responses-oauth.js";
+import { isCodexResponsesOAuth } from "./responses-oauth-policy.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   assertScheduledCodexAppAuthorityRuntime,

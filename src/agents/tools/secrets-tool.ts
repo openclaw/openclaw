@@ -12,9 +12,9 @@ import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { resolveDefaultSecretProviderAlias } from "../../secrets/ref-contract.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel-normalize.js";
 import { resolveAgentQuestionGatewayCall } from "../harness/gateway-question-dispatch.js";
+import { normalizeQuestionTimeoutSeconds } from "../question-timeout.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { describeSecretsTool } from "../tool-description-presets.js";
-import { normalizeQuestionTimeoutSeconds } from "./ask-user-tool-normalization.js";
 import { beginAskUserPromptDelivery } from "./ask-user-tool.js";
 import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common.js";
 import {

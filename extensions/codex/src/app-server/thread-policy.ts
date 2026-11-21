@@ -5,17 +5,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { CodexEphemeralThreadPolicy } from "./client-thread-owner.js";
-import {
-  isCodexAppServerOverloadError,
-  isCodexAppServerPrewriteRequestCancellationError,
-  type CodexAppServerClient,
-} from "./client.js";
+import { isCodexAppServerOverloadError, type CodexAppServerClient } from "./client.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import type { CodexThread } from "./protocol.js";
 import {
   CodexAppServerScopedRequestRejectedError,
   requestCodexAppServerClientJson,
 } from "./request.js";
+import { isCodexAppServerPrewriteRequestCancellationError } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";

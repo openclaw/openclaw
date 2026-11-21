@@ -25,12 +25,13 @@ import {
   type AttemptClientHarness as ClientHarness,
 } from "./attempt-startup.test-support.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
-import { CodexAppServerClient, isCodexAppServerRequestTimeoutError } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { codexPluginConfig, curatedPlugin } from "./plugin-inventory.test-helpers.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { isCodexAppServerRequestTimeoutError } from "./rpc-error.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";

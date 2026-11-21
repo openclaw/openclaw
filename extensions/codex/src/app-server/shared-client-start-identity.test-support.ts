@@ -9,7 +9,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
-import { resolveCodexAppServerSpawnEnv, withCodexAppServerGitConfig } from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv, withCodexAppServerGitConfig } from "./spawn-env.js";
 
 export function registerSharedClientStartIdentityTests() {
   it.each(["catalog-first", "turn-first"])(
