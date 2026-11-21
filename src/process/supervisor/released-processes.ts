@@ -1,10 +1,16 @@
 import { readProcessIdentity, isSupported } from "@openclaw/proc-safe/identity";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { isPidDefinitelyDead, isPidDefinitelyDeadAsync } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils/sleep.js";
 import { readCommandProcessStartTime } from "../command-process-identity.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import type { ReleasedProcess } from "./types.js";
+
+/** Gateway startup loads this: host stop can report after an update replaced its chunk. */
+export const loadSupervisorLogRuntime = createLazyRuntimeModule(
+  () => import("./supervisor-log.runtime.js"),
+);
 
 const REAP_INTERVAL_MS = 5_000;
 
@@ -206,7 +212,7 @@ export async function stopReleasedProcesses(): Promise<void> {
   });
   if (unconfirmed.length > 0) {
     // The records stay; a later stop retries them.
-    const { warnProcessSupervisorFailure } = await import("./supervisor-log.runtime.js");
+    const { warnProcessSupervisorFailure } = await loadSupervisorLogRuntime();
     warnProcessSupervisorFailure(
       `Could not confirm that these processes stopped: ${unconfirmed.join(", ")}`,
     );
