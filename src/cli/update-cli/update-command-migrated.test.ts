@@ -703,7 +703,7 @@ it.for(["package", "release", "success"] as const)(
         withUpdateCommandExecutor(run.runId, async (executor) => {
           const scopedRun = { ...run, executorFence: await executor.enter(candidateRoot) };
           register(scopedRun);
-          const result = await continueMigratedUpdateInFreshProcess(
+          const migratedResult = await continueMigratedUpdateInFreshProcess(
             finishParams({
               root: candidateRoot,
               result: updateResult({ root: candidateRoot }),
@@ -719,9 +719,13 @@ it.for(["package", "release", "success"] as const)(
                 backupRoot: path.join(stateDir, "backup"),
                 rollback: vi.fn(),
                 complete: async () => {
-                  if (stage === "release") return;
+                  if (stage === "release") {
+                    return;
+                  }
                   await hold();
-                  if (stage === "package") throw new Error("fixture late package refusal");
+                  if (stage === "package") {
+                    throw new Error("fixture late package refusal");
+                  }
                 },
               },
             }),
@@ -734,7 +738,7 @@ it.for(["package", "release", "success"] as const)(
               "CREATE TRIGGER deny_success_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture late executor refusal'); END",
             );
           }
-          return result;
+          return migratedResult;
         }),
       { json: true },
     );

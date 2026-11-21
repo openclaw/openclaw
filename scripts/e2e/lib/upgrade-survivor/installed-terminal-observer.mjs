@@ -1370,12 +1370,12 @@ function install(spec) {
         );
         selected = { child: child.pid, input: [], inputBytes: 0, output: [], outputBytes: 0 };
         const state = Object.getOwnPropertyDescriptor(child.stdin, "_writableState").value;
-        const prepareInput = (receiver, args, final) => {
+        const prepareInput = (receiver, inputArgs, final) => {
           try {
             assert.equal(receiver, child.stdin);
             assert.equal(Object.getOwnPropertyDescriptor(receiver, "_writableState")?.value, state);
             const prepared = { ending: state.ending };
-            const [value, encoding] = args;
+            const [value, encoding] = inputArgs;
             if (value !== undefined && value !== null && typeof value !== "function") {
               // Copy only inert input. Coercion and public stream getters must
               // never replace the native operation's return, callback or error.
@@ -1561,8 +1561,8 @@ function install(spec) {
       const cleanup = publishedSteps.slice(privateSteps.length);
       assert(cleanup.length <= 1, "Unexpected candidate publication steps");
       for (const step of cleanup) {
-        const { durationMs, advisory, diagnostics, ...operation } = step;
-        assert.deepEqual(operation, {
+        const { durationMs, advisory, diagnostics, ...cleanupOperation } = step;
+        assert.deepEqual(cleanupOperation, {
           name: "recovery-artifact-cleanup",
           command: "openclaw update cleanup",
           cwd: "",
@@ -1613,9 +1613,12 @@ function install(spec) {
           confirmedAtMs: "confirmed_at_ms",
           finishedAtMs: "finished_at_ms",
           downtimeMs: "downtime_ms",
-        }))
+        })) {
           expected[key] = candidate[column];
-        if (expected.origin.admission) expected.admission = expected.origin.admission;
+        }
+        if (expected.origin.admission) {
+          expected.admission = expected.origin.admission;
+        }
         for (const key of [
           "updateRecoveryCapture",
           "windowsUserSid",
@@ -2013,8 +2016,12 @@ function nativeLifetimeReader(rows, onEnclosing = () => {}) {
       );
     }
     const direct = nativeExitsFor(rows, created);
-    if (direct.length || created.event === "spawn") return requireUniqueExit(created, direct);
-    if (cache.has(created)) return cache.get(created);
+    if (direct.length || created.event === "spawn") {
+      return requireUniqueExit(created, direct);
+    }
+    if (cache.has(created)) {
+      return cache.get(created);
+    }
     assert(!ancestors.has(created), "Cyclic Worker creation ancestry");
     for (const thread of [created.thread, created.childThread]) {
       assert.equal(
@@ -2066,7 +2073,9 @@ const processSettlements = (rows, created) =>
   );
 
 function assertIsolateEnded(isolate, rows, nativeEnd) {
-  if (isolate.at(-1).event === "exit") return;
+  if (isolate.at(-1).event === "exit") {
+    return;
+  }
   const { pid, thread } = isolate[0];
   const created = rows.filter((row) =>
     thread === 0
@@ -3011,16 +3020,21 @@ export function summarizeInstalledTerminalLaunches(rows) {
       }),
     processesWithoutPreload: rows
       .filter((row) => row.event === "spawn" && (row.coverage || row.lifetimeBound))
-      .map((row) => ({
-        pid: row.child,
-        creatorPid: row.pid,
-        creatorThread: row.thread,
-        spawnId: row.spawnId,
-        evidence: reference(row),
-        coverage: row.coverage,
-        ...(row.lifetimeBound ? { lifetimeBound: row.lifetimeBound } : {}),
-        nativeSettlement: processSettlements(rows, row).map(reference),
-      })),
+      .map((row) => {
+        const entry = {
+          pid: row.child,
+          creatorPid: row.pid,
+          creatorThread: row.thread,
+          spawnId: row.spawnId,
+          evidence: reference(row),
+          coverage: row.coverage,
+        };
+        if (row.lifetimeBound) {
+          entry.lifetimeBound = row.lifetimeBound;
+        }
+        entry.nativeSettlement = processSettlements(rows, row).map(reference);
+        return entry;
+      }),
     workerLifetimeBounds: rows
       .filter((row) => row.event === "thread" && row.lifetimeBound)
       .map((row) => {
@@ -3100,7 +3114,9 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
     for (const row of read(`${cell.name}-observer.jsonl.gz`, 32 * 1024 * 1024)) {
       add(row, "raw");
       const key = `${row.pid}:${row.thread}`;
-      if (!fullIsolates.has(key)) fullIsolates.set(key, []);
+      if (!fullIsolates.has(key)) {
+        fullIsolates.set(key, []);
+      }
       fullIsolates.get(key).push(row);
     }
     const lifecycleName = `${cell.name}-lifetimes.jsonl.gz`;
@@ -3159,15 +3175,19 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
       const isolates = new Map();
       for (const event of raw) {
         const key = `${event.pid}:${event.thread}`;
-        if (!isolates.has(key)) isolates.set(key, []);
+        if (!isolates.has(key)) {
+          isolates.set(key, []);
+        }
         isolates.get(key).push(event);
       }
-      for (const [key, events] of isolates) {
+      for (const [key, isolateEvents] of isolates) {
         const complete = fullIsolates.get(key);
         // Only the declared lifecycle projection can omit intermediate events.
         // Full raw isolates must retain every sequence and a qualified ending.
-        if (complete) assertIsolateRows(complete);
-        const ordered = events.toSorted((a, b) => a.sequence - b.sequence);
+        if (complete) {
+          assertIsolateRows(complete);
+        }
+        const ordered = isolateEvents.toSorted((a, b) => a.sequence - b.sequence);
         assertIsolateRows(ordered, false);
         assertIsolateEnded(ordered, raw, nativeEnd);
       }
