@@ -55,6 +55,12 @@ export async function cleanupSessionLifecycleArtifactsCore(
     }
     const input = {
       sessionKeySegmentPrefix,
+      ...(params.scopeOrphanSweepToSessionKeySegmentPrefix === undefined
+        ? {}
+        : {
+            scopeOrphanSweepToSessionKeySegmentPrefix:
+              params.scopeOrphanSweepToSessionKeySegmentPrefix,
+          }),
       transcriptContentMarker,
       pluginOwnerId,
       orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
@@ -186,6 +192,12 @@ export async function cleanupSessionLifecycleArtifactsCore(
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           ...(pluginOwnerId ? { pluginOwnerId } : {}),
           sessionKeySegmentPrefix,
+          ...(params.scopeOrphanSweepToSessionKeySegmentPrefix === undefined
+            ? {}
+            : {
+                scopeOrphanSweepToSessionKeySegmentPrefix:
+                  params.scopeOrphanSweepToSessionKeySegmentPrefix,
+              }),
           transcriptContentMarker,
           orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
           nowMs: params.nowMs ?? Date.now(),

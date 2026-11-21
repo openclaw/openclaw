@@ -17,6 +17,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type MemoryLifecycleArtifactInput = Pick<
   SessionLifecycleArtifactCleanupParams,
   | "sessionKeySegmentPrefix"
+  | "scopeOrphanSweepToSessionKeySegmentPrefix"
   | "transcriptContentMarker"
   | "orphanTranscriptMinAgeMs"
   | "pluginOwnerId"

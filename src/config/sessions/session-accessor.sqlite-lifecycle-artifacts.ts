@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sql, type RawBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -150,8 +151,39 @@ function readOrphanTranscriptMarkerSessionIds(params: {
 
 const ORPHAN_WINDOW_PAGE_SIZE = 128;
 
-function readOrphanWindowPage(database: OpenClawAgentReadOnlyDatabase, afterSessionId?: string) {
+/**
+ * Narrows orphan-window reads to the cleanup's own session-key segment, so a
+ * scoped foreground helper cleanup no longer pages through unrelated orphans
+ * on every call (#202134). Mirrors sessionKeySegmentStartsWith: the segment is
+ * the key after its second colon, or the whole key when there is no second
+ * colon. Only used when the caller opts in with
+ * scopeOrphanSweepToSessionKeySegmentPrefix; the shared marker-based
+ * reclamation contract otherwise still finds marked history outside the entry
+ * prefix (#165254, #182245).
+ */
+function sessionKeySegmentStartsWithSql(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  prefix: string,
+): RawBuilder<boolean> {
+  const position =
+    /* kysely-allow-raw: Closed engine choice of equivalent substring-position functions. */
+    sql.raw(isPostgresSqlConnection(database.db) ? "strpos" : "instr");
+  const key = sql.ref("session_key");
+  return sql<boolean>`${position}(
+    CASE
+      WHEN ${position}(${key}, ':') = 0 THEN ${key}
+      WHEN ${position}(substr(${key}, ${position}(${key}, ':') + 1), ':') = 0 THEN ${key}
+      ELSE substr(${key}, ${position}(${key}, ':') + ${position}(substr(${key}, ${position}(${key}, ':') + 1), ':') + 1)
+    END, ${prefix}) = 1`;
+}
+
+function readOrphanWindowPage(
+  database: OpenClawAgentReadOnlyDatabase,
+  afterSessionId?: string,
+  sessionKeySegmentPrefix?: string,
+) {
   const db = getSessionKysely(database.db);
+  const prefix = sessionKeySegmentPrefix;
   return executeSqliteQuerySync(
     database.db,
     db
@@ -163,6 +195,9 @@ function readOrphanWindowPage(database: OpenClawAgentReadOnlyDatabase, afterSess
         "not in",
         db.selectFrom("session_transcript_cold_archives").select("session_id"),
       )
+      .$if(prefix !== undefined && prefix !== "", (query) =>
+        query.where(sessionKeySegmentStartsWithSql(database, prefix!)),
+      )
       .$if(afterSessionId !== undefined, (query) => query.where("session_id", ">", afterSessionId!))
       .orderBy("session_id", "asc")
       .limit(ORPHAN_WINDOW_PAGE_SIZE),
@@ -170,7 +205,10 @@ function readOrphanWindowPage(database: OpenClawAgentReadOnlyDatabase, afterSess
 }
 
 // Plans orphan cleanup without file writes or row deletion; finalization
-// handles archive durability before removing rows.
+// handles archive durability before removing rows. The orphan sweep follows
+// the shared marker-based reclamation contract across session-key prefixes
+// unless the caller opts in to scoping it to the cleanup's own segment
+// (foreground helper teardown, #202134).
 function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
   agentId?: string;
   archiveRemovedEntryTranscripts: boolean;
@@ -180,6 +218,8 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
   excludedSessionIds?: ReadonlySet<string>;
   pluginOwnerId?: string;
   referencedSessionIds: ReadonlySet<string>;
+  sessionKeySegmentPrefix: string;
+  scopeOrphanSweepToSessionKeySegmentPrefix?: boolean;
   transcriptContentMarker: string;
   orphanTranscriptMinAgeMs: number;
   nowMs: number;
@@ -197,6 +237,8 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
       .filter(
         (row) =>
           sessionKeyBelongsToAgent(row.session_key, params.agentId) &&
+          (!params.scopeOrphanSweepToSessionKeySegmentPrefix ||
+            sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix)) &&
           !params.referencedSessionIds.has(row.session_id) &&
           !params.excludedSessionIds?.has(row.session_id) &&
           (!params.pluginOwnerId ||
@@ -231,7 +273,11 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
       break;
     }
     yield;
-    rows = readOrphanWindowPage(params.database, rows.at(-1)!.session_id);
+    rows = readOrphanWindowPage(
+      params.database,
+      rows.at(-1)!.session_id,
+      params.scopeOrphanSweepToSessionKeySegmentPrefix ? params.sessionKeySegmentPrefix : undefined,
+    );
   }
   return deletePlans;
 }
@@ -379,7 +425,11 @@ function* planSessionLifecycleArtifactCleanupPages(
     if (diagnostics) {
       diagnostics.selectedEntries = entries.length;
     }
-    const firstPage = readOrphanWindowPage(database);
+    const firstPage = readOrphanWindowPage(
+      database,
+      undefined,
+      params.scopeOrphanSweepToSessionKeySegmentPrefix ? params.sessionKeySegmentPrefix : undefined,
+    );
     if (entries.length === 0 && firstPage.length === 0) {
       if (diagnostics) {
         diagnostics.deletePlans = 0;
@@ -419,6 +469,13 @@ function* planSessionLifecycleArtifactCleanupPages(
         excludedSessionIds: removedSessionIds,
         ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
         referencedSessionIds,
+        sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
+        ...(params.scopeOrphanSweepToSessionKeySegmentPrefix === undefined
+          ? {}
+          : {
+              scopeOrphanSweepToSessionKeySegmentPrefix:
+                params.scopeOrphanSweepToSessionKeySegmentPrefix,
+            }),
         transcriptContentMarker: params.transcriptContentMarker,
         orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
         nowMs: params.nowMs,

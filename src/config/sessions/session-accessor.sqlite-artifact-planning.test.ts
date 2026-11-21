@@ -23,6 +23,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
+import type { SqliteSessionArtifactPreparationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { writeSessionEntry as writeRow } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntryReadOnly as readEntry } from "./session-accessor.sqlite-entry.js";
 import * as artifactPlanning from "./session-accessor.sqlite-lifecycle-artifacts.js";
@@ -299,6 +300,78 @@ it("leaves a missing lifecycle store absent", async () => {
   expect(fs.existsSync(databasePath)).toBe(false);
 });
 
+it("scopes the orphan marker sweep to the cleanup's own session-key prefix", () => {
+  const marker = "artifact-plan-marker";
+  const inScopeId = "in-scope-orphan";
+  const nowMs = Date.now() + 600_000;
+  const outOfScopeIds = Array.from(
+    { length: 129 },
+    (_, index) => `out-scope-${String(index).padStart(3, "0")}`,
+  );
+  runOpenClawAgentWriteTransaction((transaction) => {
+    // Windows need a node for their session key; each node points at a
+    // different current session so the seeded windows are orphans. The nodes
+    // stay fresh at the plan time so they are not entry candidates themselves.
+    writeRow(transaction, "agent:main:artifact-plan-orphan", {
+      sessionId: "in-scope-orphan-current",
+      updatedAt: nowMs,
+    });
+    writeRow(transaction, "agent:main:other-lifecycle", {
+      sessionId: "other-lifecycle-current",
+      updatedAt: nowMs,
+    });
+    const window = transaction.db.prepare(
+      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    );
+    const transcript = transaction.db.prepare(
+      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)",
+    );
+    window.run(inScopeId, "agent:main:artifact-plan-orphan");
+    transcript.run(inScopeId, JSON.stringify({ ...event, runId: marker }));
+    for (const id of outOfScopeIds) {
+      window.run(id, "agent:main:other-lifecycle");
+      transcript.run(id, JSON.stringify({ ...event, runId: marker }));
+    }
+  }, options);
+  const diagnostics: SqliteSessionArtifactPreparationDiagnostics = {};
+  const plan = artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
+    ...planInput(),
+    agentId: "main",
+    orphanTranscriptMinAgeMs: 300_000,
+    nowMs,
+    // Foreground helper teardown opts in to the scoped sweep (#202134).
+    scopeOrphanSweepToSessionKeySegmentPrefix: true,
+    diagnostics,
+  });
+  // The victim entry matches the prefix and is removed with its own orphan.
+  expect(plan.entries).toEqual([
+    { sessionKey, expectedEntry: { ...entry, delivery: { kind: "none" as const } } },
+  ]);
+  expect(plan.deletePlans.map((item) => item.sessionId).toSorted()).toEqual(
+    [sessionId, inScopeId].toSorted(),
+  );
+  // Out-of-prefix orphans are never marker-scanned, so a scoped cleanup no
+  // longer rescans unrelated orphan transcripts on every call (#202134).
+  expect(diagnostics.markerWindows).toBe(1);
+  expect(diagnostics.windowRows).toBe(1);
+
+  // Without the opt-in, the shared marker-based reclamation contract still
+  // finds marked history outside the entry prefix (#165254, #182245).
+  const unscopedDiagnostics: SqliteSessionArtifactPreparationDiagnostics = {};
+  const unscopedPlan = artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
+    ...planInput(),
+    agentId: "main",
+    orphanTranscriptMinAgeMs: 300_000,
+    nowMs,
+    diagnostics: unscopedDiagnostics,
+  });
+  expect(unscopedDiagnostics.markerWindows).toBe(130);
+  expect(unscopedDiagnostics.windowRows).toBe(130);
+  expect(unscopedPlan.deletePlans.map((item) => item.sessionId).toSorted()).toEqual(
+    [sessionId, inScopeId, ...outOfScopeIds].toSorted(),
+  );
+});
+
 it("pages orphan marker reads while protecting fresh and retained history", () => {
   const freshSessionId = "history-000";
   const unrelatedSessionId = "history-001";
@@ -308,6 +381,7 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
     { length: 129 },
     (_, index) => `history-${String(index).padStart(3, "0")}`,
   );
+  const nowMs = Date.now();
   runOpenClawAgentWriteTransaction((transaction) => {
     writeRow(transaction, sessionKey, { ...entry, previousSessionId: ids.at(-2) });
     const window = transaction.db.prepare(
@@ -360,7 +434,6 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
         ? "transcriptSelection"
         : null,
   );
-  const nowMs = Date.now();
   const plan = () =>
     artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
       ...planInput(),
