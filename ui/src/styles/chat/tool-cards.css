@@ -1058,9 +1058,12 @@
   }
 
   > :is(.chat-activity-group, .chat-bubble--tool-shell, openclaw-chat-tool-card)
-    + .chat-tool-msg-collapse--lifecycle,
-  > .chat-tool-msg-collapse--lifecycle + :is(.chat-activity-group, .chat-bubble--tool-shell),
-  > .chat-tool-msg-collapse--lifecycle + openclaw-chat-tool-card > .chat-tool-msg-collapse {
+    + :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion),
+  > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
+    + :is(.chat-activity-group, .chat-bubble--tool-shell),
+  > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
+    + openclaw-chat-tool-card
+    > .chat-tool-msg-collapse {
     margin-block-start: calc(2 * var(--chat-run-block-gap) - var(--chat-message-gap));
   }
 }
