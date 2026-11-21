@@ -147,7 +147,7 @@ export function loadManagedChildSpawner(platform = process.platform) {
   if (platform !== "win32") {
     return spawn;
   }
-  return import("./managed-windows-job.mts").then(({ spawnWindowsJobChild }) => {
+  return loadWindowsJobSpawner().then((spawnWindowsJobChild) => {
     function spawnManagedChild(
       command: string,
       args: string[],
@@ -163,7 +163,7 @@ export function loadManagedChildSpawner(platform = process.platform) {
       args: string[],
       options: SpawnOptions,
     ): ChildProcess {
-      const owned = spawnWindowsJobChild(command, args, options);
+      const owned = spawnWindowsJobChild?.(command, args, options);
       if (!owned) {
         return spawn(command, args, options);
       }
@@ -172,6 +172,23 @@ export function loadManagedChildSpawner(platform = process.platform) {
     }
     return spawnManagedChild;
   });
+}
+
+async function loadWindowsJobSpawner() {
+  try {
+    return (await import("./managed-windows-job.mts")).spawnWindowsJobChild;
+  } catch (error) {
+    // worktree-setup runs the first `pnpm install` through here, before proc-safe is installed.
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ERR_MODULE_NOT_FOUND" &&
+      error.message.includes("@openclaw/proc-safe")
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function observeWindowsTree(child: ManagedProcessGroupChild): ManagedChildTermination {
