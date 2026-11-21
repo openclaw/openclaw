@@ -29,6 +29,7 @@ import {
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
+  createLocalWorkspaceBaselineTree,
   localWorkspaceManifestRootReference,
   updateLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestChange,
@@ -347,13 +348,7 @@ export async function executeLocalWorkspaceManifestRead(
       action.manifestRef,
       action.buildCacheInputs,
     );
-    const records = createLocalWorkspaceManifestTree([
-      ...manifest.entries,
-      ...(manifest.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
+    const records = createLocalWorkspaceBaselineTree(manifest, action.preparedDirectories);
     const resultingRoot = localWorkspaceManifestRootReference(records, manifest.baseCommit);
     const mutation: LocalWorkspaceMutation = {
       kind: "update",
@@ -396,13 +391,7 @@ export async function executeLocalWorkspaceManifestRead(
       undefined,
       "stored",
     );
-    records = createLocalWorkspaceManifestTree([
-      ...baseline.entries,
-      ...(baseline.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
+    records = createLocalWorkspaceBaselineTree(baseline);
   } else if (records.size === 0) {
     if (row.baseline_ref) {
       throw new Error("Local workspace baseline nodes are missing");
