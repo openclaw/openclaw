@@ -1,0 +1,2 @@
+# Retain bounded anchor diagnostics and their existing opt-in Gateway regression after plugin migration.
+424

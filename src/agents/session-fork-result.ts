@@ -7,6 +7,8 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
  */
 export function assertSessionForkRunSucceeded(
   result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
+  assertSourceCurrent?: () => void,
+  readSourceFailure?: () => Error | undefined,
 ): void {
   const runtimeErrorPayload = result.payloads?.find(
     (payload) => payload.isError && !getReplyPayloadMetadata(payload)?.toolErrorWarning,
@@ -16,6 +18,13 @@ export function assertSessionForkRunSucceeded(
     (result.meta.aborted ? "Session fork model run aborted." : undefined) ||
     runtimeErrorPayload?.text?.trim();
   if (message || runtimeErrorPayload) {
+    // The embedded result carries only bounded text. Reassert the source before replacing its
+    // typed fence diagnostic with the generic terminal message.
+    const sourceFailure = readSourceFailure?.();
+    if (sourceFailure !== undefined) {
+      throw sourceFailure;
+    }
+    assertSourceCurrent?.();
     throw new Error(message || "Session fork model run failed.");
   }
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -221,6 +222,16 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           }
         }
       })().catch((error: unknown) => {
+        // Correlate the rejected evidence locally without logging conversation keys or paths.
+        const source = createHash("sha256")
+          .update(
+            JSON.stringify([
+              pending.candidate.source.agentId,
+              pending.candidate.source.sessionId,
+              pending.candidate.source.entryId,
+            ]),
+          )
+          .digest("hex");
         const expectedCancellation =
           isExpectedRunCancellation(error) ||
           (error instanceof Error && error.name === "AbortError");
@@ -228,9 +239,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         // classifier protection: that aggregate is a real failure, never a cancellation.
         const cleanupFailure = error instanceof AggregateError && !expectedCancellation;
         if (!cleanupFailure && (reviewSignal?.aborted || expectedCancellation)) {
-          workshopLog().debug(`skill experience review cancelled: ${formatErrorMessage(error)}`);
+          workshopLog().debug(
+            `skill experience review cancelled: ${formatErrorMessage(error)} source=${source}`,
+          );
         } else {
-          workshopLog().warn(`skill experience review failed: ${formatErrorMessage(error)}`);
+          workshopLog().warn(
+            `skill experience review failed: ${formatErrorMessage(error)} source=${source}`,
+          );
         }
         if (pendingBySession.get(key) === pending) {
           pendingBySession.delete(key);
