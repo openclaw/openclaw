@@ -46,13 +46,26 @@ async function writeStoredRuntime(packageRoot: string, store: string, generation
 }
 
 describe.skipIf(process.platform === "win32")("native package stage", () => {
-  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11", "pnpm12", "pnpm12-quoted"] as const)(
+  it.each([
+    "bun",
+    "bun-launcher",
+    "pnpm10",
+    "pnpm11",
+    "pnpm11-grouped",
+    "pnpm12",
+    "pnpm12-quoted",
+  ] as const)(
     "preserves the live %s project and executes its relocated candidate launcher",
     async (layout) =>
       withTestDir({ prefix: "native-package-stage-" }, async (base) => {
         // pnpm 12.15+ quotes the shim base and its relative target separately.
         const pnpm12 = layout === "pnpm12" || layout === "pnpm12-quoted";
-        const grouped = layout === "pnpm11" || pnpm12;
+        // pnpm 11.28 installs the candidate into a new group whose project-local
+        // virtual store is `<group>/.pnpm`, with the same quoted shim spelling.
+        const pnpm11Grouped = layout === "pnpm11-grouped";
+        const regrouped = pnpm12 || pnpm11Grouped;
+        const quotedShim = layout === "pnpm12-quoted" || pnpm11Grouped;
+        const grouped = layout === "pnpm11" || regrouped;
         const bun = layout.startsWith("bun");
         const manager = bun ? "bun" : "pnpm";
         // An apostrophe in the stage path makes pnpm spell it `'\''` inside quoted words.
@@ -103,9 +116,19 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         const expectModules = async (file: string, store = virtualStoreDir) =>
           expect(await readJson(file)).toEqual({ virtualStoreDir: store, storeDir: external });
         let candidateRoot = join(stage.projectRoot, relative(project, packageRoot));
-        if (pnpm12) {
-          const newGroupRoot = join(stage.globalRoot, "new-group", "node_modules", "openclaw");
+        if (regrouped) {
+          const newGroup = join(stage.globalRoot, "new-group");
+          const newGroupRoot = pnpm11Grouped
+            ? join(newGroup, ".pnpm", "openclaw@2.0.0", "node_modules", "openclaw")
+            : join(newGroup, "node_modules", "openclaw");
           await fs.cp(candidateRoot, newGroupRoot, { recursive: true, verbatimSymlinks: true });
+          if (pnpm11Grouped) {
+            await fs.mkdir(join(newGroup, "node_modules"));
+            await fs.symlink(newGroupRoot, join(newGroup, "node_modules", "openclaw"));
+            // The deeper store path needs its own relative dependency link.
+            const stagedStore = join(stage.projectRoot, relative(project, virtualStoreDir));
+            await writeStoredRuntime(newGroupRoot, stagedStore, "old");
+          }
           candidateRoot = newGroupRoot;
           await fs.unlink(join(stage.projectRoot, "owned-package"));
           await fs.symlink(candidateRoot, join(stage.projectRoot, "owned-package"));
@@ -157,17 +180,17 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           }
         } else {
           const target = relative(stage.binDir, candidateEntry);
-          const basedir = pnpm12 ? "basedir_abs" : "basedir";
+          const basedir = regrouped ? "basedir_abs" : "basedir";
           const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
           // Current pnpm (seen from 11.28 and 12.21) quotes the base and target separately:
           // exec node  "$basedir_abs"/'../global/v11/<group>/node_modules/openclaw/openclaw.mjs' "$@"
           const reference = (variable: string) =>
-            layout === "pnpm12-quoted"
-              ? `"$${variable}"/${quote(target)}`
-              : `"$${variable}/${target}"`;
-          // Finalize refuses a launcher whose NODE_PATH still names the stage.
-          const nodePath =
-            layout === "pnpm12-quoted"
+            quotedShim ? `"$${variable}"/${quote(target)}` : `"$${variable}/${target}"`;
+          // Finalize refuses a launcher whose NODE_PATH still names the stage. pnpm 11.28
+          // names the package's own `<group>/.pnpm/<package>/node_modules` directory.
+          const nodePath = pnpm11Grouped
+            ? `export NODE_PATH=${quote(dirname(candidateRoot))}\n`
+            : layout === "pnpm12-quoted"
               ? `export NODE_PATH=${quote(join(dirname(candidateRoot), ".pnpm", "node_modules"))}\n`
               : "";
           const convertedBranch = pnpm12
