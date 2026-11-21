@@ -1,0 +1,2 @@
+5
+# Preserve the real 200-agent schema/metadata contract while modeling Doctor's host-side worker admission in Vitest.

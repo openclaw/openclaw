@@ -1,7 +1,13 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectRuntimeToolSchemaFindings } from "./doctor-tool-schema-runtime.js";
+
+// Doctor owns host-side worker admission; retain real workers inside Vitest.
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
 
 it("bounds metadata copies while inspecting a fleet's per-agent schemas", async () => {
   await withOpenClawTestState({ env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } }, async (state) => {

@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => {
       readPreparedModelCatalog: handles.catalog,
     },
     "../agents/agent-bundle-mcp-tools.js": { createBundleMcpToolRuntime: handles.mcpRuntime },
-    "../agents/agent-tools.js": { createOpenClawCodingTools: handles.codingTools },
+    "../agents/agent-tools.js": { createOpenClawCodingToolsInternalAsync: handles.codingTools },
     "../gateway/call.js": {
       buildGatewayProbeConnectionDetails: handles.connectionDetails,
       callGateway: handles.callGateway,
@@ -364,7 +364,7 @@ describe("doctor runtime tool schema checks", () => {
     const workerId = acp ? "acp-worker" : "worker";
     const workspaceName = acp ? "main-workspace" : "shared-workspace";
     const workspace = `/tmp/${workspaceName}`;
-    mocks.codingTools.mockImplementation((options) =>
+    mocks.codingTools.mockImplementation(async (options) =>
       options?.agentId === workerId
         ? [tool("fuzzplugin_move_angles", arraySchema)]
         : [tool("healthy", objectSchema)],
@@ -447,9 +447,7 @@ describe("doctor runtime tool schema checks", () => {
   ] as const)("reports %s errors for %s", async (phase, toolName, mcp) => {
     const error = new Error(`fuzzplugin ${phase} failed`);
     if (phase === "load") {
-      mocks.codingTools.mockImplementationOnce(() => {
-        throw error;
-      });
+      mocks.codingTools.mockRejectedValueOnce(error);
     } else {
       if (mcp) {
         mocks.mcpRuntime.mockResolvedValueOnce(
