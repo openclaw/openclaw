@@ -189,29 +189,64 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses explicit tool config for viewer links and screenshot browser selection", async () => {
-    const processConfig: OpenClawConfig = {
-      gateway: { publicOrigin: "https://process.example" },
-      browser: { executablePath: path.join(rootDir, "unavailable-browser") },
-    };
-    const explicitConfig: OpenClawConfig = {
-      gateway: { publicOrigin: "https://explicit.example" },
-      browser: { executablePath: process.execPath },
-    };
-    const { render } = createRegistrationHarness({}, processConfig);
-    launchMock.mockResolvedValue(createMockBrowser([]));
+  it.each([undefined, false, true])(
+    "honors browser.noSandbox=%s from explicit tool config",
+    async (noSandbox) => {
+      const processConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://process.example" },
+        browser: { executablePath: path.join(rootDir, "unavailable-browser") },
+      };
+      const explicitConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://explicit.example" },
+        browser: { executablePath: process.execPath, noSandbox },
+      };
+      const { render } = createRegistrationHarness({}, processConfig);
+      launchMock.mockResolvedValue(createMockBrowser([]));
 
-    const { details } = await render({ config: explicitConfig });
+      const { details } = await render({ config: explicitConfig });
 
-    expect
-      .soft(String(details.viewerUrl))
-      .toContain("https://explicit.example/plugins/diffs/view/");
-    expect(details.fileError).toBeUndefined();
-    expect(launchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ executablePath: process.execPath }),
-    );
-    await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
-  });
+      expect
+        .soft(String(details.viewerUrl))
+        .toContain("https://explicit.example/plugins/diffs/view/");
+      expect(details.fileError).toBeUndefined();
+      expect(launchMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executablePath: process.execPath,
+          chromiumSandbox: noSandbox !== true,
+        }),
+      );
+      await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
+    },
+  );
+
+  it.each([undefined, false])(
+    "separates unsandboxed renders from noSandbox=%s",
+    async (noSandbox) => {
+      const unsandboxed = createMockBrowser([]);
+      const sandboxed = createMockBrowser([]);
+      launchMock.mockResolvedValueOnce(unsandboxed).mockResolvedValueOnce(sandboxed);
+      for (const policy of [true, noSandbox, true]) {
+        const screenshotter = new PlaywrightDiffScreenshotter({
+          config: { browser: { ...browserConfig.browser, noSandbox: policy } },
+        });
+        await screenshotter.screenshotHtml(screenshotParams());
+      }
+      expect(launchMock).toHaveBeenCalledTimes(2);
+      expect(launchMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ chromiumSandbox: false }),
+      );
+      expect(launchMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ chromiumSandbox: true }),
+      );
+      expect(unsandboxed.newPage).toHaveBeenCalledTimes(2);
+      expect(sandboxed.newPage).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(unsandboxed.close).toHaveBeenCalledOnce();
+      expect(sandboxed.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     ["pdf", 2, 240, 8_000_000, 2, 1],

@@ -89,6 +89,7 @@ function expectClosedOnce(handles: ReturnType<typeof makeBrowser>) {
 }
 
 async function expectReadable(pageId: string) {
+  expect(launch).toHaveBeenCalledWith(expect.objectContaining({ chromiumSandbox: true }));
   await expect(webRuntime.qaWebSnapshot({ pageId })).resolves.toMatchObject({ text: "page body" });
 }
 
