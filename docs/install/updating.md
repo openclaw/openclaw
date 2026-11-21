@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor removes empty snapshot directories left by cancellation between
+private directory creation and native-token acquisition, after its inspection
+workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
+remain retained. The candidate must contain this repair; installed updaters need
+no schema or protocol change.
+
 Candidate Doctor compares pending plugin migration obligations independently of
 plugin order and repair guidance. A changed owner, protected path, or migration
 requirement still refuses input publication; diagnostics name added or removed
