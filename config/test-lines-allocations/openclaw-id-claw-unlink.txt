@@ -8,4 +8,5 @@
 # its lookup, a publication without a link code, and the pre-unlink stored-claw upgrade proof.
 # Final review repairs add Unlink staying in the menu when only the endpoint key is refused, and
 # the tunnel child starting unlinked (not pinned to the old K_srv) after a confirmed unlink.
-504
+# The pin is also read after persistence but before acknowledgement, including initial linking.
+508
