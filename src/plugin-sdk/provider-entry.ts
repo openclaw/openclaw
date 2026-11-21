@@ -131,6 +131,13 @@ type SingleProviderPluginCatalogOptions =
        */
       liveModelDiscovery?: true | OpenAICompatibleModelDiscoveryOptions;
       discoveryMode?: "strict";
+      /**
+       * Advisory-only: answers which configured model ids this provider's successful
+       * server listing was supposed to contain. Forwarded to the core provider registry
+       * so single-provider plugins can keep their own listing semantics (for example a
+       * chat-only discovery endpoint that never lists media models).
+       */
+      getUnlistedConfiguredModelIds?: ProviderPluginCatalog["getUnlistedConfiguredModelIds"];
       run?: never;
       order?: never;
       staticRun?: never;
@@ -148,6 +155,13 @@ type SingleProviderPluginCatalogOptions =
        * Catalog ordering contract forwarded to the core provider registry.
        */
       order?: ProviderPluginCatalog["order"];
+      /**
+       * Advisory-only: answers which configured model ids this provider's successful
+       * server listing was supposed to contain. Forwarded to the core provider registry
+       * so single-provider plugins can keep their own listing semantics (for example a
+       * chat-only discovery endpoint that never lists media models).
+       */
+      getUnlistedConfiguredModelIds?: ProviderPluginCatalog["getUnlistedConfiguredModelIds"];
       buildProvider?: never;
       buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
@@ -431,6 +445,9 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           catalog = {
             order: provider.catalog.order ?? "simple",
             run: catalogRun!,
+            ...(provider.catalog.getUnlistedConfiguredModelIds
+              ? { getUnlistedConfiguredModelIds: provider.catalog.getUnlistedConfiguredModelIds }
+              : {}),
           };
         } else {
           const catalogProviderIds = new Set(
@@ -472,6 +489,9 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                 ? runLiveProviderCatalog({ providerId, run })
                 : run();
             },
+            ...(provider.catalog.getUnlistedConfiguredModelIds
+              ? { getUnlistedConfiguredModelIds: provider.catalog.getUnlistedConfiguredModelIds }
+              : {}),
           };
         }
         const manifestStaticProvider =
