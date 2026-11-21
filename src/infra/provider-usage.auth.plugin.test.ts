@@ -124,6 +124,202 @@ describe("provider usage auth boundary", () => {
     ]);
   });
 
+  it("never resolves a binding owned by another provider", async () => {
+    // A binding for openai must not send its secret to deepseek's usage endpoint.
+    seed({ "openai:manual": { type: "api_key", provider: "openai", key: "openai-secret" } }, {});
+    resolveKey.mockResolvedValue({ apiKey: "openai-secret", provider: "openai" });
+    let candidates: string[] | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      candidates = await context.resolveApiKeyCandidatesFromConfigAndStore?.({});
+      return candidates?.[0] ? { token: candidates[0] } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: {
+        models: {
+          providers: {
+            deepseek: { baseUrl: "https://api.deepseek.com", apiKey: "openai:manual", models: [] },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(candidates ?? []).not.toContain("openai-secret");
+    expect(candidates?.[0]).not.toBe("openai:manual");
+    expect(auths).toEqual([]);
+  });
+
+  it("keeps an environment candidate ahead of a config profile binding", async () => {
+    // Env credentials are selected ahead of config; a config binding must not replace them.
+    seed(
+      { "minimax:manual": { type: "api_key", provider: "minimax", key: "saved-minimax-secret" } },
+      { minimax: ["minimax:manual"] },
+    );
+    resolveKey.mockResolvedValue({ apiKey: "saved-minimax-secret", provider: "minimax" });
+    let candidates: string[] | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      candidates = await context.resolveApiKeyCandidatesFromConfigAndStore?.({});
+      return candidates?.[0] ? { token: candidates[0] } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["minimax"],
+      env: { MINIMAX_CODE_PLAN_KEY: "working-env-key" },
+      config: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimaxi.com",
+              apiKey: "minimax:manual",
+              models: [],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(candidates?.[0]).toBe("working-env-key");
+    expect(auths).toEqual([{ provider: "minimax", token: "working-env-key" }]);
+  });
+
+  it("does not release another provider's secret to a fixed usage endpoint", async () => {
+    // Inference entries may share a proxy baseUrl; the usage endpoint is fixed per provider,
+    // so that exception must not authorize sending openai's secret to minimax's usage fetch.
+    seed({ "openai:manual": { type: "api_key", provider: "openai", key: "openai-secret" } }, {});
+    resolveKey.mockResolvedValue({ apiKey: "openai-secret", provider: "openai" });
+    let candidates: string[] | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      candidates = await context.resolveApiKeyCandidatesFromConfigAndStore?.({});
+      return candidates?.[0] ? { token: candidates[0] } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["minimax"],
+      env: {},
+      config: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://proxy.example/v1",
+              apiKey: "openai:manual",
+              models: [],
+            },
+            openai: { baseUrl: "https://proxy.example/v1", models: [] },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(candidates ?? []).not.toContain("openai-secret");
+    expect(candidates?.[0]).not.toBe("openai:manual");
+    expect(auths).toEqual([]);
+  });
+
+  it("does not return an ineligible legacy binding's raw token", async () => {
+    // Profile order excludes the expired token; the legacy synchronous path must agree.
+    seed(
+      {
+        "deepseek:expired": {
+          type: "token",
+          provider: "deepseek",
+          token: "expired-token",
+          expires: 1,
+        },
+      },
+      { deepseek: [] },
+    );
+    let legacy: string | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      legacy = context.resolveApiKeyFromConfigAndStore?.({});
+      return undefined;
+    });
+
+    await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: {
+        models: {
+          providers: {
+            deepseek: {
+              baseUrl: "https://api.deepseek.com",
+              apiKey: "deepseek:expired",
+              models: [],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(legacy).not.toBe("expired-token");
+    expect(legacy).not.toBe("deepseek:expired");
+  });
+
+  it("resolves a saved profile binding written into provider config", async () => {
+    // The Models save flow writes the profile id, not the secret, into provider config.
+    const profileId = "deepseek:manual";
+    seed(
+      { [profileId]: { type: "api_key", provider: "deepseek", key: "saved-deepseek-secret" } },
+      { deepseek: [] },
+    );
+    resolveKey.mockResolvedValue({ apiKey: "saved-deepseek-secret", provider: "deepseek" });
+    let firstCandidate: string | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      firstCandidate = (await context.resolveApiKeyCandidatesFromConfigAndStore?.({}))?.[0];
+      return firstCandidate ? { token: firstCandidate } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: {
+        models: {
+          providers: {
+            deepseek: { baseUrl: "https://api.deepseek.com", apiKey: profileId, models: [] },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(firstCandidate).toBe("saved-deepseek-secret");
+    expect(auths).toEqual([{ provider: "deepseek", token: "saved-deepseek-secret" }]);
+  });
+
+  it("keeps a literal config api key as the first usage candidate", async () => {
+    seed({}, { deepseek: [] });
+    let firstCandidate: string | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      firstCandidate = (await context.resolveApiKeyCandidatesFromConfigAndStore?.({}))?.[0];
+      return firstCandidate ? { token: firstCandidate } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: {
+        models: {
+          providers: {
+            deepseek: {
+              baseUrl: "https://api.deepseek.com",
+              apiKey: "sk-literal-usage-key",
+              models: [],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(firstCandidate).toBe("sk-literal-usage-key");
+    expect(auths).toEqual([{ provider: "deepseek", token: "sk-literal-usage-key" }]);
+  });
+
   it("keeps the supplied store when direct credentials admit a legacy usage hook", async () => {
     const profileId = "anthropic:scoped";
     const store: AuthProfileStore = {

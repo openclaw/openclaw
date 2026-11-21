@@ -11,6 +11,10 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import {
+  resolveProviderEntryApiKeyBinding,
+  resolveProviderEntryApiKeyProfileReference,
+} from "../agents/model-auth-provider-config.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
@@ -25,6 +29,7 @@ import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.
 import type { ProviderUsageAuthToken } from "../plugins/provider-runtime.types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveProviderAuthEnvVarCandidatesCore } from "../secrets/provider-env-vars.js";
+import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
@@ -66,21 +71,31 @@ async function resolveUsageAuthStore(state: UsageAuthState): Promise<AuthStore> 
   return state.store;
 }
 
-function resolveProviderApiKeyFromConfig(params: {
+/** Where the first usage candidate came from; only a config value may name a stored profile. */
+type ProviderApiKeyCandidateSource = "envDirect" | "environment" | "config";
+
+type ProviderApiKeyCandidate = {
+  value: string;
+  source: ProviderApiKeyCandidateSource;
+  /** Provider whose config entry supplied a config candidate. */
+  provider?: string;
+};
+
+function resolveProviderApiKeyCandidate(params: {
   state: UsageAuthState;
   providerIds: string[];
   envDirect?: Array<string | undefined>;
-}): string | undefined {
+}): ProviderApiKeyCandidate | undefined {
   params.state.signal?.throwIfAborted();
   const envDirect = params.envDirect?.map(normalizeSecretInput).find(Boolean);
   if (envDirect) {
-    return envDirect;
+    return { value: envDirect, source: "envDirect" };
   }
 
   for (const providerId of params.providerIds) {
     const envKey = resolveEnvApiKey(providerId, params.state.env)?.apiKey;
     if (envKey) {
-      return envKey;
+      return { value: envKey, source: "environment", provider: providerId };
     }
     const key = resolveUsableCustomProviderApiKey({
       cfg: params.state.cfg,
@@ -88,7 +103,7 @@ function resolveProviderApiKeyFromConfig(params: {
       env: params.state.env,
     })?.apiKey;
     if (key) {
-      return key;
+      return { value: key, source: "config", provider: providerId };
     }
   }
   return undefined;
@@ -101,19 +116,114 @@ type ProviderApiKeyCandidatesParams = {
 };
 
 function prepareProviderApiKeyCandidates(params: ProviderApiKeyCandidatesParams) {
-  const configKey = resolveProviderApiKeyFromConfig(params);
-  const candidates = configKey ? [configKey] : [];
+  const candidate = resolveProviderApiKeyCandidate(params);
+  const candidates = candidate ? [candidate.value] : [];
   if (!params.state.allowAuthProfileStore) {
-    return { candidates };
+    return { candidates, candidate };
   }
   const store = params.state.store;
   if (!store) {
-    return { candidates };
+    return { candidates, candidate };
   }
   const profileIds = normalizeProviderIds(params.providerIds).flatMap((provider) =>
     resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
   );
-  return { candidates, store, profileIds };
+  return { candidates, candidate, store, profileIds };
+}
+
+/**
+ * A saved credential writes its profile id into provider config. Only a candidate actually
+ * selected from that provider's config is classified, and the secret is released only to the
+ * provider that owns it: usage and billing endpoints ignore the configured inference base URL,
+ * so two entries sharing a proxy URL does not authorize this transmission. Environment and
+ * direct candidates pass through unchanged, and an unusable binding drops only the config value.
+ */
+function resolveConfiguredBindingCandidate(params: {
+  candidate: ProviderApiKeyCandidate;
+  state: UsageAuthState;
+  store: AuthProfileStore;
+  profileIds: readonly string[];
+}): string | undefined {
+  if (params.candidate.source !== "config") {
+    return params.candidate.value;
+  }
+  const provider = params.candidate.provider;
+  if (!provider) {
+    return params.candidate.value;
+  }
+  const reference = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.state.cfg,
+    provider,
+    store: params.store,
+    allowSharedBaseUrlCredentials: false,
+  });
+  if (reference.kind === "none" || reference.kind === "marker" || reference.kind === "literal") {
+    return params.candidate.value;
+  }
+  // Incompatible, expired, disabled, or otherwise unusable bindings must never be sent as a
+  // token; failing closed drops the config value and falls back to the remaining candidates.
+  if (reference.kind !== "profile" || !params.profileIds.includes(reference.profileId)) {
+    return undefined;
+  }
+  const value = normalizeSecretInput(
+    reference.credential.type === "api_key"
+      ? reference.credential.key
+      : "token" in reference.credential
+        ? reference.credential.token
+        : undefined,
+  );
+  return value && !isNonSecretApiKeyMarker(value) ? value : undefined;
+}
+
+async function resolveAsyncConfiguredBindingCandidate(params: {
+  candidate: ProviderApiKeyCandidate;
+  state: UsageAuthState;
+  store: AuthProfileStore;
+}): Promise<string | undefined> {
+  if (params.candidate.source !== "config") {
+    return params.candidate.value;
+  }
+  const provider = params.candidate.provider;
+  if (!provider) {
+    return params.candidate.value;
+  }
+  // Classify before resolving: another provider's profile must never be resolved for a fixed
+  // destination, and an unusable binding must not surface its raw profile id as a token.
+  const reference = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.state.cfg,
+    provider,
+    store: params.store,
+    allowSharedBaseUrlCredentials: false,
+  });
+  if (reference.kind === "none" || reference.kind === "marker" || reference.kind === "literal") {
+    return params.candidate.value;
+  }
+  if (reference.kind !== "profile") {
+    return undefined;
+  }
+  let binding: Awaited<ReturnType<typeof resolveProviderEntryApiKeyBinding>>;
+  try {
+    binding = await resolveProviderEntryApiKeyBinding({
+      cfg: params.state.cfg,
+      provider,
+      store: params.store,
+      agentDir: params.state.agentDir,
+      signal: params.state.signal,
+      allowSharedBaseUrlCredentials: false,
+    });
+  } catch (error) {
+    params.state.signal?.throwIfAborted();
+    // Secret-surface failures must surface; other classification failures fail closed.
+    if (error instanceof SecretSurfaceUnavailableError) {
+      throw error;
+    }
+    return undefined;
+  }
+  if (binding.kind !== "profile-resolved") {
+    return undefined;
+  }
+  const value = normalizeSecretInput(binding.auth.apiKey);
+  return value && !isNonSecretApiKeyMarker(value) ? value : undefined;
 }
 
 function resolveLegacyProviderApiKeyCandidatesFromConfigAndStore(
@@ -130,10 +240,14 @@ function resolveLegacyProviderApiKeyCandidatesFromConfigAndStore(
       allowKeychainPrompt: false,
     });
   }
-  const { candidates, store, profileIds } = prepareProviderApiKeyCandidates(params);
+  const { candidate, store, profileIds } = prepareProviderApiKeyCandidates(params);
   if (!store) {
-    return candidates;
+    return candidate ? [candidate.value] : [];
   }
+  const configured = candidate
+    ? resolveConfiguredBindingCandidate({ candidate, state: params.state, store, profileIds })
+    : undefined;
+  const candidates = configured ? [configured] : [];
   const credentials = profileIds
     .map((id) => store.profiles[id])
     .filter((profile) => profile?.type === "api_key" || profile?.type === "token");
@@ -154,10 +268,18 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(
   if (params.state.allowAuthProfileStore) {
     await resolveUsageAuthStore(params.state);
   }
-  const { candidates, store, profileIds } = prepareProviderApiKeyCandidates(params);
+  const { candidate, store, profileIds } = prepareProviderApiKeyCandidates(params);
   if (!store) {
-    return candidates;
+    return candidate ? [candidate.value] : [];
   }
+  const configured = candidate
+    ? await resolveAsyncConfiguredBindingCandidate({
+        candidate,
+        state: params.state,
+        store,
+      })
+    : undefined;
+  const candidates = configured ? [configured] : [];
   for (const profileId of dedupeProfileIds(profileIds)) {
     const credential = store.profiles[profileId];
     if (!credential || (credential.type !== "api_key" && credential.type !== "token")) {
@@ -349,7 +471,7 @@ export async function resolveProviderAuths(params: {
       }
       const credentialProviderIds = [...providerIds];
       let hasDirectCredentialSource = Boolean(
-        resolveProviderApiKeyFromConfig({
+        resolveProviderApiKeyCandidate({
           state: directCredentialState,
           providerIds: credentialProviderIds,
         }),
