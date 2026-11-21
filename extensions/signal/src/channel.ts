@@ -1,6 +1,7 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   createChatChannelPlugin,
   type ChannelPlugin,
@@ -507,23 +508,27 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           });
           const targetAuthor = normalizeOptionalString(account.config.account);
           const targetAuthorUuid = normalizeOptionalString(account.config.accountUuid);
-          if (!targetAuthor && !targetAuthorUuid) {
-            return null;
-          }
-          const { addSignalApprovalReactionHintToStructuredPayload } =
-            await loadSignalApprovalReactionsModule();
           const payload = materializeSignalPresentationFallback(
             params.payload,
             params.presentation,
           );
-          return addSignalApprovalReactionHintToStructuredPayload({
-            cfg: params.ctx.cfg,
-            accountId: params.ctx.accountId ?? undefined,
-            to: params.ctx.to,
-            payload,
-            targetAuthor,
-            targetAuthorUuid,
-          });
+          // Approval text already lists every command; generic control flattening would repeat it.
+          const approvalFallback = getExecApprovalReplyMetadata(params.payload) ? payload : null;
+          if (!targetAuthor && !targetAuthorUuid) {
+            return approvalFallback;
+          }
+          const { addSignalApprovalReactionHintToStructuredPayload } =
+            await loadSignalApprovalReactionsModule();
+          return (
+            addSignalApprovalReactionHintToStructuredPayload({
+              cfg: params.ctx.cfg,
+              accountId: params.ctx.accountId ?? undefined,
+              to: params.ctx.to,
+              payload,
+              targetAuthor,
+              targetAuthorUuid,
+            }) ?? approvalFallback
+          );
         },
         sendFormattedText: async (ctx) => {
           const send = await createSignalOutboundSender(ctx);
