@@ -41,7 +41,17 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
     testNodeExecPath,
-    ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
+    [
+      "--import",
+      hook,
+      script,
+      "render",
+      template.id,
+      "--text",
+      "\u001b[31mFish\u001b[0m & chips\u0007\uffff",
+      "--out",
+      out,
+    ],
     { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );
   return { image, out, result };
@@ -55,11 +65,12 @@ describe("meme-maker local rendering", () => {
     expect(stdout).toContain(out);
     expect(svg).toContain(`width="${template.width}" height="${template.height}"`);
     expect(svg).toContain(`data:image/jpeg;base64,${image.toString("base64")}`);
-    expect(svg).toContain(">Fish &amp;</tspan>");
     const { Resvg } = await import("@resvg/resvg-js");
     const fontFiles = [path.resolve("src/gateway/assets/session-card/Lato-Regular.ttf")];
     const font = { fontFiles, loadSystemFonts: false };
     const caption = new Resvg(svg.replace(/<image[^>]*\/>/, ""), { font }).innerBBox()!;
+    expect(svg).toContain(">Fish &amp;</tspan>");
+    expect(svg).toContain(">chips</tspan>");
     expect(Math.abs(caption.x + caption.width / 2 - 138)).toBeLessThan(10); // rotated box 0 center
   });
 
