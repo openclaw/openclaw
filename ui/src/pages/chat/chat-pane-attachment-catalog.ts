@@ -1,11 +1,14 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { readChatTranscriptAttachmentSource } from "./chat-history-state.ts";
+import { resolveCappedMessageId } from "./chat-message-recovery.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { assistantMediaPolicyKey } from "./components/chat-message-media.ts";
+import type { SessionWorkspaceArtifacts } from "./components/chat-session-workspace-types.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { projectTranscriptAttachments } from "./components/chat-transcript-attachments.ts";
 
@@ -26,6 +29,47 @@ export function filesJump(
         access.open(id);
       }
     : undefined;
+}
+
+/** Keep the catalog's richer media references for unchanged rows. New live versions
+ * replace the same durable message in place, including when an upload is removed. */
+function overlayAttachmentMessages(
+  snapshot: NonNullable<SessionWorkspaceArtifacts["attachments"]>,
+  live: readonly unknown[],
+): unknown[] {
+  const messages = snapshot.messages.slice();
+  const positions = new Map<string, number>();
+  for (const [index, message] of messages.entries()) {
+    const id = persistedMessageEntryId(message);
+    if (id) {
+      positions.set(id, index);
+    }
+  }
+  for (const message of live) {
+    const id = persistedMessageEntryId(message);
+    const position = id ? positions.get(id) : undefined;
+    if (
+      message &&
+      typeof message === "object" &&
+      snapshot.atRequest.has(message) &&
+      ((!snapshot.truncated && id !== null) || position !== undefined)
+    ) {
+      continue;
+    }
+    if (position === undefined) {
+      messages.push(message);
+    } else {
+      // A history refresh can adopt a display-capped copy of an already cataloged upload.
+      const normalized = normalizeMessage(message);
+      if (
+        !resolveCappedMessageId(message, normalized.role) &&
+        !normalized.content.some((item) => item.type === "omitted_media")
+      ) {
+        messages[position] = message;
+      }
+    }
+  }
+  return messages;
 }
 
 export class PaneAttachmentCatalog {
@@ -111,41 +155,26 @@ export class PaneAttachmentCatalog {
     if (catalogPresented) {
       const loaded = readChatTranscriptAttachmentSource(state);
       const snapshot = workspaceState?.artifacts?.attachments;
-      const source =
-        snapshot && snapshot.sessionId === loaded.sessionId
-          ? {
-              ...loaded,
-              messages: snapshot.messages,
-              coverage: snapshot.truncated ? ("partial" as const) : ("complete" as const),
-              loading: false,
-              error: undefined,
-            }
-          : loaded;
-      // publishChatSessionProjection preserves the array for run-only changes and
-      // replaces it for adopted/streamed row changes. No message scan is needed here.
-      const tail =
-        snapshot?.truncated && snapshot.sessionId === loaded.sessionId
-          ? loaded.messages
-          : undefined;
-      const inputs = [source.messages, source.coverage, source.loading, source.error, tail];
+      const current = snapshot?.sessionId === loaded.sessionId ? snapshot : undefined;
+      const inputs = [current, loaded.messages, loaded.coverage, loaded.loading, loaded.error];
       if (
         !attachmentCatalog.inputs ||
         inputs.some((value, index) => value !== attachmentCatalog.inputs![index])
       ) {
-        // A bounded snapshot still augments the loaded window, never hides its recent files.
-        const covered = tail
-          ? new Set(source.messages.map(persistedMessageEntryId).filter(Boolean))
-          : undefined;
+        const source = current
+          ? {
+              ...loaded,
+              messages: overlayAttachmentMessages(
+                current,
+                loaded.coverage === "unknown" ? [] : loaded.messages,
+              ),
+              coverage: current.truncated ? ("partial" as const) : ("complete" as const),
+              loading: false,
+              error: undefined,
+            }
+          : loaded;
         attachmentCatalog.value = projectTranscriptAttachments(
-          tail && covered
-            ? {
-                ...source,
-                messages: [
-                  ...source.messages,
-                  ...tail.filter((message) => !covered.has(persistedMessageEntryId(message))),
-                ],
-              }
-            : source,
+          source,
           {
             sessionKey: chatProps.sessionKey,
             showMessage: input.showMessage

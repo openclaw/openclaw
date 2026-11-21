@@ -22,7 +22,6 @@ import type {
   TranscriptAttachments,
 } from "./chat-sidebar-content-types.ts";
 import { transcriptAttachmentMatches } from "./chat-transcript-attachments.ts";
-import "./chat-session-workspace-attachments.css";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -177,7 +176,11 @@ export function TranscriptAttachmentRow(props: {
         role="listitem"
         class={[
           mobile() ? "chat-workspace-mobile__item" : "workspace-desktop__item",
-          { "workspace-attachment--with-source": Boolean(props.entry.onShowMessage) },
+          {
+            "workspace-desktop__item--actions": !mobile() && Boolean(props.entry.onShowMessage),
+            "chat-image-frame": grid() && Boolean(props.entry.onShowMessage),
+            row: mobile() && Boolean(props.entry.onShowMessage),
+          },
         ]}
       >
         <button
@@ -269,7 +272,12 @@ export function TranscriptAttachmentRow(props: {
         <Show when={props.entry.onShowMessage}>
           <button
             type="button"
-            class="workspace-attachment__source"
+            class={[
+              mobile()
+                ? "oc-icon-button oc-icon-button--36 oc-icon-button--row-glyph"
+                : "workspace-desktop__actions workspace-desktop__action",
+              { "chat-image-actions": grid() },
+            ]}
             title={t("chat.attachments.showInChatFor", { name: props.entry.label })}
             aria-label={t("chat.attachments.showInChatFor", { name: props.entry.label })}
             onClick={() => props.entry.onShowMessage?.()}
