@@ -12,7 +12,10 @@ export function createSidebarRenameScope() {
   };
 }
 
-export const SidebarRenameScope = createContext<ReturnType<typeof createSidebarRenameScope>>();
+// Pinned and catalog rows can render outside a sortable Sessions section.
+export const SidebarRenameScope = createContext<ReturnType<typeof createSidebarRenameScope> | null>(
+  null,
+);
 
 /** Keep an editor connected, including its native composing range. Only order is held:
  * removed rows disappear, new rows join the list and retained rows use their latest facts. */
