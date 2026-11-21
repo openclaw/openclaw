@@ -32,10 +32,6 @@ export function scanAnsiOscAt(input: string, index: number): AnsiOscScan | undef
   };
 }
 
-export function matchAnsiOscAt(input: string, index: number): string | undefined {
-  return scanAnsiOscAt(input, index)?.value;
-}
-
 type AnsiCsiScan = {
   controls: string[];
   ended: boolean;
@@ -265,6 +261,7 @@ export function scanAnsiCsiAt(input: string, index: number): AnsiCsiScan | undef
 export function* iterateAnsiSegments(input: string): Generator<AnsiSegment, void> {
   let position = 0;
   let index = 0;
+  let failedOscUntil = 0;
 
   while (index < input.length) {
     const code = input.charCodeAt(index);
@@ -273,7 +270,9 @@ export function* iterateAnsiSegments(input: string): Generator<AnsiSegment, void
       continue;
     }
 
-    const osc = matchAnsiOscAt(input, index);
+    const scan = index < failedOscUntil ? undefined : scanAnsiOscAt(input, index);
+    if (scan && !scan.value) failedOscUntil = scan.bodyEnd;
+    const osc = scan?.value;
     const csi = osc ? undefined : scanAnsiCsiAt(input, index);
     const value = osc ?? csi?.value;
     if (!value) {

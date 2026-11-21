@@ -4,8 +4,8 @@ import {
   ANSI_OSC_INTRODUCER_PATTERN,
   ANSI_STRING_TERMINATOR_PATTERN,
   iterateAnsiSegments,
-  matchAnsiOscAt,
   scanAnsiCsiAt,
+  scanAnsiOscAt,
 } from "./ansi-sequences.js";
 
 /*
@@ -34,10 +34,8 @@ import {
  * SOFTWARE.
  */
 const ANSI_OSC_SEQUENCE_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[\\s\\S]*?${ANSI_STRING_TERMINATOR_PATTERN}`;
-const ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX = new RegExp(
-  `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN}`,
-  "y",
-);
+const ANSI_COMPAT_OSC_AT_INDEX_REGEX = new RegExp(ANSI_OSC_SEQUENCE_PATTERN, "y");
+const ANSI_COMPAT_CONTROL_AT_INDEX_REGEX = new RegExp(ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN, "y");
 // string-width already requires Intl.Segmenter at module initialization.
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -60,6 +58,8 @@ function stripAnsiInternal(
   const output: string[] = [];
   let copyStart = 0;
   let index = 0;
+  let failedOscUntil = 0;
+  let compatibilityOscFailed = false;
 
   while (index < input.length) {
     const introducerCode = input.charCodeAt(index);
@@ -68,13 +68,24 @@ function stripAnsiInternal(
       continue;
     }
 
-    const osc = matchAnsiOscAt(input, index);
+    const scan = index < failedOscUntil ? undefined : scanAnsiOscAt(input, index);
+    if (scan && !scan.value) failedOscUntil = scan.bodyEnd;
+    const osc = scan?.value;
     const csi = osc ? undefined : scanAnsiCsiAt(input, index);
-    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-    const compatibilityMatch =
-      !osc && options.compatibilityGrammar
-        ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)?.[0]
-        : undefined;
+    let compatibilityMatch: string | undefined;
+    if (!osc && options.compatibilityGrammar) {
+      if (!compatibilityOscFailed) {
+        ANSI_COMPAT_OSC_AT_INDEX_REGEX.lastIndex = index;
+        compatibilityMatch = ANSI_COMPAT_OSC_AT_INDEX_REGEX.exec(input)?.[0];
+        // Unlike strict OSC, this grammar crosses escapes. Failure at an OSC
+        // opener proves there is no later terminator, but short controls remain.
+        if (!compatibilityMatch && scan) compatibilityOscFailed = true;
+      }
+      if (!compatibilityMatch) {
+        ANSI_COMPAT_CONTROL_AT_INDEX_REGEX.lastIndex = index;
+        compatibilityMatch = ANSI_COMPAT_CONTROL_AT_INDEX_REGEX.exec(input)?.[0];
+      }
+    }
     let length = osc?.length ?? csi?.value.length ?? compatibilityMatch?.length;
     if (length === undefined) {
       index += 1;
