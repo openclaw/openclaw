@@ -31,9 +31,11 @@
   margin-inline: auto;
 }
 
+/* Search and one filter button; the button opens the other filters. */
 .transcripts-filters {
   display: grid;
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
 }
 
 .transcripts-filters__advanced {
@@ -43,7 +45,6 @@
   margin-block-start: var(--space-3);
 }
 
-.transcripts-filters summary,
 .transcripts-source-details {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -363,14 +364,7 @@
   }
 }
 
-/* Search and a filter button replace the filter block; Filters renders these at the same query. */
-.transcripts-filters--phone {
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-2);
-}
-
 .transcripts-filters__search {
-  --settings-control-height: 44px;
   position: relative;
 }
 
@@ -396,9 +390,12 @@
   padding-inline-start: 32px;
 }
 
-.transcripts-filters__trigger,
 .transcripts-page-menu__trigger {
   --settings-control-height: 44px;
+}
+
+.transcripts-filters__trigger,
+.transcripts-page-menu__trigger {
   justify-content: center;
   width: var(--settings-control-height);
   min-width: 0;
@@ -416,6 +413,13 @@
 .transcripts-filter-popover__panel {
   display: grid;
   gap: var(--space-3);
+}
+
+/* The popover is a compact panel under its button; the phone sheet keeps the full width. */
+.oc-popover.transcripts-filter-popover {
+  --oc-overlay-max-width: min(26rem, calc(100vw - 24px));
+
+  width: min(26rem, calc(100vw - 24px));
 }
 
 /* The sheet owns the inset. */
@@ -463,6 +467,11 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .transcripts-filters__search,
+  .transcripts-filters__trigger {
+    --settings-control-height: 44px;
+  }
+
   /* The menu sits beside the title instead of on a row of its own. */
   .transcripts-workspace > .content-header.hub-page-header--untabbed {
     grid-template-columns: minmax(0, 1fr) auto;

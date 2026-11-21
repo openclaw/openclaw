@@ -312,10 +312,8 @@ describe("meeting transcript library", () => {
     const request = vi.fn(() => pending.promise);
     const { page, setSearch } = mount(request);
     await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
-    const filters = page.querySelector<HTMLDetailsElement>(".transcripts-filters details")!;
-    expect(filters).not.toBeNull();
-    expect(filters.open).toBe(false);
-    filters.open = true;
+    page.querySelector<HTMLButtonElement>(".transcripts-filters__trigger")!.click();
+    flush();
     const drafts = {
       query: "unsaved title",
       providerId: "caption",
@@ -331,7 +329,6 @@ describe("meeting transcript library", () => {
     }
     pending.resolve({ sessions: [meetingEntry], nextCursor: null });
     await waitForSolid(() => expect(page.textContent).toContain("Design review"));
-    expect(filters.open).toBe(true);
     for (const [key, value] of Object.entries(drafts)) {
       expect(page.querySelector<HTMLInputElement>(`input[name="${key}"]`)!.value).toBe(value);
     }
@@ -346,10 +343,10 @@ describe("meeting transcript library", () => {
     flush();
     expect(page.querySelector<HTMLInputElement>('input[name="query"]')!.value).toBe("from-history");
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')!.value).toBe("other");
-    expect(filters.open).toBe(true);
+    expect(page.querySelector(".transcripts-filters__trigger")?.classList).toContain("active");
     button(page, "Clear filters").click();
     flush();
-    expect(filters.open).toBe(false);
+    expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')!.value).toBe("");
   });
 
   it("preserves reader search through pagination, tabs, and export updates, then submits and clears it", async () => {

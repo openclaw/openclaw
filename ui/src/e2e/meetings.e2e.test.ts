@@ -360,7 +360,7 @@ suite.define(() => {
       await expectDetailRequests(gateway);
     }));
 
-  it("keeps a toggled desktop filter disclosure open while the route settles", () =>
+  it("searches on Enter and keeps other filters behind one desktop button", () =>
     suite.withPage(
       { viewport: { width: 1440, height: 900 }, locale: "en-US" },
       async ({ page }) => {
@@ -370,15 +370,19 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}meetings`);
         const view = page.locator("openclaw-meetings-page");
         await view.getByRole("link", { name: /Design review/ }).waitFor();
-        const disclosure = view.locator(".transcripts-filters details");
-        await disclosure.locator("summary").click();
+        await expectAbsent(view.locator(".transcripts-filters details"));
         const search = view.getByRole("searchbox", { name: "Search meetings", exact: true });
         await search.fill("design");
         await search.press("Enter");
         await page.waitForURL(/query=design/u);
-        await view.getByRole("link", { name: /Design review/ }).waitFor();
-        await page.waitForTimeout(500);
-        expect(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+        const trigger = view.getByRole("button", { name: "Filters", exact: true });
+        await trigger.click();
+        const provider = page.getByRole("searchbox", { name: "Provider", exact: true });
+        await provider.fill("discord-voice");
+        await page.getByRole("button", { name: "Filter", exact: true }).click();
+        await page.waitForURL(/providerId=discord-voice/u);
+        expect(new URL(page.url()).searchParams.get("query")).toBe("design");
+        expect(await trigger.evaluate((element) => element.classList.contains("active"))).toBe(
           true,
         );
       },
