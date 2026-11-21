@@ -5,6 +5,7 @@ import {
   errorShape,
   type ArtifactsGetParams,
   type ArtifactsListParams,
+  type ArtifactsListResult,
   validateArtifactsDownloadParams,
   validateArtifactsGetParams,
   validateArtifactsListParams,
@@ -65,6 +66,7 @@ import { assertValidParams } from "./validation.js";
 type ArtifactCollectionOptions = {
   includeDownloadData?: boolean;
   downloadArtifactId?: string;
+  includeAttachments?: boolean;
 };
 
 type ArtifactDownloadLookup = ArtifactLookup &
@@ -142,6 +144,7 @@ async function loadArtifacts(
   artifacts: ArtifactRecord[];
   sessionKey?: string;
   nextCursor?: string;
+  attachments?: ArtifactsListResult["attachments"];
   omittedOversized?: boolean;
   assertCurrent?: () => void;
 }> {
@@ -233,16 +236,18 @@ async function loadArtifacts(
     if (queuedKey) {
       queuedArtifactDownloads.delete(queuedKey);
     }
-    const { artifacts } = await readSessionArtifacts(scope, {
+    const { artifacts, attachments } = await readSessionArtifacts(scope, {
       kind: "list",
       sessionKey,
       runId: query.runId,
       messageRole: query.messageRole,
       includeDownloadData: opts.includeDownloadData,
+      includeAttachments: opts.includeAttachments,
       downloadArtifactIds: downloadIds ? [...downloadIds] : undefined,
     });
     return {
       sessionKey,
+      ...(attachments ? { attachments } : {}),
       artifacts: await pMap(artifacts, resolveArtifactAvailability, { concurrency: 8 }),
     };
   };
@@ -419,12 +424,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const query = { ...params };
     const loaded = await runArtifactSessionOperation(respond, () =>
-      loadArtifacts(query, access, { includeDownloadData: false }),
+      loadArtifacts(query, access, {
+        includeDownloadData: false,
+        includeAttachments: Boolean(
+          query.sessionKey && !query.type && !query.runId && !query.messageRole,
+        ),
+      }),
     );
     if (!loaded.ok) {
       return;
     }
     const { artifacts, sessionKey, nextCursor, omittedOversized } = loaded.value;
+    const attachments = "attachments" in loaded.value ? loaded.value.attachments : undefined;
     if (!sessionKey && query.runId) {
       respond(
         false,
@@ -436,6 +447,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (artifactResponseIsCurrent(loaded.value, respond)) {
       respond(true, {
         artifacts: artifacts.map(toArtifactSummary),
+        ...(attachments ? { attachments } : {}),
         ...(nextCursor ? { nextCursor } : {}),
         ...(omittedOversized ? { omittedOversized: true } : {}),
       });
