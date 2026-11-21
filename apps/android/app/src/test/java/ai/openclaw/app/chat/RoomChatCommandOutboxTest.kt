@@ -966,7 +966,7 @@ class RoomChatCommandOutboxTest {
     }
 
   @Test
-  fun videoCommandsUseServerAttachmentCapWithoutRaisingOtherMediaCaps() =
+  fun videoCommandsUseFrameAttachmentCapWithoutRaisingOtherMediaCaps() =
     runTest {
       val aboveDefaultCap = ByteArray((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 1L).toInt())
       val video =
@@ -984,7 +984,6 @@ class RoomChatCommandOutboxTest {
 
       assertTrue(video is ChatOutboxEnqueueResult.Queued)
       assertEquals(ChatOutboxEnqueueResult.AttachmentsTooLarge, document)
-      assertEquals(20L * 1024L * 1024L, OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES)
     }
 
   @Test

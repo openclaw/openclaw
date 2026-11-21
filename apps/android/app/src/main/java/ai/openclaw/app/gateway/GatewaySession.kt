@@ -50,6 +50,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.Buffer
+import okio.utf8Size
 import java.io.IOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
@@ -299,6 +300,20 @@ internal class GatewayRequestNotEnqueued(
 internal class GatewayRequestRejected(
   val gatewayError: GatewaySession.ErrorShape,
 ) : GatewayRequestDefinitiveFailure("${gatewayError.code}: ${gatewayError.message}")
+
+/** The request frame alone exceeds what the socket accepts, so reconnecting cannot send it. */
+internal class GatewayRequestTooLarge(
+  message: String,
+) : GatewayRequestDefinitiveFailure(message)
+
+/**
+ * OkHttp refuses a WebSocket message that would grow its outgoing queue past 16 MiB
+ * (`RealWebSocket.MAX_QUEUE_SIZE`): `send` returns false and closes the socket with 1001.
+ */
+internal const val GATEWAY_MAX_OUTGOING_FRAME_BYTES = 16L * 1024L * 1024L
+
+/** Decoded attachment bytes one request frame can carry; same formula as src/shared/chat-attachment-frame-budget.ts. */
+internal const val GATEWAY_FRAME_ATTACHMENT_BUDGET_BYTES = ((GATEWAY_MAX_OUTGOING_FRAME_BYTES - 256L * 1024L) * 3L) / 4L
 
 /** Request frame was sent, but no response proved whether the gateway applied it. */
 internal class GatewayRequestOutcomeUnknown(
@@ -1477,6 +1492,8 @@ class GatewaySession(
       withEnqueue: (() -> Unit) -> Unit = { it() },
     ) {
       val jsonString = obj.toString()
+      // OkHttp would drop the socket for this frame on every reconnect; fail the request instead.
+      if (jsonString.utf8Size() > GATEWAY_MAX_OUTGOING_FRAME_BYTES) throw GatewayRequestTooLarge("request too large to send")
       writeLock.withLock {
         currentCoroutineContext().ensureActive()
         withEnqueue {

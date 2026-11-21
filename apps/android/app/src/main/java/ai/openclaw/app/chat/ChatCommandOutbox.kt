@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GATEWAY_FRAME_ATTACHMENT_BUDGET_BYTES
 import androidx.room3.ColumnInfo
 import androidx.room3.Dao
 import androidx.room3.Entity
@@ -29,6 +30,9 @@ internal const val OUTBOX_EXPIRED_ERROR = "expired"
 /** Delivery is ambiguous after dispatch without an acknowledgement; retry needs explicit intent. */
 internal const val OUTBOX_DELIVERY_UNCONFIRMED_ERROR = "delivery unconfirmed; retry manually"
 
+/** The serialized request exceeds the socket's message limit; resending cannot help. */
+internal const val OUTBOX_TOO_LARGE_ERROR = "too large to send; delete it and send a smaller file"
+
 /** Connection-gated command rows never auto-replay across a reconnect; retry needs explicit intent. */
 internal const val OUTBOX_CONNECTION_CHANGED_ERROR = "connection changed before this command was sent; retry manually"
 
@@ -53,9 +57,10 @@ internal const val OUTBOX_ATTACHMENT_CHUNK_BYTES = 512 * 1024
 /** Upper bound of attachment bytes on one queued command (8 images plus a voice note fit). */
 internal const val OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES = 8L * 1024L * 1024L
 
-// Mirrors DEFAULT_CHAT_ATTACHMENT_MAX_MB in src/gateway/chat-attachments.ts. Only video raises
-// the durable command ceiling; existing image, audio, and document admission stays at 8 MiB.
-internal const val OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES = 20L * 1024L * 1024L
+// Attachments travel inline as Base64 in one chat.send frame, so a command can carry only what
+// the socket accepts in one message. Only video raises the durable command ceiling; existing
+// image, audio, and document admission stays at 8 MiB.
+internal const val OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES = GATEWAY_FRAME_ATTACHMENT_BUDGET_BYTES
 
 /** Upper bound of queued attachment bytes per gateway so the outbox database stays bounded. */
 internal const val OUTBOX_MAX_GATEWAY_ATTACHMENT_BYTES = 48L * 1024L * 1024L
