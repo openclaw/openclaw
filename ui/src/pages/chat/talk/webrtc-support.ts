@@ -211,6 +211,7 @@ export class RealtimeTalkWebRtcOfferExchange {
     };
     this.pendingRequest = request;
     try {
+      const hasBrokerToken = Boolean(params.session.offerHeaders?.["x-openclaw-realtime-token"]);
       const response = await fetch(
         resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
         {
@@ -218,9 +219,11 @@ export class RealtimeTalkWebRtcOfferExchange {
           body: params.offer.sdp,
           headers: {
             ...params.session.offerHeaders,
-            Authorization: `Bearer ${params.session.clientSecret}`,
+            ...(hasBrokerToken ? {} : { Authorization: `Bearer ${params.session.clientSecret}` }),
             "Content-Type": "application/sdp",
           },
+          // Custom credential headers are not automatically stripped on redirects.
+          ...(hasBrokerToken ? { redirect: "error" } : {}),
           signal: request.controller.signal,
         },
       );

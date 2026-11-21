@@ -2,7 +2,7 @@
 import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js";
-import { createBroker } from "./realtime-quicksilver.test-helpers.js";
+import { createBroker, reserveLiveSession } from "./realtime-quicksilver.test-helpers.js";
 
 it("delivers a rejected offer's response before releasing the connection", async () => {
   const { realtime } = createBroker();
@@ -68,6 +68,44 @@ it("delivers a rejected offer's response before releasing the connection", async
           body: expect.stringContaining("SDP offer is required"),
           closedByServer: false,
         });
+      },
+    );
+  } finally {
+    await realtime.cleanup();
+  }
+});
+
+it("admits an offer token behind an OAuth proxy without weakening single use", async () => {
+  const { realtime } = createBroker();
+  try {
+    await withServer(
+      (req, res) => {
+        if (req.headers.cookie !== "session=authenticated") {
+          res.writeHead(401).end("OAuth session required");
+          return;
+        }
+        req.headers.authorization = "Bearer oidc-proxy-token";
+        void realtime.handler(req, res);
+      },
+      async (baseUrl) => {
+        const reservation = await reserveLiveSession(realtime);
+        const url = `${baseUrl}${reservation.offerUrl}`;
+        const send = (cookie?: string, headers = reservation.offerHeaders) =>
+          fetch(url, {
+            method: "POST",
+            body: " ",
+            headers: {
+              "content-type": "application/sdp",
+              ...headers,
+              ...(cookie ? { cookie } : {}),
+            },
+          });
+
+        expect((await send()).status).toBe(401);
+        expect((await send("session=authenticated", {})).status).toBe(401);
+        // An admitted but empty SDP is rejected before any upstream request.
+        expect((await send("session=authenticated")).status).toBe(400);
+        expect((await send("session=authenticated")).status).toBe(401);
       },
     );
   } finally {
