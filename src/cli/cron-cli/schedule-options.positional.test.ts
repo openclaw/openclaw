@@ -44,6 +44,12 @@ describe("resolveCronCreateScheduleFromArgs positional schedule disambiguation",
     ).toEqual({ kind: "at", at: "2027-01-01T00:00:00.000Z" });
   });
 
+  it("accepts a positional cron alias with a timezone", () => {
+    expect(
+      resolveCronCreateScheduleFromArgs({ positionalSchedule: "@daily", tz: "Asia/Taipei" }),
+    ).toMatchObject({ kind: "cron", expr: "@daily", tz: "Asia/Taipei" });
+  });
+
   it("reports an invalid --tz before validating the expression", () => {
     expect(() => resolveCronCreateScheduleFromArgs({ cron: "0 9 * * *", tz: "Not/AZone" })).toThrow(
       /Invalid --tz/,
