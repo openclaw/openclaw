@@ -11,6 +11,8 @@ defineDiscordVoiceTests(
     joinVoiceChannelMock,
     entersStateMock,
     realtimeSessionMock,
+    createRealtimeSessionMock,
+    createRealtimeVoiceBridgeSessionMock,
     listenersModule,
     configureVoiceStateGateway,
     createClient,
@@ -233,6 +235,86 @@ defineDiscordVoiceTests(
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
       expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
       expect(manager.status()).toStrictEqual([]);
+    });
+
+    const occupiedRoom = () => {
+      const client = createClient();
+      const member = { user: { id: "u-owner", bot: false } };
+      configureVoiceStateGateway(client, () => [
+        { guild_id: "g1", user_id: "u-owner", channel_id: "1001", member },
+      ]);
+      const manager = createManager(
+        makeVoiceConfig(
+          {
+            mode: "agent-proxy",
+            autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
+            realtime: { provider: "openai" },
+          },
+          { groupPolicy: "open" },
+        ),
+        client,
+        {},
+        "default",
+        "bot-user",
+      );
+      return { client, manager, member };
+    };
+
+    it("backs off occupied autoJoin after a transient startup failure", async () => {
+      vi.useFakeTimers();
+      try {
+        const relayDown = () => {
+          const session = createRealtimeSessionMock();
+          session.connect.mockRejectedValue(new Error("gateway relay failed"));
+          return session;
+        };
+        createRealtimeVoiceBridgeSessionMock
+          .mockImplementationOnce(relayDown)
+          .mockImplementationOnce(relayDown);
+        const { manager, member } = occupiedRoom();
+
+        await manager.autoJoin();
+        // The failed start's own leave and other members' updates must not rejoin.
+        await updateVoiceState(manager, "bot-user", null);
+        await updateVoiceState(manager, "u-owner", "1001", member);
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+        await updateVoiceState(manager, "bot-user", null);
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3);
+        expectConnectedStatus(manager, "1001");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("suppresses occupied autoJoin after Discord Missing Access until an explicit join", async () => {
+      vi.useFakeTimers();
+      try {
+        const { client, manager, member } = occupiedRoom();
+        const fetchChannel = client.fetchChannel.getMockImplementation()!;
+        client.fetchChannel.mockRejectedValue(new Error("Missing Access"));
+
+        await manager.autoJoin();
+        await updateVoiceState(manager, "u-owner", "1001", member);
+        await vi.advanceTimersByTimeAsync(60 * 60_000);
+        await updateVoiceState(manager, "u-owner", "1001", member);
+        expect(client.fetchChannel).toHaveBeenCalledOnce();
+
+        client.fetchChannel.mockImplementation(fetchChannel);
+        expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({
+          ok: true,
+        });
+        expectConnectedStatus(manager, "1001");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("rejects joins outside configured allowed voice channels", async () => {
