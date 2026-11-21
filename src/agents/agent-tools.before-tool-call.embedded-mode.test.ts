@@ -181,6 +181,28 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("offers embedded one-call decisions when the hook cannot learn the decision", async () => {
+    const broker = embeddedBroker();
+    runBeforeToolCallMock.mockResolvedValue(approvalResult({}, { path: "notes.md" }));
+
+    const resultPromise = runBeforeToolCallHook({
+      toolName: "demo_write",
+      params: { path: "notes.md" },
+      toolCallId: "call-demo-one-call",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    await vi.waitFor(() => {
+      expect(broker.listPending()).toHaveLength(1);
+    });
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
+    expect(approval.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(broker.resolve(approval.id, "allow-once")).toBe(true);
+    await resultPromise;
+  });
+
   it("does not allow embedded approvals when the broker stops", async () => {
     const broker = embeddedBroker();
     const onResolution = vi.fn();

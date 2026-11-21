@@ -117,6 +117,31 @@ function notifyPluginApprovalResolution(
   }
 }
 
+const ONE_CALL_PLUGIN_APPROVAL_DECISIONS = ["allow-once", "deny"] as const;
+
+/**
+ * Decisions a hook approval offers. The host never persists a hook approval, and
+ * `onResolution` is the only way the plugin learns which decision was chosen. A
+ * hook that names no decisions and has no `onResolution` therefore cannot honor
+ * a standing grant, so it offers the one-call decisions only.
+ */
+function resolveRequestedPluginApprovalDecisions(
+  approval: PluginApprovalRequest,
+): PluginApprovalRequest["allowedDecisions"] {
+  const namesDecision =
+    Array.isArray(approval.allowedDecisions) &&
+    approval.allowedDecisions.some(
+      (decision) =>
+        decision === PluginApprovalResolutions.ALLOW_ONCE ||
+        decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+        decision === PluginApprovalResolutions.DENY,
+    );
+  if (namesDecision || typeof approval.onResolution === "function") {
+    return approval.allowedDecisions;
+  }
+  return [...ONE_CALL_PLUGIN_APPROVAL_DECISIONS];
+}
+
 function resolvePermittedPluginApprovalResolution(
   decision: unknown,
   allowedDecisions: readonly string[],
@@ -255,7 +280,10 @@ async function requestPluginToolApprovalDecision(
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs =
     addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
-  const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
+  const requestedDecisions = resolveRequestedPluginApprovalDecisions(approval);
+  const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions({
+    allowedDecisions: requestedDecisions,
+  });
   const resolveDecision = (decision: unknown): HookOutcome | undefined => {
     const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
     notifyPluginApprovalResolution(approval, resolution);
@@ -319,7 +347,7 @@ async function requestPluginToolApprovalDecision(
           description: approval.description,
           ...(approval.scope ? { scope: sanitizeApprovalScope(approval.scope) } : {}),
           severity: approval.severity,
-          allowedDecisions: approval.allowedDecisions,
+          allowedDecisions: requestedDecisions,
           ...requestIdentity,
         },
         timeoutMs,
@@ -376,7 +404,7 @@ async function requestPluginToolApprovalDecision(
             description: approval.description,
             ...(approval.scope ? { scope: approval.scope } : {}),
             severity: approval.severity,
-            allowedDecisions: approval.allowedDecisions,
+            allowedDecisions: requestedDecisions,
             ...requestIdentity,
             ...(params.ctx?.approvalReviewerDeviceId
               ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
