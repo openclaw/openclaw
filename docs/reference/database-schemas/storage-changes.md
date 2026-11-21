@@ -3313,7 +3313,8 @@ owner completion authority from those outcomes. Child exec approvals require the
 original creator; an unrelated administrator cannot approve them.
 
 **Same-version draft readers:** schema 44 is already used by development builds,
-including the maintainer's fsn1 rollout. Its version check cannot distinguish a
+including the maintainer's fsn1 draft `62dc98d`, which ignores the child envelope
+and must be rebuilt before enabling this feature. Its version check cannot distinguish a
 draft reader that predates these fields. The accepted boundary is a coordinated
 upgrade of all same-version readers before enabling participant children, not an
 older-reader safety guarantee. Do not roll back to a same-version draft reader

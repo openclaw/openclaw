@@ -4,6 +4,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { resolveSubagentCompletionParticipation } from "./subagent-child-owner-match.js";
 import {
   findAuthorizedSwarmCollectorRequest,
   compactSubagentRunForMemory,
@@ -460,6 +461,7 @@ it.each([false, true])(
       {
         participationCeiling: {
           kind: "send" as const,
+          permission: "guarded" as const,
           profileId: "participant",
           sessionKey: "agent:main:main",
           tools: ["read"],
@@ -472,6 +474,26 @@ it.each([false, true])(
           },
         },
       },
+    );
+    const entry = {
+      sessionId: "child",
+      lifecycleRevision: "current",
+      updatedAt: 1,
+      inheritedToolPolicySource: "participant" as const,
+      participationCeiling: record.participationCeiling,
+    };
+    const previous = {
+      ...record,
+      childSessionIdentity: { sessionId: "child", lifecycleRevision: "old" },
+    };
+    const current = {
+      ...record,
+      runId: "current",
+      childSessionIdentity: { sessionId: "child", lifecycleRevision: "current" },
+    };
+    expect(() => resolveSubagentCompletionParticipation([previous], entry)).toThrow(/incarnation/);
+    expect(resolveSubagentCompletionParticipation([previous, current], entry)).toEqual(
+      record.participationCeiling,
     );
     const restored = rowToSubagentRunRecord(bindSubagentRunRecord(record))!;
     subagentRuns.set(restored.runId, restored);

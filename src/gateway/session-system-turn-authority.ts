@@ -54,35 +54,39 @@ export async function prepareSessionSystemTurnAuthority(
   if (entry?.sessionId !== params.sessionId) {
     throw new Error("System turn session is unavailable or has changed.");
   }
-  const participation = await prepareSessionParticipationRun({
-    context: params.context,
-    agentId: params.agentId,
-    entry,
-    turnCeiling: params.participationCeiling,
-    assertCurrent: params.assertCurrent,
-  });
-  if (participation) {
-    return participation;
-  }
-  if (params.operatorSource) {
-    const restored = await restoreGatewayQueuedOperatorRecovery({
-      source: params.operatorSource,
+  const restored = params.operatorSource
+    ? await restoreGatewayQueuedOperatorRecovery({
+        source: params.operatorSource,
+        context: params.context,
+        assertCurrent: () => params.assertCurrent?.(),
+      })
+    : undefined;
+  try {
+    const participation = await prepareSessionParticipationRun({
       context: params.context,
-      assertCurrent: () => params.assertCurrent?.(),
+      agentId: params.agentId,
+      entry,
+      turnCeiling: params.participationCeiling,
+      preserveRecordedSource: params.preserveRecordedSource,
+      recoveredOperatorAuthority: restored?.authority,
+      assertCurrent: params.assertCurrent,
     });
-    try {
+    if (participation) {
+      return participation;
+    }
+    if (restored) {
       return await prepareSessionPrincipalRunAuthority({
         ...params,
         profileId: restored.authority.profileId,
         recoveredOperatorAuthority: restored.authority,
         preserveRecordedSource: true,
       });
-    } finally {
-      restored.release();
     }
+    const profileId = resolveSessionSystemTurnProfileId(entry);
+    return profileId
+      ? await prepareSessionPrincipalRunAuthority({ ...params, profileId, sessionPrincipal: true })
+      : undefined;
+  } finally {
+    restored?.release();
   }
-  const profileId = resolveSessionSystemTurnProfileId(entry);
-  return profileId
-    ? prepareSessionPrincipalRunAuthority({ ...params, profileId, sessionPrincipal: true })
-    : undefined;
 }

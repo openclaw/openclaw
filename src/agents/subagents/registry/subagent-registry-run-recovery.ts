@@ -365,7 +365,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const refreshCompletionAuthority =
       preserveCompletedRun || replaceParams.refreshCompletionAuthority === true;
     const authority = refreshCompletionAuthority
-      ? await captureOperatorToolGatewayContinuationContext()
+      ? await captureOperatorToolGatewayContinuationContext(undefined, {
+          participationCeiling: selected.participationCeiling,
+        })
       : undefined;
     let custodyTransferred = false;
     const runIds = new Set([

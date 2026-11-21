@@ -126,20 +126,32 @@ export function matchesSubagentChildSessionOwner(
 }
 
 /** The registry's captured source outlives child deletion and is a restriction, not a grant. */
-export function resolveSubagentCompletionParticipation(
+export function resolveSubagentChildParticipation(
   records: Iterable<SubagentRunRecord>,
   entry: SessionEntry | undefined,
   captured?: ParticipationCeiling,
 ): ParticipationCeiling | undefined {
   let recorded = captured;
   for (const record of records) {
-    if (record.participationCeiling) {
-      recorded = intersectParticipationCeilings(recorded, record.participationCeiling);
-      sessionParticipationCeiling(entry, recorded);
-      if (!matchesSubagentChildSessionIdentity(record, entry ?? null)) {
-        throw new Error("Participant completion child incarnation changed.");
-      }
-    }
+    recorded = intersectParticipationCeilings(recorded, record.participationCeiling);
   }
   return sessionParticipationCeiling(entry, recorded);
+}
+
+/** Owed completions additionally belong to the exact child execution incarnation. */
+export function resolveSubagentCompletionParticipation(
+  records: Iterable<SubagentRunRecord>,
+  entry: SessionEntry | undefined,
+  captured?: ParticipationCeiling,
+): ParticipationCeiling | undefined {
+  const retained = [...records];
+  const ceiling = resolveSubagentChildParticipation(retained, entry, captured);
+  const participants = retained.filter((record) => record.participationCeiling);
+  if (
+    participants.length &&
+    !participants.some((record) => matchesSubagentChildSessionIdentity(record, entry ?? null))
+  ) {
+    throw new Error("Participant completion child incarnation changed.");
+  }
+  return ceiling;
 }

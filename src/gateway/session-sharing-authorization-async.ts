@@ -247,7 +247,9 @@ export async function prepareSessionPrincipalRunAccess(params: {
       method: "chat.send",
       ...(params.participationCeiling ? { participationRequired: true as const } : {}),
       sessionScope:
-        original && resolveMissingOperatorScope(["operator.write"], scopes) !== null
+        original &&
+        !params.participationCeiling &&
+        resolveMissingOperatorScope(["operator.write"], scopes) !== null
           ? "operator.sessions.write"
           : undefined,
       requestParams: { agentId: params.agentId, sessionKey: params.sessionKey },
@@ -476,9 +478,9 @@ export async function resolveSessionMutationAuthorizationAsync(
       if (params.method === "chat.send" || params.method === "agent") {
         const { getSubagentRunsForChildSession } =
           await import("../agents/subagents/registry/subagent-registry-memory.js");
-        const { resolveSubagentCompletionParticipation } =
+        const { resolveSubagentChildParticipation } =
           await import("../agents/subagents/registry/subagent-child-owner-match.js");
-        childCeiling = resolveSubagentCompletionParticipation(
+        childCeiling = resolveSubagentChildParticipation(
           getSubagentRunsForChildSession(target.sessionKey, input.agentId),
           initialFacts.target?.entry,
         );
