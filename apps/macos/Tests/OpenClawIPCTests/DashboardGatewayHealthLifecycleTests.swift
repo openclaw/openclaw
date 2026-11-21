@@ -205,6 +205,21 @@ extension DashboardGatewayHealthTests {
         }
     }
 
+    @Test func `focusing a signed out window keeps its sign in running`() async throws {
+        try await self.withFixture { manager, _ in
+            let target = DashboardGatewayTarget.profile("first")
+            let controller = try await self.open(target, in: manager)
+            let page = DashboardFailurePage.SignedOut(
+                target: target, name: "first", host: "gateway.example", expiresAt: Date())
+            controller.showSignedOut(page, present: false, autoStart: true)
+            #expect(controller.isSigningIn)
+            await manager.openOrFocusDashboard(for: target).value
+            #expect(controller.window?.windowController === controller)
+            #expect(manager.dashboardControllers().contains { $0.controller === controller })
+            controller.cancelGatewayReconnect(target)
+        }
+    }
+
     @Test func `same URL replacement rejects wakes from its retired WebView`() async throws {
         try await self.withFixture { manager, _ in
             let target = DashboardGatewayTarget.profile("first")
