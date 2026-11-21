@@ -1,0 +1,2 @@
+# Net test lines for #201710 beyond the allowance: fixed session tool listing with execution gates. Refusal equivalence against main is executed through the production tool base, bundle pass and catalog for five policy shapes (cron/user/event allowlists, group guest and owner) across the direct, preparer and dispatch paths, plus series listing, fork and upgrade pin cases. Duplicate tests were removed first.
+594

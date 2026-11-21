@@ -15,6 +15,99 @@ function text(root: Page | Locator, value: string, exact = true) {
 }
 
 suite.define(() => {
+  it("keeps an unread update failure in the Inbox after the Gateway build changes", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const run = {
+          ...createUpdateRunFixture(),
+          phase: "finished",
+          status: "failed",
+          reason: "post-update-failed",
+          target: { kind: "git", channel: "dev", sha: "b".repeat(40) },
+          before: { version: "2026.11.5", buildId: "before-build" },
+          after: { version: "2026.11.5", buildId: "after-build", sha: "b".repeat(40) },
+          steps: [{ step: "verifying", status: "failed" }],
+          verification: {
+            versionMatch: false,
+            serviceRunning: true,
+            runningVersion: "2026.11.5",
+            runningBuildId: "before-build",
+          },
+          finishedAtMs: Date.now(),
+        } as const;
+        const gateway = await installMockGateway(page, {
+          communityInvite: false,
+          serverVersion: "2026.11.5",
+          serverBuildId: "before-build",
+          gatewayBootId: "gateway-boot",
+          presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+          controlUiBuildSource: "configured",
+          updateAvailable: null,
+          methodResponses: {
+            "update.status": { lastRun: run },
+            "update.runs.get": { run },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("update.status");
+        const inbox = page.locator(".sidebar-issues-button:visible");
+        const card = page.locator('[data-attention-kind="updateAvailable"]');
+        await inbox.click();
+        await card
+          .getByText(/OpenClaw update failed/)
+          .first()
+          .waitFor();
+
+        const connections = (await gateway.getRequests("connect")).length;
+        await gateway.setServerBuildId("after-build");
+        await gateway.closeLatest();
+        await gateway.waitForRequest("connect", { after: connections });
+        const historical = page.getByRole("link", {
+          name: /Last update run failed.*serving build after-build/,
+        });
+        await historical.waitFor();
+
+        await gateway.emitGatewayEvent("update.available", {
+          updateAvailable: {
+            channel: "stable",
+            currentVersion: "2026.11.5",
+            latestVersion: "2026.11.6",
+          },
+        });
+        const release = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await release.getByText("Update available", { exact: true }).waitFor();
+        await release.locator("summary").hover();
+        await release
+          .getByRole("button", { name: "Dismiss Update available", exact: true })
+          .click();
+        await release.waitFor({ state: "detached" });
+        await historical.click();
+        await page.waitForURL("**/settings/updates");
+        const report = page.locator('openclaw-update-run-view [data-run-status="failed"]');
+        await report
+          .getByRole("status")
+          .filter({ hasText: /Last update run failed/ })
+          .waitFor();
+        await report
+          .getByText("The Gateway is now serving the update target.", { exact: true })
+          .waitFor();
+        const verification = report.getByRole("list", {
+          name: "Verification at the time of the update",
+        });
+        expect(
+          await verification.locator('[data-oracle="version"]').getAttribute("data-state"),
+        ).toBe("fail");
+        expect(await page.getByRole("button", { name: "Retry update", exact: true }).count()).toBe(
+          0,
+        );
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      },
+    );
+  });
+
   it.each([
     ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
     ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
@@ -87,6 +180,87 @@ suite.define(() => {
       );
     },
   );
+
+  it("labels a standalone repair and keeps the failed update it repaired visible", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 1200, width: 1440 } },
+      async ({ page }) => {
+        const now = Date.now();
+        const failure =
+          "Update 2b6f7c1e-9a41-4c2d-8f3e-5d6a7b8c9d0e to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: SQLite migration publication could not be verified: database is locked";
+        const run = {
+          ...createUpdateRunFixture(),
+          trigger: "cli",
+          phase: "finished",
+          status: "succeeded",
+          reason: null,
+          target: { kind: "package", version: "2026.11.5" },
+          before: {},
+          after: { version: "2026.11.5" },
+          verification: {},
+          finishedAtMs: now,
+          steps: [
+            {
+              step: "requested",
+              status: "completed",
+              startedAtMs: now - 60_000,
+              endedAtMs: now - 59_000,
+            },
+            {
+              step: "repairing",
+              status: "completed",
+              startedAtMs: now - 59_000,
+              endedAtMs: now - 1_000,
+            },
+            {
+              step: "finalize:repaired-run",
+              status: "completed",
+              endedAtMs: now - 59_000,
+              detail: failure,
+            },
+            { step: "finalize:doctor", status: "completed", endedAtMs: now - 2_000 },
+          ],
+        } as const;
+        const schedule = {
+          channel: "stable",
+          autoEnabled: false,
+          install: { kind: "package" },
+        } as const;
+        const gateway = await installMockGateway(page, {
+          communityInvite: false,
+          serverVersion: "2026.11.5",
+          updateAvailable: null,
+          updateSchedule: schedule,
+          methodResponses: {
+            "config.get": configResponse(
+              { update: { channel: "stable", auto: { enabled: false } } },
+              "repair-run",
+            ),
+            "update.status": { lastRun: run, schedule },
+            "update.runs.get": { run },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("update.status");
+        const surface = page.locator("openclaw-update-run-view");
+        await surface.locator(".update-run-view__report").waitFor();
+        const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
+          animations: "disabled",
+          scrollTo: surface,
+        });
+        await writeFile(path.join(suite.artifactDir, "repair-run.png"), frame.png);
+
+        await text(surface, "✅ OpenClaw repair completed for 2026.11.5.").first().waitFor();
+        await text(surface, `Repaired update: ${failure}`).waitFor();
+        expect(await surface.textContent()).not.toContain("OpenClaw updated to");
+        const phases = surface.locator(".update-run-view__phases > li");
+        expect(await phases.evaluateAll((items) => items.map((item) => item.dataset.step))).toEqual(
+          ["requested", "repairing", "finished"],
+        );
+        await text(surface, "3 of 3 phases complete").waitFor();
+      },
+    );
+  });
 
   it("requires confirmation and keeps long update output keyboard accessible", async () => {
     await suite.withPage(

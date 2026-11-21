@@ -33,6 +33,7 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
 
 export {
   MAX_PLUGIN_RECOMMENDED_PROMPTS,
+  MAX_PLUGIN_RECOMMENDED_PROMPT_LENGTH,
   validatePluginRecommendedPrompts,
 } from "./recommended-prompts.js";
 export { PLUGIN_CATEGORY_SLUGS, validatePluginCategories } from "./categories.js";

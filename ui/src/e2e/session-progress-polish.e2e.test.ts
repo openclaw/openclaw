@@ -54,24 +54,23 @@ async function openProgress(page: Page, active = true) {
 
 suite.define(() => {
   it.each([1440, 390])(
-    "keeps paused progress markers the same size as pending markers at %i px",
+    "keeps paused and pending progress markers at their compact size at %i px",
     async (width) => {
       const context = await suite.newBrowserContext({ viewport: { width, height: 1000 } });
       try {
         const page = await context.newPage();
         const { details } = await openProgress(page, false);
-        const markerSize = (status: "paused" | "pending") =>
-          details
+        const size = expect.closeTo(((width === 1440 ? 13 : 12) * 24) / 21.5, 2);
+        for (const status of ["paused", "pending"]) {
+          const marker = await details
             .locator(`.session-progress-card__step-marker[data-status="${status}"] > svg`)
             .first()
             .evaluate((svg) => {
               const bounds = svg.getBoundingClientRect();
-              return { width: bounds.width, height: bounds.height };
+              return [bounds.width, bounds.height, getComputedStyle(svg).strokeWidth];
             });
-        const paused = await markerSize("paused");
-        const pending = await markerSize("pending");
-        expect(paused.width).toBeCloseTo(pending.width, 2);
-        expect(paused.height).toBeCloseTo(pending.height, 2);
+          expect(marker).toEqual([size, size, "1.5px"]);
+        }
       } finally {
         await suite.closeBrowserContext(context);
       }

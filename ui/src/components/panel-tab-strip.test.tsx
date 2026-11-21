@@ -194,7 +194,7 @@ it("retains icon content when tab projections and callbacks change", async () =>
   renderedTabs(container)
     .find((tab) => tab.dataset.tabValue === TAB.id)
     ?.click();
-  expect(onSelect).toHaveBeenCalledExactlyOnceWith(TAB.id);
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith(TAB.id, expect.any(MouseEvent));
   icon.textContent = "Updated icon";
   flush();
   expect(tabStrip(container, "-tab__icon span")).toBe(iconElement);
@@ -239,7 +239,7 @@ it("keeps a fixed tab selectable without a close action", async () => {
   tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
   expect(onClose).not.toHaveBeenCalled();
   tab.click();
-  expect(onSelect).toHaveBeenCalledWith(TAB.id);
+  expect(onSelect).toHaveBeenCalledWith(TAB.id, expect.any(MouseEvent));
 
   await renderStrip({ tabs: [TAB], container, onClose });
   expect(container.querySelector(".tabstrip-tab__close")).not.toBeNull();

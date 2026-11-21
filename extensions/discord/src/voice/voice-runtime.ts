@@ -90,7 +90,8 @@ export class DiscordVoiceManager {
     scheduler: PluginServiceSchedulerV1;
     readPolicy?: DiscordLivePolicyReader;
     client: Client;
-    cfg: OpenClawConfig;
+    /** Reads the current runtime config, so hot-reloaded media, model and TTS settings apply. */
+    readConfig: () => OpenClawConfig;
     discordConfig: DiscordAccountConfig;
     accountId: string;
     runtime: RuntimeEnv;
@@ -107,7 +108,10 @@ export class DiscordVoiceManager {
             { guildId, channelId, accountId: params.accountId },
             this,
           );
-    const { admissionAllowFrom, ownerAllowFrom } = resolveDiscordVoiceAccess(params);
+    const { admissionAllowFrom, ownerAllowFrom } = resolveDiscordVoiceAccess({
+      ...params,
+      cfg: params.readConfig(),
+    });
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null

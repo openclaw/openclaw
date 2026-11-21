@@ -9,6 +9,8 @@
  * For frozen transcript reuse: --messages 40 (or 150) --frozen [--hook]
  * adds 8-KiB tool arguments/results and the production transport transform. --hook
  * includes mutable input preparation required by the agent's payload callback.
+ * --provider-arguments builds tool blocks from noncanonical provider JSON; compare
+ * exact-byte replay costs separately (wire hashes intentionally change after the fix).
  * --conversion-only omits post-conversion image sanitation; default measures both.
  * --context-usage --messages 600 measures admission followed by the managed OpenAI
  * request builder, including the saved compaction/usage prefix. Verify identical
@@ -21,6 +23,9 @@
  * immutability proof set. Strings are shared; message/container identities are not.
  * --builder-module <path> selects an adjacent baseline params owner whose converter
  * import points at the matching baseline converter (all other dependencies unchanged).
+ * Assistant fixtures carry response IDs so signed text exercises the real fallback-ID
+ * decision. Compare --messages 200/1000/2000 with and without --frozen to separate
+ * warm projection reuse from per-message conversion of mutable histories.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -38,6 +43,7 @@ import {
 } from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
 import { cloneResponsesInputForPayloadHook } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import { resolveCompletedResponsesToolCall } from "../../packages/ai/src/transports/openai-responses-stream-terminal-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
 import { createAssistantMessageEventStream } from "../../packages/ai/src/utils/event-stream.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
@@ -53,6 +59,7 @@ const messageCount = Number(process.argv[process.argv.indexOf("--messages") + 1]
 const frozen = process.argv.includes("--frozen");
 const hook = process.argv.includes("--hook");
 const conversionOnly = process.argv.includes("--conversion-only");
+const providerArguments = process.argv.includes("--provider-arguments");
 const contextUsage = process.argv.includes("--context-usage");
 const histories = Number(process.argv[process.argv.indexOf("--histories") + 1]) || 1;
 assert(Number.isSafeInteger(histories) && histories > 0 && (!contextUsage || histories === 1));
@@ -218,11 +225,23 @@ for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); tur
     ],
   });
   const call = turn % 5 === 0;
+  const toolArguments = { query: messageCount ? `q${turn}`.padEnd(8192, "q") : `q${turn}` };
+  const completedCall =
+    providerArguments && call
+      ? resolveCompletedResponsesToolCall({
+          type: "function_call",
+          id: `fc_${turn}`,
+          call_id: `call_${turn}`,
+          name: "lookup",
+          arguments: JSON.stringify(toolArguments, null, 2),
+        })
+      : { name: "lookup", arguments: toolArguments };
   messages.push({
     role: "assistant",
     provider: model.provider,
     api: model.api,
     model: model.id,
+    responseId: `resp_${turn}`,
     timestamp: turn,
     stopReason: call ? "toolUse" : "stop",
     usage: {
@@ -249,8 +268,7 @@ for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); tur
             {
               type: "toolCall" as const,
               id: `call_${turn}|fc_${turn}`,
-              name: "lookup",
-              arguments: { query: messageCount ? `q${turn}`.padEnd(8192, "q") : `q${turn}` },
+              ...completedCall,
             },
           ]
         : []),
@@ -412,6 +430,7 @@ console.log(
     frozen,
     hook,
     conversionOnly,
+    providerArguments,
     contextUsage,
     conversionsPerRequest: conversions / iterations,
     plainDataChecksPerRequest: plainDataChecks / iterations,

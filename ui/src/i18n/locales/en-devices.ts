@@ -10,6 +10,7 @@ const enDevices = {
       browserPairingRequired:
         "You can view devices, but this browser needs approval to change them.",
       pairingRequired: "You can view devices, but only admins can change them.",
+      pairingRequiredTooltip: "Admin access required to manage devices.",
       adminRequired:
         "You can view command approvals and device bindings, but only admins can change them.",
       pairingAndAdminRequired:
@@ -52,6 +53,7 @@ const enDevices = {
       requestedAccessLabel: "Requested access",
       approvedAccessLabel: "Approved access",
       desktopOpenWindow: "Open this desktop in a new window",
+      desktopOpenWindowTooltip: "Open in new window",
       desktopEnableHint:
         "Desktop sharing starts enabled on desktop devices. In the desktop app on that device, check the Desktop sharing switch under Settings. Approve any pending desktop access request here. If sharing still doesn’t work, ask an admin to check the desktop policy. The device needs Screen Sharing or an authenticated local VNC server.",
       uptime: "up {time}",
@@ -70,6 +72,10 @@ const enDevices = {
       olderPairing: "{count} older pairing of {name}",
       olderPairings: "{count} older pairings of {name}",
       autoPaired: "auto-paired",
+      openclawIdLabel: "Access",
+      openclawIdManaged:
+        "Connects through OpenClaw ID. Manage people on the Access page, and your own browsers under Your devices in the account menu.",
+      openclawIdOpen: "Open Access",
       versionDrift: "Version drift",
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older version to match.",
@@ -115,11 +121,10 @@ const enDevices = {
       rotateAcknowledge: "I saved this token",
       rotateDismissHint: "This dialog stays open until you confirm the token is saved.",
       rotateWithheldTitle: "Token rotated · {device}",
-      rotateWithheldNext:
-        "It will reconnect with the new token automatically — nothing else to do.",
+      rotateWithheldNext: "The previous token no longer works.",
       rotateWithheldException: "If it doesn’t reconnect on its own, pair it again.",
-      rotateWithheldNote: "For security, the new token is only revealed on the device itself.",
-      gateway: "This computer",
+      rotateWithheldNote: "The new token isn’t shown here because it belongs to another device.",
+      gateway: "Computer running OpenClaw",
       unknownClient: "Unknown device",
       revoked: "Revoked",
       rotate: "Rotate",
@@ -153,7 +158,7 @@ const enDevices = {
         "Switching devices discards unsaved command approval changes for the current device. These changes can’t be recovered.",
       discardConfirm: "Discard changes",
       host: "Device",
-      gateway: "This computer",
+      gateway: "Computer running OpenClaw",
       selectNode: "Select device",
       noNodes: "No devices support command approvals yet.",
       defaults: "Defaults",
@@ -224,7 +229,6 @@ const enDevices = {
       expiredTitle: "Setup code expired",
       generateNewCode: "Create new code",
       nodeWaiting: "Run the command on the device, then review its pairing request here.",
-      help: "Connection help",
       helpNewTab: "Connection help (opens in a new tab)",
       manageDevices: "Manage devices",
     },

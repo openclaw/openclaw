@@ -8,10 +8,9 @@ import {
   settingsRow,
 } from "./config-composer-fixtures.test-support.ts";
 const suite = createConfigSuite("Control UI curated settings defaults mocked Gateway E2E");
-const thinkingDefaultExplanation =
-  "Uses the selected model's thinking policy instead of saving a global thinking override.";
+const thinkingDefaultExplanation = "Default: use the model’s own effort setting.";
 const fastModeDefaultExplanation =
-  "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.";
+  "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.";
 function configResponse(config: Record<string, unknown>, hash: string) {
   return { ...configSnapshot(config, hash), appliedConfigHash: hash };
 }
@@ -142,7 +141,7 @@ suite.define(() => {
       const profileSelect = profileRow.getByRole("combobox", { name: "Available tools" });
       await browserRow.getByRole("switch", { name: "Browser tools", exact: true }).waitFor();
       await expectQuietDefault(browserRow);
-      expect(await profileSelect.inputValue()).toBe("minimal");
+      await expect.poll(() => profileSelect.inputValue()).toBe("minimal");
 
       const securitySavesBefore = (await gateway.getRequests("config.set")).length;
       await browserRow.locator(".settings-row__title").click();

@@ -281,6 +281,7 @@ describe("ChatComposerCapabilityHost", () => {
       });
     });
     await import("./components/chat-composer-plus-menu-content.tsx");
+    await import("./components/chat-composer-plus-menu-subview.tsx");
     const expectMessage = (message: string) =>
       waitForSolid(() =>
         expect(

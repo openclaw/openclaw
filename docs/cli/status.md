@@ -44,6 +44,9 @@ openclaw status --usage --agent work
 | `--timeout <ms>`        | Check timeout in milliseconds (default: `60000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
+An explicitly empty `--agent` is invalid; omit the flag to use the default usage
+scope. `--agent` remains valid only with `--usage`.
+
 `status --all` neutralizes terminal controls in channel and agent labels, account
 tables, and channel issue diagnostics. Embedded tabs and line breaks in these
 values display as visible escapes; report styling and multiline store guidance remain.
@@ -302,6 +305,10 @@ If local session state requires Doctor, status prints any installation drift to 
   unavailable message with guidance to check the file path and permissions.
 
 ## Plugin health
+
+A plugin that failed to load appears in a **Plugins not loaded** overview row
+(`failedPlugins` in JSON). The Gateway keeps serving without it, keeps its config and
+data, and retries it on the next start. Run `openclaw doctor` for the load error.
 
 Plugin-health collection warns when persisted quarantine records cannot be read
 and continues with the available health information. The inventory may be

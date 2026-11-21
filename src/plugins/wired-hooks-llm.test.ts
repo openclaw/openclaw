@@ -41,8 +41,8 @@ it.each([
   await runner.runLlmInput({ ...input, historyMessages: [...input.historyMessages] }, context);
   await runner.runLlmOutput({ ...output, assistantTexts: [...output.assistantTexts] }, context);
   if (!privateSession) {
-    expect(llmInput).toHaveBeenCalledWith(input, context);
-    expect(llmOutput).toHaveBeenCalledWith(output, context);
+    expect(llmInput).toHaveBeenCalledWith(input, { ...context, turnTainted: "unknown" });
+    expect(llmOutput).toHaveBeenCalledWith(output, { ...context, turnTainted: "unknown" });
     return;
   }
   expect(llmInput).not.toHaveBeenCalled();
@@ -67,7 +67,7 @@ it.each([
   // Skill names are conversation evidence, so private sessions withhold them with the messages.
   expect(agentEnd).toHaveBeenCalledExactlyOnceWith(
     { runId: "run-1", messages: [], success: false, durationMs: 42 },
-    context,
+    { ...context, turnTainted: "unknown" },
   );
   expect(readMessages).not.toHaveBeenCalled();
   expect(readError).not.toHaveBeenCalled();

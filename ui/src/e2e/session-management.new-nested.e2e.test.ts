@@ -36,7 +36,7 @@ suite.define(() => {
       );
       await gateway.deferNext("sessions.create");
       await action.click();
-      const pending = page.getByRole("menuitem", { name: "Creating nested session…", exact: true });
+      const pending = page.getByRole("menuitem", { name: "Creating child session…", exact: true });
       await pending.waitFor({ state: "visible" });
       expect(await pending.getAttribute("aria-disabled")).toBe("true");
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(1);
@@ -51,7 +51,7 @@ suite.define(() => {
       await ui.expectNoRequests(gateway, "agent", "chat.send", "sessions.spawn");
       await page.locator('[data-session-key="' + childKey + '"]').waitFor({ state: "visible" });
       await page
-        .getByRole("menuitem", { name: "New Nested Session", exact: true })
+        .getByRole("menuitem", { name: "New child session", exact: true })
         .waitFor({ state: "hidden" });
       await captureNestedSessionProof(page, "created");
     }));
@@ -77,7 +77,7 @@ suite.define(() => {
       await gateway.deferNext("sessions.create");
       await action.click();
       await page
-        .getByRole("menuitem", { name: "Creating nested session…", exact: true })
+        .getByRole("menuitem", { name: "Creating child session…", exact: true })
         .waitFor({ state: "visible" });
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(1);
       await gateway.rejectDeferred("sessions.create", { message: "Parent is no longer available" });

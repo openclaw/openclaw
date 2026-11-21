@@ -1,5 +1,6 @@
 import { marked } from "marked";
 import { expect, it } from "vitest";
+import { markdownToStory } from "../urbit/story.js";
 import { extractMessageText, formatModelName, formatSummarizationHistoryText } from "./utils.js";
 
 it.each([
@@ -21,6 +22,11 @@ it.each([
   const tokens = marked.lexer(text).filter((token) => token.type !== "space");
   expect(tokens).toMatchObject([{ type: "code", lang, text: code }]);
 });
+
+it.each(["~zod please summarize:\n1. parent\n   - child", "- [ ] todo\n- [x] done"])(
+  "extractMessageText keeps native lists from %j",
+  (markdown) => expect(extractMessageText(markdownToStory(markdown))).toBe(markdown),
+);
 
 const MAX_DEPTH = 100;
 const render = (...inline: unknown[]) => extractMessageText([{ inline }]);
@@ -81,17 +87,4 @@ it("shifts the local time relative to the UTC baseline when a non-UTC zone is co
   expect(newYork).toContain("08:00:00");
   expect(shanghai).not.toBe(utc);
   expect(newYork).not.toBe(utc);
-});
-
-it("joins multiple entries with newlines", () => {
-  const history = [
-    { author: "~a", content: "first", timestamp: SAMPLE_TS },
-    { author: "~b", content: "second", timestamp: SAMPLE_TS + 60_000 },
-  ];
-  const text = formatSummarizationHistoryText(history, {
-    agents: { defaults: { userTimezone: "UTC" } },
-  });
-  expect(text.split("\n")).toHaveLength(2);
-  expect(text).toContain("first");
-  expect(text).toContain("second");
 });

@@ -13,6 +13,7 @@ import {
   iterateSqliteQuerySync,
   requestSqliteWorkerOperationAdmission,
   runSqliteImmediateTransactionSync,
+  type SynchronousSqliteCallback,
   type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { aggregateDay, aggregateDays, itemKey } from "./aggregate.js";
@@ -565,7 +566,7 @@ class TeamReportsDatabase {
     }));
   }
 
-  withWriteTransaction<T>(operation: () => T): T {
+  withWriteTransaction<T>(operation: SynchronousSqliteCallback<T>): T {
     requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return runSqliteImmediateTransactionSync(this.db, operation, {
       withCommit(commit) {

@@ -26,7 +26,9 @@ export async function captureTopVisibleVirtualRow(thread: Locator): Promise<Visi
   return thread.evaluate((element) => {
     const viewport = element.getBoundingClientRect();
     const row = Array.from(
-      element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
+      element.querySelectorAll<HTMLElement>(
+        ".chat-virtual-row[data-virtual-row-key]:not([data-prepared-row])",
+      ),
     ).find((candidate) => {
       const rect = candidate.getBoundingClientRect();
       return rect.bottom > viewport.top && rect.top < viewport.bottom;

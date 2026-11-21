@@ -22,8 +22,11 @@ export type RemoteModelCatalogWriteResult =
   | { status: "retained-newer"; row: RemoteModelCatalogStoreRow };
 
 // Slot name predates the v2 wire; renaming it would discard cached catalogs.
-// It stores whichever wire the configured URL serves, v3 included. No release reads
-// it, and it must never replace the slot read by released v2 clients.
+// It stores whichever wire the configured URL serves. Builds before the v3 default
+// (2026.11.5-beta.1 included) already write v2 bytes here; readers pick the parser from
+// the stored schemaVersion, so those bytes stay v2 after an upgrade. Those builds cannot
+// parse v3 bytes, but they refuse this build's newer state schema before reading them.
+// It must never replace the slot read by released v2 clients.
 export const REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v3";
 export const PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
 // Released v1/v2 snapshots remain readable until this client stores its own.

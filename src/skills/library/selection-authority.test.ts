@@ -590,6 +590,27 @@ async function resourceFixture() {
   return { root, options, authority, pin, snapshot: snapshotFor(pin), databasePath: options.path };
 }
 
+it("prepares and delivers pinned revisions without main-thread synchronous filesystem reads", async () => {
+  const { root, snapshot } = await resourceFixture();
+  const prefix = path.join(root, "skill-library") + path.sep;
+  const spies = (["existsSync", "statSync", "lstatSync", "openSync", "readFileSync"] as const).map(
+    (method) => vi.spyOn(fs, method),
+  );
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  await inRoot(root, async () => {
+    for (let turn = 0; turn < 2; turn++) {
+      const delivery = await deliver(snapshot, noop);
+      expect(delivery?.skills).toHaveLength(1);
+      expect(delivery?.skills[0]?.files).toHaveLength(3);
+    }
+  });
+  for (const spy of [...spies, realpath]) {
+    expect(
+      spy.mock.calls.filter(([file]) => typeof file === "string" && file.startsWith(prefix)),
+    ).toEqual([]);
+  }
+});
+
 it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
   "delivers cold and warm immutable pins without parent SQL under %s reads",
   async (mode) => {

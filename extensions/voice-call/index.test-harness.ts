@@ -91,7 +91,7 @@ export function registerVoiceCall(
       },
     }),
   );
-  if (!service || !toolFactory || !cli) {
+  if (service?.apiVersion !== 2 || !toolFactory || !cli) {
     throw new Error("Missing voice-call registration");
   }
   const factory = toolFactory;

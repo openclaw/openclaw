@@ -11,6 +11,7 @@ import {
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
@@ -85,15 +86,20 @@ async function refreshLocalGatewaySkills(
   }
 }
 
-async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
+async function loadSkillsStatusReport(
+  agentId: string | undefined,
+  signal?: AbortSignal,
+): Promise<SkillStatusReport> {
   const resolved = await resolveSkillsWorkspace({ agentId, bestEffort: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
       method: "skills.status",
       params: { agentId: resolved.agentId },
+      signal,
     });
   } catch (error) {
+    signal?.throwIfAborted();
     if (
       !(await canFallbackToImplicitLocalGateway({
         config: resolved.config,
@@ -116,9 +122,18 @@ async function runSkillsAction(
   render: (report: SkillStatusReport) => string,
   agentId: string | undefined,
 ): Promise<void> {
+  const signal = getAsyncWorkSignal();
   await runCommandWithRuntime(defaultRuntime, async () => {
-    const report = await loadSkillsStatusReport(agentId);
-    defaultRuntime.writeStdout(render(report));
+    try {
+      const report = await loadSkillsStatusReport(agentId, signal);
+      if (!signal?.aborted) {
+        defaultRuntime.writeStdout(render(report));
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        throw error;
+      }
+    }
   });
 }
 
@@ -372,6 +387,7 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             }),
             logger: skillInstallLogger,
             config: target.config,
+            signal: getAsyncWorkSignal(),
           });
           if (results.some((result) => result.ok && result.changed)) {
             await refreshLocalGatewaySkills(target);
@@ -436,6 +452,10 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
         },
         command: Command,
       ) => {
+        const signal = getAsyncWorkSignal();
+        if (signal?.aborted) {
+          return;
+        }
         let exitCode: number | undefined;
         const reportError =
           hasJsonOutput(opts) || opts.card !== true
@@ -443,7 +463,7 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             : defaultRuntime.error;
         try {
           const workspace = await resolveClawHubTargetWorkspace(command, opts, reportError);
-          if (!workspace) {
+          if (!workspace || signal?.aborted) {
             return;
           }
           const target = await resolveClawHubSkillVerificationTarget({
@@ -452,6 +472,9 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             version: opts.version,
             tag: opts.tag,
           });
+          if (signal?.aborted) {
+            return;
+          }
           if (!target.ok) {
             reportError(target.error);
             exitCode = 1;
@@ -465,7 +488,11 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
               version: target.version,
               tag: target.tag,
               baseUrl: target.baseUrl,
+              signal,
             });
+            if (signal?.aborted) {
+              return;
+            }
             if (!result.ok) {
               reportError(result.error);
               exitCode = 1;
@@ -479,7 +506,11 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
                 const card = await fetchClawHubSkillCard({
                   url: cardUrl.url,
                   baseUrl: target.baseUrl,
+                  signal,
                 });
+                if (signal?.aborted) {
+                  return;
+                }
                 defaultRuntime.writeStdout(card.endsWith("\n") ? card : `${card}\n`);
                 exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
               }
@@ -490,6 +521,9 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             }
           }
         } catch (err) {
+          if (signal?.aborted) {
+            return;
+          }
           if (err instanceof ExitError) {
             throw err;
           }
@@ -518,6 +552,7 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
     .option("--json", "Output as JSON", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(async (name: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+      const signal = getAsyncWorkSignal();
       let skillFound = false;
       await runSkillsAction(
         (report) => {
@@ -529,7 +564,7 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
         },
         resolveOptionFromCommand<string>(command, "agent"),
       );
-      if (!skillFound) {
+      if (!skillFound && !signal?.aborted) {
         defaultRuntime.exit(1);
       }
     });

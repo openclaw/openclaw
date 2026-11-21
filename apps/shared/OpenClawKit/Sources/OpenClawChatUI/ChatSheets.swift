@@ -212,7 +212,7 @@ public struct ChatSessionsSheet: View {
                     Task { await self.runBatch(.delete) }
                 }
             } message: {
-                Text("Each selected thread and its transcript will be removed from the gateway.")
+                Text("Each selected chat will be removed from the gateway.")
                     .font(OpenClawChatTypography.body)
             }
         }
@@ -243,7 +243,6 @@ public struct ChatSessionsSheet: View {
         } label: {
             chatActionLabel(Text("Groups"), systemImage: "folder")
         }
-        .help("Manage thread groups")
     }
 
     private var selectButton: some View {

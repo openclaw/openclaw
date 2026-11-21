@@ -21,6 +21,7 @@ import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
+  buildCronCommandShellArgvForGateway,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
@@ -241,7 +242,9 @@ export function registerCronAddCommand(cron: Command) {
                 );
                 return {
                   kind: "command" as const,
-                  argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
+                  argv:
+                    commandArgv ??
+                    (await buildCronCommandShellArgvForGateway(commandShell ?? "", opts)),
                   cwd: readNonBlankString(opts.commandCwd),
                   env: parseCronCommandEnv(opts.commandEnv),
                   input: typeof opts.commandInput === "string" ? opts.commandInput : undefined,

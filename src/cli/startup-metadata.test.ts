@@ -4,14 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTempDirs(tempDirs);
 });
 
 function createModuleLayout(): { moduleDir: string; moduleUrl: string; parentDir: string } {

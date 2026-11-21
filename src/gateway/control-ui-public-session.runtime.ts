@@ -27,6 +27,7 @@ import {
 } from "./control-ui-public-session-token.js";
 import {
   buildControlUiSessionEntryUrl,
+  isControlUiSessionReturnPathQueryKey,
   parseControlUiSessionReturnPath,
 } from "./control-ui-session-entry-path.js";
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
@@ -157,6 +158,25 @@ export async function serveControlUiPublicChat(params: {
 }): Promise<true> {
   const { req, res, basePath, config, projection, gate } = params;
   const url = new URL(req.url ?? "/", "http://localhost");
+  // Links can gain parameters outside OpenClaw (a Home Screen icon was seen adding
+  // homescreen=1). Redirect them away so neither the return path nor the app,
+  // which reads ?token= and ?gatewayUrl= from its own address, ever sees them.
+  const knownQuery = new URLSearchParams(
+    [...url.searchParams].filter(
+      ([key]) => key === "offset" || isControlUiSessionReturnPathQueryKey(key),
+    ),
+  );
+  if (
+    knownQuery.size !== url.searchParams.size &&
+    (req.method === "GET" || req.method === "HEAD") &&
+    parseControlUiSessionReturnPath(url.pathname, basePath)
+  ) {
+    res.statusCode = 302;
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Location", url.pathname + (knownQuery.size ? `?${knownQuery}` : ""));
+    res.end();
+    return true;
+  }
   const entryQuery = new URLSearchParams(url.searchParams);
   entryQuery.delete("offset");
   const entryPath = url.pathname + (entryQuery.size ? `?${entryQuery}` : "");

@@ -18,6 +18,7 @@ import {
   findNormalizedProviderValue,
   parseModelRef,
 } from "../../agents/model-selection-normalize.js";
+import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   prepareSessionCapabilityRead,
@@ -43,6 +44,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
@@ -85,6 +87,7 @@ function chatSendPreparationConfig(
   const defaults = cfg.agents?.defaults;
   const agent = resolveAgentEntry(cfg, agentId);
   const selected = resolveSessionModelRef(cfg, entry, agentId);
+  const { refs, repairConfigPath } = resolveConfiguredModelPolicyAllow({ cfg, agentId });
   const fallbacks =
     modelFallbackOverrideFromAvailability(
       resolveModelFallbackAvailability({
@@ -135,8 +138,8 @@ function chatSendPreparationConfig(
     agentModel: agent?.model,
     defaultModels: defaults?.models,
     agentModels: agent?.models,
-    defaultModelPolicy: defaults?.modelPolicy,
-    agentModelPolicy: agent?.modelPolicy,
+    // Canonical alias owner survives migration; empty allowlists remain unrestricted.
+    modelPolicy: { refs, owner: refs.length > 0 ? repairConfigPath : null },
     runtime: agent?.runtime,
     models: { mode: cfg.models?.mode, providers },
     auth: cfg.auth,
@@ -242,6 +245,13 @@ async function loadChatSendSessionContext(params: {
     { sessionKey: rawSessionKey, agentId: requestedAgentId },
   ]);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
+  if (!request.stopCommand) {
+    await waitForAgentInputAdmission(requestedAgentId, {
+      cfg: runtimeConfig,
+      sessionKey: sessionLoadKey,
+      owner: context.agentDatabaseStartup,
+    });
+  }
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
     "gateway.chat_send.load_session",
@@ -283,7 +293,6 @@ async function loadChatSendSessionContext(params: {
   ) {
     throw new Error("Session preparation changed; retry.");
   }
-  const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
   const expectedSessionRoutingContract = normalizeOptionalString(p.expectedSessionRoutingContract);
   const expectedLeafEntryId =
@@ -299,7 +308,7 @@ async function loadChatSendSessionContext(params: {
       clientRunId,
       pendingChatSendKey,
       sessionLoadOptions,
-      sessionLoadMs,
+      sessionLoadMs: roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs),
       cfg,
       agentId,
       selectedAgent: requestedAgent,

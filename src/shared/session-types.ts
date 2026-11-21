@@ -32,6 +32,8 @@ export type GatewayAgentRow = Pick<
   | "admissionRefusal"
   | "kind"
   | "name"
+  | "description"
+  | "recommendedPrompts"
   | "identity"
   | "workspace"
   | "workspaceGit"
@@ -42,6 +44,7 @@ export type GatewayAgentRow = Pick<
   | "thinkingOptions"
   | "thinkingDefault"
   | "defaultPermissionMode"
+  | "newSessionPermissionMode"
 >;
 
 export type SessionActivityPulse = {

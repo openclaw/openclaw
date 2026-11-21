@@ -6,6 +6,7 @@ import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
 } from "../../infra/node-runner-inventory.js";
+import type { WorkerProvider } from "../../plugins/types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
@@ -42,6 +43,10 @@ export async function preparedHarness(
     repository?: SessionRepositoryWorkspaceRecord & { baseCommit: string };
     recipe?: EnvironmentRecipe;
     lifecycleFailure?: boolean;
+    project?: WorkerProjectSnapshot;
+    preparation?: WorkerProjectPreparationIdentity;
+    provider?: WorkerProvider;
+    serviceOptions?: Parameters<typeof support.createService>[1];
     boundWorkspace?: Pick<
       NodeWorkerPreparedWorkspaceResult,
       "workspaceDir" | "sourceManifestRef" | "preparedManifestRef"
@@ -73,7 +78,7 @@ export async function preparedHarness(
       ),
   });
   const environmentId = reserve ? "prepared-spare" : harness.ready.environmentId;
-  const preparation: WorkerProjectPreparationIdentity = {
+  const preparation: WorkerProjectPreparationIdentity = options.preparation ?? {
     key: PREPARATION_KEY,
     cacheKey: "a".repeat(64),
     contractVersion: 1,
@@ -87,21 +92,23 @@ export async function preparedHarness(
       protocolFeatures,
     },
   };
-  const project: WorkerProjectSnapshot = options.repository
-    ? {
-        key: "d".repeat(64),
-        baseCommit: options.repository.baseCommit,
-        source: {
-          kind: "repository",
-          url: options.repository.url,
-          repositoryId: "R_dispatch_fixture",
-          owner: {
-            agent: { agentId: REQUEST.agentId, provenance: null },
-            identity: { source: "anonymous" },
+  const project: WorkerProjectSnapshot =
+    options.project ??
+    (options.repository
+      ? {
+          key: "d".repeat(64),
+          baseCommit: options.repository.baseCommit,
+          source: {
+            kind: "repository",
+            url: options.repository.url,
+            repositoryId: "R_dispatch_fixture",
+            owner: {
+              agent: { agentId: REQUEST.agentId, provenance: null },
+              identity: { source: "anonymous" },
+            },
           },
-        },
-      }
-    : { key: "d".repeat(64), baseCommit: "e".repeat(40), root: "/gateway/workspace" };
+        }
+      : { key: "d".repeat(64), baseCommit: "e".repeat(40), root: "/gateway/workspace" });
   const settings = {
     region: "test",
     ...(options.runSetupScript === undefined ? {} : { runSetupScript: options.runSetupScript }),
@@ -135,7 +142,7 @@ export async function preparedHarness(
       ? {
           preparation: {
             purpose: "reserve",
-            key: PREPARATION_KEY,
+            key: preparation.key,
             demandAtMs: 900,
             expiresAtMs: 10_000,
           },
@@ -161,7 +168,10 @@ export async function preparedHarness(
     ...support.BUNDLE_ARTIFACT,
     protocolFeatures,
   });
-  const workerService = support.createService(support.createProvider());
+  const workerService = support.createService(
+    options.provider ?? support.createProvider(),
+    options.serviceOptions,
+  );
   const projected = workerService.get(environmentId)!;
   const ordinaryGet = vi.mocked(harness.environments.get).getMockImplementation()!;
   vi.mocked(harness.environments.get).mockImplementation(

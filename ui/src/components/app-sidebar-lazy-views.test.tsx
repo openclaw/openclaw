@@ -10,17 +10,11 @@ import { selectSidebarView } from "../test-helpers/app-sidebar-setup.ts";
 
 const modules = vi.hoisted(() => ({
   roster: { started: false, ...Promise.withResolvers<void>() },
-  pages: { started: false, ...Promise.withResolvers<void>() },
   online: { started: false, ...Promise.withResolvers<void>() },
 }));
 vi.mock("./sidebar-agent-roster.tsx", async (importOriginal) => {
   modules.roster.started = true;
   await modules.roster.promise;
-  return importOriginal();
-});
-vi.mock("./app-sidebar-pages.tsx", async (importOriginal) => {
-  modules.pages.started = true;
-  await modules.pages.promise;
   return importOriginal();
 });
 vi.mock("./app-sidebar-online.tsx", async (importOriginal) => {
@@ -43,7 +37,7 @@ it("loads optional sidebar views on selection without replacing the shell or ret
         expect(sidebar.querySelector(selector)).toBe(originalRegions[index]),
       );
     const body = sidebar.querySelector(".sidebar-shell__body");
-    expect(Object.values(modules).map((module) => module.started)).toEqual([false, false, false]);
+    expect(Object.values(modules).map((module) => module.started)).toEqual([false, false]);
     const loading = async (module: (typeof modules)[keyof typeof modules]) => {
       await vi.waitFor(() => {
         expect(module.started).toBe(true);
@@ -71,11 +65,8 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     sidebar.sidebarAgentsMode = "roster";
     await loading(modules.roster);
     await retainLink("a.sidebar-agent-roster__row");
-    expect(modules.pages.started).toBe(false);
+    expect(modules.online.started).toBe(false);
 
-    await selectSidebarView(sidebar, "pages");
-    await loading(modules.pages);
-    await retainLink('.sidebar-pages [data-sidebar-entry="route:usage"] a');
     await selectSidebarView(sidebar, "online");
     await loading(modules.online);
     await vi.waitFor(() =>
@@ -83,7 +74,6 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     );
   } finally {
     modules.roster.resolve();
-    modules.pages.resolve();
     modules.online.resolve();
   }
 });

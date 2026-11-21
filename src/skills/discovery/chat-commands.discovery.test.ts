@@ -53,13 +53,13 @@ async function remoteFixture(name: string, description: string, bins?: string[])
   const release = registerAgentWorkspaceAccess(gateway, {
     bridge: bridge(),
     loadSkills: async (request) => ({
-      ...readWorkspaceSkillSources({
+      ...(await readWorkspaceSkillSources({
         ...request,
         sourcePlan:
           bins && request.sourcePlan.roots.length === 0
             ? request.sourcePlan
             : resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
-      }),
+      })),
       ...(bins ? { runtime: { platform: process.platform, bins } } : {}),
     }),
   });

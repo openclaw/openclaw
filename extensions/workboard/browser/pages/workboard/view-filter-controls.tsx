@@ -169,7 +169,7 @@ export function StatusTabs(props: StatusFilterProps) {
 }
 export function MobileStatusPicker(
   props: StatusFilterProps & {
-    cards: readonly WorkboardCard[];
+    cards: readonly WorkboardCard[] | null;
   },
 ) {
   const state = () => {
@@ -178,7 +178,7 @@ export function MobileStatusPicker(
   };
   const counts = createMemo(() => {
     const result = new Map<WorkboardStatus, number>();
-    for (const card of props.cards) {
+    for (const card of props.cards ?? []) {
       result.set(card.status, (result.get(card.status) ?? 0) + 1);
     }
     return result;
@@ -245,9 +245,13 @@ export function MobileStatusPicker(
               <span>
                 {status() === undefined ? t("workboard.allWork") : formatStatusLabel(status()!)}
               </span>
-              <span class="workboard-mobile-status__count">
-                {status() === undefined ? props.cards.length : (counts().get(status()!) ?? 0)}
-              </span>
+              <Show when={props.cards}>
+                {(cards) => (
+                  <span class="workboard-mobile-status__count">
+                    {status() === undefined ? cards().length : (counts().get(status()!) ?? 0)}
+                  </span>
+                )}
+              </Show>
               <span class="workboard-status-option__check" aria-hidden="true">
                 {icons.check}
               </span>
@@ -368,7 +372,7 @@ export function MultiFilter<Value extends string>(props: {
   options: readonly {
     value: Value;
     label: string;
-    count: number;
+    count?: number;
     title?: string;
     icon?: () => JSX.Element;
   }[];
@@ -417,19 +421,21 @@ export function MultiFilter<Value extends string>(props: {
                 {option().icon ? <i aria-hidden="true">{option().icon?.()}</i> : null}
                 {option().label}
               </span>
-              <span
-                class="workboard-filter-option__count"
-                aria-label={t(
-                  option().count === 1
-                    ? "workboard.viewPresetCountOne"
-                    : "workboard.viewPresetCount",
-                  {
-                    count: String(option().count),
-                  },
-                )}
-              >
-                {option().count}
-              </span>
+              <Show when={option().count !== undefined}>
+                <span
+                  class="workboard-filter-option__count"
+                  aria-label={t(
+                    option().count === 1
+                      ? "workboard.viewPresetCountOne"
+                      : "workboard.viewPresetCount",
+                    {
+                      count: String(option().count),
+                    },
+                  )}
+                >
+                  {option().count}
+                </span>
+              </Show>
             </label>
           )}
         </For>

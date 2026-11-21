@@ -4,6 +4,7 @@ import {
   errorShape,
   type QuestionRecord,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { PreparedSessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -22,6 +23,7 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { retainGatewayOperatorRunAuthority } from "./operator-run-cancellation.js";
 import { usesOwnRunQuestionAccess } from "./question-access.js";
 import {
   QuestionManagerError,
@@ -335,7 +337,13 @@ export async function withPreparedQuestionSessions<T>(
   }
 }
 
-/** Capture before the first worker await, then bind only the exact admitted row in its consumer. */
+/** Own the question's live source independently of optional session disclosure access. */
+export async function prepareQuestionProducer(options: GatewayRequestHandlerOptions) {
+  const captured = await captureGatewayOperatorRunAuthority(options);
+  return captured && retainGatewayOperatorRunAuthority(captured);
+}
+
+/** Bind the handler-owned producer to the exact admitted row before transferring disclosure access. */
 export async function withQuestionSessionAccess<T>(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
@@ -344,133 +352,120 @@ export async function withQuestionSessionAccess<T>(
     access: QuestionSessionAccess | undefined,
     prepared: PreparedQuestionSession | undefined,
   ) => T,
-  operation: { assertCurrent: () => void },
+  operation: { assertCurrent: () => void; operatorAuthority?: AdmittedRunOperatorAuthority },
 ): Promise<T> {
   operation.assertCurrent();
   const producer = resolveGatewayOperatorRoleActor(options.client);
-  const source = await captureGatewayOperatorRunAuthority(options);
+  const source = operation.operatorAuthority;
   const profileId =
     usesOwnRunQuestionAccess(options.client) && options.client?.internal?.operatorRunAuthority
-      ? source?.authority.profileId
+      ? source?.profileId
       : undefined;
-  let transferred = false;
-  try {
-    return await withPreparedQuestionSessions(
-      options,
-      [{ sessionKey, agentId }],
-      ([prepared]) => {
-        const selected = prepared?.target;
+  return await withPreparedQuestionSessions(
+    options,
+    [{ sessionKey, agentId }],
+    ([prepared]) => {
+      const selected = prepared?.target;
+      if (
+        !prepared ||
+        !selected?.entry.sessionId ||
+        !selected.entry.lifecycleRevision ||
+        selected.entry.incognito ||
+        isIncognitoSessionKey(selected.canonicalKey)
+      ) {
+        return consume(undefined, prepared);
+      }
+      source?.assertCurrent();
+      const retained = retainSessionHistoryWorkerDatabase(prepared.read.database);
+      const identity = prepared.read.result.databaseIdentity;
+      const original = {
+        agentId: selected.agentId,
+        sessionKey: selected.canonicalKey,
+        storePath: selected.storePath,
+        databasePath: prepared.read.database.path,
+        sessionId: selected.entry.sessionId,
+        lifecycleRevision: selected.entry.lifecycleRevision,
+      };
+      let released = false;
+      let invalidated = false;
+      const assertSourceCurrent = () => {
+        if (released || invalidated) {
+          throw new Error("Question session source was released");
+        }
+        // Discovery may rotate worker connections normally; the retained host
+        // resource, not a worker connection UUID, owns close/reopen revocation.
+        retained.owner.assertCurrent();
+        source?.assertCurrent();
+        const currentProducer = resolveGatewayOperatorRoleActor(options.client);
         if (
-          !prepared ||
-          !selected?.entry.sessionId ||
-          !selected.entry.lifecycleRevision ||
-          selected.entry.incognito ||
-          isIncognitoSessionKey(selected.canonicalKey)
+          producer?.kind === "operator" &&
+          (currentProducer?.kind !== "operator" || producer.profileId !== currentProducer.profileId)
         ) {
-          return consume(undefined, prepared);
+          throw new Error("Question producer identity changed");
         }
-        source?.authority.assertCurrent();
-        const retained = retainSessionHistoryWorkerDatabase(prepared.read.database);
-        const identity = prepared.read.result.databaseIdentity;
-        const original = {
-          agentId: selected.agentId,
-          sessionKey: selected.canonicalKey,
-          storePath: selected.storePath,
-          databasePath: prepared.read.database.path,
-          sessionId: selected.entry.sessionId,
-          lifecycleRevision: selected.entry.lifecycleRevision,
-        };
-        let released = false;
-        let invalidated = false;
-        const assertSourceCurrent = () => {
-          if (released || invalidated) {
-            throw new Error("Question session source was released");
-          }
-          // Discovery may rotate worker connections normally; the retained host
-          // resource, not a worker connection UUID, owns close/reopen revocation.
-          retained.owner.assertCurrent();
-          source?.authority.assertCurrent();
-          const currentProducer = resolveGatewayOperatorRoleActor(options.client);
+      };
+      const access: QuestionSessionAccess = {
+        agentId: original.agentId,
+        sessionKey: original.sessionKey,
+        canSelect: (client) =>
+          Boolean(
+            profileId &&
+            client &&
+            !client.invalidated &&
+            (client.connect.role ?? "operator") === "operator" &&
+            !authorizeOwnSessionMutation({ client, target: null, expectedProfileId: profileId }),
+          ),
+        assertSourceCurrent,
+        assertCurrent: (current) => {
+          assertSourceCurrent();
+          current.assertCurrent();
+          const next = current.target;
+          const nextIdentity = current.read.result.databaseIdentity;
           if (
-            producer?.kind === "operator" &&
-            (currentProducer?.kind !== "operator" ||
-              producer.profileId !== currentProducer.profileId)
+            !identity ||
+            !nextIdentity ||
+            identity.identity !== nextIdentity.identity ||
+            identity.birthtime !== nextIdentity.birthtime ||
+            current.read.database.path !== original.databasePath ||
+            next?.agentId !== original.agentId ||
+            next.canonicalKey !== original.sessionKey ||
+            next.storePath !== original.storePath ||
+            next.entry.sessionId !== original.sessionId ||
+            next.entry.lifecycleRevision !== original.lifecycleRevision ||
+            next.entry.incognito
           ) {
-            throw new Error("Question producer identity changed");
+            // A proven successor cannot revive this source. Pending requester checks
+            // cancel only this binding; terminal records remain immutable but unreadable.
+            invalidated = true;
+            throw new Error("Question session generation changed");
           }
-        };
-        const access: QuestionSessionAccess = {
-          agentId: original.agentId,
-          sessionKey: original.sessionKey,
-          canSelect: (client) =>
-            Boolean(
-              profileId &&
-              client &&
-              !client.invalidated &&
-              (client.connect.role ?? "operator") === "operator" &&
-              !authorizeOwnSessionMutation({ client, target: null, expectedProfileId: profileId }),
-            ),
-          assertSourceCurrent,
-          assertCurrent: (current) => {
-            assertSourceCurrent();
-            current.assertCurrent();
-            const next = current.target;
-            const nextIdentity = current.read.result.databaseIdentity;
-            if (
-              !identity ||
-              !nextIdentity ||
-              identity.identity !== nextIdentity.identity ||
-              identity.birthtime !== nextIdentity.birthtime ||
-              current.read.database.path !== original.databasePath ||
-              next?.agentId !== original.agentId ||
-              next.canonicalKey !== original.sessionKey ||
-              next.storePath !== original.storePath ||
-              next.entry.sessionId !== original.sessionId ||
-              next.entry.lifecycleRevision !== original.lifecycleRevision ||
-              next.entry.incognito
-            ) {
-              // A proven successor cannot revive this source. Pending requester checks
-              // cancel only this binding; terminal records remain immutable but unreadable.
-              invalidated = true;
-              throw new Error("Question session generation changed");
-            }
-          },
-          release: () => {
-            if (!released) {
-              released = true;
-              try {
-                retained.release();
-              } finally {
-                source?.release();
-              }
-            }
-          },
-        };
-        transferred = true;
-        try {
-          const value = consume(access, prepared);
-          if (isPromiseLike(value)) {
-            void Promise.resolve(value).catch(() => {});
-            throw new Error("Question session consumers must remain synchronous");
-          }
-          return value;
-        } catch (error) {
-          access.release();
-          throw error;
-        }
-      },
-      {
-        assertCurrent: () => {
-          operation.assertCurrent();
-          source?.authority.assertCurrent();
         },
+        release: () => {
+          if (!released) {
+            released = true;
+            retained.release();
+          }
+        },
+      };
+      try {
+        const value = consume(access, prepared);
+        if (isPromiseLike(value)) {
+          void Promise.resolve(value).catch(() => {});
+          throw new Error("Question session consumers must remain synchronous");
+        }
+        return value;
+      } catch (error) {
+        access.release();
+        throw error;
+      }
+    },
+    {
+      assertCurrent: () => {
+        operation.assertCurrent();
+        source?.assertCurrent();
       },
-    );
-  } finally {
-    if (!transferred) {
-      source?.release();
-    }
-  }
+    },
+  );
 }
 
 function canAccessSessionQuestion(

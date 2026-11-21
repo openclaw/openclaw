@@ -264,10 +264,10 @@ describe("buildContextReply", () => {
     },
   );
 
-  it("describes compactable transcript counts in help output", async () => {
+  it("describes compactable chat history counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(
-      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
     );
   });
 
@@ -281,10 +281,12 @@ describe("buildContextReply", () => {
   });
 
   it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
-    const result = await buildContextReply(
-      makeParams("/context detail", false, { nativeUnverified: true }),
-    );
+    const params = makeParams("/context detail", false, { nativeUnverified: true });
+    // Codex base instructions taken from configuration rather than the loaded thread.
+    params.sessionEntry!.systemPromptReport!.systemPrompt.estimatedChars = 400;
+    const result = await buildContextReply(params);
 
+    expect(result.text).toContain("(Project Context 500 chars (~125 tok); estimated 400 chars");
     expect(result.text).toContain(
       "- AGENTS.md: NATIVE/UNVERIFIED | raw(local) 10,000 chars (~2,500 tok) | injected unknown",
     );
@@ -366,7 +368,7 @@ describe("buildContextReply", () => {
       async (target) => {
         const { text } = await buildContextReply(detailParams(target));
         expect(text).toContain(
-          `Compactable transcript: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} transcript message(s)`,
+          `Compactable chat history: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} history entries`,
         );
         if (paged) {
           expect(text).not.toContain("Compaction note:");

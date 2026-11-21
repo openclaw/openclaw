@@ -1,0 +1,4 @@
+# Explicit source/cell identity rejection contract: 79 lines in the existing analyzer suite.
+# Preserve merged owner regressions/fixtures and the restored chunk boundary: 25 lines.
+# Exact net increase above the retained allocations; no unrelated ceiling headroom.
+104

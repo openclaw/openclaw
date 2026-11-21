@@ -142,7 +142,9 @@ export function prepareOpenAISdkSseResponse(
             if (synthesizeJson) {
               const data = buffer.trim();
               if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                // SSE consumers join data fields, not unprefixed JSON lines.
+                const fields = data.replace(/\r\n|\r|\n/g, "\ndata: ");
+                controller.enqueue(encoder.encode(`data: ${fields}\n\n`));
               }
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             } else if (options.sanitize && hasReadableSseData(buffer)) {

@@ -250,6 +250,7 @@ credentials, approvals, or external-effect authorization. See
 | `configSchema`                       | Yes      | `object`                     | Inline JSON Schema for this plugin's config.                                                                                                                                                                                                                                                                                                                                                   |
 | `requiresPlugins`                    | No       | `string[]`                   | Plugin ids that must also be installed for this plugin to have an effect. Discovery keeps the plugin loadable but warns when any required plugin is missing.                                                                                                                                                                                                                                   |
 | `generationOverlap`                  | No       | `boolean`                    | Explicit author opt-in for independently owned plugin generations to overlap during replacement. Defaults to serialized replacement; see [Generation overlap](#generation-overlap).                                                                                                                                                                                                            |
+| `memoryBackends`                     | No       | `boolean`                    | Memory slot owner opt-in: while this plugin owns `plugins.slots.memory`, every other enabled memory plugin loads as a passive backend it can open. See [Memory backends](/plugins/sdk-overview/memory-and-context#memory-backends).                                                                                                                                                            |
 | `enabledByDefault`                   | No       | `true`                       | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                                                                                                                                                                                                   |
 | `enabledByDefaultOnPlatforms`        | No       | `string[]`                   | Marks a bundled plugin as enabled by default only on the listed Node.js platforms, for example `["darwin"]`. Explicit config still wins.                                                                                                                                                                                                                                                       |
 | `legacyPluginIds`                    | No       | `string[]`                   | Legacy ids that normalize to this primary plugin id.                                                                                                                                                                                                                                                                                                                                           |
@@ -330,18 +331,25 @@ prompts. Native plugins, including third-party plugins, declare it at the top le
 }
 ```
 
-- Declare at most **three** non-empty strings. Omit the field or use `[]` when
-  there are no useful recommendations.
+- Declare at most **three** non-empty strings, each at most **128 Unicode code
+  points** after whitespace normalization. Omit the field or use `[]` when there
+  are no useful recommendations.
 - Write the actual user request, not a button label. Do not include a plugin
   mention in the authored text; the host owns plugin selection and mention context.
-- OpenClaw trims outer whitespace only. It preserves internal whitespace, line
-  breaks, ordering, and the complete prompt text, with no per-prompt length cap.
-  Clients must display the same text they insert, without truncating or rewriting it.
+- OpenClaw trims outer whitespace and collapses internal whitespace, including
+  line breaks, to single spaces. Ordering and the complete normalized text are
+  preserved; overlong prompts are rejected, never truncated. Clients must display
+  the same normalized text they insert.
 - Invalid optional declarations are ignored as a whole, with a native manifest
   warning, rather than partially shown or used to block plugin loading.
 - These strings do not install, enable, execute, or grant trust to a plugin.
   Catalog, inspection, and local discovery detail can read them without loading
   the plugin runtime.
+
+On upgrade, previously accepted declarations with a prompt longer than 128 normalized
+Unicode code points are ignored as a whole; the plugin still loads. Shorten those
+prompts to restore recommendations. Existing internal whitespace is now collapsed
+to single spaces, including line breaks.
 
 The Gateway also understands `recommendedPrompts` in a registry's selected-version
 `pluginManifestSummary`. Pre-install availability depends on the registry actually
@@ -536,6 +544,9 @@ See [Configuration reference](/gateway/configuration-reference#plugins) for the 
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
+  A live `catalog.run` descriptor supplies runtime discovery for its own provider ID.
+  Full plugin registration still supplies any runtime or refreshable sibling providers
+  that the entry does not cover; a static-only descriptor does not replace live discovery.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory` (default `memory-core`), `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Bundled plugins use manifest kinds without loading their runtime during enablement. Runtime-entry `OpenClawPluginDefinition.kind` was deprecated on 2026-07-25 and remains only as a compatibility fallback for older external plugins; its removal gate is 2026-10-01. See the [compatibility policy](/plugins/sdk-migration/compatibility-policy#compatibility-policy).
 - Env-var metadata in `setup.providers[].envVars` is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.

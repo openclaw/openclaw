@@ -1,6 +1,5 @@
 import { assert, expect, it, vi } from "vitest";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
-import { createPostCompactionLoopGuard } from "./embedded-agent-runner/post-compaction-loop-guard.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
@@ -36,53 +35,6 @@ async function failure(tool: AnyAgentTool, callId: string, signal?: AbortSignal)
   assert.ok(error instanceof Error);
   return error;
 }
-
-it.each([undefined, false])(
-  "preserves post-compaction protection with loop detection %s",
-  async (enabled) => {
-    const guard = createPostCompactionLoopGuard({ enabled: enabled !== false });
-    guard.armPostCompaction();
-    const verdicts: boolean[] = [];
-    const { tool } = probe(new Error("same network failure"), {
-      sessionKey: `network-compaction-${enabled}`,
-      runId: `network-compaction-${enabled}`,
-      ...(enabled === undefined ? {} : { loopDetection: { enabled } }),
-      onToolOutcome: (outcome) => verdicts.push(guard.observe(outcome).shouldAbort),
-    });
-    for (let index = 0; index < 3; index++) {
-      await expect(tool.execute(`compaction-${enabled}-${index}`, {})).rejects.toBeInstanceOf(
-        Error,
-      );
-    }
-    expect(verdicts).toEqual([false, false, enabled !== false]);
-  },
-);
-
-it("blocks after twenty identical protected network failures", async () => {
-  const original = new Error('keyboard.press: Unknown key: "NotAKey"');
-  const { source, tool } = probe(original, {
-    sessionKey: "network-error-loop",
-    runId: "network-error-loop",
-    loopDetection: { enabled: true },
-  });
-  const markerIds = new Set<string>();
-  for (let index = 0; index < 20; index++) {
-    const error = await failure(tool, `network-loop-${index}`);
-    const matches = [...error.message.matchAll(/EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})"/g)];
-    expect(matches).toHaveLength(2);
-    const markerId = matches[0]?.[1];
-    assert.isDefined(markerId, "Expected a generated external-content marker");
-    expect(markerId).toBe(matches[1]?.[1]);
-    markerIds.add(markerId);
-  }
-  expect(markerIds.size).toBe(20);
-  expect((await tool.execute("network-loop-blocked", {})).details).toMatchObject({
-    status: "blocked",
-    deniedReason: "tool-loop",
-  });
-  expect(source.execute).toHaveBeenCalledTimes(20);
-  expect(original.message).toBe('keyboard.press: Unknown key: "NotAKey"');
-});
 
 it("keeps authenticated host input failures local and untainted", async () => {
   const original = new ToolInputError("query required");

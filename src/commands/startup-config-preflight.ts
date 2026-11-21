@@ -16,6 +16,7 @@ import {
   type PluginCache,
 } from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { restorePrivateStateStoreModes } from "../state/openclaw-state-db-permissions.js";
 import {
   readAdmittedConfigSnapshot,
   createConfigPreflightSnapshotReader,
@@ -128,6 +129,8 @@ async function prepareStartupConfig(
       beforeStatePreparation,
       prepareClientCredentials: async (snapshot) => {
         const { prepareStartupClientCredentials } = await import("./startup-client-credentials.js");
+        // Repair modes broadened by remount before strict startup credential reads.
+        restorePrivateStateStoreModes(env);
         await prepareStartupClientCredentials({ env, config: snapshot.config });
       },
     });
@@ -235,7 +238,18 @@ async function prepareStartupConfig(
       const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
         const { applyPluginDoctorCompatibilityMigrations } =
           await import("../plugins/doctor-contract-registry.js");
-        // Legacy compatibility inspection is synchronous boot admission, before runtime starts.
+        const { preparePluginDoctorContractModules } =
+          await import("../plugins/doctor-contract-preparation.js");
+        await preparePluginDoctorContractModules({
+          config: read.snapshot.sourceConfig,
+          env,
+          manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
+          pluginIds: pendingWebhookChannels,
+          historicalWebhookListeners: true,
+          surfaces: ["configRepair"],
+          assertCurrent: assertLeaseCurrent,
+        });
+        assertLeaseCurrent();
         return withEngineStoreAdmission(() =>
           applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
             config: read.snapshot.sourceConfig,

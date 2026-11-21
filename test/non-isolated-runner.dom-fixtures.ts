@@ -1,3 +1,5 @@
+import path from "node:path";
+
 // Keep both files in the shared runner's existing child: the regression is the
 // lifetime mismatch between a retired source generation and the native document.
 export const domResourceFixtureFiles: Record<string, string> = {
@@ -15,8 +17,7 @@ exports.install = () => {
   "11-dom-a-producer.test.ts": `
 /* @vitest-environment jsdom */
 import { createRequire } from "node:module";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
+import { expectCollected } from ${JSON.stringify(path.resolve(import.meta.dirname, "../src/test-utils/retention.ts"))};
 import { expect, it, vi } from "vitest";
 it("registers live source and external dependency DOM resources", async () => {
   createRequire(import.meta.url)("./dependency/node_modules/persistent-dom.cjs").install();
@@ -48,9 +49,7 @@ it("registers live source and external dependency DOM resources", async () => {
     return new WeakRef(payload);
   }
   const removed = registerAndRemove();
-  await setImmediate();
-  expect(queryObjects(RemovedPayload)).toBe(0);
-  expect(removed.deref()).toBeUndefined();
+  await expectCollected(removed);
   document.dispatchEvent(new Event("removed-event"));
   expect(document.body.dataset.removedEvent).toBeUndefined();
   document.body.dataset.repoEvent = "";

@@ -132,16 +132,36 @@ final class ChatMediaPlaybackCoordinator {
     static let shared = ChatMediaPlaybackCoordinator()
 
     private weak var activeOwner: (any ChatMediaPlaybackOwner)?
+    private var playbackIntentGeneration = 0
     private let nowPlayingCenter: any ChatMediaNowPlayingPublishing
 
     init(nowPlayingCenter: any ChatMediaNowPlayingPublishing = SystemChatMediaNowPlayingCenter.shared) {
         self.nowPlayingCenter = nowPlayingCenter
     }
 
-    func activate(_ owner: any ChatMediaPlaybackOwner) {
+    /// Claim on the user action, before loading media. A later action supersedes
+    /// any attachment still preparing its automatic start.
+    func claimPlaybackIntent() -> Int {
+        self.playbackIntentGeneration &+= 1
+        return self.playbackIntentGeneration
+    }
+
+    func isCurrentIntent(_ generation: Int) -> Bool {
+        self.playbackIntentGeneration == generation
+    }
+
+    func playbackDidPause(_ owner: any ChatMediaPlaybackOwner) {
+        guard self.activeOwner === owner else { return }
+        _ = self.claimPlaybackIntent()
+    }
+
+    @discardableResult
+    func activate(_ owner: any ChatMediaPlaybackOwner, intent: Int? = nil) -> Bool {
+        if let intent, !self.isCurrentIntent(intent) { return false }
+        _ = self.claimPlaybackIntent()
         guard self.activeOwner !== owner else {
             self.updateNowPlaying(owner)
-            return
+            return true
         }
         let previous = self.activeOwner
         // Install the new owner before stopping the old one: its release callback
@@ -149,6 +169,7 @@ final class ChatMediaPlaybackCoordinator {
         self.activeOwner = owner
         previous?.stopForMediaPlaybackInterruption()
         self.configureNowPlaying(for: owner)
+        return true
     }
 
     func release(_ owner: any ChatMediaPlaybackOwner) {
@@ -178,6 +199,7 @@ final class ChatMediaPlaybackCoordinator {
                   let owner,
                   self.activeOwner === owner
             else { return }
+            _ = self.claimPlaybackIntent()
             owner.handleRemoteCommand(command)
             self.updateNowPlaying(owner)
         }

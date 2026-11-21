@@ -22,7 +22,7 @@ impl PendingApproval {
             ApprovalKind::Device => "Device",
         };
         format!(
-            "{kind} pairing request from {} — open the dashboard to approve",
+            "{kind} pairing request from {} — open OpenClaw to approve",
             self.label
         )
     }
@@ -153,11 +153,11 @@ mod tests {
     fn notification_copy_names_request_kind_and_source() {
         assert_eq!(
             request(ApprovalKind::Node, "request-1", "Kitchen Mac").notification_body(),
-            "Node pairing request from Kitchen Mac — open the dashboard to approve"
+            "Node pairing request from Kitchen Mac — open OpenClaw to approve"
         );
         assert_eq!(
             request(ApprovalKind::Device, "request-2", "Browser").notification_body(),
-            "Device pairing request from Browser — open the dashboard to approve"
+            "Device pairing request from Browser — open OpenClaw to approve"
         );
     }
 }

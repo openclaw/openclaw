@@ -17,12 +17,19 @@ the saved profile. Environment-provided keys remain managed by the Gateway
 process environment. The page distinguishes saved accounts from API keys managed in config or the
 environment without revealing keys.
 Use **Test access** to check whether a provider account can use its models.
+Saving or replacing an API key runs the same check right away. If the provider
+rejects the key, the key stays saved, the form stays open with the reason, and
+you can paste a different key. If the check can't finish (for example, the
+provider returns a server error or times out), the key stays saved and you can
+retry with **Test access**.
 You can view Models without admin access, but only admins can change model settings.
 
 Saving a key and refreshing the catalog are separate outcomes. If refresh fails,
 the saved key remains; follow the reported recovery step. Removing a stored key
 keeps model defaults and provider connection settings. See
 [Auth profiles](/cli/models#auth-profiles) for the matching CLI commands.
+
+Use **Remove provider** to delete a provider's Gateway settings and configured model list, even if the provider is offline. If one card groups several configured entries, choose the exact entry to remove. This leaves model defaults and models on the provider's server untouched. To remove credentials instead, use **Remove saved access**.
 
 Configured global model defaults remain available while provider details load.
 Provider and installed-app details keep their initial loading view until

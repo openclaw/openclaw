@@ -8,6 +8,10 @@ import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
 } from "../gateway/operator-tool-gateway-authority.js";
+import {
+  readPluginSessionWorkAuthority,
+  runWithPluginSessionWorkAuthority,
+} from "../gateway/plugin-session-work-authority.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
@@ -209,6 +213,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
     expect(getInProcessGatewayRequestContext()).toBe(context);
     expect(getPluginRuntimeGatewayRequestScope()?.client).toBeUndefined();
     expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+    expect(readPluginSessionWorkAuthority()).toBeUndefined();
     registerRoute(`/scheduled-context/${++observations}`);
   };
   registry.services.push({
@@ -279,9 +284,21 @@ it("owns service callbacks after startup and reload callers finish", async () =>
   );
   try {
     await clock.advanceBy(1);
+    const borrow = new AbortController();
     await runFromRequest(() =>
-      scopes[0]!.schedule({ id: "later-request", delayMs: 1, run: observe }),
+      runWithPluginSessionWorkAuthority(
+        {
+          pluginId: record.id,
+          context,
+          target: { agentId: "main", sessionKey: "agent:main:research", sessionId: "session" },
+          signal: borrow.signal,
+          assertCurrent: () => borrow.signal.throwIfAborted(),
+          assertToolAllowed() {},
+        },
+        () => scopes[0]!.schedule({ id: "later-request", delayMs: 1, run: observe }),
+      ),
     );
+    borrow.abort(new Error("Session work borrow closed"));
     await clock.advanceBy(1);
     expect(registry.httpRoutes.map((route) => route.path)).toEqual([
       "/scheduled-start/1",

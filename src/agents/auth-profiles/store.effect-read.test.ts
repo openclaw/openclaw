@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as persistedReceipts from "./persisted-rows-receipt.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "./runtime-snapshots.js";
 import { createAuthProfileStoreRuntime } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
@@ -129,5 +131,55 @@ it("refuses disclosure without a live shared-state owner", async () => {
         reader.read(),
       ),
     ).rejects.toThrow("requires a live shared-state owner");
+  });
+});
+
+it("invalidates the first cold effect read after a committed worker write without receipt filesystem discovery", async () => {
+  await withState(async (state) => {
+    save({ version: 1, profiles: {} }, undefined, saveOptions);
+    const agentDir = state.agentDir("cold-effect");
+    using filesystem = observeMainThreadFs();
+    const receipt = persistedReceipts.readAuthProfileRowsReceipt;
+    let receiptLookups = 0;
+    using observation = vi
+      .spyOn(persistedReceipts, "readAuthProfileRowsReceipt")
+      .mockImplementation((...args) => {
+        const before = filesystem.count();
+        try {
+          return receipt(...args);
+        } finally {
+          receiptLookups += filesystem.count() - before;
+        }
+      });
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    let disclosed = false;
+    try {
+      await expect(
+        atEffect(agentDir, options(agentDir), async (reader) => {
+          expect((await reader.read()).profiles).toEqual({});
+          await update({
+            agentDir,
+            saveOptions,
+            updater(current) {
+              current.profiles[profileId] = store.profiles[profileId]!;
+              return true;
+            },
+          });
+          reader.assertCurrent();
+          disclosed = true;
+        }),
+      ).rejects.toThrow("Auth profile store changed");
+      expect(disclosed).toBe(false);
+      await atEffect(agentDir, options(agentDir), async (reader) => {
+        expect((await reader.read()).profiles).toEqual(store.profiles);
+        reader.assertCurrent();
+      });
+      sql.expectIdle();
+      expect(observation).toHaveBeenCalled();
+      expect(receiptLookups).toBe(0);
+    } finally {
+      sql.restore();
+    }
   });
 });

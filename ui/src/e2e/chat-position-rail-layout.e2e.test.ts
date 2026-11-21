@@ -136,10 +136,12 @@ async function keepRailAnchored(page: Page, count: number, direction: string) {
     await expect
       .poll(() =>
         transcript.evaluate(
-          (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          // Fractional layout units can round the requested wheel delta by one pixel.
+          (element) =>
+            Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop - 4),
         ),
       )
-      .toBe(4);
+      .toBeLessThanOrEqual(1);
   }
   const anchorIndex = await markers.evaluateAll((elements) => {
     const viewport = elements[0]!.closest(".chat-position-rail__marks")!.getBoundingClientRect();

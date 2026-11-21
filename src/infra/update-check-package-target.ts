@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toOptionalTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -13,8 +14,15 @@ type NpmPackageTargetStatus = {
   version: string | null;
   nodeEngine: string | null;
   schemaVersions?: OpenClawSchemaVersions;
+  /** The package's own unpacked bytes (`dist.unpackedSize`), without its dependencies. */
+  unpackedSize?: number;
   error?: string;
+  versionMissing?: boolean;
 };
+
+function readUnpackedSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
 
 export type NpmMetadataCommandRunner = (
   argv: string[],
@@ -57,10 +65,14 @@ function parseNpmPackageTargetMetadata(
       ? { schemaVersions: rec["openclaw.schemaVersions"] }
       : rec.openclaw,
   });
+  const unpackedSize = readUnpackedSize(
+    rec["dist.unpackedSize"] ?? (isRecord(rec.dist) ? rec.dist.unpackedSize : undefined),
+  );
   return {
     version: toOptionalTrimmedString(rec.version),
     nodeEngine,
     ...(schemaVersions ? { schemaVersions } : {}),
+    ...(unpackedSize ? { unpackedSize } : {}),
   };
 }
 
@@ -91,6 +103,8 @@ export async function fetchRegistryPackageDocument<T = unknown>(params: {
     signal: params.signal,
     operation: params.operation ?? "npm-registry-update-check",
     url,
+    // Status and preview reads surface this failure in their result, without writing state.
+    logTimeout: false,
   });
   let res: Response | undefined;
   try {
@@ -109,6 +123,37 @@ export async function fetchRegistryPackageDocument<T = unknown>(params: {
     await cancelUnreadResponseBody(res);
     cleanup();
   }
+}
+
+const UNPUBLISHED_NPM_VERSION =
+  /^(?:npm (?:ERR!|error) (?:404|notarget) )?No (?:match found for version|matching version found for) /u;
+
+function parseNpmViewFailure(
+  stdout: string,
+  stderr: string,
+): Pick<NpmPackageTargetStatus, "error" | "versionMissing"> {
+  let json: unknown;
+  try {
+    json = JSON.parse(stdout);
+  } catch {
+    // Older npm output and interrupted commands may only provide text diagnostics.
+  }
+  const jsonError = isRecord(json) && isRecord(json.error) ? json.error : undefined;
+  const summary = toOptionalTrimmedString(jsonError?.summary);
+  const lines = (stderr.trim() || stdout.trim())
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const reason = summary ?? lines.find((line) => UNPUBLISHED_NPM_VERSION.test(line));
+  const code = summary
+    ? toOptionalTrimmedString(jsonError?.code)
+    : lines.find((line) => /^npm (?:ERR!|error) code E(?:404|TARGET)\b/u.test(line));
+  const raw = (reason ? [code, reason].filter(Boolean) : lines.slice(-3)).join("\n");
+  return {
+    error: raw ? `npm view failed: ${raw}` : "npm view failed",
+    // E404 alone also covers missing packages and registry access failures.
+    ...(reason && UNPUBLISHED_NPM_VERSION.test(reason) ? { versionMissing: true } : {}),
+  };
 }
 
 export async function fetchNpmPackageTargetStatus(params: {
@@ -131,15 +176,18 @@ export async function fetchNpmPackageTargetStatus(params: {
         version?: unknown;
         engines?: { node?: unknown };
         openclaw?: { schemaVersions?: unknown };
+        dist?: { unpackedSize?: unknown };
       }>(params);
       const schemaVersions = parsePackageOpenClawSchemaVersions({
         ...json,
         name: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
       });
+      const unpackedSize = readUnpackedSize(json.dist?.unpackedSize);
       return {
         version: toOptionalTrimmedString(json.version),
         nodeEngine: toOptionalTrimmedString(json.engines?.node),
         ...(schemaVersions ? { schemaVersions } : {}),
+        ...(unpackedSize ? { unpackedSize } : {}),
       };
     }
     const runCommand = params.runCommand ?? runCommandWithTimeout;
@@ -152,6 +200,7 @@ export async function fetchNpmPackageTargetStatus(params: {
         "version",
         "engines.node",
         "openclaw.schemaVersions",
+        "dist.unpackedSize",
         "--json",
         "--global",
       ],
@@ -163,11 +212,10 @@ export async function fetchNpmPackageTargetStatus(params: {
       },
     );
     if (res.code !== 0) {
-      const raw = (res.stderr.trim() || res.stdout.trim()).split("\n").slice(-3).join("\n");
       return {
         version: null,
         nodeEngine: null,
-        error: raw ? `npm view failed: ${raw}` : "npm view failed",
+        ...parseNpmViewFailure(res.stdout, res.stderr),
       };
     }
     return parseNpmPackageTargetMetadata(

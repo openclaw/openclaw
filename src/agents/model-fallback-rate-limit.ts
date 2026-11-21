@@ -2,12 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProviderRateLimitState } from "../llm/provider-rate-limit.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
-import { resolveConfiguredProviderConfig } from "./embedded-agent-runner/model.configured-overrides.js";
-import { normalizeConfiguredProviderModel } from "./embedded-agent-runner/model.registry-resolution.js";
-import {
-  resolveBundledStaticCatalogModel,
-  resolveManifestModelCatalogProviderAliasMetadata,
-} from "./embedded-agent-runner/model.static-catalog.js";
 import { isFailoverError } from "./failover-error.js";
 import { isFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -16,11 +10,18 @@ import {
   resolveConfigAwareEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth-provider-config.js";
+import { resolveFallbackRateLimitModel } from "./model-fallback-rate-limit-model.js";
 import {
   MODEL_FALLBACK_SKIPPED_CODE,
   type FallbackAttempt,
   type ModelFallbackCandidate,
 } from "./model-fallback.types.js";
+import { modelKey } from "./model-ref-shared.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "./prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 
 type CandidateRateLimit = { eligible: boolean; retryAt?: number };
@@ -78,11 +79,15 @@ export function prepareModelFallbackRateLimit(
   candidates: ModelFallbackCandidate[],
   context: RateLimitContext,
 ) {
+  const generation = getPreparedModelRuntimePluginGeneration();
+  const prepared = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
+  const preparedModels =
+    prepared?.config === context.cfg ? prepared?.fallbackRateLimitModels : undefined;
   const snapshot: RateLimitSnapshot = new Map(
     candidates.length > 1
       ? candidates.map((candidate) => [
           candidate,
-          readFallbackCandidateRateLimit({ ...context, candidate }),
+          readFallbackCandidateRateLimit({ ...context, candidate, preparedModels }),
         ])
       : [],
   );
@@ -103,17 +108,16 @@ export function prepareModelFallbackRateLimit(
 function readFallbackCandidateRateLimit(
   params: RateLimitContext & {
     candidate: ModelFallbackCandidate;
+    preparedModels?: PreparedModelRuntimeSnapshot["fallbackRateLimitModels"];
   },
 ): CandidateRateLimit {
   const { candidate, cfg, authStore } = params;
   try {
     const lookup = { provider: candidate.provider, modelId: candidate.model, cfg };
-    const model = normalizeConfiguredProviderModel({
-      ...lookup,
-      providerConfig: resolveConfiguredProviderConfig(cfg, candidate.provider),
-      discoveredModel: resolveBundledStaticCatalogModel(lookup),
-      manifestAlias: resolveManifestModelCatalogProviderAliasMetadata(lookup),
-    });
+    const routeKey = modelKey(candidate.provider, candidate.model);
+    const model = params.preparedModels?.has(routeKey)
+      ? params.preparedModels.get(routeKey)
+      : resolveFallbackRateLimitModel(lookup);
     if (!model) {
       return { eligible: true };
     }

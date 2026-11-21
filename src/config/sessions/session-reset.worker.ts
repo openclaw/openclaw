@@ -1,5 +1,5 @@
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { applySessionResetInDatabase } from "./session-reset.kernel.js";
 import type { SessionResetCommit, SessionResetCommitted } from "./session-reset.types.js";
