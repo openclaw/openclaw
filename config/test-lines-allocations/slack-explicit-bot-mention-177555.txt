@@ -1,0 +1,5 @@
+# PR #177555: retained explicit-bot-mention admission regressions.
+# Exact net test growth against official main 730e581f4b0e051a88bda8ff6a3002fd983a9782.
+# Config/schema, bot-thread admission, reload, and isolated Gateway/Slack HTTP contracts.
+# No inherited debt, shared scalar change, assertion removal, or overlapping credit.
+538
