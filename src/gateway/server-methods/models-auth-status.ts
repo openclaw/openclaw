@@ -308,7 +308,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       const { removeModelAuthCredentials } = await import("../../commands/models/auth-logout.js");
-      const configWarning = await removeModelAuthCredentials({
+      const removalResult = await removeModelAuthCredentials({
         cfg,
         agentDir,
         profileIds: removedProfiles,
@@ -329,10 +329,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               agentId: scope.agentId,
             });
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
-      const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
+      const warning = [removalResult.warning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelAuthLogoutResult = {
         provider,
-        removedProfiles,
+        removedProfiles: removalResult.removedProfiles,
         abortedRunIds,
         ...(warning ? { warning } : {}),
       };
