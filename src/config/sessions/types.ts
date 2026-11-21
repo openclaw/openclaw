@@ -729,6 +729,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   resumeAfterRestart?: {
     /** False retains only accepted inputs; the scheduler still owns the interrupted turn. */
     resumeTurn?: false;
+    /** A direct chat turn in a visible spawned session, not the original delegated run. */
+    directChat?: true;
     queuedInputIds: string[];
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
     operatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;

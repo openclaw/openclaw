@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
+import { isVisibleSpawnedSession } from "../agents/subagents/spawn/subagent-capabilities.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -109,7 +110,12 @@ async function persistRunningSessions(
           const replacements: Array<{ sessionKey: string; entry: InternalSessionEntry }> = [];
           const preserve: Array<{ session: SessionIdentity; preserve: () => void }> = [];
           for (const session of batch) {
-            summary.record(session.agentId, session.sessionKey, "session-missing");
+            summary.record(
+              session.agentId,
+              session.sessionKey,
+              "session-missing",
+              session.storePath,
+            );
           }
           for (const { sessionKey, entry } of entries) {
             assertCurrent();
@@ -117,7 +123,9 @@ async function persistRunningSessions(
             if (!session) {
               continue;
             }
-            const ownerSkip = restartResumeSkipReason(sessionKey, entry);
+            const directChat =
+              session.directChat === true && isVisibleSpawnedSession(sessionKey, { entry });
+            const ownerSkip = restartResumeSkipReason(sessionKey, entry, directChat);
             const skip =
               (ownerSkip === "subagent" && session.parked ? undefined : ownerSkip) ??
               (session.sessionId && session.sessionId !== entry.sessionId
@@ -125,7 +133,12 @@ async function persistRunningSessions(
                 : session.parked && !resolveSessionYieldWait(sessionKey, entry, session.agentId)
                   ? "session-changed"
                   : undefined);
-            summary.record(session.agentId, sessionKey, skip ?? "persistence-incomplete");
+            summary.record(
+              session.agentId,
+              sessionKey,
+              skip ?? "persistence-incomplete",
+              session.storePath,
+            );
             if (skip) {
               continue;
             }
@@ -138,6 +151,7 @@ async function persistRunningSessions(
                 session.agentId,
                 sessionKey,
                 session.scheduledAutomation ? "automation-owned" : "reply-completed",
+                session.storePath,
               );
               continue;
             }
@@ -149,6 +163,7 @@ async function persistRunningSessions(
                 resumeAfterRestart: {
                   // Cron retains its occurrence; only the accepted human queue restarts here.
                   ...(session.scheduledAutomation ? { resumeTurn: false as const } : {}),
+                  ...(directChat ? { directChat: true } : {}),
                   queuedInputIds: queued.queuedInputIds,
                   queuedInputSources: queued.queuedInputSources,
                   operatorSource:
@@ -161,7 +176,7 @@ async function persistRunningSessions(
         },
       });
       for (const { session, preserve } of preserveQueued) {
-        summary.record(session.agentId, session.sessionKey, "marked");
+        summary.record(session.agentId, session.sessionKey, "marked", session.storePath);
         preserve();
       }
     }),
@@ -349,6 +364,7 @@ async function resumeRestartStore(
       parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
       sessionKey,
       "resume-incomplete",
+      target.storePath,
     );
   }
   try {
@@ -479,13 +495,14 @@ async function resumeRestartStore(
             agentId,
             sessionKey,
             interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
+            target.storePath,
           );
           continue;
         }
         const { entry, marker, parked, skip } = resumed;
         let admissionStage = "principal";
         if (skip && !(parked && skip === "subagent")) {
-          summary.record(agentId, sessionKey, skip);
+          summary.record(agentId, sessionKey, skip, target.storePath);
           log.warn(
             `Skipped restart resume for ${sessionKey}: session is archived or has another execution owner`,
           );
@@ -493,10 +510,10 @@ async function resumeRestartStore(
         }
         if (parked === "unreachable") {
           await recordUnreachableYieldFailure({ sessionKey, agentId, entry, signal });
-          summary.record(agentId, sessionKey, "yield-source-unavailable");
+          summary.record(agentId, sessionKey, "yield-source-unavailable", target.storePath);
         } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
-          summary.record(agentId, sessionKey, "parked");
+          summary.record(agentId, sessionKey, "parked", target.storePath);
           log.warn(
             `Parked restart resume (yield-waiting): ${truncateUtf16Safe(JSON.stringify({ agentId, sessionKey }), 1024)}`,
           );
@@ -567,13 +584,13 @@ async function resumeRestartStore(
               const accepted = acceptRestartResumeReceipt(receipt, sessionKey, authority, log);
               authority = undefined;
               await accepted;
-              summary.record(agentId, sessionKey, "resumed");
+              summary.record(agentId, sessionKey, "resumed", target.storePath);
             } else {
-              summary.record(agentId, sessionKey, "automation-owned");
+              summary.record(agentId, sessionKey, "automation-owned", target.storePath);
             }
           } catch (error) {
             signal.throwIfAborted();
-            summary.record(agentId, sessionKey, "admission-failed");
+            summary.record(agentId, sessionKey, "admission-failed", target.storePath);
             await recordRestartResumeFailure({
               target: { ...target, agentId, sessionKey },
               entry,

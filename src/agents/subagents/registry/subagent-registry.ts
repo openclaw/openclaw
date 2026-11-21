@@ -574,7 +574,7 @@ export function initSubagentRegistry() {
 }
 
 export {
-  listLiveSubagentRootSessions,
+  listLiveSubagentSessions,
   resolveRootSubagentRequester,
 } from "./subagent-registry-read.js";
 

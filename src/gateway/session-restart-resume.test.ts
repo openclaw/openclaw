@@ -22,6 +22,7 @@ import {
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
+import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -579,7 +580,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       assert(queued, "Queued fixture input was not admitted");
       recorded.length = 0;
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(recorded.at(-1)).toEqual([target.agentId, target.sessionKey, "marked"]);
+      expect(recorded.at(-1)).toEqual([
+        target.agentId,
+        target.sessionKey,
+        "marked",
+        await preparePhysicalSessionStorePath(target, {}),
+      ]);
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
         queuedInputSources: {

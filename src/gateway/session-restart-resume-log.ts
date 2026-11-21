@@ -2,18 +2,18 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("gateway/restart-resume");
 
-/** Count unique sessions, including candidates that never reached the writer. */
+/** Count physical session owners, including candidates that never reached the writer. */
 export function createRestartResumeSummary(phase: "shutdown" | "startup") {
   const agents = new Map<string, Map<string, string>>();
   let published = false;
   return {
-    record(agentId: string, sessionKey: string, outcome: string) {
+    record(agentId: string, sessionKey: string, outcome: string, storePath: string | undefined) {
       let sessions = agents.get(agentId);
       if (!sessions) {
         sessions = new Map();
         agents.set(agentId, sessions);
       }
-      sessions.set(sessionKey, outcome);
+      sessions.set(JSON.stringify([storePath, sessionKey]), outcome);
     },
     publish() {
       if (published) {
