@@ -11,6 +11,8 @@
  * of empty cold sweeps; each iteration removes one target from the seeded store.
  * --entry <built archive worker> uses the same prebuilt worker in both arms; the
  * owner overlay still selects the host call site. This avoids source-loader startup cost.
+ * --warm-history performs a real history read before measurement; report separately
+ * from the default cold-history case. Iteration zero includes cold owner startup.
  * Worker first-result cost includes entry imports and one empty selection, excludes
  * the loader/preload prelude and native allocation. V8 estimate = heap delta + GC
  * reclaimed bytes, without forced GC. RSS is process-wide, never per-worker RSS.
@@ -45,6 +47,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     operation: { type: "string", default: "cold" },
     entry: { type: "string" },
+    "warm-history": { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output must name a new, task-owned directory");
@@ -100,6 +103,8 @@ const codec: typeof import("../../src/config/sessions/session-cold-storage-codec
 );
 const workers: typeof import("../../src/infra/worker-cpu.js") =
   await load("src/infra/worker-cpu.ts");
+const lanes: typeof import("../../src/config/sessions/session-transcript-worker-resources.js") =
+  await load("src/config/sessions/session-transcript-worker-resources.ts");
 const lifecycle: typeof import("../../src/shared/global-singleton.js") = await load(
   "src/shared/global-singleton.ts",
 );
@@ -170,6 +175,29 @@ for (const [agentIndex, agentId] of agentIds.entries()) {
 await agentDb.closeOpenClawAgentDatabasesAsync();
 await stateDb.closeOpenClawStateDatabaseAsync();
 const seedMs = performance.now() - seededAt;
+if (values["warm-history"]) {
+  const history: typeof import("../../src/config/sessions/session-transcript-worker-runtime.ts") =
+    await load("src/config/sessions/session-transcript-worker-runtime.ts");
+  const options = { agentId: "main", env: process.env };
+  await history.withSessionHistoryWorkerDatabase(options, async (reader) => {
+    // The first read may qualify a cold source on the store lane. Reuse its
+    // retained reader for the foreground read before calling this a warm arm.
+    const admitted = await reader.readExactEntries({
+      env: process.env,
+      sessionKeys: [oldKey],
+    });
+    assert.equal(admitted.entries.length, 1);
+    assert(
+      await reader.readEntryPresence({
+        agentId: "main",
+        databaseAgentId: options.agentId,
+        storePath: agentDb.resolveOpenClawAgentSqlitePath(options),
+        sessionKey: oldKey,
+      }),
+    );
+  });
+  assert(lanes.historyLane.native, "warm-history did not start a foreground reader");
+}
 if (values.allocations || values.entry) {
   if (values.allocations) {
     process.env.OPENCLAW_ARCHIVE_CHURN_PROFILE_DIR = path.join(root, "worker-profiles");
@@ -221,7 +249,18 @@ const counts = () =>
   workers
     .getTrackedWorkerLifecycleSnapshot()
     .workerLifecycle.find(({ script }) => script === "session-accessor.sqlite-archive.worker.js");
+const workerStarts = () =>
+  Object.fromEntries(
+    workers
+      .getTrackedWorkerLifecycleSnapshot()
+      .workerLifecycle.map(({ script, started }) => [script, started]),
+  );
+const startDelta = (before: Record<string, number>, after = workerStarts()) =>
+  Object.fromEntries(
+    Object.entries(after).map(([script, started]) => [script, started - (before[script] ?? 0)]),
+  );
 const before = counts();
+const startsBefore = workerStarts();
 const memoryBefore = process.memoryUsage();
 let peakRssBytes = memoryBefore.rss;
 const sampler = setInterval(() => {
@@ -267,10 +306,11 @@ try {
         maintenanceReason: "pruned",
       });
     }
+    const startedWorkers = counts()?.started ?? 0;
+    const startedAllWorkers = workerStarts();
     const started = performance.now();
     const cpu = process.cpuUsage();
     const thread = process.threadCpuUsage();
-    const startedWorkers = counts()?.started ?? 0;
     const result:
       | Awaited<
           ReturnType<
@@ -310,6 +350,7 @@ try {
       processCpuMs: (used.user + used.system) / 1000,
       mainThreadCpuMs: (main.user + main.system) / 1000,
       archiveStarts: (counts()?.started ?? 0) - startedWorkers,
+      workerStarts: startDelta(startedAllWorkers),
       load: loadavg(),
     });
     if (iteration + 1 < iterations && intervalMs > 0) {
@@ -320,6 +361,7 @@ try {
   clearInterval(sampler);
   measurementEnd = process.memoryUsage();
   const after = counts();
+  const startsAfter = workerStarts();
   if (values.allocations) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     await writeFile(path.join(root, "main.heapprofile"), JSON.stringify(profile));
@@ -330,6 +372,13 @@ try {
       nodes.push(...node.children);
     }
   }
+  // Observe after timing and allocation sampling: lazy pools can create host wrappers.
+  const transcriptLanes = Object.fromEntries(
+    [lanes.historyLane, lanes.sessionStoreLane, lanes.transcriptSearchLane].map((lane) => [
+      lane.name,
+      lane.pool.getSnapshot(),
+    ]),
+  );
   await agentDb.closeOpenClawAgentDatabasesAsync();
   await stateDb.closeOpenClawStateDatabaseAsync();
   const workerProfiles = await Promise.all(
@@ -386,12 +435,15 @@ try {
     sessions,
     stores,
     operation: values.operation,
+    warmHistory: values["warm-history"],
     entry: values.entry ?? null,
     intervalMs,
     allocations: values.allocations,
     seedMs,
     measurements,
     archiveStarts: (after?.started ?? 0) - (before?.started ?? 0),
+    workerStarts: startDelta(startsBefore, startsAfter),
+    transcriptLanes,
     lifecycleBefore: before,
     lifecycleAfter: after,
     sampledMainBytes,
