@@ -110,6 +110,54 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return tool;
   }
 
+  it("limits a personal MCP run and its App view to the creator's unattended live tools", async () => {
+    const input = createInput();
+    const catalog = ["report", "amend", "connect", "new"].map((name) => {
+      const tool = createStubTool(`orders__${name}`);
+      setPluginToolMeta(tool, {
+        pluginId: "bundle-mcp",
+        optional: false,
+        mcp: {
+          operation: "tool",
+          serverName: "orders",
+          safeServerName: "orders",
+          toolName: name,
+          codexApproval: { mode: name === "amend" ? "prompt" : "approve" },
+          ...(name === "connect" ? { oauthConnectBootstrap: true } : {}),
+        },
+      });
+      return tool;
+    });
+    const restrictAppTools = vi.fn();
+    mockMcp();
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: catalog,
+      appTools: catalog,
+      restrictAppTools,
+    });
+    input.attempt.scheduledToolPolicy = {
+      version: 1,
+      mode: "account",
+      ownerAccountId: "bot",
+      ownerSessionKey: "parent",
+      personalRequester: {
+        accountId: "bot",
+        senderId: "alice",
+        assertCurrent() {},
+        tools: ["report", "amend", "connect"].map((name) => ({
+          name: `orders__${name}`,
+          pluginId: "bundle-mcp",
+        })),
+      },
+    };
+    const result = await prepare(input);
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ requesterSenderId: "alice" }),
+    );
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["orders__report"]);
+    expect(restrictAppTools).toHaveBeenCalledExactlyOnceWith(result.uncompactedEffectiveTools);
+  });
+
   it.each(["memory flush", "disabled tools", "raw", "model", "global denial"])(
     "does not widen %s with auxiliary tools",
     async (mode) => {

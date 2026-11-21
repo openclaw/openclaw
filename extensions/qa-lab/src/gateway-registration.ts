@@ -61,6 +61,25 @@ export const qaLabGatewayDefinition = {
       },
       { name: "qa_restart_wait" },
     );
+    const reportPort = process.env.OPENCLAW_QA_WHATSAPP_REPORT_PORT;
+    if (reportPort && /^\d{1,5}$/u.test(reportPort)) {
+      api.registerMcpServerConnectionResolver({
+        serverName: "connected",
+        resolve({ requesterSenderId, messageChannel, agentAccountId }) {
+          if (
+            messageChannel !== "whatsapp" ||
+            !agentAccountId ||
+            requesterSenderId !== "+15550000001"
+          ) {
+            return null;
+          }
+          return {
+            url: `http://127.0.0.1:${reportPort}/connected`,
+            headers: { Authorization: `Bearer fixture-${agentAccountId}-${requesterSenderId}` },
+          };
+        },
+      });
+    }
     const ordersFile = process.env.OPENCLAW_QA_PERSONAL_ORDERS_FILE;
     if (ordersFile) {
       api.registerTool(

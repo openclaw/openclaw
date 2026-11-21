@@ -8,6 +8,7 @@ import { startAutomationProvider } from "./control-ui-automation-provider.test-s
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild } from "./gateway-child.ts";
 import { writeQaAuthProfiles } from "./providers/shared/auth-store.ts";
+import { startReportMcp } from "./whatsapp-automation-mcp.test-support.ts";
 
 async function run() {
   const outputDir = await mkdtemp(path.join(homedir(), "whatsapp-qa-"));
@@ -16,6 +17,10 @@ async function run() {
   const provider = await startAutomationProvider("whatsapp_automations", accounts);
   const owner = createQaGatewayChild();
   let transport: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>> | undefined;
+  const mode = process.argv[2];
+  assert.ok(!mode || ["static", "connected", "mixed"].includes(mode));
+  const sources = mode === "mixed" ? ["static", "connected"] : mode ? [mode] : [];
+  let reports: Awaited<ReturnType<typeof startReportMcp>> | undefined;
   await runQaGatewayFixture(
     async () => {
       transport = await createQaCrablineTransportAdapter({
@@ -43,6 +48,10 @@ async function run() {
         ...adapter.createRuntimeEnvPatch(),
         OPENCLAW_QA_PERSONAL_ORDERS_FILE: ordersFile,
       };
+      if (mode) {
+        reports = await startReportMcp(adapter.accountId);
+        runtimeEnvPatch.OPENCLAW_QA_WHATSAPP_REPORT_PORT = new URL(reports.origin).port;
+      }
       const socketUrl = runtimeEnvPatch.OPENCLAW_WHATSAPP_WEB_SOCKET_URL;
       assert.ok(socketUrl);
       assert.equal(new URL(socketUrl).hostname, "127.0.0.1");
@@ -76,16 +85,40 @@ async function run() {
           cfg.plugins = { ...cfg.plugins, slots: { ...cfg.plugins?.slots, memory: "none" } };
           cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), "qa-lab"])];
           cfg.plugins.entries = { ...cfg.plugins.entries, "qa-lab": { enabled: true } };
+          const allow = reports
+            ? [
+                "whatsapp_automations",
+                ...sources.flatMap((name) => [`${name}__report`, `${name}__amend`]),
+              ]
+            : ["whatsapp_automations", "session_status", "qa_my_orders"];
+          if (reports) {
+            const origin = reports.origin;
+            cfg.mcp = {
+              servers: Object.fromEntries(
+                sources.map((name) => [
+                  name,
+                  {
+                    url: `${origin}/${name}`,
+                    transport: "streamable-http",
+                    ...(name === "static"
+                      ? { headers: { Authorization: "Bearer fixture-shared" } }
+                      : {}),
+                    codex: { defaultToolsApprovalMode: "auto" },
+                  },
+                ]),
+              ),
+            };
+          }
           const tools = {
             profile: "full" as const,
-            allow: ["whatsapp_automations", "session_status", "qa_my_orders"],
+            allow,
           };
           cfg.tools = {
             ...tools,
             codeMode: false,
             toolSearch: false,
             gatewayPolicy: {
-              allow: ["whatsapp_automations", "session_status", "qa_my_orders"],
+              allow,
               actions: {
                 whatsapp_automations: ["add", "list", "update", "remove"],
                 qa_my_orders: ["list", "mark_reviewed"],
@@ -163,6 +196,114 @@ async function run() {
         assert.ok(result, JSON.stringify(provider.diagnostics(marker)));
         console.log(marker, result.slice(0, 300));
         return result;
+      }
+      async function completed(id: string, status: string) {
+        await adapter.waitForCondition(async () => {
+          const page = (await gateway.call("cron.runs", { id })) as {
+            entries: { status: string }[];
+          };
+          return page.entries.some((entry) => entry.status === status) || null;
+        }, 45_000);
+      }
+      if (reports) {
+        const at = new Date(Date.now() + 100_000);
+        // Avoid cron's top-of-hour staggering.
+        if (at.getUTCMinutes() === 0) {
+          at.setUTCMinutes(1);
+        }
+        const schedule = {
+          kind: "cron",
+          expr: `${at.getUTCMinutes()} ${at.getUTCHours()} * * *`,
+          tz: "UTC",
+        };
+        const jobs = new Map<string, string>();
+        for (const source of sources) {
+          const tool = `${source}__report`;
+          provider.requestedTools.set(`initial-${source}`, tool);
+          assert.match(await ask(alice, `initial-${source}`, {}), /1 unit\./);
+          provider.requestedTools.set(`due-${source}`, tool);
+          provider.requests.set(`due-${source}`, {});
+          const savedReport = JSON.parse(
+            await ask(alice, `save-${source}`, {
+              action: "add",
+              mode: "task",
+              text: `Send today's ${source} report here. [automation-proof:due-${source}]`,
+              schedule,
+            }),
+          );
+          assert.ok((await readJobs()).some((j) => j.id === savedReport.id));
+          jobs.set(source, savedReport.id);
+          assert.ok(
+            provider.surfaces.get(`save-${source}`)?.includes(`${source}__amend`),
+            "interactive control tool must be present",
+          );
+          assert.match(
+            await ask(bob, `foreign-${source}`, { action: "remove", id: savedReport.id }),
+            /not found/i,
+          );
+        }
+        reports.setUnits(17);
+        const sinceIndex = adapter.state
+          .getSnapshot()
+          .messages.filter((m) => m.direction === "outbound").length;
+        for (const [source, id] of jobs) {
+          const marker = `due-${source}`;
+          const occurrence = await adapter.waitForCondition(async () => {
+            const page = (await gateway.call("cron.runs", { id })) as {
+              entries: { status: string; error?: string }[];
+            };
+            return page.entries[0] ?? null;
+          }, 160_000);
+          assert.equal(
+            occurrence.status,
+            "ok",
+            occurrence.error ?? "The daily report did not finish.",
+          );
+          assert.deepEqual(
+            provider.surfaces
+              .get(marker)
+              ?.filter((tool) => tool.includes("__"))
+              .toSorted(),
+            sources.map((name) => `${name}__report`).toSorted(),
+            "due model must see every eligible report and no consent-required action",
+          );
+          const message = await adapter.waitForOutbound({
+            sinceIndex,
+            textIncludes: `Today's ${source} report: 17 units.`,
+            timeoutMs: 45_000,
+          });
+          assert.equal(message.accountId, adapter.accountId);
+          assert.equal(message.conversation.id, replyPeers.get(alice));
+          assert.match(provider.results.get(marker) ?? "", /17 units/);
+          console.log("daily report", source, id, "17 units in creator DM");
+        }
+        const calls = reports.calls.slice();
+        for (const source of sources) {
+          assert.deepEqual(
+            calls.filter((call) => call.source === source),
+            [1, 17].map((units) => ({ source, tool: "report", units })),
+          );
+        }
+        const config = (await gateway.call("config.get", {})) as { hash: string };
+        await gateway.call("config.patch", {
+          baseHash: config.hash,
+          replacePaths: [`channels.whatsapp.accounts.${adapter.accountId}.allowFrom`],
+          raw: JSON.stringify({
+            channels: {
+              whatsapp: { accounts: { [adapter.accountId]: { allowFrom: ["+15550000003"] } } },
+            },
+          }),
+        });
+        const beforeWithdrawal = adapter.state
+          .getSnapshot()
+          .messages.filter((m) => m.direction === "outbound").length;
+        for (const id of jobs.values()) {
+          await gateway.call("cron.run", { id, mode: "force" });
+          await completed(id, "skipped");
+        }
+        await adapter.waitForNoOutbound({ sinceIndex: beforeWithdrawal });
+        assert.deepEqual(reports.calls, calls);
+        return;
       }
       provider.requestedTools.set("interactive-orders", "qa_my_orders");
       assert.deepEqual(JSON.parse(await ask(alice, "interactive-orders", { action: "list" })), {
@@ -258,14 +399,6 @@ async function run() {
       assert.notEqual(replyPeers.get(alice), replyPeers.get(bob));
       assert.equal(delivered.conversation.id, replyPeers.get(alice));
       assert.equal(delivered.accountId, adapter.accountId);
-      async function completed(id: string, status: string) {
-        await adapter.waitForCondition(async () => {
-          const page = (await gateway.call("cron.runs", { id })) as {
-            entries: { status: string }[];
-          };
-          return page.entries.some((entry) => entry.status === status) || null;
-        }, 45_000);
-      }
       await completed(created.id, "ok");
       await ask(alice, "remove", { action: "remove", id: created.id });
       assert.deepEqual(await readJobs(), before);
@@ -499,6 +632,7 @@ async function run() {
     },
     () => stopQaGatewayFixture(owner),
     () => transport?.cleanupAfterGatewayStop(),
+    () => reports?.close(),
     () => provider.stop(),
   );
 }
