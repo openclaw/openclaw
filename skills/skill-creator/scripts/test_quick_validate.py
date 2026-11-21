@@ -62,6 +62,17 @@ metadata: |
                     rendered = content.replace("DESCRIPTION", description)
                     self.assertEqual(self.validate_content(rendered)[0], expected, description)
 
+    def test_fallback_accepts_quoted_field_names(self):
+        with patch.object(quick_validate, "yaml", None):
+            for quote in ("'", '"'):
+                with self.subTest(quote=quote):
+                    self.assertTrue(
+                        *self.validate_content(
+                            f"---\n{quote}name{quote}: quoted-skill\n"
+                            f"{quote}description{quote}: Summarize reports.\n---\n"
+                        )
+                    )
+
     def test_rejects_blank_name_or_description(self):
         cases = [
             ('""', "a valid description", "Name must not be empty"),
