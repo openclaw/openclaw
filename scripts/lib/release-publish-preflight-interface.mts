@@ -125,7 +125,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
   const parsed = parseArgs({ args: argv, options: optionDefinitions, strict: true });
   if (parsed.values.help) {
     console.log(
-      "Usage: pnpm release:publish-preflight --tag <tag> --full-release-validation-run-id <id> (--workflow-ref <protected-publish-tag> | --workflow-sha <trusted-main-sha>) [options]\n\nRead-only: evaluates publication gates and prints the exact dispatch command.\n--workflow-sha reuses or mints the protected release-publish/<sha12>-<epoch> tag at that trusted main SHA (tag-creation authority required).\n" +
+      "Usage: pnpm release:publish-preflight --tag <tag> --full-release-validation-run-id <id> (--workflow-ref <protected-publish-tag> | --workflow-sha <trusted-main-sha>) [options]\n\nApproval preparation: pnpm release:publish-preflight approval <request|status> --request <immutable-request.json>. This does not dispatch or authorize publication.\n\nRead-only: evaluates publication gates and prints the exact dispatch command.\n--workflow-sha reuses or mints the protected release-publish/<sha12>-<epoch> tag at that trusted main SHA (tag-creation authority required).\n" +
         strings.map((key) => `  --${key} <value>`).join("\n") +
         "\n  --json  Emit the report as JSON.\n\nDefaults: repo=openclaw/openclaw, npm-dist-tag=beta, plugin-publish-scope=all-publishable, publish-openclaw-npm=true, release-profile=from-validation.\npreflight-run-id defaults to the full validation run when it owns a qualified npm preflight.",
     );
