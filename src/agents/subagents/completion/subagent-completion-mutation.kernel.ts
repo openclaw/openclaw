@@ -359,7 +359,11 @@ function mutateRequesterBatch(
         (!params.outcome.delivered &&
           subagent.delivery?.status === "failed" &&
           subagent.delivery.disposition === "retryable") ||
-        settleExpiredDelivery)
+        settleExpiredDelivery ||
+        // Blocking a finished requester keeps its yield batch, which still carries this result.
+        (params.outcome.delivered &&
+          isCompletedRequesterDeliveryBlocked(subagent) &&
+          subagent.requesterSettleWake?.requesterYieldBatch === true))
     ) {
       if (params.outcome.delivered) {
         markDelivered(subagent, params.outcome.deliveredAt ?? now);
