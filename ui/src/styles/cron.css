@@ -1127,6 +1127,8 @@
 }
 
 .cron-history > .settings-section__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
 }
 
@@ -1365,7 +1367,29 @@
   }
 
   .cron-run-entry__header {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: var(--space-1);
+  }
+
+  .cron-run-entry__title {
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .cron-run-entry__time {
+    grid-area: 1 / 3;
+    padding-inline-start: 0;
+  }
+
+  .cron-run-entry__facts {
+    grid-column: 2 / -1;
+  }
+
+  .cron-run-entry__facts:empty,
+  .cron-run-entry__facts:not(:empty)::before {
+    display: none;
   }
 }
 
