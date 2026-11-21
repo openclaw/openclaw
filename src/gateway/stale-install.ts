@@ -28,6 +28,7 @@ import {
   onGatewaySuspendAdmissionChange,
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { announceReady } from "../update/gateway-trial.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { isGatewayTransportError } from "./transport-error.js";
 
@@ -183,14 +184,12 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
-  // A serving Gateway ends the trial of the Git release it runs; the launcher stops counting.
-  if (observer?.installationRoot && !observer.trialSettled) {
+  // The maintenance owner starts only after the Gateway listener is serving.
+  if (observer && !observer.trialSettled) {
     observer.trialSettled = true;
-    void import("../infra/git-release.js")
-      .then(({ settleGitReleaseTrial }) => settleGitReleaseTrial(observer.installationRoot))
-      .catch(() => {
-        observer.trialSettled = false;
-      });
+    void announceReady(observer.running.buildId).catch(() => {
+      observer.trialSettled = false;
+    });
   }
   const root = observer?.installationRoot;
   if (

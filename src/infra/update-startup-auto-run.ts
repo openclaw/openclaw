@@ -89,6 +89,35 @@ export async function runAutoUpdateCommand(
       "skipped",
     );
   }
+  // Git installs prepare a release and restart into the launcher's trial; no handoff helper.
+  if (params.mode === "git" && params.root) {
+    const [{ prepareUpdate }, { recordPhase }, { scheduleGatewayRestart }] = await Promise.all([
+      import("../update/run.js"),
+      import("../update/runs.js"),
+      import("./restart.js"),
+    ]);
+    // prepareUpdate settles the run itself unless a trial is pending; later writes are no-ops.
+    const outcome = await prepareUpdate({
+      runId: params.runId,
+      runningRoot: params.root,
+      runningVersion: VERSION,
+      channel: params.channel,
+      ...(params.devTarget ? { sha: params.devTarget.upstreamSha } : {}),
+    });
+    if (outcome.status === "current") {
+      return failure(
+        "already-current",
+        `OpenClaw ${outcome.version} is already current.`,
+        "skipped",
+      );
+    }
+    if (outcome.status === "failed") {
+      return failure(outcome.reason, outcome.message);
+    }
+    recordPhase(params.runId, "restarting");
+    scheduleGatewayRestart({ reason: "update" });
+    return { status: "handoff" };
+  }
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
@@ -208,6 +237,11 @@ export async function runAutoUpdateCommand(
         reason: "managed-service-handoff-already-running",
       });
     }
+    await recordUpdateRunStep(params.runId, {
+      step: "managed-service update handoff",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
     return {
       status: "handoff",
       command: started.command,
@@ -383,11 +417,6 @@ export async function runCampaignUpdate(params: {
     });
     if (outcome.status === "handoff") {
       terminal = undefined;
-      await recordUpdateRunStep(runId, {
-        step: "managed-service update handoff",
-        status: "completed",
-        endedAtMs: Date.now(),
-      });
       if (!isCurrent()) {
         return "failed";
       }

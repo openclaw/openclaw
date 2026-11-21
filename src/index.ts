@@ -8,6 +8,7 @@ import {
   resolveOpenClawCompileCacheDirectory,
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
+import { forwardToReleaseLauncher } from "../release-launcher-forward.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
@@ -31,9 +32,12 @@ const isMain = isMainModule({
 if (isMain) {
   installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
 }
-const handledAdmission =
-  isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
+// A converted install's older entry points run the current release through its launcher.
+const handledAdmission =
+  isMain &&
+  ((await forwardToReleaseLauncher(packageRootUrl)) ||
+    (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv))));
 if (
   !handledAdmission &&
   !existsSync(new URL("entry.ts", import.meta.url)) &&

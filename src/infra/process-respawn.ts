@@ -31,7 +31,7 @@ import { assertPersistedStateDatabaseAccessAllowed } from "./gateway-state-owner
 import { rewritePnpmVersionedOpenClawEntryPath } from "./openclaw-root.js";
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { requestGatewayRestartWithSignalAdmission, triggerOpenClawRestart } from "./restart.js";
-import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
+import { detectGatewayRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
 
 type GatewayRespawnResult = {
   mode: "supervised" | "disabled" | "failed";
@@ -66,12 +66,15 @@ export type GatewayRestartDecision =
   | { mode: "disabled"; reason: "unmanaged"; detail: string }
   | {
       mode: "supervised";
-      supervisor: NonNullable<ReturnType<typeof detectGatewayRespawnSupervisor>>;
+      supervisor: RespawnSupervisor | "external" | "launcher";
     };
 
 export function resolveGatewayRestartDecision(): GatewayRestartDecision {
   if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled", reason: "no-respawn" };
+  }
+  if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
+    return { mode: "supervised", supervisor: "launcher" };
   }
   const supervisor = detectGatewayRespawnSupervisor(process.env);
   if (supervisor) {
@@ -247,7 +250,10 @@ export function registerGatewayRuntimeRecovery(params: {
 export function restartGatewayProcessWithFreshPid(
   opts: GatewayRespawnOptions = {},
 ): GatewayRespawnResult {
-  const decision = opts.decision ?? resolveGatewayRestartDecision();
+  const decision: GatewayRestartDecision =
+    (opts.env?.OPENCLAW_LAUNCHER_IPC ?? process.env.OPENCLAW_LAUNCHER_IPC) === "1"
+      ? { mode: "supervised", supervisor: "launcher" }
+      : (opts.decision ?? resolveGatewayRestartDecision());
   if (decision.mode === "disabled") {
     return decision.reason === "no-respawn"
       ? { mode: "disabled" }
@@ -259,6 +265,9 @@ export function restartGatewayProcessWithFreshPid(
     return { mode: "failed", detail: formatErrorMessage(error) };
   }
   const { supervisor } = decision;
+  if (supervisor === "launcher") {
+    return { mode: "supervised", exitCode: 0 };
+  }
   if (supervisor === "launchd") {
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       mode: "start-after-exit",
