@@ -49,7 +49,6 @@ extension OpenClawChatComposer {
         }
         .pickerStyle(.menu)
         .controlSize(.small)
-        .help(String(localized: "Verbosity"))
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
@@ -75,7 +74,6 @@ extension OpenClawChatComposer {
         }
         .pickerStyle(.menu)
         .controlSize(.small)
-        .help(String(localized: "Fast responses"))
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
@@ -127,7 +125,6 @@ extension OpenClawChatComposer {
         .accessibilityLabel("Model")
         .controlSize(.small)
         .frame(maxWidth: 240, alignment: .leading)
-        .help("Model")
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 

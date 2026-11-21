@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { openClawIdEmailDisplayName } from "../shared/openclaw-id-email-display-name.js";
 import {
   publishUserProfileAuthorityChange,
   publishUserProfileIdentityChange,
@@ -10,6 +11,7 @@ import {
   runUserProfileWriteTransaction,
   type UserProfileMutationOptions,
 } from "./user-profile-mutation.js";
+import { readOpenClawIdDisplayEmail } from "./user-profile-openclaw-id.read.js";
 import {
   openClawIdProfileProvider,
   type OpenClawIdProfileDisplayMetadata,
@@ -18,6 +20,7 @@ import {
 import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
+  selectResolvedUserProfileMetadataById,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -36,7 +39,7 @@ export function ensureOpenClawIdUserProfile(
   input: OpenClawIdUserProfileInput,
   options: UserProfileMutationOptions,
 ): UserProfile {
-  const name = normalizeInitialDisplayName(input.name);
+  const reportedName = normalizeInitialDisplayName(input.name);
   const email = input.email?.trim();
   const metadata =
     input.email === undefined
@@ -57,6 +60,16 @@ export function ensureOpenClawIdUserProfile(
           .where("provider", "=", openClawIdProfileProvider)
           .where("subject", "=", input.accountId),
       );
+      // A member with no reported name is named like an email sign-in: by the email's local part.
+      const name =
+        reportedName ??
+        normalizeInitialDisplayName(
+          openClawIdEmailDisplayName(
+            input.email === undefined
+              ? readOpenClawIdDisplayEmail(identity?.verified_email_json ?? null)
+              : email,
+          ),
+        );
       const now = Date.now();
       const profile = identity
         ? requireResolvedUserProfileMetadataById(db, identity.profile_id)
@@ -118,13 +131,13 @@ export type OpenClawIdLinkResult =
   | { ok: true }
   | {
       ok: false;
-      code: "owner_profile" | "profile_changed" | "linked_elsewhere";
+      code: "owner_profile" | "profile_changed" | "linked_elsewhere" | "profile_linked";
     };
 
 /**
  * Links an OpenClaw ID account to an existing personal profile, as a provider identity.
  * An account belongs to at most one profile (a profile may hold several, as after a merge);
- * the shared owner profile never holds one. The caller proves both sides on one connection; linking grants nothing.
+ * the shared owner profile never holds one. The caller owns authorization; linking grants nothing.
  */
 export function linkOpenClawIdUserProfile(
   input: { profileId: string; accountId: string; email: string | null },
@@ -134,7 +147,10 @@ export function linkOpenClawIdUserProfile(
   return runUserProfileWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
-      const target = requireResolvedUserProfileMetadataById(db, input.profileId);
+      const target = selectResolvedUserProfileMetadataById(db, input.profileId);
+      if (!target) {
+        return { ok: false, code: "profile_changed" };
+      }
       if (target.id === GATEWAY_OWNER_PROFILE_ID) {
         return { ok: false, code: "owner_profile" };
       }
@@ -154,6 +170,18 @@ export function linkOpenClawIdUserProfile(
         return requireResolvedUserProfileMetadataById(db, holder.profile_id).id === target.id
           ? { ok: true }
           : { ok: false, code: "linked_elsewhere" };
+      }
+      // A profile takes a second account only through a merge, never through a link.
+      const held = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select("subject")
+          .where("provider", "=", openClawIdProfileProvider)
+          .where("profile_id", "=", target.id),
+      );
+      if (held) {
+        return { ok: false, code: "profile_linked" };
       }
       options.mutation?.before(db, target.id);
       executeSqliteQuerySync(

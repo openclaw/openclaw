@@ -119,13 +119,17 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
 
 The `mistral` plugin registers Voxtral Realtime as a Voice Call streaming STT provider.
 
-| Setting      | Config path                                                            | Default                                 |
-| ------------ | ---------------------------------------------------------------------- | --------------------------------------- |
-| API key      | `plugins.entries.voice-call.config.streaming.providers.mistral.apiKey` | Falls back to `MISTRAL_API_KEY`         |
-| Model        | `...mistral.model`                                                     | `voxtral-mini-transcribe-realtime-2602` |
-| Encoding     | `...mistral.encoding`                                                  | `pcm_mulaw`                             |
-| Sample rate  | `...mistral.sampleRate`                                                | `8000`                                  |
-| Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                   |
+| Setting      | Config path                                                            | Default                                                              |
+| ------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| API key      | `plugins.entries.voice-call.config.streaming.providers.mistral.apiKey` | Falls back to `MISTRAL_API_KEY`, then a saved `mistral` auth profile |
+| Model        | `...mistral.model`                                                     | `voxtral-mini-transcribe-realtime-2602`                              |
+| Encoding     | `...mistral.encoding`                                                  | `pcm_mulaw`                                                          |
+| Sample rate  | `...mistral.sampleRate`                                                | `8000`                                                               |
+| Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                                                |
+
+The saved auth profile is used only when Mistral is the named provider, for example
+`streaming.provider: "mistral"`. Automatic selection counts only the config and
+environment keys.
 
 ```json5
 {

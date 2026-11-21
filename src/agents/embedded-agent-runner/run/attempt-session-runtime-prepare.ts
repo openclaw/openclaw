@@ -1,5 +1,3 @@
-import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
@@ -9,7 +7,6 @@ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { readGitHubPublicationToolSelection } from "../../github-tool-identity-config.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
@@ -25,8 +22,12 @@ import {
 import { decayToolUsage } from "../../tool-usage.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
-import { declarePromptToolPin } from "../prompt-cache-observability.js";
+import {
+  declarePromptSystemPromptRebuild,
+  declarePromptToolPin,
+} from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
+import { listSessionForkTools } from "../session-fork-request.js";
 import {
   retainEmbeddedSessionPromptState,
   beginSessionSystemPrompt,
@@ -37,6 +38,8 @@ import {
   prepareSessionPublicationToolListing,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "../session-prompt-update.js";
+import { resolveSessionToolPolicyDigest } from "../session-tool-checkpoint.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { SystemPromptUpdatePreparation } from "./attempt-permission-prompt.js";
@@ -107,7 +110,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     sessionAgentId,
   } = input.setup;
-  const { catalogToolHookContext, effectiveTools, toolSearchRunPlan } = input.toolCatalog;
+  const { catalogToolHookContext, effectiveTools } = input.toolCatalog;
   const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
   const {
     codeModeControlsEnabledForRun,
@@ -141,7 +144,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           resources.sessionManager = manager;
           resources.ownsSessionManager = manager !== attempt.sessionManager;
         },
-        replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
         resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
         withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
       }),
@@ -159,6 +161,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
   resources.promptStateLease = promptStateLease;
   const sessionPromptState = promptStateLease.state;
+  // Every session pins its system prompt and tool definitions on every route; see
+  // prepareSessionSystemPrompt for the closed set of rebuild points.
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
   const promptRouteKey = buildSystemPromptRouteKey({
@@ -167,8 +171,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     api: attempt.model.api,
     baseUrl: attempt.model.baseUrl,
     inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
-    // Personal bootstrap follows the session's selected human, not only the session ID.
-    personalProfile: attempt.bootstrapUserProfileId,
+    // The session's selected human, never the current turn's sender classification.
+    personalProfile: attempt.sessionUserProfileId,
     harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
     surface: codeModeControlsEnabledForRun
       ? "code-mode"
@@ -199,10 +203,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       entries: sessionManager[sessionManagerReadTranscriptBranch](),
       historyBoundaryCount: sessionManager.getBoundaryCount(),
       enabled: rankingEnabled,
-      catalogIds:
-        toolSearchCatalogRef?.current?.entries
-          .filter((entry) => entry.source !== "mcp")
-          .map((entry) => entry.id) ?? [],
+      catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
       inherited: inheritedRanking,
       now,
       readRankedIds: async () => {
@@ -243,26 +244,10 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         );
       }),
     );
-  if (
-    usesSystemPromptSeries &&
-    beginSessionSystemPrompt({
-      state: sessionPromptState,
-      routeKey: promptRouteKey,
-      enabled: transcriptPolicy.inHistorySystemUpdates === true,
-      getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
-    })
-  ) {
-    await retireSystemPromptUpdates();
+  if (usesSystemPromptSeries) {
+    beginSessionSystemPrompt(sessionPromptState);
   }
-  const toolPolicyDigest = sha256Hex(
-    stableStringify([
-      attempt.config?.tools,
-      attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
-      attempt.config?.plugins,
-      attempt.config?.desktop,
-      readGitHubPublicationToolSelection(attempt.config ?? {}),
-    ]),
-  );
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(attempt.config, sessionAgentId);
   if (usesSystemPromptSeries) {
     const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
       prepareSessionPublicationToolListing({
@@ -287,13 +272,31 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const effectiveToolCount = effectiveTools.length;
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
+  // Assigned once the session exists; earlier prompt preparations keep their ranking.
+  const sessionTools: { refresh?: () => void } = {};
+  // A session fork sends its source's pinned prompt and tool list unchanged.
+  const forkPin = attempt.sessionForkRequest?.pin;
   const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
-    usesSystemPromptSeries && (transcriptPolicy.inHistorySystemUpdates || rankingEnabled)
+    usesSystemPromptSeries
       ? async (nextPrompt: string, freshlyRendered = false) => {
+          if (forkPin) {
+            return {
+              systemPrompt: forkPin.prefix,
+              update: undefined,
+              restart: false,
+              seriesStatus: "pinned" as const,
+              commit: () => {},
+            };
+          }
           let preparedPrompt = nextPrompt;
           let wasFreshlyRendered = freshlyRendered;
           const previousRanking = usageRanking;
           await prepareUsageRanking();
+          if (usageRanking !== previousRanking) {
+            // A refreshed snapshot starts a new series: re-pin the tool definitions before
+            // the first request that uses it.
+            sessionTools.refresh?.();
+          }
           if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
             const refresh = await systemPrompt.prepareToolPrompt(
               resources.session?.agent.state.tools ?? effectiveTools,
@@ -304,19 +307,22 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
             freshSystemPrompt = preparedPrompt;
           }
-          if (!transcriptPolicy.inHistorySystemUpdates) {
-            return { systemPrompt: freshSystemPrompt };
-          }
+          const entries = sessionManager[sessionManagerReadTranscriptBranch]();
           const prepared = prepareSessionSystemPrompt({
             state: sessionPromptState,
             routeKey: promptRouteKey,
             systemPrompt: freshSystemPrompt,
-            entries: sessionManager[sessionManagerReadTranscriptBranch](),
+            entries,
             historyBoundaryCount: sessionManager.getBoundaryCount(),
           });
           // Keep an attempt's restart visible through subsequent continuation preparations.
           if (prepared.restart || state.systemPromptSeries === undefined) {
             state.systemPromptSeries = prepared.seriesStatus;
+          }
+          // Only an allowed rebuild point may change the prompt within a session; a lost
+          // series ("new" on a known session) stays a reported prefix change.
+          if (prepared.restart && prepared.seriesStatus !== "restarted:new") {
+            declarePromptSystemPromptRebuild(attempt);
           }
           let restartRecorded = false;
           if (prepared.restart && resources.session) {
@@ -324,6 +330,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             restartRecorded = true;
             resources.session.agent.state.messages = resources.session.messages.filter(
               (message) => getOpenClawSystemUpdateKind(message) !== "prompt-update",
+            );
+          }
+          if (resources.session) {
+            resources.session.agent.state.messages = retireUserRowPromptUpdates(
+              resources.session.agent.state.messages,
+              entries,
+              prepared.restart,
             );
           }
           projectedSystemPrompt = prepared.systemPrompt;
@@ -337,6 +350,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // policy change starts a new pin, so configured removals leave the provider request.
   const pinTools = usesSystemPromptSeries
     ? (tools: AnyAgentTool[]) => {
+        if (forkPin) {
+          return listSessionForkTools(forkPin, tools);
+        }
         const pending = sessionPromptState.pendingToolSurface;
         const pinned = prepareSessionToolSurface({
           state: sessionPromptState,
@@ -345,6 +361,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           entries: sessionManager[sessionManagerReadTranscriptBranch](),
           historyBoundaryCount: sessionManager.getBoundaryCount(),
           tools,
+          admitNewTools: !toolBase.fixedListing,
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
           declarePromptToolPin(attempt);
@@ -404,6 +421,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       ),
   );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  sessionTools.refresh = preparedAgentSession.refreshTools;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };
@@ -605,6 +623,10 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     ...(sandbox !== undefined ? { sandbox } : {}),
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    getDeferredToolEntries: () =>
+      input.toolCatalog.deferredDirectoryToolsCallable
+        ? toolSearchCatalogRef?.current?.entries
+        : undefined,
     providerPromptState: {
       state: getProviderPromptState(attempt.runId),
       effectiveContextTokenBudget: Math.max(

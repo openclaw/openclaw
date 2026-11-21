@@ -194,7 +194,7 @@ struct TailscaleIntegrationSection: View {
     @ViewBuilder
     private var accessURLRow: some View {
         if let host = self.tailscaleService.tailscaleHostname {
-            LabeledContent("Dashboard URL") {
+            LabeledContent("Web app URL") {
                 if let url = Self.dashboardURL(host: host) {
                     Link(url.absoluteString, destination: url)
                         .font(.callout.monospaced())
@@ -205,7 +205,7 @@ struct TailscaleIntegrationSection: View {
                 }
             }
         } else if !self.tailscaleService.isRunning {
-            LabeledContent("Dashboard URL") {
+            LabeledContent("Web app URL") {
                 Text("Start Tailscale to get your tailnet hostname.")
                     .foregroundStyle(.secondary)
             }

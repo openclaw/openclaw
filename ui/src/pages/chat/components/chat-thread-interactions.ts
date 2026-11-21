@@ -9,7 +9,6 @@ import type {
 } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button-state.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
@@ -29,7 +28,6 @@ import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
-import type { TurnRecapWatch } from "../chat-progress.ts";
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -68,7 +66,8 @@ registerChatMessageMetadataEnglish();
 export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>[0] & {
   threadElement?: HTMLElement;
   commentPins?: ChatCommentPinsHandle;
-  turnRecapWatch: TurnRecapWatch | null;
+  observedWorkRun?: { sessionKey: string; runId: string };
+  readerExpandedWork?: { sessionKey: string; keys: ReadonlySet<string> };
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
@@ -153,6 +152,8 @@ export type ChatThreadProps = Omit<
     announceTranscript?: boolean;
     loading: boolean;
     restoring?: boolean;
+    /** First-turn content was already shown by New Session; never replace it with history placeholders. */
+    initialSubmission?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
@@ -160,7 +161,6 @@ export type ChatThreadProps = Omit<
     toolMessages: unknown[];
     /** Existing pane owner, forwarded into the transcript's detached render root. */
     toolMessageSource?: ChatToolMessageSource;
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
@@ -182,6 +182,7 @@ export type ChatThreadProps = Omit<
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    onStartNewSession?: (runId: string, summary: string) => void;
     failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
@@ -208,6 +209,9 @@ export type ChatThreadProps = Omit<
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
     onOpenManagedArtifact?: (href: string) => boolean;
+    /** Receives settled transcript file links; links the Gateway cannot open become text. */
+    workspaceFileLinkScope?: string;
+    onWorkspaceFileLinks?: (links: HTMLElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
     onHistoryIntent?: (event: Event) => void;
@@ -253,7 +257,6 @@ export function getTranscriptState(paneId: string): ChatThreadState {
   const state: ChatThreadState = {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
-    turnRecapWatch: null,
     search: new TranscriptSearchState(),
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
@@ -303,6 +306,8 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
+    state.observedWorkRun = undefined;
+    state.readerExpandedWork = undefined;
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }
@@ -694,6 +699,21 @@ export function handleTranscriptContextMenu(
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
+  const { signal } = owner.listeners;
+  // Keyboard dismissal is ready before focus enters the menu, independent of paint.
+  listen(
+    document,
+    "keydown",
+    (nextEvent) => {
+      if (nextEvent.key === "Escape") {
+        nextEvent.preventDefault();
+        nextEvent.stopPropagation();
+        removeReplyContextMenu();
+        props.onFocusComposer?.();
+      }
+    },
+    { signal },
+  );
   mounted.firstButton?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== owner) {
@@ -704,18 +724,8 @@ export function handleTranscriptContextMenu(
         removeReplyContextMenu();
       }
     };
-    const handleKeydown = (nextEvent: KeyboardEvent) => {
-      if (nextEvent.key === "Escape") {
-        nextEvent.preventDefault();
-        nextEvent.stopPropagation();
-        removeReplyContextMenu();
-        props.onFocusComposer?.();
-      }
-    };
-    const { signal } = owner.listeners;
     listen(document, "click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
     listen(document, "contextmenu", handleOutsideEvent, { capture: true, signal });
-    listen(document, "keydown", handleKeydown, { signal });
   });
 }

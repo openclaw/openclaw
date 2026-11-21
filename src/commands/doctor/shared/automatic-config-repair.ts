@@ -161,7 +161,7 @@ async function planConfigRepair(
     const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
       validationConfig,
       validationConfig,
-    );
+    ).filter((issue) => !issue.reviewOnly);
     if (reportValidationFailure && (!validated.ok || issues.length > 0)) {
       throw createConfigValidationFailedError(
         dedupeByKey([...(!validated.ok ? validated.issues : []), ...issues], (issue) =>

@@ -1,75 +1,3 @@
-/* Keep shadow-hosted resets, with separate ancestors for selector fast rejection.
-   The scrollbar rules mirror the canonical profile in styles/base.css, which
-   can't reach into shadow roots. */
-.oc-overlay,
-.oc-modal-dialog,
-.oc-overlay *,
-.oc-modal-dialog * {
-  box-sizing: border-box;
-}
-
-@supports not selector(::-webkit-scrollbar) {
-  .oc-overlay,
-  .oc-modal-dialog,
-  .oc-overlay *,
-  .oc-modal-dialog * {
-    scrollbar-color: var(--scrollbar-thumb) transparent;
-    scrollbar-width: thin;
-  }
-
-  .oc-overlay:hover,
-  .oc-modal-dialog:hover,
-  .oc-overlay :hover,
-  .oc-modal-dialog :hover {
-    scrollbar-color: var(--scrollbar-thumb-near) transparent;
-  }
-}
-
-.oc-overlay::-webkit-scrollbar,
-.oc-modal-dialog::-webkit-scrollbar,
-.oc-overlay ::-webkit-scrollbar,
-.oc-modal-dialog ::-webkit-scrollbar {
-  width: var(--scrollbar-size);
-  height: var(--scrollbar-size);
-}
-
-/* Separately keyed roots keep selector rejection cheap. Native nesting also keeps
-   shared declarations single in the inline copies used by shadow hosts. */
-.oc-overlay,
-.oc-modal-dialog {
-  &::-webkit-scrollbar-track,
-  &::-webkit-scrollbar-corner,
-  & ::-webkit-scrollbar-track,
-  & ::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-
-  &::-webkit-scrollbar-thumb,
-  & ::-webkit-scrollbar-thumb {
-    background-color: var(--scrollbar-thumb);
-    border-radius: var(--radius-full);
-    border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
-    background-clip: content-box;
-  }
-
-  &:hover,
-  & :hover {
-    --scrollbar-hover: 1;
-  }
-
-  &:hover::-webkit-scrollbar-thumb,
-  & :hover::-webkit-scrollbar-thumb {
-    background-color: var(--scrollbar-thumb-near);
-  }
-
-  &::-webkit-scrollbar-thumb:hover,
-  &::-webkit-scrollbar-thumb:active,
-  & ::-webkit-scrollbar-thumb:hover,
-  & ::-webkit-scrollbar-thumb:active {
-    background-color: var(--scrollbar-thumb-hover);
-  }
-}
-
 /* The anchor owner sets position-anchor; each surface keeps its own placement and size budget. */
 .oc-overlay {
   --scrollbar-size: var(--scrollbar-size-compact);
@@ -253,14 +181,8 @@
   font: inherit;
   font-weight: var(--control-ui-font-weight-normal);
   text-align: start;
-  opacity: 0;
-  scale: 0.95;
-  /* Keep the native top layer until the lifecycle's closing animation settles. */
-  transition:
-    opacity var(--oc-overlay-hide-duration, var(--menu-exit-duration)) var(--overlay-ease-exit),
-    scale var(--oc-overlay-hide-duration, var(--menu-exit-duration)) var(--overlay-ease-exit),
-    display var(--oc-overlay-hide-duration, var(--menu-exit-duration)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--menu-exit-duration)) allow-discrete;
+  /* Settled surfaces keep the computed scale that geometry readers wait for. */
+  scale: 1;
 }
 
 /* Zero specificity: every caller's own size budget wins regardless of load order. */
@@ -612,13 +534,20 @@ a.oc-menu-item[href] {
   transform: scaleX(-1);
 }
 
-/* Single-arm wrappers keep Lightning CSS from merging these back into an unindexed list. */
-:is(.oc-menu:popover-open:where(:not([data-phase="closing"]))),
-:is(.oc-popover:popover-open:where(:not([data-phase="closing"]))) {
-  opacity: 1;
-  scale: 1;
-  transition-duration: var(--oc-overlay-show-duration, var(--menu-enter-duration));
-  transition-timing-function: var(--overlay-ease-enter);
+/* One-shot animations, not transitions: WebKitGTK 2.50 restarts a transition on an anchored
+   surface with position-try-fallbacks every frame, so the surface never paints and the
+   renderer spins (openclaw/openclaw#202467). The lifecycle waits for these before it settles.
+   Single-arm wrappers keep Lightning CSS from merging these back into an unindexed list. */
+:is(.oc-menu[data-phase="opening"]),
+:is(.oc-popover[data-phase="opening"]) {
+  animation: oc-overlay-enter var(--oc-overlay-show-duration, var(--menu-enter-duration))
+    var(--overlay-ease-enter);
+}
+
+:is(.oc-menu[data-phase="closing"]),
+:is(.oc-popover[data-phase="closing"]) {
+  animation: oc-overlay-exit var(--oc-overlay-hide-duration, var(--menu-exit-duration))
+    var(--overlay-ease-exit) forwards;
 }
 
 .oc-overlay[hidden],
@@ -627,11 +556,18 @@ a.oc-menu-item[href] {
   display: none;
 }
 
-@starting-style {
-  :is(.oc-menu:popover-open),
-  :is(.oc-popover:popover-open) {
-    scale: 0.95;
+@keyframes oc-overlay-enter {
+  from {
+    opacity: var(--oc-overlay-enter-opacity, 0);
+    scale: var(--oc-overlay-enter-scale, 0.95);
+    translate: var(--oc-overlay-enter-translate, 0);
+  }
+}
+
+@keyframes oc-overlay-exit {
+  to {
     opacity: 0;
+    scale: var(--oc-overlay-enter-scale, 0.95);
   }
 }
 
@@ -685,8 +621,7 @@ a.oc-menu-item[href] {
   .oc-menu-heading__action,
   .sidebar-session-menu-row,
   .sidebar-session-menu-switch,
-  .sidebar-session-sort-menu__item,
-  .usage-filter-option {
+  .sidebar-session-sort-menu__item {
     corner-shape: superellipse(1.5);
   }
 }
@@ -713,6 +648,8 @@ a.oc-menu-item[href] {
 @media (prefers-reduced-motion: reduce) {
   .oc-menu,
   .oc-popover,
+  .oc-menu[data-phase],
+  .oc-popover[data-phase],
   .oc-menu-item {
     animation: none;
     transition: none;

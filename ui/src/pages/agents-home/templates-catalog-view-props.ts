@@ -1,8 +1,6 @@
-import type {
-  TemplateAddReviewPlan,
-  TemplateCatalogDetail,
-  TemplateCatalogEntry,
-} from "./templates-catalog-client.ts";
+import type { TemplatePluginPresentation } from "./template-plugin-icon.tsx";
+import type { TemplateAddFailure } from "./templates-add-agent.ts";
+import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 
 export type TemplatesCatalogViewProps = {
   basePath: string;
@@ -13,12 +11,10 @@ export type TemplatesCatalogViewProps = {
   readDetail: () => TemplateCatalogDetail | null;
   detailRequest: Promise<TemplateCatalogDetail | null> | undefined;
   installedPluginPackages: ReadonlySet<string>;
-  addError: string | null;
+  pluginPresentation?: Readonly<Record<string, TemplatePluginPresentation>>;
+  addFailure: Pick<TemplateAddFailure, "entry" | "message"> | null;
   applying: boolean;
-  reviewing: boolean;
-  canStartAdd: boolean;
   consentWarning: string | null;
-  reviewPlan: TemplateAddReviewPlan | null;
   canAdd: boolean;
   preview?: {
     kind: "instruction" | "skill";
@@ -29,11 +25,11 @@ export type TemplatesCatalogViewProps = {
   readPreview?: () => void;
   onClosePreview?: () => void;
   onOpenPreview: (kind: "instruction" | "skill", name: string) => void;
+  /** The whole text of one workspace file of the shown release. */
+  readInstruction?: (name: string) => Promise<string>;
   onBack: () => void;
   onRetryDetail: () => void;
   onConfirm: () => void | Promise<void>;
   onConfirmConsent: () => void | Promise<void>;
   onCancelConsent: () => void;
-  onConfirmReview: () => void | Promise<void>;
-  onCancelReview: () => void;
 };

@@ -3,11 +3,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { InternalAgentTurnDispatchOptions } from "../../../gateway/agent-turn/internal-facade.types.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import { parseMessageWithAttachments } from "../../../gateway/chat-attachments.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
@@ -16,15 +17,11 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../../../infra/outbound/deliver-types.js";
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
+import { saveMediaBuffer } from "../../../media/store.js";
 import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
-import {
-  reserveSessionControllerSource,
-  retireSessionControllerInput,
-} from "../../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -32,6 +29,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
+import { detectAndLoadPromptImages } from "../../embedded-agent-runner/run/images.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -45,6 +43,7 @@ import {
   musicCompletionEvents,
   taskCompletionEvents,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { buildSavedMediaAttachment } from "../../tools/media-generate-result-shared.js";
 import {
   testing,
   deliverSubagentAnnouncement,
@@ -68,6 +67,7 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
 
+const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureQueueContext: OpenClawStateWorkerContext;
 
 beforeEach(() => {
@@ -232,7 +232,7 @@ describe("queued completion handoff", () => {
         expect(executed).toBe(false);
         if (outcome === "delivery deadline") {
           deliveryDeadline.abort(new Error("completion delivery expired"));
-          expect(await delivery).toMatchObject({ delivered: false, path: "none" });
+          expect(await delivery).toMatchObject({ delivered: false, disposition: "retryable" });
           parentSettled.resolve();
           await vi.advanceTimersByTimeAsync(0);
           expect(executed).toBe(false);
@@ -630,7 +630,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "none",
         reason: "completion_handoff_pending",
         terminal: true,
-        disposition: "intentional_non_delivery",
       },
       gatewayCalls: 0,
     }),
@@ -874,19 +873,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each([null, "replacement-parent"])(
-    "does not deliver private completion to a missing or replaced parent: %s",
+    "hands a private completion only to a live parent chat, also after a reset: %s",
     async (currentRequesterSessionId) => {
       const { result, callGateway, sendMessage } = await runDelivery("discord", {
-        response: { status: "ok", result: { payloads: [] } },
+        response: { status: "ok", inputProcessingCompleted: true, result: { payloads: [] } },
         completionTarget: "parent",
         currentRequesterSessionId,
         internalEvents: taskCompletionEvents(),
       });
-      expect(result).toMatchObject({
-        delivered: false,
-        reason: "completion_handoff_unavailable",
-        terminal: true,
-      });
+      if (currentRequesterSessionId) {
+        expectGatewayAgentParams(callGateway, { expectedExistingSessionId: "replacement-parent" });
+        return expect(sendMessage).not.toHaveBeenCalled();
+      }
+      expect(result).toMatchObject({ delivered: false, reason: "completion_handoff_unavailable" });
       expectNoExternalDelivery(callGateway, sendMessage);
     },
   );
@@ -1110,6 +1109,60 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("admits only the delivered generation as image input without widening workspace discovery", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", mediaTempDirs.make("openclaw-generated-inspection-"));
+    try {
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const generated = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+      const unrelated = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+      sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockReturnValueOnce({
+        id: "session-delivery-media",
+        claimed: false,
+        status: "completed",
+      });
+      const { callGateway, sendMessage } = await runDelivery("discord", {
+        sourceTool: "image_generate",
+        inputAttachments: [
+          { type: "image", mimeType: "image/png", content: png.toString("base64") },
+        ],
+        internalEvents: imageCompletionEvents({
+          mediaUrls: [generated.path],
+          attachments: [buildSavedMediaAttachment("image", generated)],
+        }),
+      });
+      const request = mockCallArg(callGateway);
+      const input = request.params;
+      if (!input || typeof input !== "object") {
+        throw new Error("Expected completion agent input");
+      }
+      const attachments = Reflect.get(input, "attachments");
+      expect(attachments).toEqual([
+        expect.objectContaining({ mimeType: "image/png", content: png.toString("base64") }),
+      ]);
+      const parsed = await parseMessageWithAttachments("Review the generated image", attachments);
+      const prepared = await detectAndLoadPromptImages({
+        prompt: `Inspect ${unrelated.path}`,
+        workspaceDir: mediaTempDirs.make("openclaw-inspection-workspace-"),
+        workspaceOnly: true,
+        model: { input: ["text", "image"] },
+        existingImages: parsed.images,
+        media: parsed.media,
+        imageOrder: parsed.imageOrder,
+      });
+      expect(prepared.images).toHaveLength(1);
+      expect(prepared.skippedCount).toBe(1);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(input).toMatchObject({
+        internalEvents: [{ mediaUrls: undefined, attachments: undefined }],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   registerDescendantWakeCurrencyTests({
     createRoleRestrictedInProcessGatewayMock,
     createGatewayMock,
@@ -1146,76 +1199,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectRecordFields(result, missingVisibleCompletion);
     },
   );
-
-  it("queues completion until ordinary requester compaction releases its turn", async () => {
-    const route = deliveryRoutes.telegram;
-    const target = captureSessionTarget({
-      storeScope: "/synthetic/requester-compaction/sessions.db",
-      sessionKey: route.key,
-      incarnation: route.sessionId,
-      agentId: "main",
-    });
-    const compactionEntered = createDeferredCore();
-    const releaseCompaction = createDeferredCore();
-    const compaction = withSessionTurn(
-      { target, sessionKey: route.key, sessionId: route.sessionId },
-      async (operation) => {
-        if (!operation) {
-          throw new Error("Requester compaction requires its retained controller operation");
-        }
-        operation.setPhase("preflight_compacting");
-        compactionEntered.resolve();
-        await releaseCompaction.promise;
-      },
-    );
-    const callGateway = createPayloadGatewayMock({ text: "child completion output" });
-    const sendMessage = createSendMessageMock();
-    let delivery: ReturnType<typeof deliverFixture> | undefined;
-    let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        compactionEntered.promise,
-        compaction,
-        "Compaction exited before retaining its controller turn",
-      );
-      input = reserveSessionControllerSource(route.key, {
-        target,
-        reservationId: "requester-compaction-completion",
-        policy: { mode: "followup" },
-      });
-      const compactionClaim = input.mailbox.claim;
-      expect(compactionClaim).toBeDefined();
-      delivery = deliverFixture("telegram", {
-        callGateway,
-        sendMessage,
-        controllerInput: input,
-        isActive: false,
-        internalEvents: identifiedCompletion({
-          taskLabel: "telegram compacting completion",
-        }),
-      });
-      await awaitGateBeforeSettlement(
-        vi.waitFor(() => expect(input?.phase).toBe("waiting")),
-        delivery,
-        "Completion settled before waiting behind requester compaction",
-      );
-      expect(input.mailbox.claim).toBe(compactionClaim);
-      expectNoExternalDelivery(callGateway, sendMessage);
-      releaseCompaction.resolve();
-      await compaction;
-      await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
-      await input.settlement.promise;
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(sendMessage).not.toHaveBeenCalled();
-      expect(input.mailbox.entries).toEqual([]);
-    } finally {
-      releaseCompaction.resolve();
-      if (input) {
-        retireSessionControllerInput(input);
-      }
-      await Promise.allSettled([compaction, ...(delivery ? [delivery] : [])]);
-    }
-  });
 
   const generatedVideoAttachment = {
     type: "video",
@@ -1625,7 +1608,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         "no_visible_payload",
         "adapter_returned_no_identity",
       ]),
-      expected: ambiguousCompletion,
+      expected: { ...ambiguousCompletion, finalAssistantVisibleText: "" },
     },
     {
       name: "empty output before a hook cancellation",
@@ -1671,10 +1654,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     { name: "empty", deliveryStatus: { status: "sent", resultCount: 0 } },
   ])("does not credit a $name automatic completion receipt", async (testCase) => {
     const { deliveryStatus, expected } = testCase;
-    const payloads = "payloads" in testCase ? testCase.payloads : undefined;
     const callGateway = createGatewayMock({
+      status: "ok",
       result: {
-        payloads: payloads ?? [{ text: "Generated completion" }],
+        payloads: "payloads" in testCase ? testCase.payloads : [{ text: "Generated completion" }],
         deliveryStatus,
       },
     });

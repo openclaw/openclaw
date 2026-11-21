@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
@@ -16,6 +17,7 @@ import {
   type prepareGatewayLocalUserIngress,
 } from "../../local-user-ingress.js";
 import { hasGatewayOperatorAccessPolicies } from "../../operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { syncTrustedProxyGitCoauthor } from "../../trusted-proxy-git-coauthor.js";
 import { formatForLog } from "../../ws-log.js";
@@ -178,6 +180,7 @@ async function resolveAuthenticatedProfile(
     recipient: {
       profileId: authority.profileId,
       role: authority.role,
+      openclawIdAccountIds: authority.openclawIdAccountIds,
       githubLogin: authority.githubLogin ?? null,
       aliases: new Set(authority.aliases),
     },
@@ -197,6 +200,8 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     };
   state: Pick<DeviceAuthorizedGatewayConnect, "authResult" | "role" | "authMethod">;
   ownerProfileExpected: boolean;
+  /** Effective connection scopes; hello publishes the activity viewer they imply. */
+  connectionScopes: readonly string[];
   /** The profile an OpenClaw ID owner device's linked account names (OCF-510). */
   linkedOwnerProfile?: { profileId: string; updatedAt: number } | null;
   authenticatedUserId: string | undefined;
@@ -230,13 +235,28 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   }
   const profileRequired =
     Boolean(state.authResult.delegation) ||
-    Boolean(context.configSnapshot.gateway?.roles) ||
-    hasGatewayOperatorAccessPolicies(context.configSnapshot);
+    isNamedOperatorRoleEnforcementEnabled(context.configSnapshot) ||
+    Boolean(context.configSnapshot.gateway?.openclawId?.enabled) ||
+    hasGatewayOperatorAccessPolicies(context.configSnapshot, {
+      openclawIdPrincipal:
+        state.authMethod === "trusted-proxy" ? state.authResult.openclawId : undefined,
+    });
+  // Without operator.read, hello publishes the caller's own profile as its activity viewer
+  // (resolveProfileActivityViewerId). Attaching that profile after hello would change the
+  // published viewer and retire the connection, so it resolves before hello.
+  const helloNamesActivityViewer =
+    state.role === "operator" &&
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.read"],
+      allowedScopes: params.connectionScopes,
+    });
   if (
     !ownerProfileExpected &&
     (!authenticatedUserId ||
       (params.resolveAuthenticatedGitHubIdentity &&
         !profileRequired &&
+        !helloNamesActivityViewer &&
         !context.configSnapshot.gateway?.auth?.trustedProxy?.gitCoauthor))
   ) {
     return { ok: true };

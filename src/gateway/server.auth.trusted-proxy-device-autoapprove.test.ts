@@ -336,7 +336,7 @@ describe("trusted-proxy operator device auto-approval", () => {
           config: loadConfig(),
           timeoutMs: 3_000,
         });
-        expect(health).toMatchObject({
+        expect(health, health.probeError).toMatchObject({
           reachable: true,
           activatedPluginErrors: [],
           channelProbeErrors: [],

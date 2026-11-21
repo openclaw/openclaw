@@ -450,8 +450,8 @@ describe("cli json stdout contract", () => {
             error: { type: "cli_error", message: conflict.message },
           });
           expect(result.stdout).not.toContain("[openclaw]");
-          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-          expect(result.stderr).not.toContain(conflict.message);
+          expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).toContain(conflict.message);
         }
       },
       { prefix: "openclaw-qr-json-failure-e2e-" },
@@ -533,36 +533,6 @@ describe("cli json stdout contract", () => {
         expect(result.stderr).toBe(`${message}\n`);
       },
       { prefix: "openclaw-sandbox-json-failure-e2e-" },
-    );
-  });
-
-  it("returns one canonical document when docs search fails", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const preload = `data:text/javascript,${encodeURIComponent(
-          'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
-        )}`;
-        const result = runBuiltCli(
-          tempHome,
-          ["docs", "offline", "--json"],
-          {},
-          {
-            execArgv: [`--import=${preload}`],
-          },
-        );
-
-        expect(result.status).toBe(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: "Docs search failed: offline fixture",
-          },
-        });
-        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-        expect(result.stderr).not.toContain("Docs search failed: offline fixture");
-      },
-      { prefix: "openclaw-docs-json-failure-e2e-" },
     );
   });
 

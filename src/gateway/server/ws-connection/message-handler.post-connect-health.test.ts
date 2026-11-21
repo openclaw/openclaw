@@ -1144,7 +1144,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
         harness.sendConnect("connect-github-identity-detached", {
           ...TEST_CONNECT_PARAMS,
-          caps: [],
+          scopes: ["operator.read"],
         });
 
         await waitForFast(() => {
@@ -1236,7 +1236,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           });
           harness.sendConnect("connect-suspended-identity", {
             ...TEST_CONNECT_PARAMS,
-            caps: [],
+            scopes: ["operator.read"],
           });
           await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
           await nextTurn();
@@ -1448,7 +1448,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
       harness.sendConnect("connect-github-identity-failure", {
         ...TEST_CONNECT_PARAMS,
-        caps: [],
+        scopes: ["operator.read"],
       });
 
       await waitForFast(() => {
@@ -1817,7 +1817,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           resolvedSessionKey: "agent:main:main",
           client,
           request: { message: "hello", idempotencyKey: runId },
-          hasRestoredCronContinuation: false,
           isOneShotModelRun: false,
         }),
       ).toEqual(remote ? undefined : { runId, callerOrigin: { kind: "local" } });
@@ -1846,7 +1845,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             resolvedSessionKey: "agent:main:main",
             client: harness.client as never,
             request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
-            hasRestoredCronContinuation: false,
             isOneShotModelRun: false,
           });
           const expected = {

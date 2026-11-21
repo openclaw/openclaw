@@ -44,16 +44,19 @@ function catalogRef(tools: ReturnType<typeof localCatalog>): ToolSearchCatalogRe
 }
 
 describe("run-granted tools in the Tool Search directory", () => {
-  it("keeps the cached directory identical whether or not the turn holds the grant", () => {
-    const base = localCatalog().slice(0, 3);
-    const granted = [...base, createStubTool("skill_library")];
-    const grantedRef = catalogRef(granted);
-    const withoutGrant = buildToolSchemaDirectoryPrompt({ catalogRef: catalogRef(base) });
+  it.each(["skill_library", "suggest_task", "dismiss_task"])(
+    "keeps the cached directory identical whether or not the turn holds the %s grant",
+    (name) => {
+      const base = localCatalog().slice(0, 3);
+      const granted = [...base, createStubTool(name)];
+      const grantedRef = catalogRef(granted);
+      const withoutGrant = buildToolSchemaDirectoryPrompt({ catalogRef: catalogRef(base) });
 
-    expect(buildToolSchemaDirectoryPrompt({ catalogRef: grantedRef })).toBe(withoutGrant);
-    expect(buildRunGrantedToolDirectory(grantedRef)).toContain("- skill_library (core)");
-    expect(buildRunGrantedToolDirectory(catalogRef(base))).toBeUndefined();
-  });
+      expect(buildToolSchemaDirectoryPrompt({ catalogRef: grantedRef })).toBe(withoutGrant);
+      expect(buildRunGrantedToolDirectory(grantedRef)).toContain(`- ${name} (core)`);
+      expect(buildRunGrantedToolDirectory(catalogRef(base))).toBeUndefined();
+    },
+  );
 
   it("lists an exact id that resolves when another source shares the granted name", async () => {
     const ref = catalogRef([createStubTool("skill_library")]);
@@ -137,7 +140,7 @@ describe("lean Tool Search directory", () => {
 });
 
 describe("Tool Search directory omission count", () => {
-  it.each([1, 8])("ignores %i unlisted MCP/client tools without hiding search", async (count) => {
+  it.each([1, 8])("keeps %i MCP/client tools out of the native rows", async (count) => {
     const native = createStubTool("local_directory_tool");
     const baseline = catalogRef([native]);
     const mcpTools = Array.from({ length: count - 1 }, (_, index) => {
@@ -154,7 +157,9 @@ describe("Tool Search directory omission count", () => {
 
     const baselineText = buildToolSchemaDirectoryPrompt({ catalogRef: baseline });
     const expandedText = buildToolSchemaDirectoryPrompt({ catalogRef: expanded });
-    expect(expandedText).toBe(baselineText);
+    // MCP tools follow in their own directory; the native rows and count are unchanged.
+    expect(expandedText.startsWith(baselineText)).toBe(true);
+    expect(expandedText.includes("external_mcp_")).toBe(count > 1);
     expect(expandedText).not.toContain("additional tools omitted");
     expect(expandedText).not.toContain("external_client");
     const runtime = new ToolSearchRuntime({ catalogRef: expanded }, resolveToolSearchConfig());

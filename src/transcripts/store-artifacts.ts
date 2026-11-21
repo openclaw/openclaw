@@ -6,7 +6,7 @@ import { root } from "@openclaw/fs-safe/root";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 export const TRANSCRIPT_PATH_SEGMENT_MAX_BYTES = 255;
 

@@ -5,6 +5,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -55,6 +56,7 @@ import {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { readGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
@@ -320,7 +322,9 @@ export async function assertCronDoesNotTargetAgentHarness(
 export async function captureCronCreatorSession(
   job: CronJobCreate & Partial<Pick<CronStoredJob, "operatorSource" | "streamOperatorSource">>,
   callerScope: CronCallerScope | undefined,
-  caller: InferenceCaller,
+  caller: InferenceCaller & {
+    onOperatorAuthority?: (authority: AdmittedRunOperatorAuthority) => void;
+  },
   cfg: OpenClawConfig,
   hasRuntimeAuthority = false,
 ) {
@@ -353,7 +357,8 @@ export async function captureCronCreatorSession(
   const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const createdActor = callerScope
     ? attributeDelegatedSessionCreator(
-        legacyActor,
+        legacyActor ??
+          (callerScope.creatorProfileId ? { type: "agent", id: callerScope.agentId } : undefined),
         callerScope.creatorProfileId,
         callerScope.agentId,
       )
@@ -396,7 +401,15 @@ export async function captureCronCreatorSession(
           caller,
         )
       : undefined;
+  const directControlUi =
+    caller.client?.internal?.authenticatedControlUi === true &&
+    !caller.client.internal.syntheticClient &&
+    !caller.client.internal.agentRuntimeIdentity &&
+    !caller.client.internal.agentToolCaller &&
+    Boolean(caller.client.connId) &&
+    readGatewayDeviceSourceAuthority(caller.hasCurrentClientAuthority) !== undefined;
   const independent = Boolean(
+    directControlUi ||
     caller.captureIndependentOperatorSource ||
     inheritedAuthority?.openclawIdPrincipal ||
     caller.client?.internal?.openclawIdPrincipal ||
@@ -464,6 +477,10 @@ export async function captureCronCreatorSession(
       throw new TypeError(
         "This requester cannot retain the authenticated execution authority for the automation.",
       );
+    }
+    // Optional work inside this request may use the same grant; never put it into job options.
+    if (operatorAuthority) {
+      caller.onOperatorAuthority?.(operatorAuthority);
     }
     return {
       ...inference,

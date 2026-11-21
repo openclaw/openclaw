@@ -289,8 +289,8 @@ suite.define(() => {
     await gateway.setOnline(false);
     const identity = page.locator("openclaw-app-sidebar .sidebar-identity-card");
     await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("reconnecting");
-    expect(await identity.getAttribute("aria-label")).toContain("Reconnecting…");
-    expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
+    expect(await identity.getAttribute("aria-label")).toContain("Reconnecting");
+    expect(await identity.getAttribute("title")).toBe("Reconnecting");
     await page.locator(".agent-chat__input--offline").waitFor();
 
     await expectLightTheme(page);

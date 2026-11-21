@@ -117,7 +117,6 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
       }
       edge.request(...args);
     },
-    takeSqliteWorkerOperationAdmissionAttachment: edge.attachment,
   };
 });
 vi.mock("../infra/sqlite-worker-broker-admission.js", () => ({
@@ -178,6 +177,7 @@ const throwError = (error: Error) => () => {
 };
 const replies = new Map<number, Deferred<SqliteWorkerReply>>();
 let receive: (request: SqliteWorkerRequest) => void;
+let admissionModule: AdmissionModule;
 let nextId = 0;
 let actor = 0;
 let nativeOpened = false;
@@ -260,14 +260,25 @@ async function sendFailed(request: SqliteWorkerRequest): Promise<FailedReply> {
   return reply;
 }
 
-function send(request: SqliteWorkerRequest): Promise<SqliteWorkerReply> {
+async function send(request: SqliteWorkerRequest): Promise<SqliteWorkerReply> {
   if (request.type === "close" && request.actor === actor) {
     actorCloseAttempts += 1;
   }
   const response = createDeferredCore<SqliteWorkerReply>();
   replies.set(request.id, response);
-  receive(request);
-  return response.promise;
+  const admission = request.operationAdmission
+    ? undefined
+    : admissionModule.createSqliteWorkerOperationAdmission((_request, grant) => grant());
+  try {
+    receive({
+      ...request,
+      operationAdmission: request.operationAdmission ?? admission?.port,
+      operationAttachment: request.operationAttachment ?? { value: edge.attachment() },
+    });
+    return await response.promise;
+  } finally {
+    await admission?.finish();
+  }
 }
 
 function retireFailedReply(
@@ -341,6 +352,9 @@ function retireFailedReply(
 }
 
 beforeAll(async () => {
+  admissionModule = await vi.importActual<AdmissionModule>(
+    "../infra/sqlite-worker-operation-admission.js",
+  );
   await import("../infra/sqlite-store.worker.js");
   const registration = edge.on.mock.calls.find(([event]) => event === "message");
   if (!registration || typeof registration[1] !== "function") {
@@ -378,11 +392,23 @@ afterEach(async () => {
 it("settles eager native factory creation synchronously", async () => {
   const { createSqliteWorkerBackend } = await import("./openclaw-agent-execution.worker.js");
   acceptOpen(true);
-  const backend = createSqliteWorkerBackend(input, { databasePath: input.databasePath });
-  expect(backend).not.toBeInstanceOf(Promise);
-  await backend.close();
-  expect(edge.database.db.isOpen).toBe(false);
-  expectCalls(1, edge.releaseAgent, edge.releaseShared);
+  const admission = admissionModule.createSqliteWorkerOperationAdmission((_request, grant) =>
+    grant(),
+  );
+  try {
+    await admissionModule.withSqliteWorkerOperationAdmissionAsync(
+      { port: admission.port, attachment: { value: edge.attachment() } },
+      async () => {
+        const backend = createSqliteWorkerBackend(input, { databasePath: input.databasePath });
+        expect(backend).not.toBeInstanceOf(Promise);
+        await backend.close();
+        expect(edge.database.db.isOpen).toBe(false);
+        expectCalls(1, edge.releaseAgent, edge.releaseShared);
+      },
+    );
+  } finally {
+    await admission.finish();
+  }
 });
 
 it.each([
@@ -477,7 +503,7 @@ it.each([
       }
     } finally {
       wait.mockRestore();
-      admission.finish();
+      await admission.finish();
     }
   },
 );
@@ -585,7 +611,6 @@ it("recognizes a separately evaluated backend's inner open refusal before comple
   vi.doMock("../infra/sqlite-worker-operation-admission.js", () => ({
     ...duplicateAdmission,
     requestSqliteWorkerOperationAdmission: edge.request,
-    takeSqliteWorkerOperationAdmissionAttachment: edge.attachment,
     withSqliteWorkerOperationAdmission: edge.forbidden,
   }));
   const refused = new Error("Authority revoked after preflight and before native agent open");

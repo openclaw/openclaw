@@ -160,7 +160,7 @@ it("recovers a real MCP request after the listener closes unexpectedly", async (
   expect((await readdir(workspace)).toSorted()).toEqual(["before.txt", "successor.txt"]);
 });
 
-it("fences retired warm-turn writes while preserving the successor's bearer", async () => {
+it("finishes admitted warm-turn writes while preserving the successor's bearer", async () => {
   await ensureMcpLoopbackServer();
   const runtime = mcp.runtime();
   const turns: Array<Awaited<ReturnType<typeof mintCliMcpClientGrant>>> = [];
@@ -239,14 +239,14 @@ it("fences retired warm-turn writes while preserving the successor's bearer", as
       },
       onToolCallResult: () => {},
     });
-    // Both writes wait after dispatch, so their source guards observe the handoff.
+    // Both writes wait inside admitted invocations; later calls still need a live bearer.
     holders.push(
       withFileMutationQueueKeyResolution(
         resolveFileMutationQueueKey(retiredTarget),
         () => releaseRetired.promise,
       ),
     );
-    const retired = write("retired.txt", "must not be written").then(mcp.json);
+    const retired = write("retired.txt", "admitted predecessor turn").then(mcp.json);
     requests.push(retired);
     expect(
       await Promise.race([retiredPrepared.promise.then(() => true), retired.then(() => false)]),
@@ -281,17 +281,12 @@ it("fences retired warm-turn writes while preserving the successor's bearer", as
     expect(await readFile(successorTarget, "utf8")).toBe("successor turn");
 
     releaseRetired.resolve();
-    expect(await retired).toMatchObject({
-      result: {
-        isError: true,
-        content: [
-          { text: expect.stringContaining("tool invocation authority is no longer active") },
-        ],
-      },
-    });
+    expect(await retired).toMatchObject({ result: { isError: false } });
+    expect(await readFile(retiredTarget, "utf8")).toBe("admitted predecessor turn");
     expect(await readFile(path.join(workspace, "first.txt"), "utf8")).toBe("first turn");
     expect((await readdir(workspace)).toSorted()).toEqual([
       "first.txt",
+      "retired.txt",
       "second.txt",
       "successor.txt",
     ]);

@@ -25,7 +25,7 @@ import {
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
-  readOnlySqliteValidationSnapshot,
+  readSessionImportValidationSnapshot,
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
   type ReadOnlySqliteValidationSnapshot,
@@ -82,11 +82,11 @@ export async function importLegacySessionRecords(
       return;
     }
     const importedTranscriptSources = new Set<string>();
-    const existingSnapshot = readOnlySqliteValidationSnapshot(target);
+    const existingSnapshot = readSessionImportValidationSnapshot(target, env);
     if (!existingSnapshot.ok) {
       report.issues.push({
         code: "legacy_import_deferred",
-        message: `Cannot verify the destination for ${target.storePath}: ${formatErrorMessage(existingSnapshot.error)}. Originals retained; repair the named SQLite destination before retrying openclaw doctor --fix.`,
+        message: `Cannot verify the destination for ${target.storePath}: ${formatErrorMessage(existingSnapshot.error)}. Originals retained; repair the named destination before retrying openclaw doctor --fix.`,
       });
       return;
     }

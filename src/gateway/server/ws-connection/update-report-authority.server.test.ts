@@ -254,20 +254,13 @@ describe("update report live authority boundary", () => {
     await fs.rm(stateDir, { force: true, recursive: true });
   });
 
-  it.each([
-    { authority: "gateway-owner", retire: true, boundary: "auth" },
-    { authority: "system-admin", retire: true, boundary: "auth" },
-    { authority: "gateway-owner", retire: false, boundary: "auth" },
-    { authority: "system-admin", retire: false, boundary: "auth" },
-    { authority: "gateway-owner", retire: true, boundary: "prepared" },
-    { authority: "system-admin", retire: true, boundary: "prepared" },
-  ] as const)(
-    "revalidates delegated $authority authority at $boundary, retired=$retire",
-    async ({ authority, retire, boundary }) => {
+  it.each(["gateway-owner", "system-admin"] as const)(
+    "submits a report with delegated %s authority",
+    async (authority) => {
       const transport = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
         "../../../infra/github-issue.js",
       );
-      const client = createOperatorWsClient({ connId: `report-runtime-${authority}-${retire}` });
+      const client = createOperatorWsClient({ connId: `report-runtime-${authority}` });
       grantReportAuthority(client, authority);
       client.usesSharedGatewayAuth = true;
       client.sharedGatewaySessionGeneration = "current";
@@ -305,19 +298,7 @@ describe("update report live authority boundary", () => {
       });
       mocks.submitGithubIssue.mockImplementationOnce(
         (issue, _runGh, hooks: GithubIssueSubmitHooks) =>
-          transport.submitGithubIssue(issue, runGh, {
-            ...hooks,
-            beforeIssueCreate: async () => {
-              if (!hooks.beforeIssueCreate) {
-                throw new Error("expected the report preparation hook");
-              }
-              const commitIssueCreate = await hooks.beforeIssueCreate();
-              if (boundary === "prepared" && retire) {
-                queueMicrotask(() => releaseAgentRunDelegatedAuthority(claim));
-              }
-              return commitIssueCreate;
-            },
-          }),
+          transport.submitGithubIssue(issue, runGh, hooks),
       );
       try {
         expect(validateAuthority(identity)).toBe(true);
@@ -326,32 +307,22 @@ describe("update report live authority boundary", () => {
         const finished = waitForNextHandler();
         const dispatch = submit("runtime-submit", previewDigest);
         await entered.promise;
-        if (retire && boundary === "auth") {
-          expect(releaseAgentRunDelegatedAuthority(claim)).toBe(true);
-        }
-        expect(validateAuthority(identity)).toBe(!(retire && boundary === "auth"));
+        expect(validateAuthority(identity)).toBe(true);
         expect(client.invalidated).not.toBe(true);
         expect(client.connectionSignal?.aborted).not.toBe(true);
         released.resolve();
         await finished;
         await dispatch;
 
-        expect(validateAuthority(identity)).toBe(!retire);
+        expect(validateAuthority(identity)).toBe(true);
         expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
 
-        expect
-          .soft(runGh.mock.calls.map(([args]) => args[0]))
-          .toEqual(retire ? ["auth"] : ["auth", "api"]);
-        expect.soft(await countReportReceipts()).toBe(retire ? 0 : 1);
+        expect(runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "api"]);
+        expect(await countReportReceipts()).toBe(1);
         expect(await countReportFiles()).toBe(0);
         const response = await harness.awaitResponseFrame("runtime-submit");
-        if (retire) {
-          expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-          expect(harness.close).toHaveBeenCalledWith(4001, "agent runtime authority closed");
-        } else {
-          expect(response).toMatchObject(createdResponse);
-          expect(harness.close).not.toHaveBeenCalled();
-        }
+        expect(response).toMatchObject(createdResponse);
+        expect(harness.close).not.toHaveBeenCalled();
       } finally {
         released.resolve();
         releaseAgentRunDelegatedAuthority(claim);

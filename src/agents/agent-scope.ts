@@ -257,6 +257,13 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+/** The tool repeat guard is on unless `tools.loopDetection.enabled` is false (agent over global). */
+export function isAgentToolRepeatGuardEnabled(cfg: OpenClawConfig | undefined, agentId?: string) {
+  const agentSetting =
+    cfg && agentId ? resolveAgentConfig(cfg, agentId)?.tools?.loopDetection?.enabled : undefined;
+  return (agentSetting ?? cfg?.tools?.loopDetection?.enabled) !== false;
+}
+
 export function resolveAgentExplicitModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,

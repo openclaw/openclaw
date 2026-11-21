@@ -13,19 +13,18 @@ import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-w
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry } from "./types.js";
 
-/** Classify an entry like the SQLite projection: exact leaf, active ancestor, or off-path. */
-function readActivePathRelation(
+/** Like the SQLite projection: the leaf or an active ancestor; `null` only when empty. */
+function readActivePathFacts(
   window: SessionActorMemoryWindow,
   entryId: string | null,
-): NonNullable<SessionTranscriptAnchorFacts["activePathRelation"]> {
+): Pick<SessionTranscriptAnchorFacts, "onActivePath"> {
   const navigation = createSessionActorMemoryHistoryNavigation(window);
-  const leafId = navigation.tree.leafId ?? null;
-  if (leafId === entryId || entryId === null) {
-    return leafId === entryId ? "exact" : "off-path";
-  }
-  return navigation.active.some(({ event }) => isRecord(event) && event.id === entryId)
-    ? "ancestor"
-    : "off-path";
+  return {
+    onActivePath:
+      (navigation.tree.leafId ?? null) === entryId ||
+      (entryId !== null &&
+        navigation.active.some(({ event }) => isRecord(event) && event.id === entryId)),
+  };
 }
 
 /** Current logical authority is separate from the selected, possibly historical transcript. */
@@ -117,7 +116,7 @@ export function readSessionActorMemoryAnchors(
   const facts: SessionTranscriptAnchorFacts = {
     anchors: selected,
     ...(selection.activePathEntryId !== undefined
-      ? { activePathRelation: readActivePathRelation(window, selection.activePathEntryId) }
+      ? readActivePathFacts(window, selection.activePathEntryId)
       : {}),
     ...(contextAuthority ? { contextAuthority } : {}),
     ...(context ? { contextValidated: true } : {}),

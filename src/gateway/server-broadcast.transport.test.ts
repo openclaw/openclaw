@@ -337,7 +337,8 @@ describe("broadcast transport retirement", () => {
                 const payload = variantFor(client.connId);
                 return {
                   payload,
-                  serializeSession: () => JSON.stringify(payload.session),
+                  serializeSession: () =>
+                    Buffer.from(`"session":${JSON.stringify(payload.session)}}`),
                   serializeMessage:
                     sharedMessage && client.connId !== "roster" ? () => messageBytes : undefined,
                 };
@@ -365,8 +366,7 @@ describe("broadcast transport retirement", () => {
         if (sharedMessage && peer.client.connId !== "roster") {
           const segments = frame instanceof SerializedGatewayFrame ? frame.segments : undefined;
           expect(segments).toContain(messageBytes);
-          // Splitting the row from the sequence creates another deflate boundary on the wire.
-          expect(String(segments?.at(-1))).toContain('"session":');
+          expect(String(segments?.at(-2))).toContain('"session":');
           expect(String(segments?.at(-1))).toContain('"seq":');
         }
       }

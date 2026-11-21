@@ -11,21 +11,19 @@ export function SettingsSectionHelp(props: { id: string; section: string; childr
   const label = () => t("common.helpFor", { section: props.section });
   return (
     <span class="settings-section__docs">
-      <openclaw-tooltip prop:content={label()}>
-        <button
-          ref={setTrigger}
-          type="button"
-          class="settings-section__help-button"
-          aria-label={label()}
-          aria-controls={props.id}
-          aria-haspopup="dialog"
-          onClick={() => popover.overlay.request(!popover.overlay.open)}
-        >
-          <span aria-hidden="true">
-            <Icon name="circleQuestionMark" />
-          </span>
-        </button>
-      </openclaw-tooltip>
+      <button
+        ref={setTrigger}
+        type="button"
+        class="settings-section__help-button"
+        aria-label={label()}
+        aria-controls={props.id}
+        aria-haspopup="dialog"
+        onClick={() => popover.overlay.request(!popover.overlay.open)}
+      >
+        <span aria-hidden="true">
+          <Icon name="circleQuestionMark" />
+        </span>
+      </button>
       <Show when={trigger()}>
         {(anchor) => (
           <Popover

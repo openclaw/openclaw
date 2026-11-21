@@ -19,10 +19,27 @@ import {
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 
+/** Presentation only: new custody has a creation stamp; deployed rows have reserved keys. */
+export function isGitHubPublicationTaskSession(
+  key: string,
+  entry?: { createdVia?: string; createdSurface?: string; parentSessionKey?: string },
+): boolean {
+  return Boolean(
+    entry?.createdSurface === "github-publication" ||
+    (entry?.createdVia === "spawn" &&
+      entry.parentSessionKey &&
+      // Stable checkout IDs and the earlier per-invocation UUIDv8 IDs both persist.
+      /^agent:[^:]+:dashboard:(?:github-publication-[a-f0-9]{32}|github-[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+        key,
+      )),
+  );
+}
+
 const BACKGROUND_CLASSIFICATIONS = new Set<SessionClassification>([
   "acp",
   "cron",
   "dreaming",
+  "github-publication",
   "harness",
   "heartbeat",
   "hook",
@@ -105,6 +122,8 @@ export function sessionClassificationForRow(
     classification = "heartbeat";
   } else if (isMain) {
     classification = "main";
+  } else if (isGitHubPublicationTaskSession(canonicalKey, entry)) {
+    classification = "github-publication";
   } else if (isSubagentSessionKey(canonicalKey)) {
     classification = "subagent";
   } else if (isAcpSessionKey(canonicalKey)) {

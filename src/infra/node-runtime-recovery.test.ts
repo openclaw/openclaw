@@ -131,8 +131,8 @@ beforeEach(async () => {
   mocks.spawn.mockReset();
   mocks.probe.mockImplementation((filename) => probeResult(mocks.admissible.has(filename)));
   child = new ChildProcess();
-  originalExitCode = process.exitCode;
-  process.exitCode = undefined;
+  originalExitCode = process.exitCode ?? 0;
+  process.exitCode = 0;
   spawned = createDeferred();
   mocks.spawn.mockImplementation(() => {
     spawned.resolve();
@@ -861,9 +861,9 @@ describe("runtime recovery discovery", () => {
         },
       );
       expect(process.cwd()).toBe(originalCwd);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
       child.emit("exit", exitCode, null);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
       child.emit("close", exitCode, null);
       await expect(completion).resolves.toBe(true);
       expect(process.exitCode).toBe(exitCode);

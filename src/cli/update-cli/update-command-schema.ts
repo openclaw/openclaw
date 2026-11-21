@@ -4,6 +4,7 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
@@ -533,14 +534,20 @@ export async function captureUpdateActivationSchemas(params: {
   const previousSchemaVersions = parsePackageOpenClawSchemaVersions(
     await tryReadJson<unknown>(path.join(params.root, "package.json")),
   );
-  const schemaVersions = params.candidateSchemaVersions
-    ? await readUpdateStateSchemaVersions({
-        stateDir: resolveStateDir(params.env),
-        config: params.config,
-        env: params.env,
-        timeoutMs: params.timeoutMs,
-      })
-    : undefined;
+  // Post-activation rollback compares against this baseline; without it every
+  // failure after activation is reported as unverified state and left installed.
+  // PostgreSQL state keeps its candidate-only read until a live-database
+  // baseline is proven before the owning Gateway stops.
+  const schemaVersions =
+    params.candidateSchemaVersions ||
+    !Object.values(resolveDatabaseFamilyEngines(params.config)).includes("postgres")
+      ? await readUpdateStateSchemaVersions({
+          stateDir: resolveStateDir(params.env),
+          config: params.config,
+          env: params.env,
+          timeoutMs: params.timeoutMs,
+        })
+      : undefined;
   const { run, candidateSchemaVersions, gatewayRestartCompletion } = params;
   if (
     run?.completionOwner === "gateway-restart" &&

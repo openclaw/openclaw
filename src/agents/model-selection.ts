@@ -54,10 +54,10 @@ export {
   findNormalizedProviderKey,
   legacyModelKey,
   modelKey,
-  normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "./model-ref-shared.js";
+export { normalizeModelRef } from "./model-selection-normalize.js";
 export { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 export {
   buildConfiguredModelCatalog,

@@ -15,7 +15,7 @@ import {
   resolveSubagentModelConfigSelectionResult,
   resolveSubagentSpawnModelFallbacksOverride,
 } from "../../../agents/agent-scope.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForSecretsRuntimeAsync } from "../../../agents/auth-profiles/store-runtime.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { createModelAuthAvailabilityResolver } from "../../../agents/model-auth-availability.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
@@ -30,7 +30,10 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveLegacyHeartbeatAgents } from "../../doctor-heartbeat-legacy.js";
 import { sanitizeDoctorNote } from "../emit-notes.js";
 
-type AuthStores = Map<string | undefined, ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>>;
+type AuthStores = Map<
+  string | undefined,
+  Awaited<ReturnType<typeof loadAuthProfileStoreForSecretsRuntimeAsync>>
+>;
 type ModelConsumer = { path: string; value: string; agentId?: string; consumer?: string };
 
 function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
@@ -141,20 +144,20 @@ function resolveBillingRequirement(
   );
 }
 
-function collectBillingRoutes(params: {
+async function collectBillingRoutes(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
   authStores: AuthStores;
-}): Map<string, BillingRoute> {
+}): Promise<Map<string, BillingRoute>> {
   const { cfg, env, metadataSnapshot } = params;
-  const owners = new Map<string | undefined, ReturnType<typeof prepareOwner>>();
-  const prepareOwner = (agentId: string | undefined) => {
+  const owners = new Map<string | undefined, Awaited<ReturnType<typeof prepareOwner>>>();
+  const prepareOwner = async (agentId: string | undefined) => {
     const agentDir = agentId ? resolveAgentDir(cfg, agentId, env) : undefined;
     const workspaceDir = agentId ? resolveAgentWorkspaceDir(cfg, agentId, env) : undefined;
     let authStore = params.authStores.get(agentDir);
     if (!authStore) {
-      authStore = loadAuthProfileStoreForSecretsRuntime(agentDir, {
+      authStore = await loadAuthProfileStoreForSecretsRuntimeAsync(agentDir, {
         config: cfg,
         externalCli: { mode: "none" },
       });
@@ -193,7 +196,7 @@ function collectBillingRoutes(params: {
     const agentId = consumerAgentId ?? tryResolveSoleAgentId(cfg);
     let owner = owners.get(agentId);
     if (!owner) {
-      owner = prepareOwner(agentId);
+      owner = await prepareOwner(agentId);
       owners.set(agentId, owner);
     }
     const parsed = splitTrailingAuthProfile(value);
@@ -221,19 +224,19 @@ function collectBillingRoutes(params: {
 }
 
 /** Compare resolved billing facts; missing credentials are not evidence of a route change. */
-export function collectModelBillingRouteMigrationWarnings(params: {
+export async function collectModelBillingRouteMigrationWarnings(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): string[] {
+}): Promise<string[]> {
   const authStores: AuthStores = new Map();
   const options = {
     env: process.env,
     metadataSnapshot: params.metadataSnapshot,
     authStores,
   };
-  const before = collectBillingRoutes({ ...options, cfg: params.before });
-  const after = collectBillingRoutes({ ...options, cfg: params.after });
+  const before = await collectBillingRoutes({ ...options, cfg: params.before });
+  const after = await collectBillingRoutes({ ...options, cfg: params.after });
   const describe = (route: BillingRoute) =>
     `${route.modelRef} via ${
       route.requirement === "native"

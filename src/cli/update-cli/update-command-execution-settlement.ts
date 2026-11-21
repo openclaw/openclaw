@@ -4,7 +4,11 @@ import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
+import { checkActivatedRelease } from "./update-command-activated-check.js";
+import {
+  adoptUpdateBootDatabaseWrites,
+  restoreFailedUpdateDatabases,
+} from "./update-command-database-backup.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   recordMutableUpdateInterruption,
@@ -33,6 +37,14 @@ export async function settleMutableUpdateResult(
   const { databaseBackup, databaseCaptureStep, activationSteps, packageTransaction } = settlement;
   const originalRun = settlement.originalRun;
   let result = recordMutableUpdateInterruption(opts, settlement.result);
+  // Without a service restart nothing boots the activated release; a failed boot
+  // reaches the same post-activation rollback as a failed Doctor.
+  const boot = () =>
+    checkActivatedRelease(params, result, settlement.env, settlement.assertCurrent);
+  result =
+    databaseBackup && originalRun && result.status === "ok" && !params.shouldRestart
+      ? await adoptUpdateBootDatabaseWrites(databaseBackup, settlement.env ?? originalRun.env, boot)
+      : await boot();
   if (
     result.status === "ok" &&
     opts.restart === false &&

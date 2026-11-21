@@ -29,7 +29,10 @@ Commands refuse before loading account state when a Gateway owns the state
 directory. Offline ownership lasts through crypto persistence and client shutdown.
 
 After an interrupted encrypted session, `openclaw matrix doctor inspect` reports
-accounts that need explicit snapshot recovery. Clean sessions retain their crypto
+accounts that need explicit snapshot recovery. This recovery subtree remains available
+when a pending plugin migration withholds other Matrix commands. After explicit
+recovery, finish pending migrations with `openclaw update repair` or
+`openclaw doctor --fix` before restarting the Gateway. Clean sessions retain their crypto
 guard files; do not delete them. See [encrypted-state recovery](/channels/matrix/encryption)
 before accepting a snapshot rollback.
 

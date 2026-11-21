@@ -28,6 +28,7 @@ import {
   isOpenClawIdTunnelPrincipalCurrent,
   openclawIdSubjectRolePolicy,
 } from "../openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
@@ -57,7 +58,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       })?.assertCurrent();
     } catch (error) {
       throw new PersonalFileAccessError(
-        "Personal instructions are unavailable in this turn. Ask in your own Control UI turn with a new message.",
+        "Personal instructions are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.",
         { cause: error },
       );
     }
@@ -134,6 +135,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
           profile?.role ?? null,
           cfg,
           profile?.githubLogin ?? null,
+          operatorRoleSubject(profile),
         ),
     );
     if (

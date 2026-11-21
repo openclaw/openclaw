@@ -12,6 +12,7 @@ import {
   runHttpConnectionRequest,
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
@@ -28,6 +29,7 @@ import {
   GatewayOperatorAccessDeniedError,
   hasCurrentGatewayOperatorAccess,
 } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
 import { sourceRolePolicies } from "./operator-role-source-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -129,6 +131,15 @@ export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unkn
     sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
     return true;
   }
+  if (isOperatorAuthorityUnavailable(error)) {
+    // A handler may already have written before revalidating its response authority.
+    sendGatewayHttpAuthFailure(
+      res,
+      { ok: false, reason: "operator_access_unavailable" },
+      { retryable: false },
+    );
+    return true;
+  }
   return error instanceof GatewayHttpRequestAuthorityError;
 }
 
@@ -171,7 +182,9 @@ export function captureHttpRequestAuthority(
   );
   const roles = cfg.gateway?.roles;
   const rolePolicy = sourceRolePolicies(roles);
-  const roleRevision = roles ? readOperatorRolePolicyRevision() : undefined;
+  const roleRevision = isNamedOperatorRoleEnforcementEnabled(cfg)
+    ? readOperatorRolePolicyRevision()
+    : undefined;
   const aliasRevision = readUserProfileAliasRevision();
   const ingress = getRemoteControlUiIngressContext(params.req);
   return () => {

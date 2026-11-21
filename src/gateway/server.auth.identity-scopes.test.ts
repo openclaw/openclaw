@@ -532,9 +532,15 @@ test("denies missing person access, retires grant or alias authority, and preser
       expect(guest.connected.ok).toBe(true);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
       policyUnavailable = true;
+      // An evaluation outage refuses this handshake without revoking the admitted grant.
       expect((await connect("visitor@example.com")).connected).toMatchObject({
         ok: false,
-        error: { details: { accessCause: "policy-check-failed" }, retryable: false },
+        error: {
+          code: "UNAVAILABLE",
+          message: "Gateway access policy is unavailable; retry the operation.",
+          details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+          retryable: true,
+        },
       });
       expect(grant.signal.aborted).toBe(false);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
@@ -594,6 +600,15 @@ test.each([
   await withIdentityServer(async ({ connect }) => {
     const { ws, connected } = await connect({ scopes: scenario.deviceScopes });
     try {
+      if (scenario.expectedScopes.length === 0) {
+        expect(connected).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
+        });
+        expect(responseAuth(connected)).toBeUndefined();
+        expect(await waitForWsClose(ws, 1_000)).toBe(true);
+        return;
+      }
       expectScopes(connected, scenario.expectedScopes);
       expect(responseAuth(connected)).toMatchObject({
         roleAllowsAdmin: scenario.assignedRole === "admin-only",
@@ -989,5 +1004,22 @@ test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([
   await withIdentityServer(async ({ connect }) => {
     const { connected } = await connect(options);
     expectScopes(connected, scopes);
+  });
+});
+
+test("keeps Tailscale identity scopes without a named-role cap when only definitions exist", async () => {
+  const login = "peter@example.test";
+  testTailscaleWhois.value = { login, name: "Peter" };
+  await configureTailscale(
+    { identityScopes: { [login]: ["operator.write"] } },
+    {
+      definitions: { guest: role([], "none", []) },
+    },
+  );
+  await withIdentityServer(async ({ tailscale }) => {
+    const { connected } = await tailscale(login, { scopes: ["operator.read"] });
+    expectScopes(connected, READ_WRITE);
+    expect(responseAuth(connected)?.sessionCap).toBeUndefined();
+    expect(responseAuth(connected)?.deviceToken).toBeTruthy();
   });
 });

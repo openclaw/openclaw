@@ -44,6 +44,10 @@ import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
+  retirePublishedMemoryEmbeddingCacheRows,
+  type MemoryEmbeddingCacheRetireCursor,
+} from "./manager-embedding-cache-retire.js";
+import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
@@ -180,7 +184,10 @@ export function bindSqliteWorkerBackend(
   context: {
     databasePath: string;
     database: EngineConnection;
-    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+    admitSearchExtensions?: (
+      definitions: Readonly<Record<string, SearchSchema>>,
+      options?: { rebuild: true },
+    ) => void;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
@@ -514,6 +521,15 @@ function createPublicationBackend(
           recount ? maxEntries : undefined,
         );
         return result.ok ? { ...result, value: exceedsCap } : result;
+      }
+      if (command.type === "cache.retire") {
+        let next: MemoryEmbeddingCacheRetireCursor | null = null;
+        const result = writeCache((size) => {
+          const page = retirePublishedMemoryEmbeddingCacheRows(db, command.input);
+          next = page.next ?? null;
+          return { ...size, size: size.size - page.removed };
+        });
+        return result.ok ? { ...result, value: next } : result;
       }
       if (command.type === "cache.clear") {
         return writeCache((size) => ({
