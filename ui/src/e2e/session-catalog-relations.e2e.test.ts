@@ -161,8 +161,9 @@ suite.define(() => {
         page.getByText("Remote transcript stays filtered", { exact: true }),
       ).toBeVisible();
       await chooseSidebarOwner(page, `owner:${viewer.id}`);
-      await expectBrowser(group.locator(".sidebar-session-group-toggle").first()).toHaveAttribute(
-        "title",
+      await expectBrowser(
+        group.locator(".sidebar-session-group-toggle").first(),
+      ).toHaveAccessibleName(
         /This source does not support relationship filters\. Update the source or choose All owners\./,
       );
       await expectBrowser(
