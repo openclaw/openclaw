@@ -585,6 +585,10 @@
       "types": "./dist/plugin-sdk/runtime-profile.d.ts",
       "default": "./dist/plugin-sdk/runtime-profile.js"
     },
+    "./plugin-sdk/resource-profile": {
+      "types": "./dist/plugin-sdk/resource-profile.d.ts",
+      "default": "./dist/plugin-sdk/resource-profile.js"
+    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"

@@ -307,7 +307,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     deviceFolderAuthority.assertCurrent = preparedFolder?.value.assertCurrent;
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
-    const requestedProjectId = normalizeOptionalString(p.projectId);
+    let requestedProjectId = normalizeOptionalString(p.projectId);
     const requestedProjectGitUrl = p.projectGitUrl;
     const projectPreparationError = validateSessionProjectPreparation({
       cwd: requestedCwd,
@@ -351,11 +351,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, reuseError);
       return;
     }
-    const requestedProject = await resolveRequestedSessionProject(cfg, p, client);
+    const requestedProject = await resolveRequestedSessionProject(cfg, p, client, {
+      cwd: requestedExecNode ? undefined : requestedCwd,
+      existingTargetEntry,
+    });
     if (!requestedProject.ok) {
       respond(false, undefined, requestedProject.error);
       return;
     }
+    requestedProjectId = requestedProject.value.projectId;
     const projectRoot = requestedProject.value.root;
     if (requestedProject.value.worktree || requestedProjectGitUrl) {
       p.worktree = true;

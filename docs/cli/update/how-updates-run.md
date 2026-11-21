@@ -1498,6 +1498,15 @@ the sentinel.
 
 ## Git checkout flow
 
+On macOS, Dashboard **Update** and `/update` use the service command to choose
+what to update. When the LaunchAgent still starts the checkout, the managed
+updater updates that checkout in place, even if an earlier update left a
+selected release on disk. A later independently started update also stays in
+place if the checkout service does not use that selection: the selected build
+is not its rollback target. A LaunchAgent already using the stable launcher
+keeps using release switches. This choice belongs to the installed updater, not the
+target build.
+
 ### Channel selection
 
 - `stable`: select the latest non-beta tag.
