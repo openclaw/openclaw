@@ -1,4 +1,5 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveChannelConfigActivationFacts } from "./channel-config-activation.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -78,12 +79,21 @@ export function configPathAffectsReader(path: string, reader: Reader): boolean {
 }
 
 /** The same dependency decision scopes both publication keys and client refreshes. */
-export function configPathAffectsConversation(path: unknown): boolean {
+function configPathAffectsConversation(path: unknown): boolean {
   const roots: readonly string[] = otherReaders;
   return (
     typeof path !== "string" ||
     (path !== "meta.lastTouchedVersion" && !roots.includes(path.split(".")[0]!))
   );
+}
+
+/** Config editors refresh every revision; conversations follow their readers' dependencies. */
+export function isConversationConfigChange(event: { event: string; payload?: unknown }): boolean {
+  if (event.event !== "config.changed") {
+    return false;
+  }
+  const paths = asNullableRecord(event.payload)?.changedPaths;
+  return !Array.isArray(paths) || paths.some(configPathAffectsConversation);
 }
 
 export function projectConfigReadDependencies(config: OpenClawConfig, reader: Reader) {

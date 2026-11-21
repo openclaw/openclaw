@@ -1,4 +1,5 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
+import { isConversationConfigChange } from "../../../src/config/read-dependencies.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import {
@@ -12,7 +13,6 @@ import {
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store-scope.ts";
-import { isConversationConfigChange } from "../lib/config-change.ts";
 import { currentDisplayConfig } from "../lib/config/config-state-model.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";

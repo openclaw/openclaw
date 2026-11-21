@@ -46,15 +46,20 @@ const replaced = [
   "src/config/runtime-snapshot-value-fact.ts",
   "src/config/runtime-session-changes.ts",
   "src/config/resolution-facts.ts",
-  "ui/src/lib/config-change.ts",
+  "src/config/read-dependencies.ts",
 ].map((file) =>
   registerPerfOwnerReplacement(
     new URL(`../../${file}`, import.meta.url).href,
-    values["baseline-dir"] ? path.join(values["baseline-dir"], file) : undefined,
+    values["baseline-dir"]
+      ? path.join(
+          values["baseline-dir"],
+          file === "src/config/read-dependencies.ts" ? "ui/src/lib/config-change.ts" : file,
+        )
+      : undefined,
   ),
 );
 // Register before importing the subscriber: both arms must exercise their own UI predicate.
-const { isConversationConfigChange } = await import("../../ui/src/lib/config-change.ts");
+const { isConversationConfigChange } = await import("../../src/config/read-dependencies.js");
 const configPath = path.join(root, "openclaw.json");
 process.env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
   startupTrace: true,
