@@ -211,6 +211,35 @@ async function readTaskLaunchers(
   return launchers;
 }
 
+/**
+ * Refusals raised while resolving the Task action. Each entry is a fixed string (never a
+ * launcher path or its text), and every one of them means the action shape was rejected.
+ */
+const TASK_ACTION_SHAPE_REFUSALS = new Set([
+  "Unsupported Scheduled Task action",
+  "Scheduled Task launcher path is not absolute and literal",
+  "Unrecognized Startup launcher",
+  "Unrecognized Scheduled Task launcher",
+  "Scheduled Task action cannot be inspected",
+  "Scheduled Task launcher arguments cannot be inspected",
+  "Scheduled Task executable arguments cannot be inspected",
+  "Startup launchers select different Gateway scripts",
+]);
+
+/**
+ * The shapes this inspector accepts, so an operator can compare what they have. CMD launchers
+ * require doubled quotes around the inner script, matching the Arguments field Task Scheduler
+ * stores for a quoted command.
+ */
+const ACCEPTED_TASK_ACTION_SHAPES =
+  'a native .exe; cmd.exe with Arguments /d /s /c ""<launcher>.cmd""; wscript.exe with Arguments "<launcher>.vbs"';
+
+/**
+ * Startup entries hold a generated one-line wrapper that starts the launcher script, so Task
+ * action examples would describe a repair the Startup entry reader rejects.
+ */
+const ACCEPTED_STARTUP_ENTRY_SHAPES = 'start "" /min cmd.exe /d /c "<launcher>.cmd"';
+
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
   options?: GatewayServiceReadOptions & {
@@ -265,6 +294,9 @@ async function readWindowsTaskCommand(
     startupEntryPath !== undefined
       ? "Startup service command could not be inspected."
       : "Effective Scheduled Task service command could not be inspected.";
+  // A refused action shape is a closed, fixed string, so naming it on the surface message
+  // cannot leak a launcher path, its arguments, or a credential.
+  let refusedActionShape: string | undefined;
   const launcherParseError = (
     lineNumber: number,
     reason:
@@ -542,6 +574,9 @@ async function readWindowsTaskCommand(
     if (error instanceof ServiceInspectionError) {
       throw error;
     }
+    if (error instanceof Error && TASK_ACTION_SHAPE_REFUSALS.has(error.message)) {
+      refusedActionShape = error.message;
+    }
     if (!requireEffective) {
       return null;
     }
@@ -569,7 +604,17 @@ async function readWindowsTaskCommand(
     }
   }
   // Native failures can contain raw service credentials; expose only the closed diagnostic.
-  throw new Error(inspectionFailureMessage);
+  // Startup entries and Task actions are read by different shapes, so name the shapes of the
+  // entry that was actually refused; Task action examples would describe a Startup repair wrong.
+  const startupEntry = startupEntryPath !== undefined;
+  const guidance = startupEntry
+    ? `The startup entry was refused: ${refusedActionShape}. Accepted Startup entry shapes: ${ACCEPTED_STARTUP_ENTRY_SHAPES}.`
+    : `The task action was refused: ${refusedActionShape}. Accepted Scheduled Task action shapes: ${ACCEPTED_TASK_ACTION_SHAPES}.`;
+  throw new Error(
+    refusedActionShape === undefined
+      ? inspectionFailureMessage
+      : `${inspectionFailureMessage} ${guidance}`,
+  );
 }
 
 function createLauncherScriptLines(
