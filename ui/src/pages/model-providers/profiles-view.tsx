@@ -282,10 +282,10 @@ function ProfileIdentity(props: { profile: ProviderProfile; identity: string; av
         </span>
       </Show>
       <div class="model-providers__profile-copy">
-        <div class="model-providers__account-title">
+        <div class="filters">
           <strong title={props.profile.profileId}>{props.identity}</strong>
           <Show when={props.profile.planLabel}>
-            {(label) => <span class="model-providers__plan-badge">{label()}</span>}
+            {(label) => <span class="chip">{label()}</span>}
           </Show>
         </div>
         {meta() ? <span>{meta()}</span> : undefined}

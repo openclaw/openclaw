@@ -239,7 +239,7 @@ export function AccountUsageBars(props: {
                   </span>
                   <Show when={read.planLabel?.()}>
                     {(label) => (
-                      <span class="model-providers__plan-badge" aria-hidden="true">
+                      <span class="chip" aria-hidden="true">
                         {label()}
                       </span>
                     )}

@@ -9,7 +9,7 @@ export function ProfileNameEditor(props: {
 }) {
   return (
     <form
-      class="model-providers__profile-copy model-providers__rename-form"
+      class="model-providers__profile-copy model-providers__inline-form"
       onSubmit={(event) => {
         event.preventDefault();
         if (!props.saving) {
@@ -24,21 +24,22 @@ export function ProfileNameEditor(props: {
         }
       }}
     >
-      <input
-        class="input"
-        ref={(element) =>
-          queueMicrotask(() => {
-            element.focus();
-            element.select();
-          })
-        }
-        aria-label={t("modelProviders.profiles.accountName")}
-        placeholder={t("modelProviders.profiles.accountNamePlaceholder")}
-        value={props.name}
-        maxlength={80}
-        readonly={props.saving}
-        onInput={(event) => props.onInput(event.currentTarget.value)}
-      />
+      <div class="field">
+        <input
+          ref={(element) =>
+            queueMicrotask(() => {
+              element.focus();
+              element.select();
+            })
+          }
+          aria-label={t("modelProviders.profiles.accountName")}
+          placeholder={t("modelProviders.profiles.accountNamePlaceholder")}
+          value={props.name}
+          maxlength={80}
+          readonly={props.saving}
+          onInput={(event) => props.onInput(event.currentTarget.value)}
+        />
+      </div>
       <button class="btn btn--sm" type="submit" disabled={props.saving}>
         {t("common.save")}
       </button>
