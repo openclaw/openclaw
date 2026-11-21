@@ -1063,8 +1063,7 @@
     display: none;
   }
 
-  .sw-hub-header .hub-page-header__actions,
-  .sw-hub-header .sw-learning {
+  .sw-hub-header :is(.hub-page-header__actions, .sw-learning) {
     width: 100%;
   }
 
