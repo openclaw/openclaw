@@ -2,7 +2,7 @@
 // cancellation stays in setup-model-selection.test.ts: the default enrichment
 // path is separate from the wizard's tool inspection.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { requestUrl } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { promptAndConfigureOllama } from "./setup.js";
 import { createLocalPrompter } from "./setup.test-support.js";
@@ -18,20 +18,34 @@ describe("Ollama setup cancellation", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["local-only", "cloud-local"] as const)(
-    "aborts pending %s model discovery with the setup session",
-    async (mode) => {
+  it.each([
+    { mode: "local-only", pendingPath: "/api/tags" },
+    { mode: "cloud-local", pendingPath: "/api/tags" },
+    { mode: "cloud-local", pendingPath: "/api/me" },
+  ] as const)(
+    "aborts pending $mode $pendingPath with the setup session",
+    async ({ mode, pendingPath }) => {
       const controller = new AbortController();
       let rejectPendingFetch!: (reason: Error) => void;
       let requestSignal: AbortSignal | undefined;
-      const tagsStarted = createDeferred<void>();
+      const requestStarted = createDeferred<void>();
       vi.stubGlobal(
         "fetch",
         vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-          if (!requestUrl(input).endsWith("/api/tags")) {
-            throw new Error(`Unexpected fetch: ${requestUrl(input)}`);
+          const url = requestUrl(input);
+          if (!url.endsWith(pendingPath)) {
+            if (url.endsWith("/api/tags")) {
+              return jsonResponse({ models: [{ name: "setup-tools:latest" }] });
+            }
+            if (url.endsWith("/api/show")) {
+              return jsonResponse({
+                model_info: { "model.context_length": 32768 },
+                capabilities: ["completion", "tools"],
+              });
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
           }
-          tagsStarted.resolve();
+          requestStarted.resolve();
           return await new Promise<Response>((_resolve, reject) => {
             rejectPendingFetch = reject;
             const signal = init?.signal;
@@ -55,7 +69,7 @@ describe("Ollama setup cancellation", () => {
         }),
         signal: controller.signal,
       });
-      await tagsStarted.promise;
+      await requestStarted.promise;
       controller.abort();
 
       try {

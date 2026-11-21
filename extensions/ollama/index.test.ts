@@ -14,8 +14,9 @@ const cloudBaseUrl = "https://ollama.com";
 
 const setupMock = vi.hoisted(() =>
   vi.fn(async () => ({
+    profiles: [],
     defaultModel: "ollama/qwen-tool",
-    config: ollamaConfig({
+    configPatch: ollamaConfig({
       baseUrl: localBaseUrl,
       api: "ollama",
       apiKey: "ollama-local",
@@ -62,7 +63,7 @@ vi.mock("./src/setup.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/setup.runtime.js")>()),
   configureOllamaNonInteractive: nonInteractiveMock,
   ensureOllamaModelPulled: pullMock,
-  promptAndConfigureOllama: setupMock,
+  runOllamaInteractiveSetup: setupMock,
 }));
 
 vi.mock("./src/stream-registration.js", () => ({
@@ -409,7 +410,6 @@ describe("ollama plugin", () => {
         models: [{ id: "qwen-tool", name: "qwen-tool" }],
       }),
     );
-    expect(result.profiles).toEqual([]);
     expect(result.defaultModel).toBe("ollama/qwen-tool");
     await provider.onModelSelected?.({
       config: result.configPatch,
