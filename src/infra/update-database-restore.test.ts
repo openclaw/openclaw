@@ -50,6 +50,23 @@ import {
 import { readPluginCohortRecoveryPairRows } from "./update-run-recovery-store.js";
 import { finishUpdateRun } from "./update-run-write.js";
 
+const sqliteBoundaryHooks = vi.hoisted(() => ({ injectConversionFailure: false }));
+
+// Injects journal-conversion failures at the SQLite boundary so the real restore
+// owner and credential recovery path stay under test.
+vi.mock("node:sqlite", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:sqlite")>();
+  class BoundaryDatabaseSync extends actual.DatabaseSync {
+    prepare(sql: string, ...args: Parameters<InstanceType<typeof actual.DatabaseSync>["prepare"]>) {
+      if (sqliteBoundaryHooks.injectConversionFailure && sql.includes("journal_mode = WAL")) {
+        throw new Error("injected sqlite-boundary conversion failure");
+      }
+      return super.prepare(sql, ...args);
+    }
+  }
+  return { ...actual, DatabaseSync: BoundaryDatabaseSync };
+});
+
 async function createRestoreFixture(
   state: OpenClawTestState,
   linked = false,
@@ -263,30 +280,32 @@ it("completes credential rebinding when journal reconciliation fails", async () 
       });
       const fixture = await createRestoreFixture(state);
       const reportedFailures: string[][] = [];
-      const displaced = await restoreUpdateDatabaseBackup({
-        backup: fixture.backup,
-        runId: fixture.run.runId,
-        env: state.env,
-        assertCurrent() {},
-        reestablishJournalMode: async () => {
-          throw new Error("injected conversion failure");
-        },
-        onJournalReconciliationFailures: (failures) => {
-          reportedFailures.push([...failures]);
-        },
-      });
-      // Journal reconciliation is recoverable: the published restoration, its
-      // credential receipt rebinding, and the failure report all complete
-      // instead of the throw blocking Gateway restart.
-      expect(displaced).not.toBeNull();
-      expect(reportedFailures.flat().length).toBeGreaterThan(0);
-      using restored = new DatabaseSync(resolveClientCredentialStorePath(state.env), {
-        readOnly: true,
-      });
-      expect(
-        restored.prepare("SELECT socket_token FROM native_exec_socket_credentials").all(),
-      ).toEqual([{ socket_token: "synthetic-before-update" }]);
-      await fixture.close();
+      sqliteBoundaryHooks.injectConversionFailure = true;
+      try {
+        const displaced = await restoreUpdateDatabaseBackup({
+          backup: fixture.backup,
+          runId: fixture.run.runId,
+          env: state.env,
+          assertCurrent() {},
+          onJournalReconciliationFailures: (failures) => {
+            reportedFailures.push([...failures]);
+          },
+        });
+        // Journal reconciliation is recoverable: the published restoration, its
+        // credential receipt rebinding, and the failure report all complete
+        // instead of the throw blocking Gateway restart.
+        expect(displaced).not.toBeNull();
+        expect(reportedFailures.flat().length).toBeGreaterThan(0);
+        using restored = new DatabaseSync(resolveClientCredentialStorePath(state.env), {
+          readOnly: true,
+        });
+        expect(
+          restored.prepare("SELECT socket_token FROM native_exec_socket_credentials").all(),
+        ).toEqual([{ socket_token: "synthetic-before-update" }]);
+      } finally {
+        sqliteBoundaryHooks.injectConversionFailure = false;
+        await fixture.close();
+      }
     },
   );
 });

@@ -135,7 +135,7 @@ async function withDatabaseExclusion<T>(
  * is excluded by the caller: its exclusive custody design requires DELETE
  * mode. Throws so per-file failures stay collectable by the restore owner.
  */
-export async function reestablishRestoredDatabaseJournalMode(databasePath: string): Promise<void> {
+async function reestablishRestoredDatabaseJournalMode(databasePath: string): Promise<void> {
   if (resolvePathJournalPolicy(databasePath) !== "wal") {
     return;
   }
@@ -171,8 +171,6 @@ export async function restoreUpdateDatabaseBackup(params: {
    * blocking Gateway restart.
    */
   onJournalReconciliationFailures?: (failures: readonly string[]) => void;
-  /** Conversion seam for injected-failure regressions; defaults to the real policy-driven conversion. */
-  reestablishJournalMode?: (databasePath: string) => Promise<void>;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -408,9 +406,7 @@ export async function restoreUpdateDatabaseBackup(params: {
             continue;
           }
           try {
-            await (params.reestablishJournalMode ?? reestablishRestoredDatabaseJournalMode)(
-              entry.path,
-            );
+            await reestablishRestoredDatabaseJournalMode(entry.path);
           } catch (error) {
             journalModeFailures.push(`${entry.path}: ${formatErrorMessage(error)}`);
           }
