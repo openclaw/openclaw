@@ -17,8 +17,10 @@ It validates the target with realpath and skips script shims and their symlink
 aliases. Calls use that stored path without searching PATH. Replacing Git behind
 a stable package-manager symlink keeps working; if the recorded path disappears,
 the wrapper repeats the same validation once to find an available native Git.
-Docker/Podman prepare their own launcher in writable temporary storage, including
-private persistent-execution containers. Host launchers are prepared at Gateway
+Docker/Podman prepare their own script in writable temporary storage, including
+private persistent-execution containers. An executable launcher on the read-only
+resource mount sources that script, preserving the default `noexec` protection
+on `/tmp` even with read-only workspaces. Host launchers are prepared at Gateway
 startup. Git credentials, egress, identity, and maintenance settings are unchanged.
 If no native Git is available, Git calls report an error; other sandbox tools
 remain available.

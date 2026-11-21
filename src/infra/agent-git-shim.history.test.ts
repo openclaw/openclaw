@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { buildAgentGitShimInstallCommand } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim-install.js";
 
 async function withHistoryFixture(
   run: (fixture: Awaited<ReturnType<typeof historyFixture>>) => Promise<void>,

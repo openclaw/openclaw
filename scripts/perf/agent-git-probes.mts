@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { buildAgentGitShimInstallCommand } from "../../src/infra/agent-git-shim.ts";
+import { buildAgentGitShimInstallCommand } from "../../src/infra/agent-git-shim-install.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({

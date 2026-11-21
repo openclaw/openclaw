@@ -1,9 +1,8 @@
-import { quoteCliArg } from "../cli/quote-cli-arg.js";
-
 export const AGENT_GIT_SANDBOX_BIN = "/openclaw/git-tools";
+export const AGENT_GIT_SANDBOX_SCRIPT = "/tmp/openclaw-agent-git/git";
 
 /** Validate native Git without pinning upgrade-managed symlinks to their current target. */
-const RESOLVE_AGENT_GIT = `
+export const RESOLVE_AGENT_GIT = `
 remaining=$PATH
 while :; do
   entry=\${remaining%%:*}
@@ -27,7 +26,7 @@ done
 `;
 
 /** A PATH tool contract: local probes, shared history, and partial-clone fetches/hydration. */
-const AGENT_GIT_SHIM = `
+export const AGENT_GIT_SHIM = `
 if [ ! -x "$git" ]; then
   wrapper_bin=\${0%/*}
   git=$(${RESOLVE_AGENT_GIT})
@@ -680,29 +679,3 @@ if [ "$result" -ne 0 ] && { [ "$result" -ne 1 ] || [ "$probe_kind" != ancestor ]
 fi
 exit "$result"
 `;
-
-/** Install in the filesystem where Git executes, including each private container. */
-export function buildAgentGitShimInstallCommand(binDir: string, source?: string): string {
-  return `set -e
-wrapper_bin=${quoteCliArg(binDir)}
-git=$(${RESOLVE_AGENT_GIT})
-mkdir -p -- "$wrapper_bin"
-temporary=$(mktemp "$wrapper_bin/git.XXXXXXXX")
-trap 'rm -f -- "$temporary"' 0
-{
-  printf '#!/bin/sh\\ngit="'
-  printf '%s' "$git" | command -p sed 's/[\\\\$\`"]/\\\\&/g'
-  printf '"\\n'
-  ${
-    source
-      ? `tail -n +3 ${quoteCliArg(source)}`
-      : `cat <<'AGENT_GIT_BODY'
-${AGENT_GIT_SHIM}
-AGENT_GIT_BODY`
-  }
-} > "$temporary"
-chmod 755 "$temporary" "$wrapper_bin"
-mv -f -- "$temporary" "$wrapper_bin/git"
-trap - 0
-`;
-}

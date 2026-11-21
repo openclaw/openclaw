@@ -8,7 +8,7 @@ import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { runExec } from "../process/exec.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { buildAgentGitShimInstallCommand } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim-install.js";
 import { writeTextAtomic } from "./json-files.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import { resolveStableNodePath } from "./stable-node-path.js";

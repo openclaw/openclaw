@@ -8,7 +8,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { prepareLocalWorkspaceCheckout } from "../gateway/worker-environments/local-workspace-checkout.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { buildAgentGitShimInstallCommand } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim-install.js";
 import {
   createSourceCliFixture,
   withSourceCliParent,

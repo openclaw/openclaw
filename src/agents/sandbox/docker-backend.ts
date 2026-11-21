@@ -1,8 +1,6 @@
 import path from "node:path";
-import {
-  AGENT_GIT_SANDBOX_BIN,
-  buildAgentGitShimInstallCommand,
-} from "../../infra/agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "../../infra/agent-git-shim-install.js";
+import { AGENT_GIT_SANDBOX_BIN, AGENT_GIT_SANDBOX_SCRIPT } from "../../infra/agent-git-shim.js";
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
@@ -135,7 +133,7 @@ async function createContainerSandboxBackend(
       const gitBinDir = params.readOnlyResourceMounts?.some(
         (mount) => mount.containerPath === AGENT_GIT_SANDBOX_BIN,
       )
-        ? path.posix.join(tempDir, "agent-git")
+        ? `${AGENT_GIT_SANDBOX_BIN}/container`
         : undefined;
       const engineTarget =
         podmanTarget ??
@@ -169,7 +167,10 @@ async function createContainerSandboxBackend(
         );
       };
       const prepareGit = gitBinDir
-        ? buildAgentGitShimInstallCommand(gitBinDir, `${AGENT_GIT_SANDBOX_BIN}/git`)
+        ? buildAgentGitShimInstallCommand(
+            path.posix.dirname(AGENT_GIT_SANDBOX_SCRIPT),
+            `${AGENT_GIT_SANDBOX_BIN}/git`,
+          )
         : undefined;
       if (prepareGit) {
         await run({ script: prepareGit }, assertCurrent);
@@ -405,7 +406,7 @@ async function createContainerSandboxBackend(
                     argv: [
                       "/bin/sh",
                       "-c",
-                      `${prepareGit}\nexport PATH="$wrapper_bin:$PATH"\nexec "$@"`,
+                      `${prepareGit}\nexport PATH="${gitBinDir}:$PATH"\nexec "$@"`,
                       "openclaw-agent-git",
                       ...input.command.argv,
                     ],
