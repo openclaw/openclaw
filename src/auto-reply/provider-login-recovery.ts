@@ -106,7 +106,8 @@ export function buildProviderLoginRecovery(
   }
   const command = buildOAuthRefreshFailureLoginCommand(evidence.provider, { surface: "chat" });
   return {
-    hint: `Your model provider needs a new login. Send \`${command}\` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**.`,
+    // Plain text: error surfaces show it verbatim; channels with buttons add the Sign in action.
+    hint: `Your model provider needs a new login. Send ${command} from a private chat or the OpenClaw app.`,
     presentation: {
       blocks: [
         {
