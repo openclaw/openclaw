@@ -155,6 +155,36 @@ describe("balanced JSON extraction", () => {
   );
 
   it.each(["\n", "\r\n", "\r"])(
+    "applies accepted framing to recovery eligibility in masked and unmasked views (%j)",
+    (newline) => {
+      const prefix = `warning: [${newline}`;
+      const framing = "\u001b[31m";
+      const child = '{"ok":true}';
+      const source = prefix + framing + child;
+      const options = {
+        ...strictRecovery,
+        strictJson: {
+          source,
+          opaqueSpans: [
+            {
+              startIndex: prefix.length,
+              endIndex: prefix.length + framing.length - 1,
+            },
+          ],
+        },
+      };
+      for (const discovery of [source, source.replace(framing, " ".repeat(framing.length))]) {
+        expect(extractBalancedJsonFragments(discovery, options)).toEqual(
+          fragmentsAt(source, [child]),
+        );
+        expect(extractBalancedJsonPrefix(discovery, options)).toEqual(
+          fragmentsAt(source, [child])[0],
+        );
+      }
+    },
+  );
+
+  it.each(["\n", "\r\n", "\r"])(
     "retains opaque line boundaries but never admits a parent from masked text (%j)",
     (newline) => {
       const framing = `framing "[]${newline}`;
@@ -174,28 +204,78 @@ describe("balanced JSON extraction", () => {
     },
   );
 
-  it("ignores a span entering inside an original string, including beyond its closing quote", () => {
-    const child = '{"actual":true}';
-    const quoted = '"note \u009b and \\"quoted\\" [0]"';
-    const source = `${quoted}\r\n${child}`;
-    const span = { startIndex: source.indexOf("\u009b"), endIndex: source.length - 1 };
-    expect(
-      extractBalancedJsonFragments(source, {
-        ...strictRecovery,
-        strictJson: { source, opaqueSpans: [span] },
-      }),
-    ).toEqual(fragmentsAt(source, [child]));
-    const parent = `[\r\n${quoted},\r\n${child}\r\n]`;
-    expect(
-      extractBalancedJsonFragments(parent, {
+  it.each(["\u009b", "\u009d"])(
+    "ignores a span entering inside an original string (%j)",
+    (control) => {
+      const child = '{"actual":true}';
+      const quoted = String.raw`"note ${control} and \"quoted\" [0]"`;
+      const source = `${quoted}\r\n${child}\u0007`;
+      const span = { startIndex: source.indexOf(control), endIndex: source.length - 1 };
+      for (const discovery of [
+        source,
+        source.slice(0, span.startIndex) + " ".repeat(source.length - span.startIndex),
+      ]) {
+        expect(
+          extractBalancedJsonFragments(discovery, {
+            ...strictRecovery,
+            strictJson: { source, opaqueSpans: [span] },
+          }),
+        ).toEqual(fragmentsAt(source, [child]));
+      }
+      const parent = `[\r\n${quoted},\r\n${child}\r\n]`;
+      expect(
+        extractBalancedJsonFragments(parent, {
+          ...strictRecovery,
+          strictJson: {
+            source: parent,
+            opaqueSpans: [{ startIndex: parent.indexOf(control), endIndex: parent.length - 1 }],
+          },
+        }),
+      ).toEqual(fragmentsAt(parent, [parent]));
+    },
+  );
+
+  it.each(['{"ok":true}', '{"nested":[{"value":1}]}'])(
+    "does not substitute string-interior children exposed by opaque quotes (%s)",
+    (child) => {
+      const source = `["prefix ${child} suffix"]`;
+      const start = source.indexOf(child);
+      const options = {
         ...strictRecovery,
         strictJson: {
-          source: parent,
-          opaqueSpans: [{ startIndex: parent.indexOf("\u009b"), endIndex: parent.length - 1 }],
+          source,
+          opaqueSpans: [
+            { startIndex: 1, endIndex: start - 1 },
+            { startIndex: start + child.length, endIndex: source.length - 2 },
+          ],
         },
-      }),
-    ).toEqual(fragmentsAt(parent, [parent]));
-  });
+      };
+      expect(() => JSON.parse(source)).toThrow();
+      const discovery =
+        "[" +
+        " ".repeat(start - 1) +
+        child +
+        " ".repeat(source.length - start - child.length - 1) +
+        "]";
+      for (const view of [source, discovery]) {
+        expect(extractBalancedJsonFragments(view, options)).toEqual([]);
+        expect(extractBalancedJsonFragments(view, { ...options, openers: ["{"] })).toEqual(
+          fragmentsAt(source, [child]),
+        );
+      }
+      const prefix = String.raw`["prefix \"{noise}",`;
+      const valid = prefix + child + ',"suffix"]';
+      expect(
+        extractBalancedJsonFragments(valid, {
+          ...strictRecovery,
+          strictJson: {
+            source: valid,
+            opaqueSpans: [{ startIndex: 1, endIndex: prefix.length - 2 }],
+          },
+        }),
+      ).toEqual(fragmentsAt(valid, [valid]));
+    },
+  );
 
   it.each([
     [{ startIndex: -1, endIndex: 0 }],

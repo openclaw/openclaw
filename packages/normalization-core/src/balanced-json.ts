@@ -65,7 +65,8 @@ function extractStrictJsonFragments(
   let escaped = false;
   let lineStart = true;
   let opaqueIndex = 0;
-  let opaqueEnd = -1;
+  let spanEnd = -1;
+  let spanOpaque = false;
   const pop = () => {
     const node = stack.pop()!;
     selectedDepth -= Number(node.selected);
@@ -73,22 +74,25 @@ function extractStrictJsonFragments(
   };
   for (let index = 0; index < source.length; index += 1) {
     const atLineStart = lineStart;
-    const discovery = raw[index];
+    const entering = opaqueSpans[opaqueIndex];
+    if (entering?.startIndex === index) {
+      // Decide at entry: a span inside a string cannot become framing after
+      // that string closes, including in the caller's masked discovery view.
+      spanEnd = entering.endIndex;
+      spanOpaque = !inString;
+      opaqueIndex++;
+    }
+    const char = source[index];
+    const inSpan = index <= spanEnd;
+    const opaque = inSpan && spanOpaque;
+    const discovery = inSpan ? (opaque && char !== "\r" && char !== "\n" ? " " : char) : raw[index];
     lineStart =
       discovery === "\n" ||
       (opts.recoverAtLineStart === true && discovery === "\r") ||
       (lineStart && (discovery === " " || discovery === "\t" || discovery === "\r"));
-    const entering = opaqueSpans[opaqueIndex];
-    if (entering?.startIndex === index) {
-      // Decide at entry: a span inside a string cannot become framing after
-      // that string closes. Original bytes still participate in JSON admission.
-      if (!inString) opaqueEnd = entering.endIndex;
-      opaqueIndex++;
-    }
-    if (index <= opaqueEnd) continue;
+    if (opaque) continue;
     // Except for declared framing, original text owns structure and strings.
     // Hidden discovery quotes must not turn string interiors into child records.
-    const char = source[index];
     if (inString) {
       if (opts.recoverAtLineStart && (char === "\n" || char === "\r")) {
         const parent = stack.at(-1);
@@ -143,10 +147,29 @@ function extractStrictJsonFragments(
     }
     const parts: string[] = [];
     let offset = node.start;
+    let quoted = false;
+    let escaped = false;
     for (const child of node.children) {
+      // Framing can hide a quote during discovery, but a string-interior
+      // container is not an original JSON value that we may substitute.
+      for (let index = offset; index < child.start; index++) {
+        const char = source[index];
+        if (escaped) {
+          escaped = false;
+        } else if (quoted && char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          quoted = !quoted;
+        }
+      }
+      if (quoted) {
+        node.invalid = true;
+        break;
+      }
       parts.push(source.slice(offset, child.start), child.opener === "{" ? "{}" : "[]");
       offset = child.end + 1;
     }
+    if (node.invalid) continue;
     parts.push(source.slice(offset, node.end + 1));
     try {
       JSON.parse(parts.join(""));
