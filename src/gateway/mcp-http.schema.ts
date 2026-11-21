@@ -11,10 +11,15 @@ export type McpLoopbackTool = Awaited<
   ReturnType<typeof resolveGatewayScopedTools>
 >["tools"][number];
 
+// Claude Code saves MCP text results over 50,000 characters to a file unless the tool raises its
+// own limit. OpenClaw tools cap their own output (sessions_history at 80 KB), so allow that much.
+const MCP_TOOL_MAX_RESULT_CHARS = 100_000;
+
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
   inputSchema: Record<string, unknown>;
+  _meta: { "anthropic/maxResultSizeChars": number };
 };
 
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
@@ -151,6 +156,7 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
       name,
       description: typeof tool.description === "string" ? tool.description : undefined,
       inputSchema: raw,
+      _meta: { "anthropic/maxResultSizeChars": MCP_TOOL_MAX_RESULT_CHARS },
     };
   });
 }

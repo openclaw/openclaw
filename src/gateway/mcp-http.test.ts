@@ -650,6 +650,22 @@ describe("mcp loopback server", () => {
     ]);
   });
 
+  it("lets Claude Code keep results up to the tools' own caps inline", async () => {
+    // Claude Code saves text over 50,000 characters to a file unless the tool raises its limit;
+    // sessions_history alone returns up to 80 KB.
+    mockScopedTools([makeMockTool({ name: "sessions_history" })]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const payload = await readOkMcpPayload(
+      await sendLoopbackToolsList({ token: runtime.ownerToken, headers: MAIN_SESSION_HEADER }),
+    );
+
+    expect(payload.result?.tools?.[0]).toMatchObject({
+      name: "sessions_history",
+      _meta: { "anthropic/maxResultSizeChars": 100_000 },
+    });
+  });
+
   it("suppresses reserved-harness errors for notifications", async () => {
     const { runtime, port } = await startLoopbackServerForTest();
     const headers = {
