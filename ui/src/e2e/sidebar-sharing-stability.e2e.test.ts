@@ -31,7 +31,7 @@ suite.define(() => {
           target,
           row("agent:main:chat:research", "Research notes", 700),
         ];
-        const other = Array.from({ length: 24 }, (_, i) =>
+        const other = Array.from({ length: 44 }, (_, i) =>
           row("agent:main:chat:other-" + i, "Project chat " + (i + 1), 600 - i),
         );
         const rows = [target, ...other];
@@ -296,6 +296,9 @@ suite.define(() => {
         expect(await keys()).toEqual(initial.order);
 
         await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
+        await expect
+          .poll(() => scroller.evaluate((element) => element.scrollHeight - element.clientHeight))
+          .toBeGreaterThanOrEqual(35);
         const focusRow = pinned.getByRole("link", { name: "Reading list", exact: true });
         await focusRow.focus();
         await scroller.evaluate((element) => {
