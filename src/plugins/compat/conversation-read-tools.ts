@@ -1,6 +1,6 @@
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import type { PluginManifestRecord } from "../manifest-registry.js";
-import type { PluginRegistry, PluginToolRegistration } from "../registry-types.js";
+import type { PluginToolRegistration } from "../registry-types.js";
 
 const HOST_RESTRICTED_CONVERSATION_READ_TOOLS = new Set(["feishu:feishu_chat"]);
 
@@ -36,12 +36,6 @@ export function listHostRestrictedConversationReadToolsForRegistration(
   return restricted;
 }
 
-export function registrationIncludesHostRestrictedConversationReadTool(
-  entry: PluginToolRegistration,
-): boolean {
-  return listHostRestrictedConversationReadToolsForRegistration(entry).length > 0;
-}
-
 export function isBundledConversationReadToolRegistration(params: {
   entry: PluginToolRegistration;
   manifestPlugin: PluginManifestRecord | undefined;
@@ -49,100 +43,21 @@ export function isBundledConversationReadToolRegistration(params: {
   return params.entry.origin === "bundled" && params.manifestPlugin?.origin === "bundled";
 }
 
-export function recordHostRestrictedConversationReadExclusion(params: {
-  registry: PluginRegistry;
-  entry: PluginToolRegistration;
-  restrictedTools: readonly string[];
-  manifestPlugin: PluginManifestRecord | undefined;
-  warn: (message: string) => void;
-}): void {
-  const message = `plugin tool excluded in delegated turn (${params.entry.pluginId}: ${params.restrictedTools.join(", ")}): conversation-read tools require bundled plugin origin (registration=${params.entry.origin ?? "unknown"}, manifest=${params.manifestPlugin?.origin ?? "unknown"})`;
-  if (
-    !params.registry.diagnostics.some(
-      (entry) =>
-        entry.level === "warn" &&
-        entry.pluginId === params.entry.pluginId &&
-        entry.source === params.entry.source &&
-        entry.message === message,
-    )
-  ) {
-    params.registry.diagnostics.push({
-      level: "warn",
-      pluginId: params.entry.pluginId,
-      source: params.entry.source,
-      message,
-    });
-    params.warn(message);
-  }
-}
-
-export function excludeHostRestrictedConversationReadRegistration(params: {
-  restrict: boolean;
-  registry: PluginRegistry;
+export function shouldRestrictConversationReadTools(params: {
+  conversationReadOrigin: unknown;
   entry: PluginToolRegistration;
   manifestPlugin: PluginManifestRecord | undefined;
-  warn: (message: string) => void;
 }): boolean {
-  if (!params.restrict) {
-    return false;
-  }
-  const restrictedTools = listHostRestrictedConversationReadToolsForRegistration(params.entry);
-  if (restrictedTools.length === 0) {
-    return false;
-  }
-  recordHostRestrictedConversationReadExclusion({ ...params, restrictedTools });
-  return true;
+  return (
+    normalizeConversationReadInvocationOrigin(params.conversationReadOrigin) !==
+      "direct-operator" && !isBundledConversationReadToolRegistration(params)
+  );
 }
 
-export function excludeHostRestrictedConversationReadTool(params: {
-  restrict: boolean;
-  registry: PluginRegistry;
-  entry: PluginToolRegistration;
-  toolName: string;
-  manifestPlugin: PluginManifestRecord | undefined;
-  warn: (message: string) => void;
-}): boolean {
-  if (
-    !params.restrict ||
-    !isHostRestrictedConversationReadTool({
-      pluginId: params.entry.pluginId,
-      toolName: params.toolName,
-    })
-  ) {
-    return false;
-  }
-  recordHostRestrictedConversationReadExclusion({ ...params, restrictedTools: [params.toolName] });
-  return true;
-}
-
-export function createConversationReadToolGate(
-  conversationReadOrigin: unknown,
-  registry: PluginRegistry,
+export function formatHostRestrictedConversationReadExclusion(
   entry: PluginToolRegistration,
+  restrictedTools: readonly string[],
   manifestPlugin: PluginManifestRecord | undefined,
-  logger: { warn: (message: string) => void },
-) {
-  const restrict =
-    normalizeConversationReadInvocationOrigin(conversationReadOrigin) !== "direct-operator" &&
-    !isBundledConversationReadToolRegistration({ entry, manifestPlugin });
-  const warn = (message: string) => logger.warn(message);
-  return {
-    excludeRegistration: () =>
-      excludeHostRestrictedConversationReadRegistration({
-        restrict,
-        registry,
-        entry,
-        manifestPlugin,
-        warn,
-      }),
-    excludeTool: (toolName: string) =>
-      excludeHostRestrictedConversationReadTool({
-        restrict,
-        registry,
-        entry,
-        toolName,
-        manifestPlugin,
-        warn,
-      }),
-  };
+): string {
+  return `plugin tool excluded in delegated turn (${entry.pluginId}: ${restrictedTools.join(", ")}): conversation-read tools require bundled plugin origin (registration=${entry.origin ?? "unknown"}, manifest=${manifestPlugin?.origin ?? "unknown"})`;
 }

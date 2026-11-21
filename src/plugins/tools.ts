@@ -1,6 +1,5 @@
 /** Builds agent tools registered by plugins, preserving plugin scope around callbacks and descriptors. */
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
-import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
@@ -10,7 +9,12 @@ import {
   getLoadedRuntimePluginRegistry,
   createRuntimePluginManifestLookup,
 } from "./active-runtime-registry.js";
-import { createConversationReadToolGate } from "./compat/conversation-read-tools.js";
+import {
+  formatHostRestrictedConversationReadExclusion,
+  isHostRestrictedConversationReadTool,
+  listHostRestrictedConversationReadToolsForRegistration,
+  shouldRestrictConversationReadTools,
+} from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
@@ -33,6 +37,7 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
+import { createPluginToolDiagnosticReporter, recordToolDiagnostic } from "./tool-diagnostics.js";
 import {
   createPluginToolFactoryContext,
   type PluginToolOwnerContinuation,
@@ -41,7 +46,12 @@ import {
   bindPluginToolCallbacks,
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
-import { createPluginToolAllowlist } from "./tool-grant-allowlist.js";
+import {
+  createPluginToolAllowlist,
+  denylistBlocksName,
+  denylistBlocksPlugin,
+  normalizeDenylist,
+} from "./tool-grant-allowlist.js";
 import {
   createPluginToolInspection,
   inspectionToolOwners,
@@ -49,28 +59,6 @@ import {
 } from "./tool-inspection-state.js";
 import { setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-function normalizeDenylist(list?: string[]) {
-  return compileGlobPatterns({
-    raw: list,
-    normalize: normalizeToolPolicyName,
-  });
-}
-
-function denylistBlocksName(name: string, denylist: ReturnType<typeof normalizeDenylist>): boolean {
-  const normalized = normalizeToolPolicyName(name);
-  return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
-}
-
-function denylistBlocksPlugin(params: {
-  pluginId: string;
-  denylist: ReturnType<typeof normalizeDenylist>;
-}): boolean {
-  return (
-    denylistBlocksName(params.pluginId, params.denylist) ||
-    matchesAnyGlobPattern("group:plugins", params.denylist)
-  );
-}
 
 type PreparedPluginToolRuntime = {
   loadContext?: ReturnType<typeof resolvePluginRuntimeLoadContext>;
@@ -286,23 +274,6 @@ function preparePluginToolRegistry(registry: PluginRegistry, snapshot: PluginMet
   return facts;
 }
 
-function recordToolDiagnostic(
-  registry: PluginRegistry,
-  diagnostic: PluginRegistry["diagnostics"][number],
-): void {
-  if (
-    !registry.diagnostics.some(
-      (entry) =>
-        entry.level === diagnostic.level &&
-        entry.pluginId === diagnostic.pluginId &&
-        entry.source === diagnostic.source &&
-        entry.message === diagnostic.message,
-    )
-  ) {
-    registry.diagnostics.push(diagnostic);
-  }
-}
-
 export type PluginToolInspectionScope = Omit<
   Parameters<typeof resolvePluginToolLoadState>[0],
   "preparedRuntime"
@@ -502,15 +473,7 @@ function* resolvePluginToolsFromRegistry(
     owners.delete(pluginId);
     const { registry, tools: registrations } = owner;
     let trustedLocalMediaNames: Set<string> | undefined;
-    const reportError = (entry: PluginToolRegistration, message: string) => {
-      context.logger.error(message);
-      recordToolDiagnostic(registry, {
-        level: "error",
-        pluginId: entry.pluginId,
-        source: entry.source,
-        message,
-      });
-    };
+    const diagnostics = createPluginToolDiagnosticReporter(registry, context.logger);
     if (registrations.length === 0) {
       recordToolDiagnostic(registry, {
         level: "warn",
@@ -536,7 +499,7 @@ function* resolvePluginToolsFromRegistry(
       ) {
         const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
         if (!params.suppressNameConflicts) {
-          reportError(entry, message);
+          diagnostics.error(entry, message);
         }
         blockedPlugins.add(entry.pluginId);
         continue;
@@ -569,14 +532,19 @@ function* resolvePluginToolsFromRegistry(
       if (!matchesAllowlist) {
         continue;
       }
-      const readGate = createConversationReadToolGate(
-        params.context.conversationReadOrigin,
-        registry,
+      const restrictConversationRead = shouldRestrictConversationReadTools({
+        conversationReadOrigin: params.context.conversationReadOrigin,
         entry,
         manifestPlugin,
-        context.logger,
-      );
-      if (readGate.excludeRegistration()) {
+      });
+      const restrictedTools = restrictConversationRead
+        ? listHostRestrictedConversationReadToolsForRegistration(entry)
+        : [];
+      if (restrictedTools.length > 0) {
+        diagnostics.warnOnce(
+          entry,
+          formatHostRestrictedConversationReadExclusion(entry, restrictedTools, manifestPlugin),
+        );
         continue;
       }
       const factoryContext = createPluginToolFactoryContext({
@@ -626,7 +594,7 @@ function* resolvePluginToolsFromRegistry(
         try {
           rawName = isRecord(toolRaw) ? toolRaw.name : undefined;
         } catch (error) {
-          reportError(
+          diagnostics.error(
             entry,
             `plugin tool is malformed (${entry.pluginId}): ${formatErrorMessage(error)}`,
           );
@@ -654,10 +622,19 @@ function* resolvePluginToolsFromRegistry(
         }
         if (
           denylistBlocksName(toolName, denylist) ||
-          (entry.optional && !allowlist.allowsTool(entry.pluginId, toolName)) ||
-          // Factories may return other declared tools, so check the actual name as well.
-          readGate.excludeTool(toolName)
+          (entry.optional && !allowlist.allowsTool(entry.pluginId, toolName))
         ) {
+          continue;
+        }
+        // Factories may return other declared tools, so check the actual name as well.
+        if (
+          restrictConversationRead &&
+          isHostRestrictedConversationReadTool({ pluginId: entry.pluginId, toolName })
+        ) {
+          diagnostics.warnOnce(
+            entry,
+            formatHostRestrictedConversationReadExclusion(entry, [toolName], manifestPlugin),
+          );
           continue;
         }
         let inspected: { tool: AnyAgentTool } | { error: string };
@@ -698,19 +675,20 @@ function* resolvePluginToolsFromRegistry(
           inspected = { error: formatErrorMessage(error) };
         }
         if ("error" in inspected) {
-          reportError(entry, `plugin tool is malformed (${entry.pluginId}): ${inspected.error}`);
+          diagnostics.error(
+            entry,
+            `plugin tool is malformed (${entry.pluginId}): ${inspected.error}`,
+          );
           continue;
         }
         const tool = inspected.tool;
         if (entry.declaredNames && !entry.declaredNames.has(toolName)) {
-          const message = `plugin tool is undeclared (${entry.pluginId}): ${toolName}`;
-          reportError(entry, message);
+          diagnostics.error(entry, `plugin tool is undeclared (${entry.pluginId}): ${toolName}`);
           continue;
         }
         if (existingNormalized.has(normalizedToolName)) {
-          const message = `plugin tool name conflict (${entry.pluginId}): ${name}`;
           if (!params.suppressNameConflicts) {
-            reportError(entry, message);
+            diagnostics.error(entry, `plugin tool name conflict (${entry.pluginId}): ${name}`);
           }
           continue;
         }
