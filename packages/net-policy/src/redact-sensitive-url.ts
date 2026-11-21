@@ -191,12 +191,30 @@ function redactQueryString(value: string, depth: number): string {
   return new URLSearchParams(redactedEntries).toString();
 }
 
-function redactUrlLikeFallback(value: string): string {
-  const redactedFallback = redactEmbeddedUrlUserInfo(value).replace(
+// A sensitive value is always masked to the end of its `[^&]*` run, exactly as
+// before: a raw "?" or space can occur inside a value, so ending the mask there
+// would leave the rest of the credential readable. Nested scanning is therefore
+// only applied to values whose own name is not sensitive, which is what makes
+// this strictly additive -- every assignment masked before is still masked.
+function redactQueryAssignments(value: string, depth: number): string {
+  return value.replace(
     /([?&])([^=&]+)=([^&]*)/g,
-    (match, prefix: string, key: string) =>
-      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
+    (match, prefix: string, key: string, entryValue: string) => {
+      if (isSensitiveUrlQueryParamName(key)) {
+        return `${prefix}${key}=***`;
+      }
+      // Only a nested "?" can start another assignment inside a value; "&" cannot
+      // appear in one. Stop at the shared depth bound so nesting cannot grow work.
+      if (depth >= MAX_NESTED_URL_REDACTION_DEPTH || !entryValue.includes("?")) {
+        return match;
+      }
+      return `${prefix}${key}=${redactQueryAssignments(entryValue, depth + 1)}`;
+    },
   );
+}
+
+function redactUrlLikeFallback(value: string): string {
+  const redactedFallback = redactQueryAssignments(redactEmbeddedUrlUserInfo(value), 0);
   return redactSensitiveUrlPath(redactedFallback);
 }
 
