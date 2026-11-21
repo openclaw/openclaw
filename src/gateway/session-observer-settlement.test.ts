@@ -22,7 +22,16 @@ it("waits for an abort-ignoring completion before retrying and never publishes i
   const pending = createDeferred<Message>();
   const completeModel = vi
     .fn()
-    .mockReturnValueOnce(pending.promise)
+    .mockImplementationOnce((params: { timeoutMs: number }) => {
+      const expired = new Promise<void>((resolve) => {
+        setTimeout(resolve, params.timeoutMs);
+      });
+      return expired
+        .then(() => pending.promise)
+        .then(() => {
+          throw new Error("candidate timed out");
+        });
+    })
     .mockResolvedValue(message("Current digest"));
   const harness = createHarness({ completeModel });
   const published = createDeferred();
@@ -33,7 +42,7 @@ it("waits for an abort-ignoring completion before retrying and never publishes i
     expect(completeModel).toHaveBeenCalledOnce();
     const requestSignal = completeModel.mock.calls[0]?.[0].abortSignal as AbortSignal;
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(requestSignal.aborted).toBe(true);
+    expect(requestSignal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(completeModel).toHaveBeenCalledOnce();
     expect(harness.broadcastToConnIds).not.toHaveBeenCalled();

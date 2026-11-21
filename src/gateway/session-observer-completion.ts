@@ -25,7 +25,7 @@ const observerLog = createSubsystemLogger("gateway/session-observer");
 const SESSION_OBSERVER_MODEL_TIMEOUT_MS = 30_000;
 const REJECTED_OUTPUT_MAX_CHARS = 160;
 
-/** One deadline covers the whole utility chain, so every configured candidate needs a call's worth. */
+/** Bound preparation; completions own their per-candidate deadlines. */
 function resolveObserverDeadlineMs(cfg: OpenClawConfig, agentId: string | undefined): number {
   const setting = readUtilityModelSetting(cfg, agentId);
   const candidates = setting.kind === "disabled" ? 1 : setting.fallbacks.length + 1;
@@ -136,6 +136,8 @@ export function createSessionObserverCompletion(params: {
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
+        // Completion owns each fallback candidate's and JSON retry's deadline.
+        clearTimeout(timeout);
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
