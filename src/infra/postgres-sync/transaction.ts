@@ -1,3 +1,4 @@
+import { POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS } from "../database-engine/policy.js";
 import {
   assertSyncTransactionResult,
   assertPostgresTransactionUsable,
@@ -20,10 +21,16 @@ function assertPostgresOperationCurrent(): void {
   }
 }
 
+// Kept on the concrete bridge: ordinary store transaction contracts do not select this budget.
+export type PostgresTransactionOptions = {
+  withCommit?: (commit: () => void) => void;
+  maintenance?: boolean;
+};
+
 export function runPostgresTransactionSync<T>(
   db: PostgresSqlConnection,
   operation: () => T,
-  options?: { withCommit?: (commit: () => void) => void },
+  options?: PostgresTransactionOptions,
   readOnly = false,
   reserved = false,
 ): T {
@@ -42,10 +49,20 @@ export function runPostgresTransactionSync<T>(
             : `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`,
         );
       }
+      const previousTimeout =
+        options?.maintenance && nested
+          ? String(db.prepare("SHOW statement_timeout").get()!.statement_timeout)
+          : undefined;
+      if (options?.maintenance) {
+        db.exec(`SET LOCAL statement_timeout = '${POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS}ms'`);
+      }
       const result = operation();
       assertSyncTransactionResult(result);
       assertPostgresTransactionUsable(db);
       if (nested) {
+        if (previousTimeout !== undefined) {
+          db.prepare("SELECT set_config('statement_timeout', ?, true)").get(previousTimeout);
+        }
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {
         const scope = currentSqliteWorkerOperationAdmission.getStore();

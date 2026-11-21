@@ -12,6 +12,7 @@ import { observeDatabaseOperation } from "../database-engine/observation.js";
 import {
   POSTGRES_CONNECT_TIMEOUT_MS,
   POSTGRES_LOCK_TIMEOUT_MS,
+  POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS,
   POSTGRES_STATEMENT_TIMEOUT_MS,
 } from "../database-engine/policy.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
@@ -37,7 +38,7 @@ import {
   type BridgeCommand,
   type BridgeRequest,
 } from "./protocol.js";
-import { runPostgresTransactionSync } from "./transaction.js";
+import { runPostgresTransactionSync, type PostgresTransactionOptions } from "./transaction.js";
 
 export class PostgresSyncConnection implements PostgresSqlConnection {
   isOpen = true;
@@ -51,6 +52,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private outcomeUnknown = true;
   private readonly mainThread = threadId === 0;
   private readonly statementTimeoutMs: number;
+  private maintenance = false;
 
   constructor(
     url: string,
@@ -97,10 +99,16 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   runTransaction<T>(
     operation: () => T,
-    options?: { withCommit?: (commit: () => void) => void },
+    options?: PostgresTransactionOptions,
     ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T {
-    return runPostgresTransactionSync(this, operation, options, ...modes);
+    const previous = this.maintenance;
+    this.maintenance = previous || options?.maintenance === true;
+    try {
+      return runPostgresTransactionSync(this, operation, options, ...modes);
+    } finally {
+      this.maintenance = previous;
+    }
   }
 
   private loseConnection(): Error {
@@ -140,7 +148,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
     // Give the server time to report statement_timeout and the dedicated bridge
     // time to retire a silent client before the host must terminate the worker.
-    const deadlineMs = request.operation === "query" ? this.statementTimeoutMs + 30_000 : 120_000;
+    const statementTimeoutMs = this.maintenance
+      ? POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS
+      : this.statementTimeoutMs;
+    const deadlineMs = request.operation === "query" ? statementTimeoutMs + 30_000 : 120_000;
     const deadline = performance.now() + deadlineMs;
     const message: BridgeRequest = { ...request, id, deadlineMs };
     this.port.postMessage(message, []);

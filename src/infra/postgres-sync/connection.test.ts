@@ -42,6 +42,7 @@ function transportFixture(
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
   let now = 0;
+  let delayMs = 0;
   let wakes = 0;
   let pending: BridgeRequest | undefined;
   vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -59,6 +60,11 @@ function transportFixture(
     }
     if (pending.operation === "query") {
       waits.push({ observed, timeout });
+      if (delayMs > 0) {
+        now += delayMs;
+        delayMs = 0;
+        return "timed-out";
+      }
       if (mode === "spurious" && wakes++ === 0) {
         Atomics.notify(control, index);
         now += 1;
@@ -108,6 +114,7 @@ function transportFixture(
     waits,
     terminate,
     normal: () => (mode = "normal"),
+    delayNextReply: (ms: number) => (delayMs = ms),
     dropReplies: () => (mode = "missing"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
@@ -260,6 +267,22 @@ describe("PostgreSQL bridge request correlation", () => {
 });
 
 describe("PostgreSQL staged physical settlement", () => {
+  it("waits beyond the runtime bridge limit only within maintenance", () => {
+    const { db, command, delayNextReply } = transportFixture("normal");
+    const result = db.runTransaction(
+      () => {
+        delayNextReply(121_000);
+        const row = db.prepare("SELECT 7 AS value").get();
+        command("COMMIT");
+        return row;
+      },
+      { maintenance: true },
+    );
+    expect(result).toEqual({ value: 7 });
+    delayNextReply(121_000);
+    expect(() => db.exec("SELECT 7")).toThrow("PostgreSQL connection lost");
+  });
+
   function stage(db: PostgresSyncConnection, phases: string[], name = "state", refuse = false) {
     stageSqliteTransactionState(db, {
       stage() {},

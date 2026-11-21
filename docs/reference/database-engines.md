@@ -145,9 +145,10 @@ throughput, operators can opt in with
 `ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
 `ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
 or operating-system crash, without corruption. Ports and backups always commit
-durably. The adapter sets generous
-lock and statement timeouts once during connection setup; operations do not
-change timeout settings individually.
+durably. The adapter sets a 60-second lock timeout and a 90-second statement
+timeout during connection setup. Schema bootstrap and migration temporarily use
+a one-hour statement budget; the lock timeout is unchanged, and regular
+operations keep their shorter statement budget.
 
 A silent PostgreSQL transport is retired before the bridge's host deadline.
 If a commit was sent but its reply is lost, the outcome is unknown. The bridge

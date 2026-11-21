@@ -80,6 +80,60 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("gives schema migrations a maintenance budget without changing runtime limits", () => {
+    fixture(({ db, open, invalidate }) => {
+      const limits =
+        "SELECT current_setting('statement_timeout') AS statement, " +
+        "current_setting('lock_timeout') AS lock";
+      const runtime = db.prepare(limits).get();
+      invalidate();
+      const nextDdl = `${ddl}\nALTER TABLE items ADD COLUMN migrated BOOLEAN NOT NULL DEFAULT true;`;
+      const migrated = open({
+        ...schema,
+        version: 2,
+        postgres: nextDdl,
+        postgresMigrations: [
+          {
+            version: 2,
+            fromSchema: { postgres: ddl },
+            schema: { postgres: nextDdl },
+            sql: `DO $$ BEGIN
+              IF current_setting('statement_timeout')::interval <> interval '1 hour' THEN
+                RAISE EXCEPTION 'migration still has a runtime statement limit';
+              END IF;
+              IF current_setting('lock_timeout')::interval <> interval '60 seconds' THEN
+                RAISE EXCEPTION 'migration changed the lock timeout';
+              END IF;
+            END $$;
+            ALTER TABLE items ADD COLUMN migrated BOOLEAN NOT NULL DEFAULT true;`,
+          },
+        ],
+      });
+      migrated.exec("INSERT INTO items(id) VALUES (1)");
+      expect(migrated.prepare("SELECT migrated FROM items WHERE id = 1").get()).toEqual({
+        migrated: 1,
+      });
+      expect(migrated.prepare(limits).get()).toEqual(runtime);
+
+      migrated.runTransaction(() => {
+        const nested = (fail: boolean) =>
+          migrated.runTransaction(
+            () => {
+              expect(migrated.prepare(limits).get()).toEqual({ ...runtime, statement: "1h" });
+              if (fail) {
+                throw new Error("maintenance refused");
+              }
+            },
+            { maintenance: true },
+          );
+        nested(false);
+        expect(migrated.prepare(limits).get()).toEqual(runtime);
+        expect(() => nested(true)).toThrow("maintenance refused");
+        expect(migrated.prepare(limits).get()).toEqual(runtime);
+      });
+    });
+  });
+
   it.each([false, true])(
     "settles schema migration authority after physical commit (refuse=%s)",
     (refuse) => {
