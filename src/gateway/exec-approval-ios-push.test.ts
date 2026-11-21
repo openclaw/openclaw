@@ -7,6 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import { resolveApnsRelayConfigFromEnv } from "../infra/push-apns.relay.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import {
   createExecApprovalIosPushDelivery,
@@ -305,6 +306,36 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(mocks.pairing).not.toHaveBeenCalled();
     expect(mocks.registrations).not.toHaveBeenCalled();
     expect(mocks.execWake).not.toHaveBeenCalled();
+  });
+
+  it("sends requests and cleanup to devices on both hosted relay origins", async () => {
+    const origins = [
+      "https://ios-push-relay.openclaw.ai",
+      "https://ios-push-relay-sandbox.openclaw.ai",
+    ];
+    const nodes = ["ios-production", "ios-sandbox"];
+    mockPairedIosOperators(...nodes.map((id) => pairedIosOperator(approvalScopes, id)));
+    mocks.registrations.mockImplementation(async (nodeIds: readonly string[]) =>
+      nodeIds.map((nodeId) => ({
+        nodeId,
+        registration: {
+          ...relayApnsRegistration(nodeId),
+          relayOrigin: origins[nodes.indexOf(nodeId)],
+          environment: nodeId === "ios-production" ? "production" : "sandbox",
+        },
+      })),
+    );
+    mocks.relayConfig.mockImplementation((_env, _gateway, options) =>
+      resolveApnsRelayConfigFromEnv({}, {}, options),
+    );
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+    expect(await delivery.handleRequested(approvalRequest("approval-mixed-relays"))).toBe(true);
+    await delivery.handleResolved({ id: "approval-mixed-relays" });
+    for (const send of [mocks.execAlert, mocks.execWake]) {
+      expect(send.mock.calls.map(([push]) => [push.nodeId, push.relayConfig?.baseUrl])).toEqual(
+        nodes.map((id, index) => [id, origins[index]]),
+      );
+    }
   });
 
   afterEach(() => {
