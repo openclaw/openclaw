@@ -132,3 +132,35 @@ describe("managed embedding capacity through server preparation", () => {
     }
   });
 });
+
+describe("managed chat prompt reuse", () => {
+  function chat(swaFull: boolean, extra: Partial<LlamaServerPresetOptions> = {}) {
+    return {
+      chatModel: {
+        mode: "configure",
+        id: "gemma-4-e4b-it-q4_k_m",
+        path: "/models/gemma.gguf",
+        swaFull,
+      },
+      embeddingModelPath: "/models/embedding.gguf",
+      ...extra,
+    } satisfies LlamaServerPresetOptions;
+  }
+
+  it("keeps a full sliding-window cache when the model asks for it", () => {
+    expect(buildLlamaServerPreset(undefined, chat(true))).toMatch(
+      /\[gemma-4-e4b-it-q4_k_m\][^[]*swa-full = true/u,
+    );
+    expect(buildLlamaServerPreset(undefined, chat(false))).not.toContain("swa-full");
+  });
+
+  it.each([
+    ["[*] defaults", "version = 1\n\n[*]\nswa-full = false\n", {}],
+    ["the model section", "version = 1\n\n[gemma-4-e4b-it-q4_k_m]\nswa-full = false\n", {}],
+    ["router arguments", undefined, { serviceSettings: { args: ["--swa-full"] } }],
+  ] as const)("keeps an explicit choice in %s", (_where, existing, extra) => {
+    const preset = buildLlamaServerPreset(existing, chat(true, extra));
+
+    expect(preset).not.toContain("swa-full = true");
+  });
+});

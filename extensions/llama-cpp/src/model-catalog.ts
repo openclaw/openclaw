@@ -213,6 +213,26 @@ export function resolveLlamaCppMemoryBudget(
   return Math.max(0, backend === "cuda" ? Math.min(systemBudget, gpuBudget) : systemBudget);
 }
 
+// Gemma's sliding-window layers keep only recent cache entries, so llama.cpp reprocesses the whole
+// prompt whenever an earlier part changes (dropped reasoning, a new session). A full-size cache keeps
+// prefix reuse but can need several more GiB at the default context; enable it only with that headroom.
+const FULL_SWA_CACHE_HEADROOM_BYTES = 8 * GIB;
+
+export function withLlamaCppPromptReuse(
+  recipe: LlamaCppModelRecipe,
+  hardware: LlamaCppHardware,
+  backend: "cpu" | "metal" | "cuda",
+): ModelDefinitionConfig {
+  if (
+    !recipe.model.id.startsWith("gemma-") ||
+    resolveLlamaCppMemoryBudget(hardware, backend) <
+      recipe.memoryBytes + FULL_SWA_CACHE_HEADROOM_BYTES
+  ) {
+    return recipe.model;
+  }
+  return { ...recipe.model, params: { ...recipe.model.params, swaFull: true } };
+}
+
 export function resolveLlamaCppModelCandidates(
   hardware: LlamaCppHardware,
   backend: "cpu" | "metal" | "cuda",
