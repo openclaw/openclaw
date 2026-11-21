@@ -37,6 +37,8 @@ Fixture reference survey / `c4c10bae3232`: 58 top-level files checked for refere
 
 OpenClaw ID token startup / `6978b40e9d38`: D1 duplicate startup-wait case, −13 test lines / one case. The retained service case exercises the real saved-binding publisher; exact mismatch/report checks and current-owner lookup preparation remain. The token-startup candidate in the frozen review below is qualified. Boat baseline 16/16 and candidate 15/15; removing only the token check's startup wait makes both original and keeper fail with early acceptance. Production bytes restored before the candidate run. Format, lint, types and independent preservation review passed. Broad scan results are recorded with the PR. No production change or runtime savings claimed.
 
+Scheduled source / `3dbbeef49fa6`: C duplicate `expectCurrent` helper, −4 test-support lines; all 14 cases and seven calls remain. The existing recovery helper preserves assertion order and callback semantics. Boat baseline/candidate passed 14/14; the same policy-recheck fault failed both admitted member/owner cases with either helper. Production bytes restored; targeted format/lint/types and independent preservation review passed. Broad scan results belong to the PR; no production change or runtime savings claimed.
+
 ## Frozen source census
 
 Census 7c99ae1dd417: owner / support / caller / history / static routing; bounded transitive dependencies. Closed = source-only.
