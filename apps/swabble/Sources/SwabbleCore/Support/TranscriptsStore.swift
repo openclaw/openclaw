@@ -4,25 +4,29 @@ public actor TranscriptsStore {
     public static let shared = TranscriptsStore()
 
     private var entries: [String] = []
-    private let limit = 100
     private let fileURL: URL
 
-    public init() {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/swabble", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        self.fileURL = dir.appendingPathComponent("transcripts.log")
-        if let data = try? Data(contentsOf: fileURL),
+    public init(fileURL: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            let dir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/swabble", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            self.fileURL = dir.appendingPathComponent("transcripts.log")
+        }
+        if let data = try? Data(contentsOf: self.fileURL),
            let text = String(data: data, encoding: .utf8)
         {
-            self.entries = text.split(separator: "\n").map(String.init).suffix(self.limit)
+            self.entries = text.split(separator: "\n").map(String.init)
         }
     }
 
-    public func append(text: String) {
+    public func append(text: String, maxEntries: Int) {
         self.entries.append(text)
-        if self.entries.count > self.limit {
-            self.entries.removeFirst(self.entries.count - self.limit)
+        let overflow = self.entries.count - max(maxEntries, 0)
+        if overflow > 0 {
+            self.entries.removeFirst(overflow)
         }
         let body = self.entries.joined(separator: "\n")
         try? body.write(to: self.fileURL, atomically: false, encoding: .utf8)
