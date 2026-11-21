@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { ROOT_VALUE_FLAGS } from "../../cli-root-options.mjs";
 import { GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
 import {
@@ -22,7 +21,7 @@ export type GitReleaseTrial = {
   attempts: number;
   /** The resolved config path; a config outside the state directory is not in the scan. */
   config?: string;
-  /** Selected by the next service start instead of now (`--no-restart`), without a fallback. */
+  /** Selected by the next service start instead of now (`--no-restart`). */
   pending?: boolean;
   /** Written by the launcher before it restores anything: what the rollback restores. */
   restoring?: Array<{ suffix: string; files: string[] }>;
@@ -192,9 +191,9 @@ let trial;
 try {
   trial = JSON.parse(fs.readFileSync(trialFile, "utf8"));
 } catch {}
-// An update run with --no-restart leaves activation to the next service start. That start
-// is the operator's, with no updater to settle a trial (an older target cannot settle it
-// itself), so a deferred release is selected without the two-start fallback.
+// A deferred npm-to-Git switch still has the package that served as its fallback. Keep
+// that trial when the operator starts it; older Git targets that cannot settle their
+// own trial retain the existing deferred-release behavior.
 if (trial?.pending && counts) {
   if (linked(fs.readlinkSync(slot)) === linked(trial.previous)) {
     switchLink(trial.target);
@@ -210,8 +209,13 @@ if (trial?.pending && counts) {
     }
     fs.renameSync(temporary, legacySlot);
   }
-  fs.rmSync(trialFile, { force: true });
-  trial = undefined;
+  if (!linked(trial.previous).startsWith(path.join(prefix, "releases") + path.sep)) {
+    trial.pending = false;
+    writeTrial(trial);
+  } else {
+    fs.rmSync(trialFile, { force: true });
+    trial = undefined;
+  }
 }
 if (trial && counts) {
   if (linked(fs.readlinkSync(slot)) !== linked(trial.target)) {
@@ -279,12 +283,4 @@ export async function writeGitReleaseLauncher(prefix: string): Promise<string> {
     await fs.rename(temporary, launcher);
   }
   return launcher;
-}
-
-/**
- * The `openclaw.mjs` an npm global package holds once a Git install runs from releases. Its exact
- * text is how a later switch back to npm recognizes the package as this installation's.
- */
-export function gitReleaseForwardingEntry(launcher: string): string {
-  return `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${launcher} selects.\nawait import(${JSON.stringify(pathToFileURL(launcher).href)});\n`;
 }

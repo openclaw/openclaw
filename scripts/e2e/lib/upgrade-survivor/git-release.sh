@@ -6,7 +6,9 @@
 #   service reaches the candidate by the baseline's own updater, then the candidate's
 #   updater runs every remaining update.
 # - no-service: a checkout of the candidate with no service updates through a release.
-# - package-to-git: a published package with a service switches to the Git checkout.
+# - package-to-git: a published package with a service switches to the Git checkout. The
+#   first switch targets a crash commit and must fall back to the npm package; the retried
+#   switch then succeeds.
 
 git_release_lib="$PWD/scripts/e2e/lib/upgrade-survivor"
 git_release_helper="$git_release_lib/git-release.mjs"
@@ -716,12 +718,42 @@ git_release_package_second() {
   grep -qF "${git_release_target:0:7}" "$ARTIFACT_ROOT/$label-path-version.txt"
 }
 
+# A switch whose first Git build never listens goes back to the npm package that served:
+# two failed starts, then the Gateway and `openclaw` on PATH run the package again.
+git_release_package_crash() {
+  local label=package-crash result=0 attempt package_root
+  package_root="$(realpath "$BASELINE_PACKAGE_ROOT")"
+  git_release_commit "$label" crash
+  git_release_before_update "$label" "$git_release_target"
+  git_release_path_cli update --channel dev --yes --json \
+    >"$ARTIFACT_ROOT/$label-update.json" 2>"$ARTIFACT_ROOT/$label-update.err" || result=$?
+  echo "$label: updater exit $result" | tee "$ARTIFACT_ROOT/$label-update.exit"
+  for attempt in $(seq 1 600); do
+    git_release_slice "$label-switch-back"
+    grep -qF "$git_release_switch_back" "$ARTIFACT_ROOT/$label-switch-back-gateway.log" && break
+    sleep 1
+  done
+  grep -F "$git_release_switch_back" "$ARTIFACT_ROOT/$label-switch-back-gateway.log"
+  echo "$label: crash release starts logged: $(grep -cF "$git_release_crash_line" "$ARTIFACT_ROOT/$label-switch-back-gateway.log" || true)" |
+    tee "$ARTIFACT_ROOT/$label-crash-starts.txt"
+  [ "$(realpath "$git_prefix/openclaw")" = "$package_root" ]
+  git_release_settle "$label"
+  grep -qx ready "$ARTIFACT_ROOT/$label-settled.txt"
+  git_release_path_cli --version | tee "$ARTIFACT_ROOT/$label-path-version.txt"
+  grep -qF "$(node -p 'require(process.argv[1]).version' "$package_root/package.json")" \
+    "$ARTIFACT_ROOT/$label-path-version.txt"
+  git_release_check_untouched "$label"
+}
+
 run_git_release_package_to_git() {
   phase git-install-package git_release_install_package
   phase git-install-service git_release_install_service git_release_path_cli
   phase git-package-request git_release_request package record
   phase git-checkout-candidate git_release_checkout "$CANDIDATE_SPEC"
   export OPENCLAW_GIT_DIR="$git_checkout"
+  phase git-package-crash-switch git_release_package_crash
+  phase git-package-crash-observe git_release_request package-crash record
+  git -C "$git_upstream" update-ref refs/heads/main "$git_release_good_tip"
   phase git-package-switch git_release_package_switch
   phase git-package-switch-observe git_release_request package-switch record
   phase git-package-second-update git_release_package_second

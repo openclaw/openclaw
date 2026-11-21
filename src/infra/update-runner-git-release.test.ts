@@ -8,11 +8,22 @@ import { revalidateManagedGatewayServiceAfterUpdate } from "../cli/update-cli/up
 import type { GatewayServiceState } from "../daemon/service-types.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { GIT_RELEASE_LAUNCHER, GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
-import { collectGitReleases, createGitReleaseDirs, publishGitRelease } from "./git-release.js";
+import {
+  GIT_RELEASE_LAUNCHER,
+  GIT_RELEASE_TRIAL,
+  gitReleaseSlot,
+  gitReleaseForwardingEntry,
+  prepareGitReleaseLayout,
+} from "./git-release-paths.js";
+import {
+  collectGitReleases,
+  createGitReleaseDirs,
+  publishGitRelease,
+  readGitReleasePlacement,
+} from "./git-release.js";
 import { readPackageVersion } from "./package-json.js";
 import { acquirePackageReleaseLease } from "./package-release-lease.js";
-import { PACKAGE_RELEASES_DIR } from "./package-release-slot-path.js";
+import { PACKAGE_RELEASES_DIR, readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import type { UpdateRunnerOptions } from "./update-runner-types.js";
 
 const target = vi.hoisted(() => ({
@@ -187,8 +198,13 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     return { slot: gitReleaseSlot(prefix), running: await fs.realpath(running) };
   }
 
-  const convert = (gitRoot: string, opts: Partial<UpdateRunnerOptions> = {}) =>
+  const convert = (
+    gitRoot: string,
+    opts: Partial<UpdateRunnerOptions> = {},
+    previousPackageRoot?: string,
+  ) =>
     updateGitRelease({
+      previousPackageRoot,
       gitRoot,
       runCommand: (argv, options) =>
         argv[1]?.endsWith("openclaw.mjs")
@@ -269,6 +285,103 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await convert(checkout);
 
     expect(target.conversionTargets).toEqual([serving]);
+  });
+
+  async function npmPackage(dir: string) {
+    const root = path.join(dir, "npm", "lib", "node_modules", "openclaw");
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "0.9.0", type: "module" }),
+    );
+    await fs.writeFile(path.join(root, "dist", "index.js"), 'console.log("npm gateway");');
+    await fs.writeFile(path.join(root, "dist", "entry.js"), 'console.log("npm cli");');
+    return root;
+  }
+
+  it.skipIf(Boolean(process.versions.bun)).each([false, true])(
+    "restores the serving npm package after two failed Git switch starts (deferred: %s)",
+    async (deferReleaseActivation) => {
+      const { dir, checkout } = await checkoutWithTwoCommits();
+      const previous = await npmPackage(dir);
+      target.runtimeVerified = false;
+      target.runningRoot = checkout;
+      const result = await convert(checkout, { deferReleaseActivation }, previous);
+      expect(result.status, `${result.reason}: ${JSON.stringify(result.steps)}`).toBe("ok");
+      const prefix = path.join(dir, "state", "git-install");
+      const slot = gitReleaseSlot(prefix);
+      const launcher = path.join(prefix, GIT_RELEASE_LAUNCHER);
+      const trialFile = path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
+      const trial = JSON.parse(await fs.readFile(trialFile, "utf8")) as Trial;
+      const candidate = path.resolve(prefix, trial.target);
+      await fs.mkdir(path.join(candidate, "dist"), { recursive: true });
+      await fs.writeFile(path.join(candidate, "dist", "index.js"), 'throw new Error("boot");');
+      // The CLI exposure replaces only the npm bin entry; the original dist remains intact.
+      const entry = path.join(previous, "openclaw.mjs");
+      await fs.writeFile(entry, gitReleaseForwardingEntry(launcher));
+      // An active collection may retire Git releases, never the external npm package.
+      const stale = await createGitReleaseDirs(prefix);
+      await fs.mkdir(stale.releaseRoot);
+      await fs.utimes(stale.releasePrefix, threeDaysAgo, threeDaysAgo);
+      await fs.utimes(previous, threeDaysAgo, threeDaysAgo);
+      const collected = await collectGitReleases({
+        prefix,
+        keep: [],
+        prune: async () => {},
+        runningRoot: null,
+      });
+      if (!deferReleaseActivation) {
+        expect(collected.removed).toContain(stale.releasePrefix);
+      }
+      const start = (args: string[]) =>
+        spawnSync(process.execPath, [entry, ...args], { encoding: "utf8", timeout: 10_000 });
+      expect(start(["gateway"]).status).not.toBe(0);
+      expect(start(["gateway"]).status).not.toBe(0);
+      const recovered = start(["gateway"]);
+      expect(recovered.status, recovered.stderr).toBe(0);
+      expect(recovered.stdout).toContain("npm gateway");
+      expect(recovered.stderr).toContain("failed to start twice; switched back");
+      expect(await fs.realpath(slot)).toBe(previous);
+      expect(start(["--version"]).stdout).toContain("npm cli");
+      expect(target.conversionTargets).toEqual([]);
+      // A later update must not displace the working fallback link.
+      expect(prepareGitReleaseLayout()).toBeUndefined();
+      expect(await fs.realpath(slot)).toBe(previous);
+      // Age and lack of a keep entry cannot make an external npm package collectible.
+      await fs.utimes(previous, threeDaysAgo, threeDaysAgo);
+      await fs.utimes(path.dirname(candidate), threeDaysAgo, threeDaysAgo);
+      await collectGitReleases({ prefix, keep: [], prune: async () => {}, runningRoot: null });
+      expect(await fs.readFile(path.join(previous, "dist", "index.js"), "utf8")).toContain(
+        "npm gateway",
+      );
+    },
+  );
+
+  it("resumes an interrupted npm switch with the recorded package as fallback", async () => {
+    const { dir, checkout } = await checkoutWithTwoCommits();
+    const previous = await npmPackage(dir);
+    const prefix = path.join(dir, "state", "git-install");
+    await publishGitRelease({ prefix, releaseRoot: previous, trial: false });
+    const candidate = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await git(checkout, "worktree", "add", "-q", "--detach", candidate, "HEAD");
+    await fs.mkdir(path.join(candidate, "dist"));
+    await fs.writeFile(path.join(candidate, "dist", "index.js"), "");
+    await publishGitRelease({ prefix, releaseRoot: candidate, trial: true });
+    const slot = gitReleaseSlot(prefix);
+    const placement = await readGitReleasePlacement(readPackageReleaseSlotSync(slot)!, checkout);
+    expect(placement).toEqual({
+      serving: previous,
+      fallback: previous,
+      unserved: { root: candidate, selected: true },
+    });
+
+    const result = await convert(checkout);
+    expect(result.status, `${result.reason}: ${JSON.stringify(result.steps)}`).toBe("ok");
+    const trial = JSON.parse(
+      await fs.readFile(path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL), "utf8"),
+    ) as Trial;
+    expect(await fs.realpath(path.resolve(prefix, trial.previous))).toBe(previous);
+    expect(target.conversionTargets).toEqual([]);
   });
 
   /**

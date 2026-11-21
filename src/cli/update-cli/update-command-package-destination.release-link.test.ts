@@ -2,8 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { gitReleaseForwardingEntry } from "../../infra/git-release-launcher.js";
-import { GIT_RELEASE_LAUNCHER, gitReleaseSlot } from "../../infra/git-release-paths.js";
+import {
+  GIT_RELEASE_LAUNCHER,
+  gitReleaseForwardingEntry,
+  gitReleaseSlot,
+} from "../../infra/git-release-paths.js";
 import { createPackageReleasePrefixFixture } from "../../infra/package-release-slot.test-support.js";
 import { createNpmTarget } from "../../infra/package-update-steps.test-support.js";
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";

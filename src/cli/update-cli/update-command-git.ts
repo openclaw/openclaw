@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { readRegularFile } from "../../infra/fs-safe.js";
-import { gitReleaseForwardingEntry } from "../../infra/git-release-launcher.js";
-import { GIT_RELEASE_LAUNCHER, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
+import {
+  gitReleaseForwardingEntry,
+  GIT_RELEASE_LAUNCHER,
+  resolveGitReleasePrefix,
+} from "../../infra/git-release-paths.js";
 import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
@@ -430,6 +433,7 @@ export async function updateGitInstall(params: {
   const result = await updateGitRelease({
     ...(await buildUpdateCommandRunner(undefined, assertCurrent)),
     gitRoot,
+    previousPackageRoot: installTarget ? (installTarget.packageRoot ?? params.root) : undefined,
     timeoutMs: params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
     startedAt: params.startedAt,
     opts: {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
 import {
   packageReleaseGlobalRoot,
@@ -12,6 +13,26 @@ export const GIT_RELEASE_LAUNCHER = "openclaw-launcher.mjs";
 export const GIT_RELEASE_TRIAL = ".trial";
 
 /**
+ * The `openclaw.mjs` an npm global package holds once a Git install runs from releases. Its exact
+ * text is how a later switch back to npm recognizes the package as this installation's.
+ */
+export function gitReleaseForwardingEntry(launcher: string): string {
+  return `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${launcher} selects.\nawait import(${JSON.stringify(pathToFileURL(launcher).href)});\n`;
+}
+
+/** The package left intact by this install's npm-to-Git switch, including after fallback. */
+export function isGitReleaseForwardingPackage(root: string, prefix: string): boolean {
+  try {
+    return (
+      fs.readFileSync(path.join(root, "openclaw.mjs"), "utf8") ===
+      gitReleaseForwardingEntry(path.join(prefix, GIT_RELEASE_LAUNCHER))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Every Git install updates through releases (on Windows the link is a junction). The layout
  * never refuses an update (#197949 decision 8): something other than a release link at the
  * package path is moved aside, and the returned warning names where. A Git checkout there (the
@@ -21,7 +42,12 @@ export const GIT_RELEASE_TRIAL = ".trial";
  */
 export function prepareGitReleaseLayout(): string | undefined {
   const slot = gitReleaseSlot(resolveGitReleasePrefix());
-  if (!fs.lstatSync(slot, { throwIfNoEntry: false }) || readPackageReleaseSlotSync(slot)) {
+  const entry = fs.lstatSync(slot, { throwIfNoEntry: false });
+  if (
+    !entry ||
+    readPackageReleaseSlotSync(slot) ||
+    (entry.isSymbolicLink() && isGitReleaseForwardingPackage(slot, path.dirname(slot)))
+  ) {
     return undefined;
   }
   if (fs.existsSync(path.join(slot, ".git"))) {

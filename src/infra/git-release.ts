@@ -26,6 +26,7 @@ import {
   sweepPackageReleaseTemporaryLinks,
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
+import { isPathStrictlyInside } from "./path-guards.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import {
   readBuiltGatewayBuildId,
@@ -259,8 +260,9 @@ export async function findVerifiedGitRelease(params: {
  * What the trial record says about the link. The link alone is not evidence of what
  * serves: an update that fails after the switch but before any Gateway starts the new
  * release leaves the link on a release that never served, with its trial still armed.
- * That trial's `previous` is used only when its commit is shown to serve (see
- * `isCheckoutServingCommit`) and its build verifies; otherwise `unsafeFallback` says why.
+ * A recorded package fallback outside this install's releases stays in place; its dist
+ * entries must still exist. A Git fallback needs evidence that its commit serves (see
+ * `isCheckoutServingCommit`) and a verified build; otherwise `unsafeFallback` says why.
  */
 export async function readGitReleasePlacement(
   slot: PackageReleaseSlot,
@@ -294,6 +296,23 @@ export async function readGitReleasePlacement(
     return current;
   }
   const unserved = { root: slot.releaseRoot, selected: true };
+  // npm-to-Git records the package that served, not a rebuilt copy of the clone's HEAD.
+  // It has no worktree metadata or Git build stamps, and retention never owns its path.
+  if (previous && !isPathStrictlyInside(path.join(slot.prefix, PACKAGE_RELEASES_DIR), previous)) {
+    const entries = await Promise.all(
+      ["index.js", "entry.js"].map((entry) =>
+        fs.stat(path.join(previous, "dist", entry)).catch(() => null),
+      ),
+    );
+    if (entries.every((entry) => entry?.isFile())) {
+      return { serving: previous, fallback: previous, unserved };
+    }
+    return {
+      ...current,
+      unserved,
+      unsafeFallback: { previous: trial.previous, reason: "unverified" },
+    };
+  }
   const commit = previous ? await readReleaseHead(previous) : null;
   // A fallback is used, or its commit rebuilt, only on evidence that the commit serves.
   const served = Boolean(
