@@ -728,6 +728,14 @@ openclaw-systems-page {
     background: transparent;
   }
 
+  /* Keep the label's leading edge and the 88px hit area. Only reserve the
+     compact chevron inset used by the device picker above. */
+  @media (forced-colors: none) {
+    .systems-desktop .desktop-toolbar select.desktop-sizing {
+      padding-inline-end: 28px;
+    }
+  }
+
   /* Wrapped rows start at one edge and Disconnect closes the bar on the right. */
   .systems-desktop .desktop-toolbar__spacer {
     display: none;
