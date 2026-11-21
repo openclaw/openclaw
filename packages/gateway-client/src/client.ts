@@ -210,6 +210,7 @@ export class GatewayClient {
   private approvalRuntimeTokenRetryBudgetUsed = false;
   private approvedGrantRetryPending = false;
   // Track last tick to detect silent stalls.
+  // Monotonic time: a wall-clock step must not hide or invent transport silence.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
@@ -511,7 +512,7 @@ export class GatewayClient {
             this.protocol.closeSocket(1012, "gateway protocol upgraded");
             return;
           }
-          this.lastTick = Date.now();
+          this.lastTick = performance.now();
           this.startTickWatch();
         };
         return stored instanceof Promise ? stored.then(complete) : complete();
@@ -566,7 +567,7 @@ export class GatewayClient {
       onGap: (info) => this.opts.onGap?.(info),
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onActivity: () => {
-        this.lastTick = Date.now();
+        this.lastTick = performance.now();
       },
       onCallbackError: (label, error) =>
         this.logDebug(
@@ -1152,7 +1153,7 @@ export class GatewayClient {
       if (this.stopped) {
         return;
       }
-      if (!this.lastTick) {
+      if (this.lastTick === null) {
         return;
       }
       const allPendingRequestsHaveTimeouts =
@@ -1162,7 +1163,7 @@ export class GatewayClient {
       if (allPendingRequestsHaveTimeouts) {
         return;
       }
-      const gap = Date.now() - this.lastTick;
+      const gap = performance.now() - this.lastTick;
       const rawTimeoutMs = this.opts.tickWatchTimeoutMs;
       // Normal gateways use the server-advertised tick interval. Long-running
       // harness clients can widen the threshold without mutating internals.
