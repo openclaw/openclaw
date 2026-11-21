@@ -172,6 +172,113 @@ struct ChatFileAdmissionTests {
         #expect(model.errorText == "Too large to send: \(rejectedName)")
     }
 
+    @Test(arguments: [16, 6])
+    @MainActor
+    func `oversized picker videos require acknowledgment before sending the draft`(videoBytes: Int) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: FileAdmissionTransport(limits: .init(maxBytes: 10, maxImageBytes: 10)),
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { model.detachTransport() }
+        let accepted = directory.appendingPathComponent("accepted.pdf")
+        try Data(count: 5).write(to: accepted)
+        await model.loadAttachments(urls: [accepted])
+        let video = directory.appendingPathComponent("clip.mp4")
+        try Data(count: videoBytes).write(to: video)
+
+        model.input = "Keep this draft"
+        await model.addVideoAttachment(
+            url: video,
+            fileName: video.lastPathComponent,
+            mimeType: "video/mp4",
+            expectedSession: model.currentSessionSnapshot())
+        #expect(!model.canSend)
+        #expect(model.send() == nil)
+        #expect(model.input == "Keep this draft")
+        #expect(model.attachments.map(\.fileName) == ["accepted.pdf"])
+        #expect(model.errorText == nil)
+        let rejection = try #require(model.rejectedVideos.first)
+        #expect(rejection.fileName == "clip.mp4")
+        #expect(rejection.byteCount == videoBytes)
+        #expect(rejection.maximumBytes == 5)
+
+        model.removeRejectedVideo(rejection.id)
+        #expect(model.rejectedVideos.isEmpty)
+        #expect(model.canSend)
+        #expect(model.input == "Keep this draft")
+        #expect(model.attachments.map(\.fileName) == ["accepted.pdf"])
+    }
+
+    @Test
+    @MainActor
+    func `replacing the model keeps each rejected video with its draft until removed`() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let transport = FileAdmissionTransport(limits: .init(maxBytes: 10, maxImageBytes: 10))
+        let original = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { original.detachTransport() }
+        original.input = "Keep this draft"
+        for name in ["first.mp4", "second.mp4"] {
+            let video = directory.appendingPathComponent(name)
+            try Data(count: 11).write(to: video)
+            await original.addVideoAttachment(url: video, fileName: name, mimeType: "video/mp4")
+        }
+        let hydrated = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            activeAgentId: "main",
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { hydrated.detachTransport() }
+        #expect(original.visibleComposerKey != hydrated.visibleComposerKey)
+        original.detachTransport()
+        hydrated.inheritComposerDraftState(from: original, preservingVisibleInput: true)
+
+        #expect(hydrated.input == "Keep this draft")
+        #expect(hydrated.rejectedVideos.map(\.fileName) == ["first.mp4", "second.mp4"])
+        let provisionalKey = hydrated.visibleComposerKey
+        hydrated.syncSessionRoutingContract("per-sender|work-main|main")
+        #expect(hydrated.visibleComposerKey != provisionalKey)
+        #expect(hydrated.rejectedVideos.map(\.fileName) == ["first.mp4", "second.mp4"])
+        let other = OpenClawChatViewModel(
+            sessionKey: "agent:other:main",
+            transport: transport,
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { other.detachTransport() }
+        other.inheritComposerDraftState(from: hydrated, preservingVisibleInput: false)
+        #expect(other.rejectedVideos.isEmpty)
+        #expect(other.input.isEmpty)
+
+        let returned = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|work-main|main",
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { returned.detachTransport() }
+        returned.inheritComposerDraftState(from: other, preservingVisibleInput: false)
+        returned.input = "Keep this draft"
+        #expect(returned.rejectedVideos.map(\.fileName) == ["first.mp4", "second.mp4"])
+        try returned.removeRejectedVideo(#require(returned.rejectedVideos.first).id)
+        #expect(!returned.canSend)
+        #expect(returned.rejectedVideos.map(\.fileName) == ["second.mp4"])
+        try returned.removeRejectedVideo(#require(returned.rejectedVideos.first).id)
+        #expect(returned.canSend)
+        #expect(returned.input == "Keep this draft")
+    }
+
     @Test(arguments: [Int?.none, 6, 8])
     @MainActor
     func `outbox admission preserves an oversized draft`(maximumBytes: Int?) async throws {
