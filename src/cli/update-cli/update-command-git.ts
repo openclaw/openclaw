@@ -162,6 +162,14 @@ export async function retireStandaloneGitWrapper(params: {
         // recognize with the launcher entry. The launcher selects a pending release and counts a
         // foreground Gateway start.
         const entry = pathApi.join(pathApi.dirname(params.replacementRoot), GIT_RELEASE_LAUNCHER);
+        if (
+          windowsEntry !== undefined
+            ? lines.length === 5 && sameWindowsPath(windowsEntry, entry)
+            : execArgs?.[2] === entry
+        ) {
+          // Already this release's launcher; rewriting would only grow the padding below.
+          continue;
+        }
         // cmd.exe rereads a running batch file at its saved byte offset, and `openclaw update` usually
         // runs through this wrapper: once it returns, cmd resumes in the new file at the old file's
         // length. The padded comment ends exactly there, so cmd runs the exit line (keeping the
