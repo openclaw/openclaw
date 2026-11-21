@@ -29,7 +29,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([false, true])("owns transcript mounts (restoring=%s)", async (restoring) => {
+it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestoring) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const clock = createFrameClock();
   vi.stubGlobal("requestAnimationFrame", clock.request);
@@ -176,7 +176,7 @@ it.each([false, true])("owns transcript mounts (restoring=%s)", async (restoring
   document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
   const warmYield = Promise.withResolvers<void>();
   vi.stubGlobal("scheduler", { yield: () => warmYield.promise });
-  const warm = mountPane("mount-held-warm", restoring);
+  const warm = mountPane("mount-held-warm", isRestoring);
   const warmComposer = warm.getByRole("textbox");
   expect(warm.container.querySelector('.chat-thread[role="log"]')).toBeNull();
   expect(warm.container.querySelector(".chat-conversation-loading")).toBeNull();
@@ -195,14 +195,14 @@ it.each([false, true])("owns transcript mounts (restoring=%s)", async (restoring
   document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
   const closedWarmYield = Promise.withResolvers<void>();
   vi.stubGlobal("scheduler", { yield: () => closedWarmYield.promise });
-  const closedWarm = mountPane("mount-closed-warm", restoring);
+  const closedWarm = mountPane("mount-closed-warm", isRestoring);
   closedWarm.unmount();
   closedWarmYield.resolve();
   await closedWarmYield.promise;
   flush();
   expect(closedWarm.chat.transcript.renderedSessionKey).toBeNull();
 
-  const warmCreated = mountPane("mount-held-created", restoring, true);
+  const warmCreated = mountPane("mount-held-created", isRestoring, true);
   expect(warmCreated.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
   expect(warmCreated.container.querySelector(".chat-conversation-loading")).toBeNull();
   warmCreated.unmount();
