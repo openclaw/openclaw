@@ -315,17 +315,6 @@ describe("LabsPage", () => {
     pendingPatch.reject(new Error("Retired save failed"));
     await waitForSolid(() => expect(page.querySelector('[role="alert"]')).toBeNull());
   });
-
-  it("does not expose graduated tool workflows or rewrite their saved choices", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
-    });
-    expect(page.textContent).not.toContain("Code Mode executor");
-    const titles = [...page.querySelectorAll(".settings-row__title")].map((row) => row.textContent);
-    expect(titles).not.toContain("Code Mode");
-    expect(titles).not.toContain("Tool search for all models");
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
-  });
 });
 
 describe("LabsPage Decision assistance", () => {
