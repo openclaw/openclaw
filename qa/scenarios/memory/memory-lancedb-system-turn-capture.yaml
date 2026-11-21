@@ -1,0 +1,134 @@
+title: memory-lancedb keeps OpenClaw system turns out of auto-capture
+
+scenario:
+  id: memory-lancedb-system-turn-capture
+  surface: session-memory
+  coverage:
+    secondary:
+      - channels.message-final-reply
+  objective: Under messages.visibleReplies=message_tool, a stranded private final gets one OpenClaw-generated [System] retry turn that quotes the agent's own reply. With memory-lancedb autoCapture on, that system turn must not be stored as a user memory, while a later user message still is.
+  plugins:
+    - memory-lancedb
+  gatewayConfigPatch:
+    messages:
+      visibleReplies: message_tool
+    plugins:
+      slots:
+        memory: memory-lancedb
+      entries:
+        memory-lancedb:
+          enabled: true
+          config:
+            embedding:
+              model: text-embedding-3-small
+              # The mock provider returns 16-dimensional embeddings.
+              dimensions: 16
+            autoCapture: true
+            autoRecall: false
+            captureMaxChars: 4000
+            customTriggers:
+              - QA-STRANDED-85714
+  successCriteria:
+    - The stranded private final gets one recovery retry, and the reply is delivered via message(action=send).
+    - A later user turn in the same conversation is stored, so capture ran and the retry's capture has settled before the store is read.
+    - No stored memory contains the retry turn's instructions, with or without its [System] marker.
+  docsRefs:
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/memory-lancedb/memory-policy.ts
+    - extensions/memory-lancedb/index.ts
+    - src/auto-reply/reply/stranded-reply-recovery.ts
+    - src/sessions/system-turn-prompt.ts
+  execution:
+    kind: flow
+    summary: Strand a message_tool_only private final with memory-lancedb autoCapture on, let the one retry deliver it, then read the memory store.
+    config:
+      requiredProviderMode: mock-openai
+      agentId: qa
+      conversationId: qa-stranded-memory-dm
+      # The capture filter rejects this prompt ("call any tool"), so the [System] retry is the first
+      # capturable text and no earlier row can absorb it through duplicate matching.
+      prompt: "qa stranded final recovery check. Include `QA-STRANDED-85714` in a thorough multi-sentence answer, but do not call any tool yet."
+      expectedMarker: QA-STRANDED-85714
+      # Captures for one session run in order, so once this later turn is stored the retry's
+      # capture has finished. A fixed sleep cannot tell "nothing stored" from "not yet". The mock's
+      # 16-dimension embeddings put most English sentences above the 0.95 duplicate threshold;
+      # this text stays far below it against the prompt and the retry turn.
+      barrierPrompt: "QA-MEMORY-BARRIER 記住 1 2 3 4 5 6 7 8 9 0"
+      # Matches the retry turn whether or not sanitizing removed its [System] first line.
+      retryFilter: "text LIKE '%send it now with message(action=send)%'"
+      barrierFilter: "text LIKE '%QA-MEMORY-BARRIER%'"
+
+flow:
+  steps:
+    - name: stores the user turn but not the stranded-reply system turn
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Alice
+            text:
+              expr: config.barrierPrompt
+        - call: waitForCondition
+          saveAs: barrierRows
+          args:
+            - lambda:
+                expr: "(async () => { const rows = await runQaCli(env, ['ltm', 'query', '--agent', config.agentId, '--filter', config.barrierFilter, '--cols', 'text', '--limit', '5'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return Array.isArray(rows) && rows.length > 0 ? rows : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 1000
+        - call: runQaCli
+          saveAs: retryRows
+          args:
+            - ref: env
+            - - ltm
+              - query
+              - --agent
+              - expr: config.agentId
+              - --filter
+              - expr: config.retryFilter
+              - --cols
+              - text
+              - --limit
+              - "50"
+            - timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+              json: true
+        - assert:
+            expr: "Array.isArray(retryRows) && retryRows.length === 0"
+            message:
+              expr: "`expected no stored retry turn, saw ${JSON.stringify(retryRows)}`"
+      detailsExpr: "`barrier rows=${barrierRows.length}; retry rows=${retryRows.length}; first retry row: ${JSON.stringify(retryRows[0] ?? null).slice(0, 240)}`"
