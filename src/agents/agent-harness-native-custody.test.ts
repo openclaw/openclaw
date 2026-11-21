@@ -3,8 +3,12 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { projectGatewaySessionRunState } from "../gateway/session-utils-display.js";
+import { buildSessionListRowMetadataContext } from "../gateway/session-utils-projection.js";
 import { onAgentEventForRun, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import { getGatewayContextLifetime } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -37,6 +41,8 @@ it.each(["source-replaced", "released", "gateway-closed", "settled"] as const)(
       const context = createContext();
       const resolver = () => context;
       context.resolveGatewayContext = resolver;
+      const entry = { sessionId: "native-requester", updatedAt: Date.now() };
+      await replaceSessionEntry({ agentId: "main", sessionKey: "agent:main:main" }, entry);
       const scope = createAgentHarnessCompletionScope({
         requesterSessionKey: "agent:main:main",
         gatewayContextResolver: resolver,
@@ -77,6 +83,22 @@ it.each(["source-replaced", "released", "gateway-closed", "settled"] as const)(
         expect(received).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ runId, agentId: "main", stream: "assistant" }),
         );
+        const activity = (sessionId = entry.sessionId) =>
+          projectGatewaySessionRunState({
+            key: scope.requesterSessionKey,
+            entry: { ...entry, sessionId },
+            now: Date.now(),
+            rowContext: buildSessionListRowMetadataContext({ now: Date.now() }),
+          }).fields.hasActiveSubagentRun === true;
+        emit({ stream: "execution", data: { state: "running", sourceId: "native" } });
+        expect(activity()).toBe(true);
+        expect(activity("replacement-requester")).toBe(false);
+        // The child's observation must not invent an abortable foreground run.
+        expect(buildProjectedAgentRunIndex().sessionKeys.size).toBe(0);
+        emit({ stream: "execution", data: { state: "unknown", sourceId: "native" } });
+        expect(activity()).toBe(false);
+        emit({ stream: "execution", data: { state: "waiting", sourceId: "native" } });
+        expect(activity()).toBe(true);
         if (ending === "source-replaced") {
           sourceCurrent = false;
         } else if (ending === "released") {
@@ -89,7 +111,8 @@ it.each(["source-replaced", "released", "gateway-closed", "settled"] as const)(
           expect(runWithAgentHarnessCompletionCustody(custody, scope, () => true)).toBe(true);
         }
         expect(() => emit({ stream: "assistant", data: { text: "Late result" } })).toThrow();
-        expect(received).toHaveBeenCalledOnce();
+        expect(activity()).toBe(false);
+        expect(received).toHaveBeenCalledTimes(4);
       } finally {
         custody?.release();
         root.release();

@@ -11,13 +11,13 @@ import {
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 import {
   areAgentRunModelsEqual,
-  buildAgentRunProjectionIndex,
   projectedAgentRunInputKey,
   projectedRunIdentity,
   resolveAgentRunProjectionProgressState,
 } from "./agent-run-projection.js";
 import {
   getAgentRunRegistryState,
+  buildProjectedAgentRunIndex,
   bumpAgentRunIndexVersion,
   getAgentRunContextOwnerStatus,
   getAgentRunLifecycleGeneration,
@@ -35,6 +35,7 @@ import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage
 import { isOperatorAuthorityUnavailable } from "./operator-authority-error.js";
 
 export type { AgentRunDelegatedAuthority, ProjectedAgentRunIndex };
+export { buildProjectedAgentRunIndex } from "./agent-run-registry-state.js";
 export { listAgentRunsForSession } from "./agent-run-registry-state.js";
 export { getAgentRunContextOwnerStatus, getAgentRunLifecycleGeneration, readAgentRunIndexVersion };
 
@@ -595,11 +596,6 @@ export function resolveProjectedAgentRunModel(params: {
       );
 }
 
-export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
-  const { contexts, lifecycleGeneration } = getAgentRunRegistryState();
-  return buildAgentRunProjectionIndex({ contexts: contexts.values(), lifecycleGeneration });
-}
-
 export function resolveProjectedAgentRunProgressState(
   params: Parameters<typeof resolveAgentRunProjectionProgressState>[0] & {
     index?: ProjectedAgentRunIndex;
@@ -762,12 +758,13 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
 
 export function resetAgentRunRegistryForTest(): void {
   const state = getAgentRunRegistryState();
-  const hadRunContexts = state.contexts.size > 0;
+  const hadRunContexts = state.contexts.size > 0 || (state.subagentActivities?.size ?? 0) > 0;
   for (const context of state.contexts.values()) {
     context.approvalLeases?.close();
   }
   resetAgentRunUsageForTest();
   state.contexts.clear();
+  state.subagentActivities?.clear();
   state.owners.clear();
   state.queuedRunContextLeases = undefined;
   if (hadRunContexts) {
