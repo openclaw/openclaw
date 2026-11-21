@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { basename, dirname, sep } from "node:path";
+import { shellEscape } from "../../src/shared/shell-quote.js";
 import { resolveTestTempRoot } from "../../src/test-utils/env.js";
 
 export function resolveGitOutsideFixtures(env: NodeJS.ProcessEnv = process.env): string {
@@ -21,3 +22,16 @@ export const gitPathShimGuard = `if [ -n "\${OPENCLAW_TEST_GIT_SHIM_ACTIVE:-}" ]
   exit 98
 fi
 export OPENCLAW_TEST_GIT_SHIM_ACTIVE=1`;
+
+export function gitPathShimShellPrelude(env: NodeJS.ProcessEnv = process.env): string {
+  return `${gitPathShimGuard}\nexport PATH=${shellEscape(env.PATH ?? "")}`;
+}
+
+export function gitPathShimJavaScriptPrelude(env: NodeJS.ProcessEnv = process.env): string {
+  return `if (process.env.OPENCLAW_TEST_GIT_SHIM_ACTIVE) {
+  console.error("recursive test Git shim invocation refused");
+  process.exit(98);
+}
+process.env.OPENCLAW_TEST_GIT_SHIM_ACTIVE = "1";
+process.env.PATH = ${JSON.stringify(env.PATH ?? "")};`;
+}

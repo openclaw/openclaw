@@ -24,7 +24,11 @@ import {
   writeExecutable,
   type WorkflowStep as BaseStep,
 } from "./ci-workflow.test-support.js";
-import { resolveGitOutsideFixtures } from "./git-path-shim.test-support.js";
+import {
+  gitPathShimJavaScriptPrelude,
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 type WorkflowStep = Omit<BaseStep, "env"> & { env?: NodeJS.ProcessEnv };
 
@@ -117,13 +121,8 @@ function createFixture() {
   writeExecutable(join(bin, "git"), [
     `#!${process.execPath}`,
     // A configured Git wrapper may rediscover its backend through PATH.
-    `process.env.PATH = ${JSON.stringify(lookupPath)};`,
+    gitPathShimJavaScriptPrelude({ PATH: lookupPath }),
     String.raw`
-if (process.env.OPENCLAW_TEST_GIT_SHIM_ACTIVE) {
-  console.error("recursive test Git shim invocation refused");
-  process.exit(98);
-}
-process.env.OPENCLAW_TEST_GIT_SHIM_ACTIVE = "1";
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 const valuedOptions = new Set(["-c", "-C", "--config-env", "--exec-path", "--git-dir", "--namespace", "--work-tree"]);
@@ -191,15 +190,26 @@ it("rejects a previous fixture Git, including a symlink alias", () => {
 it("refuses nested Git shims and still forbids network Git", () => {
   const fixture = createFixture();
   const backend = join(fixture.bin, "backend");
-  // Re-enter once, then delegate to native Git if the sentinel is broken.
-  writeExecutable(backend, [
+  const shellShim = join(fixture.bin, "shell-git");
+  writeExecutable(shellShim, [
     "#!/bin/sh",
-    `export OPENCLAW_TEST_REAL_GIT=${quoteShell(resolveGitOutsideFixtures())}`,
-    `exec ${quoteShell(join(fixture.bin, "git"))} "$@"`,
+    gitPathShimShellPrelude(),
+    'exec "$OPENCLAW_TEST_REAL_GIT" "$@"',
   ]);
-  const nested = fixture.run({ run: "git --version" }, { OPENCLAW_TEST_REAL_GIT: backend });
-  expect(nested.status, nested.stderr).toBe(98);
-  expect(nested.stderr).toContain("recursive test Git shim invocation refused");
+  for (const shim of [join(fixture.bin, "git"), shellShim]) {
+    // Re-enter once, then delegate to native Git if the sentinel is broken.
+    writeExecutable(backend, [
+      "#!/bin/sh",
+      `export OPENCLAW_TEST_REAL_GIT=${quoteShell(resolveGitOutsideFixtures())}`,
+      `exec ${quoteShell(shim)} "$@"`,
+    ]);
+    const nested = fixture.run(
+      { run: `${quoteShell(shim)} --version` },
+      { OPENCLAW_TEST_REAL_GIT: backend },
+    );
+    expect(nested.status, nested.stderr).toBe(98);
+    expect(nested.stderr).toContain("recursive test Git shim invocation refused");
+  }
   for (const command of ["clone", "fetch", "ls-remote"]) {
     const network = fixture.run({ run: `git -C . ${command} https://example.invalid/repo` });
     expect(network.status, network.stderr).toBe(97);

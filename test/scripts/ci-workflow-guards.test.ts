@@ -80,7 +80,10 @@ import {
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
-import { gitPathShimGuard, resolveGitOutsideFixtures } from "./git-path-shim.test-support.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 const manifestSource = readFileSync(
   new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
@@ -425,8 +428,7 @@ function runReleaseFallbackHistoryFixture(options: {
     );
     writeExecutable(path.join(bin, "git"), [
       "#!/bin/bash",
-      gitPathShimGuard,
-      `export PATH=${quoteShell(fixtureEnv.PATH!)}`,
+      gitPathShimShellPrelude(fixtureEnv),
       `exec ${quoteShell(testNodeExecPath)} ${quoteShell(launcher)} "$@"`,
     ]);
     const allocatedBytes = () =>
