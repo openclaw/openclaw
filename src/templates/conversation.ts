@@ -23,3 +23,12 @@ export type TemplateSetupReport = {
   /** Declared MCP servers now present in config, by name. */
   mcpServers: string[];
 };
+
+/** Facts for the opening turn, including when another device retries it. */
+export type TemplateSetupOpening = {
+  report: TemplateSetupReport;
+  /** Absent when the adding device did not declare a valid zone; use the manifest. */
+  deviceTimeZone?: string;
+  /** Workspace is ready; dependency installation can overlap the first turn. */
+  dependenciesPending?: true;
+};

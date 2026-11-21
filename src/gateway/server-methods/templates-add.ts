@@ -21,6 +21,8 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
+import { cronDeclarationOwnedBy } from "../../cron/declaration-owner.js";
+import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
@@ -67,6 +69,14 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/templates-add");
+
+function templateDeviceTimeZone(
+  client: GatewayRequestHandlerOptions["client"],
+): string | undefined {
+  const zone = client?.connect.client?.timeZone;
+  // Intl also accepts numeric offsets; they aren't IANA zones and can't follow DST.
+  return zone && !/^[+-]/.test(zone) ? resolveTimezone(zone) : undefined;
+}
 
 // One terminal record per request; never serialize request data or caught errors.
 function templateAddDiagnostic(operation: "plan" | "apply") {
@@ -185,6 +195,7 @@ export async function planTemplateAddForRequest(
   options.onStage?.("source_resolution_and_plan");
   const plan = await planTemplateAddForGateway({
     source: params.source,
+    deviceTimeZone: templateDeviceTimeZone(client),
     onStage: options.onStage,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     config,
@@ -212,6 +223,7 @@ export async function applyTemplateAddForRequest(
     options;
   // The handler option type also carries an open record; name the union so `mode` narrows.
   const params: TemplatesAddApplyParams = options.params;
+  const deviceTimeZone = templateDeviceTimeZone(client);
   const configPath = resolveConfigPath();
   const configEnv = process.env;
   const assertCurrent = () => {
@@ -296,9 +308,21 @@ export async function applyTemplateAddForRequest(
               mode: params.mode,
               source: params.source,
               ...(params.resume ? { resume: true as const } : {}),
+              readSetupAutomationKeys: async ({ agentId, sessionKey }) => {
+                assertCurrent();
+                const jobs = await context.cron.list({ includeDisabled: true });
+                assertCurrent();
+                return new Set(
+                  jobs.flatMap((job) =>
+                    job.declarationKey && cronDeclarationOwnedBy(job, { agentId, sessionKey })
+                      ? [job.declarationKey]
+                      : [],
+                  ),
+                );
+              },
               // Creation has finished: the first turn starts now, with its outcome, and
               // nothing was installed here that needs an installer card in the chat.
-              onAgentCreated: async (agent, report, dependenciesPending, onModelRequested) => {
+              onAgentCreated: async (agent, opening, onModelRequested) => {
                 assertCurrent();
                 await measureTemplateAddStage(
                   "opening.total",
@@ -308,7 +332,7 @@ export async function applyTemplateAddForRequest(
                       agent.agentId,
                       agent.sessionKey,
                       "template",
-                      buildTemplateOpeningMessage(report, agent, dependenciesPending),
+                      buildTemplateOpeningMessage(opening, agent),
                       () => {
                         assertCurrent();
                         publishProgress("agent-ready", agent);
@@ -360,6 +384,7 @@ export async function applyTemplateAddForRequest(
           assertTemplatesLabsEnabled(config);
           return {
             config,
+            deviceTimeZone,
             resolvePreferredModel: preferredModelResolver(context),
             sourceMcpServers: async () => {
               const listedMcp = await listConfiguredMcpServers();
