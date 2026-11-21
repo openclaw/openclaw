@@ -745,6 +745,11 @@ Every section heading from the previous single-page version keeps its anchor her
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
 
+Selected iOS lanes install and verify the pinned simulator helper before compiling
+the app. A failed download stops the job before compilation. Simulator boot and
+preparation still run alongside the build, with the same checks required before
+tests start.
+
 Android's existing `android-access-native` emulator rows retain their packaged
 Access-crypto proof and exercise Gateway WebSocket and widget HTTPS clients on
 Android Conscrypt. Each client must pass matching leaf-pin and platform-root
