@@ -27,7 +27,10 @@ import {
 } from "./context-engine-projection.js";
 import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
-import type { CodexAttemptContext } from "./run-attempt-context.js";
+import type {
+  CodexAttemptContext,
+  CodexOpenClawReferenceInclusion,
+} from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import {
   resolveCodexPromptContinuity,
@@ -229,7 +232,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           prompt: joinPresentSections(
             params.prompt,
             params.currentInboundContext?.text,
-            buildOpenClawPromptContext(true),
+            buildOpenClawPromptContext({ includeWorkspace: true, includeWatchedSessions: true }),
             inputAttachmentNote,
           ),
         }
@@ -391,11 +394,14 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       prompt: string;
       promptInputRange?: { start: number; end: number };
     },
-    includeWorkspaceReferences = true,
+    includeReferences: CodexOpenClawReferenceInclusion = {
+      includeWorkspace: true,
+      includeWatchedSessions: true,
+    },
   ) => {
     const turnPromptText = prependCodexOpenClawPromptContext(
       promptBuildResult.prompt,
-      buildOpenClawPromptContext(includeWorkspaceReferences),
+      buildOpenClawPromptContext(includeReferences),
       {
         preservePromptWithoutContext:
           params.bootstrapContextMode === "lightweight" &&
@@ -696,11 +702,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     },
     nativeHistoryProvenancePrefix,
     turnState,
-    refreshWorkspaceReferences: (include: boolean) => {
+    refreshWorkspaceReferences: (include: CodexOpenClawReferenceInclusion) => {
       turnState.codexTurnPromptText = decorateCodexTurnPromptText(turnState.promptBuild, include);
-      if (include !== workspaceReferencesIncluded) {
-        Object.assign(systemPromptReport, buildSystemPromptReport(!include));
-        workspaceReferencesIncluded = include;
+      if (include.includeWorkspace !== workspaceReferencesIncluded) {
+        Object.assign(systemPromptReport, buildSystemPromptReport(!include.includeWorkspace));
+        workspaceReferencesIncluded = include.includeWorkspace;
       }
     },
     setThreadDeveloperInstructions: (instructions: string) => {

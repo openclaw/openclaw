@@ -96,8 +96,14 @@ export function prepareCodexWorkspaceReferences(
   client: CodexAppServerClient,
   threadId: string,
   reference: string | undefined,
+  watchedSessionsReference?: string,
 ) {
-  return prepareCodexWorkspaceReferenceState(configuredClients.get(client), threadId, reference);
+  return prepareCodexWorkspaceReferenceState(
+    configuredClients.get(client),
+    threadId,
+    reference,
+    watchedSessionsReference,
+  );
 }
 
 /** Native rollout records are data owned by this physical client, never retained executors. */
@@ -216,7 +222,11 @@ export function ensureCodexAppServerClientRuntime(
       // Observe manual and automatic compaction even without an active turn projector.
       const previous = runtime.workspaceReferences.get(threadId);
       if (previous) {
-        runtime.workspaceReferences.set(threadId, { ...previous, needsReintroduction: true });
+        runtime.workspaceReferences.set(threadId, {
+          ...previous,
+          needsReintroduction: true,
+          needsWatchedSessionsReintroduction: true,
+        });
       }
     }
     if (notification.method === "account/rateLimits/updated") {
