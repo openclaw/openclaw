@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -48,6 +48,14 @@ it("stops a built Gateway without first-importing a module after SIGTERM", async
   });
   await instance.startGateway();
   expect(await instance.entrypoint()).toEqual([expect.stringMatching(/^dist\/index\.m?js$/u)]);
+  // Startup work still loading at SIGTERM is not shutdown's import; stop after it settles.
+  await vi.waitFor(
+    () =>
+      expect(instance?.logs()).toMatch(
+        /startup (?:phase|trace): post-ready\.startup-maintenance \d/u,
+      ),
+    { timeout: 60_000, interval: 250 },
+  );
   const child = instance.child;
   await instance.stopGateway();
 
