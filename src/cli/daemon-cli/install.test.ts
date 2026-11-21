@@ -544,6 +544,67 @@ describe("runDaemonInstall", () => {
     expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
   });
 
+  it("rejects an explicit port that an installed service would not apply", async () => {
+    loadedService({
+      programArguments: ["openclaw", "gateway", "run", "--port", "18789"],
+    });
+
+    await runDaemonInstall({ json: true, port: "19001" });
+
+    expectFailure("--port 19001 would not be applied");
+    expect(actionState.failed[0]?.hints?.join(" ")).toContain(
+      "gateway install --force --port 19001",
+    );
+    expectNoCalls(installDaemonServiceAndEmitMock, service.install);
+  });
+
+  it("rejects an explicit token that an installed service would not apply", async () => {
+    const environment = { OPENCLAW_GATEWAY_TOKEN: "durable-token" };
+    loadedService({ environment });
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment,
+      workingDirectory: "/tmp",
+    });
+
+    await runDaemonInstall({ json: true, token: "new-token" });
+
+    expectFailure("--token would not be applied");
+    expect(actionState.failed[0]?.hints?.join(" ")).toContain("install does not persist --token");
+    expectNoCalls(installDaemonServiceAndEmitMock, service.install);
+  });
+
+  it("keeps already-installed when explicit port and token match the service", async () => {
+    const environment = { OPENCLAW_GATEWAY_TOKEN: "durable-token" };
+    const command = loadedService({
+      programArguments: ["openclaw", "gateway", "run", "--port", "18789"],
+      environment,
+    });
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      ...command,
+      environment,
+      workingDirectory: "/tmp",
+    });
+
+    await runDaemonInstall({ json: true, port: "18789", token: "durable-token" });
+
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+    expectNoCalls(installDaemonServiceAndEmitMock, service.install);
+  });
+
+  it("keeps already-installed when the explicit token matches config-backed credentials", async () => {
+    setConfig({ gateway: { auth: { token: "durable-token" } } });
+    loadedService({
+      programArguments: ["openclaw", "gateway", "run", "--port", "18789"],
+      environment: {},
+    });
+
+    await runDaemonInstall({ json: true, port: "18789", token: "durable-token" });
+
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+    expectNoCalls(installDaemonServiceAndEmitMock, service.install);
+  });
+
   it("reinstalls when wrapper command matches but wrapper env is missing", async () => {
     loadedService({
       programArguments: ["/usr/local/bin/openclaw-doppler", "gateway", "run"],

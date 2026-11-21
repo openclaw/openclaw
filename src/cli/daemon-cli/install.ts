@@ -71,6 +71,7 @@ import { omitSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/env
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { resolveUnappliedInstalledOptions } from "./install-option-guard.js";
 import { assertExpectedRuntimePin, resolveRestoreServiceCli } from "./install-restore-cli.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
@@ -569,6 +570,21 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   if (loaded && !opts.force && !autoRefreshMessage) {
+    const { unapplied, hints } = await resolveUnappliedInstalledOptions({
+      command: resolveManagedGatewayServiceCommand(existingServiceCommand),
+      port,
+      portExplicit: opts.port !== undefined,
+      token: opts.token,
+      cfg,
+      env: installEnv,
+    });
+    if (unapplied.length > 0) {
+      fail(
+        `Gateway service already ${service.loadedText}; ${unapplied.join(" and ")} would not be applied.`,
+        hints,
+      );
+      return;
+    }
     emitMessage({
       ok: true,
       result: "already-installed",
