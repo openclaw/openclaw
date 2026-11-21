@@ -230,9 +230,7 @@ function main(args) {
     const scan = processScan();
     let result;
     try {
-      const current = holds.some(
-        (hold) => hold.path === anchor.path && hold.dev === anchor.dev && hold.ino === anchor.ino,
-      );
+      const current = holds.some((hold) => hold.path === anchor.path && hold.ino === anchor.ino);
       const checked = current ? evidence(anchor, scan) : { blockers: [] };
       result = checked.blockers.length
         ? { state: "blocked", blockers: checked.blockers }

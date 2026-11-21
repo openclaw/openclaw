@@ -49,6 +49,9 @@ class RetirementTests(unittest.TestCase):
         return old * 1000
 
     def test_shared_lock_survives_helper_exit_until_inherited_descriptor_closes(self):
+        # Persisted device numbers can predate a remount; flock still owns liveness.
+        for value in (self.candidate["identity"], self.candidate["lease"]):
+            value["dev"] = str(int(value["dev"]) + 1)
         fd = os.open(self.lease, os.O_RDWR)
         try:
             subprocess.run([sys.executable, "-I", "-S", "-B", str(HELPER), "shared", str(fd)],
@@ -60,6 +63,26 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.retire()["state"], "retired")
         self.assertFalse(self.anchor.exists())
         self.assertTrue(self.lease.exists())
+
+    def test_device_changes_during_retirement_still_refuse(self):
+        for boundary in ("lease-fd", "directory-path"):
+            with self.subTest(boundary=boundary):
+                original = os.fstat if boundary == "lease-fd" else OWNER.physical
+                calls = 0
+                def changed(target):
+                    nonlocal calls
+                    value = original(target)
+                    calls += 1
+                    if boundary == "lease-fd" or calls == 3:
+                        fields = list(value)
+                        fields[2] += 1  # st_dev only; preserve inode, owner and mode.
+                        return os.stat_result(fields)
+                    return value
+                owner, name = (OWNER.os, "fstat") if boundary == "lease-fd" else (OWNER, "physical")
+                with mock.patch.object(owner, name, side_effect=changed):
+                    result = self.retire()
+                self.assertEqual(result["reason"], "changed-lease" if boundary == "lease-fd" else "changed-directory")
+                self.assertTrue(self.anchor.exists())
 
     def test_retirement_preserves_symlink_targets_and_accepts_already_missing_anchor(self):
         outside = self.root / "outside"
@@ -123,7 +146,7 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.retire(({}, set()))["state"], "retired")
 
     def test_missing_legacy_anchor_uses_modified_time_for_age_and_birth_for_pid(self):
-        now = time.time()
+        now = 2_000_000_000.0  # Exact millisecond round-trip at the 24-hour boundary.
         self.anchor.rmdir()
         self.candidate.pop("lease")
         self.candidate["legacy"] = {"pid": 1234, "createdMs": (now - 100) * 1000,
