@@ -53,10 +53,38 @@ offline, start it after configuration.
     credentials, `fromNumber`, and a publicly reachable webhook URL. With
     multiple agents, also set `agentId` to the agent that should own calls.
 
-    For an inbound Twilio number, set its **Voice webhook** to the public Voice
-    Call webhook URL with method `POST`. Set the number-level **Status
-    Callback** to the same URL with `?type=status`, also using `POST`, so
-    terminal inbound call statuses reach the plugin.
+    #### Inbound calls and caller allowlisting
+
+    Inbound calls are **disabled by default** (`inboundPolicy: "disabled"`). To
+    accept inbound calls, set `inboundPolicy: "allowlist"` and list allowed caller
+    numbers in E.164 format under `allowFrom`:
+
+    ```json5
+    {
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15555550123"],
+      inboundGreeting: "Hello! How can I help you today?",
+    }
+    ```
+
+    See [Inbound calls](/plugins/voice-call/tts-and-inbound-calls#inbound-calls) for
+    additional options such as per-number routes and greeting customization.
+
+    #### Twilio Console configuration
+
+    For an inbound Twilio number, configure the webhook fields in the **Twilio
+    Console** under **Phone Numbers** → **Manage** → **Active numbers** → select
+    your number → **Voice Configuration**:
+
+    - **A call comes in:** Select **Webhook**, enter your public Voice Call webhook URL (`https://<public-url>/voice/webhook`), and select `HTTP POST`.
+    - **Status Callback URL:** Enter `https://<public-url>/voice/webhook?type=status` and select `HTTP POST` so terminal inbound call events reach the plugin.
+
+    <Warning>
+    A Twilio phone number supports only one **A call comes in** handler.
+    Pointing this webhook to OpenClaw replaces any existing routing on that
+    number, including existing TwiML Bins, Twilio Studio Flows, or call
+    forwarding rules.
+    </Warning>
 
   </Step>
   <Step title="Verify setup">
@@ -68,8 +96,17 @@ offline, start it after configuration.
     Checks plugin enablement, provider credentials, webhook exposure, agent
     ownership, and that only one audio mode (`streaming` or `realtime`) is active.
 
+    <Note>
+    `openclaw voicecall setup` verifies local Gateway configuration and
+    webhook exposure only; it does not inspect or validate your remote Twilio
+    Console settings. A passing setup check does not prove that the phone
+    number routes to your Gateway or that a call will connect and speak.
+    </Note>
+
   </Step>
   <Step title="Smoke test">
+    #### Outbound test
+
     ```bash
     openclaw voicecall smoke
     openclaw voicecall smoke --to "+15555550123"
@@ -81,6 +118,15 @@ offline, start it after configuration.
     ```bash
     openclaw voicecall smoke --to "+15555550123" --yes
     ```
+
+    #### Inbound test
+
+    Outbound smoke testing verifies carrier dialing and credentials, but it does
+    not test inbound routing or caller admission. To verify inbound calls:
+
+    1. Call your configured Twilio phone number (`fromNumber`) from an allowlisted phone matching an entry in `allowFrom`.
+    2. Confirm the call is answered, the greeting speaks, and the assistant responds to spoken dialogue.
+    3. Check `openclaw voicecall tail` or `openclaw logs --follow` to confirm webhook receipt and session activity.
 
   </Step>
 </Steps>
