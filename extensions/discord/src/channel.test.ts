@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -538,6 +538,131 @@ describe("discordPlugin outbound", () => {
       expect(diagnosticSignal?.aborted).toBe(true);
     } finally {
       fetchPermissionsSpy.mockRestore();
+    }
+  });
+
+  it("explains the selected account's mention policy separately from permissions", async () => {
+    const cfg = createCfg({
+      guilds: { "123": { requireMention: false } },
+      accounts: {
+        work: {
+          token: "synthetic-token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "123": {
+              requireMention: false,
+              channels: { "222": { requireMention: true, users: ["111"] } },
+            },
+          },
+        },
+      },
+    });
+    const responses: Record<string, unknown> = {
+      "/channels/222": { id: "222", guild_id: "123", type: 0, name: "general" },
+      "/users/@me": { id: "999", username: "SyntheticBot" },
+      "/guilds/123": {
+        id: "123",
+        name: "Synthetic Guild",
+        roles: [{ id: "123", permissions: String(PermissionFlagsBits.Administrator) }],
+      },
+      "/guilds/123/members/999": { roles: [] },
+    };
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      expect(init?.method).toBe("GET");
+      const path = decodeURIComponent(
+        new URL(input instanceof Request ? input.url : input).pathname,
+      ).replace("/api/v10", "");
+      expect(responses).toHaveProperty(path);
+      return Response.json(responses[path]);
+    });
+    const rest = new RequestClient("synthetic-token", { fetch });
+    const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
+    try {
+      const diagnostics = await discordPlugin.status!.buildCapabilitiesDiagnostics!({
+        account: resolveAccount(cfg, "work"),
+        cfg,
+        timeoutMs: 5000,
+        target: "channel:222",
+      });
+      expect(diagnostics?.details?.permissions).toMatchObject({ missingRequired: [] });
+      expect(diagnostics?.details?.messagePolicy).toMatchObject({
+        channelAllowed: true,
+        requireMention: true,
+        mentionSource:
+          'channels.discord.accounts.work.guilds["123"].channels["222"].requireMention',
+        senderAccess: "not-evaluated",
+      });
+      const output = diagnostics?.lines?.map((line) => line.text).join("\n");
+      expect(output).toContain("Missing required: none");
+      expect(output).toContain("requireMention=true");
+      expect(output).toContain("First test: mention the bot in this allowed channel");
+      expect(output).toContain("Sender access: not evaluated");
+
+      const accountConfig = cfg.channels!.discord!.accounts!.work!;
+      const guild = accountConfig.guilds!["123"]!;
+      const channel = guild.channels!["222"]!;
+      const diagnose = () =>
+        discordPlugin.status!.buildCapabilitiesDiagnostics!({
+          account: resolveAccount(cfg, "work"),
+          cfg,
+          timeoutMs: 5000,
+          target: "channel:222",
+        });
+      delete channel.requireMention;
+      expect((await diagnose())?.details?.messagePolicy).toMatchObject({
+        requireMention: false,
+        mentionSource: 'channels.discord.accounts.work.guilds["123"].requireMention',
+      });
+      delete guild.requireMention;
+      expect((await diagnose())?.details?.messagePolicy).toMatchObject({
+        requireMention: true,
+        mentionSource: "default",
+      });
+      channel.enabled = false;
+      const blocked = await diagnose();
+      expect(blocked?.details?.messagePolicy).toMatchObject({ channelAllowed: false });
+      expect(blocked?.lines?.some((line) => line.text.startsWith("First test:"))).toBe(false);
+      channel.enabled = true;
+      responses["/channels/222"] = {
+        id: "222",
+        guild_id: "123",
+        type: ChannelType.PublicThread,
+        parent_id: "333",
+        owner_id: "999",
+        name: "topic",
+      };
+      responses["/channels/333"] = {
+        id: "333",
+        guild_id: "123",
+        type: ChannelType.GuildText,
+        name: "general",
+      };
+      guild.channels = { "333": { requireMentionInBotThreads: false } };
+      expect((await diagnose())?.details?.messagePolicy).toMatchObject({
+        channelAllowed: true,
+        requireMention: false,
+        mentionSource:
+          'channels.discord.accounts.work.guilds["123"].channels["333"].requireMentionInBotThreads',
+        threadRoute: "not-evaluated",
+      });
+      accountConfig.guilds = {};
+      expect((await diagnose())?.details?.messagePolicy).toMatchObject({
+        channelAllowed: false,
+        channelSource: "channels.discord.accounts.work.guilds",
+      });
+      delete accountConfig.guilds;
+      expect((await diagnose())?.details?.messagePolicy).toMatchObject({
+        channelAllowed: true,
+        requireMention: false,
+        mentionSource: 'channels.discord.guilds["123"].requireMention',
+      });
+      accountConfig.guilds = { "synthetic-guild": { requireMention: true } };
+      expect((await diagnose())?.details?.messagePolicy).toMatchObject({
+        unresolved: "name-based-config",
+        senderAccess: "not-evaluated",
+      });
+    } finally {
+      resolveRest.mockRestore();
     }
   });
 

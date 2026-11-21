@@ -366,7 +366,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
           }
           return lines;
         },
-        buildCapabilitiesDiagnostics: async ({ account, target, timeoutMs }) => {
+        buildCapabilitiesDiagnostics: async ({ account, cfg, target, timeoutMs }) => {
           if (!target?.trim()) {
             return undefined;
           }
@@ -412,6 +412,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
                 new Error(`Capabilities diagnostic timed out after ${timeoutMs}ms`),
               run: async (signal) =>
                 await sendModule.fetchChannelPermissionsDiscord(parsedTarget.id, {
+                  includeMessagePolicyContext: true,
                   cfg: statusCfg,
                   token,
                   accountId: account.accountId ?? undefined,
@@ -432,6 +433,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
               missingRequired,
               raw: perms.raw,
             };
+            const messagePolicy = perms.guildId
+              ? (await import("./capabilities-policy.js")).buildDiscordMessagePolicyDiagnostics({
+                  account,
+                  cfg,
+                  target: perms,
+                })
+              : undefined;
+            if (messagePolicy) {
+              details.messagePolicy = messagePolicy.details;
+            }
             return {
               details,
               lines: [
@@ -441,6 +452,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
                 missingRequired.length > 0
                   ? { text: `Missing required: ${missingRequired.join(", ")}`, tone: "warn" }
                   : { text: "Missing required: none", tone: "success" },
+                ...(messagePolicy?.lines ?? []),
               ],
             };
           } catch (err) {
