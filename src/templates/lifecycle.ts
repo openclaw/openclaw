@@ -7,7 +7,11 @@ import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { parseRequestedClawHubSkillRef } from "../skills/lifecycle/clawhub-store.js";
 import { resolveUserPath } from "../utils.js";
-import { templateAgentCopyNumber, selectNextTemplateAgentId } from "./add-agent-id.js";
+import {
+  selectNextTemplateAgentId,
+  templateAgentCopyNumber,
+  templateAgentIdProblem,
+} from "./add-agent-id.js";
 import { templateOwnedAgentConfig } from "./agent-config-ownership.js";
 import { templateAddCapabilityChange, templateAgentCapabilityChange } from "./application-plan.js";
 import { planBundledTemplateDependency } from "./bundled-dependency-plan.js";
@@ -35,8 +39,6 @@ import {
   type TemplateWorkspaceSourceSnapshot,
   type TemplateBundledSourceSnapshot,
 } from "./types.js";
-
-const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 
 function sourceReferencePath(root: string, path: string): string {
   return `${root.replace(/\/+$/u, "")}/${path.replaceAll("\\", "/")}`;
@@ -100,14 +102,9 @@ export async function buildTemplateAddPlan(params: {
   const capabilityChanges: TemplateAddCapabilityChange[] = [];
   const readinessRequirements: TemplateLocalPrerequisite[] = [];
 
-  if (!AGENT_ID_PATTERN.test(finalId)) {
-    blockers.push(
-      blocker(
-        "invalid_agent_id",
-        "$.agent.id",
-        `Final agent id ${JSON.stringify(finalId)} is not a valid portable agent id.`,
-      ),
-    );
+  const agentIdProblem = templateAgentIdProblem(finalId);
+  if (agentIdProblem) {
+    blockers.push(blocker(agentIdProblem.code, "$.agent.id", agentIdProblem.message));
   }
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
@@ -156,7 +153,7 @@ export async function buildTemplateAddPlan(params: {
     action: "create",
     target: `agents.entries[${JSON.stringify(finalId)}]`,
     details: { ...agentConfig, expectedState: "absent" },
-    blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
+    blocked: agentBlocked || agentIdProblem !== undefined,
   });
   const agentCapability = templateAgentCapabilityChange(finalId, openClawAgentSettings);
   if (agentCapability) {
