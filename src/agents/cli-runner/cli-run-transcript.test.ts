@@ -793,19 +793,15 @@ it.skipIf(!isMainThread).each(["live", "stale", "revoked"])(
           modelId: "claude-sonnet-4-6",
           sourceReplyWasDelivered: false,
         });
-        if (state !== "live") {
-          await expect(settlement).rejects.toThrow(
-            state === "revoked"
-              ? "owner revoked"
-              : "session writer claim changed before transcript persistence",
-          );
+        if (state === "revoked") {
+          await expect(settlement).rejects.toThrow("owner revoked");
         } else {
           await settlement;
         }
       },
     );
     expect(await transcriptMessages(target)).toMatchObject([
-      { stopReason: state === "live" ? "stop" : "aborted" },
+      { stopReason: state === "revoked" ? "aborted" : "stop" },
     ]);
   },
 );
