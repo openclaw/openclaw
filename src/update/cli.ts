@@ -21,7 +21,10 @@ export type ReleaseUpdateOptions = {
   restart: boolean;
   /** The Git checkout the update command admitted. */
   runningRoot: string;
+  /** Requested with --channel; persisted before the update. */
   channel?: UpdateChannel;
+  /** The saved `update.channel`, used when nothing was requested. */
+  storedChannel?: UpdateChannel;
   sha?: string;
 };
 
@@ -53,7 +56,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   const runId = opts.restart ? await requestGatewayUpdate(target) : null;
   const record = runId
     ? await followRun(runId, opts.json)
-    : await updateWithoutGateway(runningRoot, channel, opts.sha);
+    : await updateWithoutGateway(runningRoot, channel ?? opts.storedChannel, opts.sha);
   report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)

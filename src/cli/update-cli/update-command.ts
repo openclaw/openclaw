@@ -100,12 +100,16 @@ async function updateCommandWithRuntime(
   // applies. A requested non-dev channel switches the checkout to a package (the package flow).
   const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
   if (prepared.installKind === "git" && staysGit && !inputOpts.dryRun) {
-    const { runReleaseUpdateCli } = await import("../../update/cli.js");
+    const [{ runReleaseUpdateCli }, { readUpdateChannelConfig }] = await Promise.all([
+      import("../../update/cli.js"),
+      import("./update-command-config.js"),
+    ]);
     return await runReleaseUpdateCli({
       json: Boolean(inputOpts.json),
       restart: prepared.shouldRestart,
       runningRoot: prepared.discoveredRoot,
       channel: prepared.requestedChannel ?? undefined,
+      storedChannel: (await readUpdateChannelConfig(false)).storedChannel ?? undefined,
       sha: inputOpts.sha,
     });
   }

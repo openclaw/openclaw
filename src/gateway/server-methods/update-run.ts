@@ -100,6 +100,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
   void runUpdateInBackground(run.runId, {
     root: installed.root,
     channel: normalizeUpdateChannel(config.update?.channel),
+    git: installed.status.git,
     sha: params.target?.upstreamSha,
     sessionKey: params.sessionKey,
     warn: (message) => context.logGateway?.warn(message),
@@ -111,6 +112,8 @@ async function runUpdateInBackground(
   options: {
     root: string;
     channel: ReturnType<typeof normalizeUpdateChannel>;
+    /** The checkout's tag and branch facts; a stable tag keeps a configless checkout on stable. */
+    git?: { tag?: string | null; branch?: string | null };
     sha?: string;
     sessionKey?: string;
     warn: (message: string) => void;
@@ -121,6 +124,7 @@ async function runUpdateInBackground(
       configChannel: options.channel,
       currentVersion: VERSION,
       installKind: "git",
+      git: options.git,
     }).channel;
     const outcome = await prepareUpdate({
       runId,

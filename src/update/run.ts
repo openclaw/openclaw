@@ -217,11 +217,26 @@ export async function prepareUpdate(params: {
     }
     const releaseRoot = await publishStaging(staging);
     staging = undefined;
+    if (target.kind === "git") {
+      // The worktree was registered at its staging path; record where it now lives.
+      const repaired = await runCommandWithTimeout(
+        ["git", "-C", target.checkout, "worktree", "repair", releaseRoot],
+        { timeoutMs: 30_000 },
+      );
+      if (repaired.code !== 0) {
+        return await fail(
+          "release-registration-failed",
+          "The new version could not be registered with Git. The current version is still running.",
+          repaired.stderr,
+        );
+      }
+    }
     const launcher = await writeLauncher(prefix);
-    // Forwarded commands run `prefix/openclaw` until the launcher switches it; on the first
-    // conversion that link must already serve the running tree.
+    // Forwarded commands run `prefix/openclaw` until the launcher switches it, so it must
+    // serve the running tree: created on the first conversion, repointed if it is stale.
     const slot = path.join(prefix, "openclaw");
-    if (!(await fs.readlink(slot).catch(() => null))) {
+    const served = await fs.realpath(slot).catch(() => null);
+    if (served !== (await fs.realpath(params.runningRoot))) {
       await switchLink(path.relative(prefix, params.runningRoot), prefix);
     }
     const previous = await fs.readlink(slot);
