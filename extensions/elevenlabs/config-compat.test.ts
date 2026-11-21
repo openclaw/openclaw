@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  migrateElevenLabsLegacyTalkConfig,
-  resolveElevenLabsApiKeyWithProfileFallback,
-} from "./config-compat.js";
+import { migrateElevenLabsLegacyTalkConfig } from "./config-compat.js";
+import { resolveElevenLabsApiKeyWithProfileFallback } from "./credential-resolution.js";
 
 afterEach(() => {
   vi.restoreAllMocks();

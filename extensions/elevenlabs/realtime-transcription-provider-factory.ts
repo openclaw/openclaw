@@ -11,7 +11,7 @@ import {
   normalizeOptionalString,
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
+import { resolveElevenLabsApiKeyWithProfileFallback } from "./credential-resolution.js";
 import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
 
 type ElevenLabsRealtimeTranscriptionEvent = {
