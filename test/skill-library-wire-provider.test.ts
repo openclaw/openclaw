@@ -5,9 +5,11 @@ import {
   registerHeadlessToolSearchCatalog,
 } from "../src/agents/tool-search.js";
 import { createInstalledSkillTools } from "../src/agents/tools/installed-skill-tools.js";
+import { formatSkillsForPromptCore } from "../src/skills/loading/skill-contract.js";
+import { makeSkill } from "../src/skills/test-support/test-helpers.js";
 import { startSkillLibraryWireProvider } from "./e2e/qa-lab/runtime/skill-library-wire-provider.js";
 
-it("uses the newest user-message bullet catalog and dispatches the authorized skill read", async () => {
+it("uses the newest canonical user-message catalog and dispatches the authorized skill read", async () => {
   const provider = await startSkillLibraryWireProvider();
   try {
     const catalogRef = createToolSearchCatalogRef();
@@ -33,16 +35,14 @@ it("uses the newest user-message bullet catalog and dispatches the authorized sk
       {
         role: "user",
         content: `System prompt update
-<available_skills>
-- "guide": Current guide
-</available_skills>`,
+${formatSkillsForPromptCore([makeSkill("guide", "Current guide")])}`,
       },
     ];
     const body = {
-      instructions: `<available_skills>
-- "guide": Old guide
-- "stale": Removed guide
-</available_skills>`,
+      instructions: formatSkillsForPromptCore([
+        makeSkill("guide", "Old guide"),
+        makeSkill("stale", "Removed guide"),
+      ]),
       input,
       tools: [{ name: dispatcher.name, parameters: dispatcher.parameters }, { name: "exec" }],
     };

@@ -8,6 +8,7 @@ import type {
   SkillsLibraryReceipt,
   SkillsLibrarySaveParams,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { parseSkillsPromptCatalog } from "../../../../src/skills/loading/skill-prompt-catalog.js";
 import { closeWireServer } from "./paired-node-worker-wire-fixture.js";
 
 type ProviderItem = {
@@ -77,13 +78,10 @@ function contentText(value: unknown): string {
 }
 
 function catalogSkills(instructions: string, blocks: "all" | "newest" = "all"): CatalogSkill[] {
-  const matches = [...instructions.matchAll(/<available_skills>([\s\S]*?)<\/available_skills>/gu)];
-  const catalog = (blocks === "newest" ? matches.slice(-1) : matches)
-    .map((match) => match[1])
-    .join("\n");
-  return [...catalog.matchAll(/^- ("(?:\\.|[^"\\])*")/gmu)].map((match) => ({
-    name: JSON.parse(match[1]!) as string,
-  }));
+  const matches = [...instructions.matchAll(/<available_skills>[\s\S]*?<\/available_skills>/gu)];
+  return (blocks === "newest" ? matches.slice(-1) : matches).flatMap((match) =>
+    parseSkillsPromptCatalog(match[0]).map(({ name }) => ({ name })),
+  );
 }
 
 function catalogContext(text: string) {
