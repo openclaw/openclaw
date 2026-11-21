@@ -252,6 +252,7 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
       icon: PLUGIN_CATEGORY_ICON_KEYS.has(icon) ? icon : "package",
       order,
       ...(pinnedPackages ? { pinnedPackages } : {}),
+      ...readClawHubNonEmptyStringFields(entry, ["previewCursor"], `plugin category ${slug}`),
     };
   });
   return categories.toSorted((left, right) => left.order - right.order);
@@ -461,6 +462,7 @@ export async function fetchClawHubPluginOverview(
     // This viewer-independent snapshot uses the public CDN; ambient auth bypasses its cache.
     skipAuth: options.skipAuth ?? (!options.token && isDefaultClawHubBaseUrl(options.baseUrl)),
     path: "/api/v1/plugins/overview",
+    search: { previewCursors: "true" },
   });
   if (!isRecord(value) || !Array.isArray(value.items)) {
     throw new Error("Malformed ClawHub plugin overview response: expected items to be an array.");

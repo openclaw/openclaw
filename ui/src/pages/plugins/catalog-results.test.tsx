@@ -195,6 +195,50 @@ describe("renderPluginCatalogResults", () => {
     ui.all(".plugin-catalog-card").toHaveLength(3);
   });
 
+  it.each(["exhausted", "failed"])(
+    "retains its loaded card when the preview ends (%s)",
+    async (outcome) => {
+      const partial = Promise.withResolvers<PluginDiscoveryResult>();
+      const last = Promise.withResolvers<PluginDiscoveryResult>();
+      const categories = [{ ...baseProps().categories[1]!, previewCursor: "more" }];
+      const request = createGatewayRequestMock()
+        .mockReturnValueOnce(Promise.resolve({ items: [], categories }))
+        .mockReturnValueOnce(partial.promise)
+        .mockReturnValueOnce(last.promise);
+      const client = createTestGatewayClient(request);
+      const { container } = mountSolid(() => {
+        const [revision, publish] = createSignal(0);
+        const discovery = createPluginDiscovery(
+          { getClient: () => client, isConnected: () => true },
+          () => publish((n) => n + 1),
+        );
+        const props = () => {
+          revision();
+          return { ...baseProps(), ...discovery.read() };
+        };
+        onSettled(() => {
+          void discovery.refresh();
+        });
+        return <PluginCatalogResults {...props()} />;
+      });
+      const placeholders = () =>
+        container.querySelectorAll('[data-catalog-section="tools"] .plugin-catalog-card--skeleton');
+      await waitForSolid(() => expect(placeholders()).toHaveLength(8));
+      partial.resolve({ items: [plugin("known")], nextCursor: "last" });
+      await waitForSolid(() => expect(placeholders()).toHaveLength(7));
+      const known = container.querySelector('[data-plugin-id="known"]');
+      expect(known).not.toBeNull();
+      if (outcome === "failed") {
+        last.reject(new Error("registry unavailable"));
+      } else {
+        last.resolve({ items: [] });
+      }
+      await waitForSolid(() => expect(placeholders()).toHaveLength(0));
+      expect(container.querySelector('[data-plugin-id="known"]')).toBe(known);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
   it("presents independent owner reads, retries failures, and retains cards during refresh and pagination", async () => {
     const categories = Array.from({ length: 2 }, () =>
       Promise.withResolvers<{ categories: PluginDiscoveryCategory[] }>(),
