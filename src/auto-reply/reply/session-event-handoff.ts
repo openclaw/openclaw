@@ -79,9 +79,9 @@ export type { SessionEventReceipt, SessionEventTarget } from "./session-event-co
 const log = createSubsystemLogger("session-events");
 
 // The loader exposes this synchronous facade; enter auth/plugin preparation only in admitted async work.
-const loadGenerationReadmission = createLazyRuntimeNamedExport(
+const loadTurnReadmission = createLazyRuntimeNamedExport(
   () => import("./queue/drain-admission-scope.js"),
-  "runOutsideAdmittedGenerationScopes",
+  "runOutsideAdmittedTurnScopes",
 );
 
 /**
@@ -713,8 +713,8 @@ export function enqueueSessionEventForHost(
   void runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
-      const runOutsideAdmittedGenerationScopes = await loadGenerationReadmission();
-      return runOutsideAdmittedGenerationScopes(() =>
+      const runOutsideAdmittedTurnScopes = await loadTurnReadmission();
+      return runOutsideAdmittedTurnScopes(() =>
         execute()
           .catch(settleExecutionFailure)
           .finally(() => generationLease?.release()),

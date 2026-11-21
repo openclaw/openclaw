@@ -46,6 +46,7 @@ import {
 } from "./subagent-registry.requester-wake-session.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
+import { holdLiveRequesterTurns } from "./subagent-requester-turn-liveness.test-support.js";
 
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
 
@@ -767,6 +768,89 @@ describe("requester settle wake product flow", () => {
       await flushOwnedWork();
       expect(registry.getSubagentRunByRunId(child.runId)).toBeUndefined();
       expect(getAgentCalls()).toHaveLength(0);
+    },
+  );
+
+  it.each(["after", "before"] as const)(
+    "wakes a yielded requester with a result that finished %s the yield while its sibling is exec-yielded",
+    async (finished) => {
+      vi.setSystemTime(100_000);
+      const context = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => context);
+      const [done, slow] = ["done", "slow"].map(visibleChild) as [
+        ReturnType<typeof visibleChild>,
+        ReturnType<typeof visibleChild>,
+      ];
+      await spawnVisibleChild({ ...slow, requesterTurnRunId: "requester-yield" });
+      if (finished === "after") {
+        await spawnVisibleChild({ ...done, requesterTurnRunId: "requester-yield" });
+      } else {
+        // A private result that ends during the requester's own turn is held until its yield.
+        await registry.registerSubagentRun(
+          createSubagentRunParams({
+            ...done,
+            label: done.runId,
+            sessionEntry: await prepareChildSession(done.childSessionKey, "sess-run-done"),
+            requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+            requesterTurnRunId: "requester-yield",
+            completionTarget: "parent",
+          }),
+        );
+        const liveTurn = holdLiveRequesterTurns("requester-yield");
+        emitCompleted(done.runId, done.childSessionKey, "done findings");
+        await flushOwnedWork();
+        expect(getAgentCalls()).toHaveLength(0);
+        liveTurn.restore();
+      }
+      await createRequesterYieldTool(MAIN_REQUESTER_SESSION_KEY, "requester-yield").execute(
+        "yield",
+        {},
+      );
+      await settleTurn("requester-yield", [done, slow], true);
+      // The slow sibling yields on its own background command and is paused, not finished.
+      lifecycleHandler!({
+        stream: "lifecycle",
+        runId: slow.runId,
+        seq: 1,
+        ts: Date.now(),
+        sessionKey: slow.childSessionKey,
+        data: { phase: "end", endedAt: Date.now(), yielded: true },
+      });
+      if (finished === "after") {
+        emitCompleted(done.runId, done.childSessionKey, "done findings");
+      }
+      await flushOwnedWork();
+      expect(registry.getSubagentRunByRunId(slow.runId)).toMatchObject({
+        pauseReason: "sessions_yield",
+        requesterSettleWake: { status: "pending", rearmGeneration: 1 },
+      });
+      await vi.waitFor(() => expect(getRequesterWakeCalls()).toHaveLength(1));
+      const findings = (request: GatewayRequest | undefined) =>
+        String(request?.params?.internalEvents?.[0]?.result ?? request?.params?.message);
+      const first = findings(getRequesterWakeCalls()[0]);
+      expect(first).toContain("done findings");
+      expect(first).toContain("still working: run-slow");
+      await waitForDeliveredCleanup(done.runId);
+
+      // The background command finishes; its continuation completes the paused task.
+      const resumeRunId = "run-slow-resume";
+      expect(
+        await registry.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: slow.childSessionKey,
+          runId: resumeRunId,
+          task: "background command finished",
+        }),
+      ).toBe(true);
+      emitCompleted(resumeRunId, slow.childSessionKey, "slow findings");
+      await flushOwnedWork();
+      await vi.waitFor(() => expect(getRequesterWakeCalls()).toHaveLength(2));
+      const second = findings(getRequesterWakeCalls()[1]);
+      expect(second).toContain("slow findings");
+      expect(second).not.toContain("done findings");
+      await registry.testing.sweepOnceForTests();
+      await flushOwnedWork();
+      expect(getRequesterWakeCalls()).toHaveLength(2);
     },
   );
 

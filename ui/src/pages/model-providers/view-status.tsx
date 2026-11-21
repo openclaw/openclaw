@@ -71,20 +71,6 @@ export function isProviderUsable(card: ModelProviderCard): boolean {
   );
 }
 
-/** Setup owns the page until a usable model exists; its call to action is the only one. */
-export function needsModelSetup(props: {
-  connected: boolean;
-  loading: boolean;
-  catalogDiscovering?: boolean;
-  configuredModels: readonly { available?: boolean }[];
-}): boolean {
-  return (
-    (props.connected || !props.loading) &&
-    !props.catalogDiscovering &&
-    !props.configuredModels.some((model) => model.available !== false)
-  );
-}
-
 export function needsAuthAttention(card: ModelProviderCard): boolean {
   if (card.auth?.kind === "missing") {
     return true;
