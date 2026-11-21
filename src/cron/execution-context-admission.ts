@@ -5,7 +5,6 @@
  * failure here never fails the run.
  */
 import { access } from "node:fs/promises";
-import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
@@ -319,16 +318,6 @@ export async function admitScheduledOccurrence(
           toolOverrides: entry.toolOverrides,
           permissionMode: entry.permissionMode,
           sessionRoot: entry.sessionRoot,
-          assertCurrent() {
-            const settings = generation?.readSessionSettings();
-            if (
-              !settings ||
-              settings.permissionMode !== entry.permissionMode ||
-              !isDeepStrictEqual(settings.toolOverrides, entry.toolOverrides)
-            ) {
-              throw new Error("The originating conversation's permissions changed.");
-            }
-          },
         };
         childParent = {
           ...(live.workspaceDir || live.cwd || live.worktree

@@ -92,7 +92,6 @@ export function prepareCronCaller(
       assertCurrent() {
         personal.assertCurrent();
         params.occurrence.childParent?.assertCurrent();
-        params.occurrence.parentPermissions?.assertCurrent();
       },
       checkRuntime(embedded: boolean, provider: string) {
         if (!embedded) {

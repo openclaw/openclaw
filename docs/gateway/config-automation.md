@@ -67,7 +67,8 @@ If the creating turn uses a stored model account, the scheduler records that
 account. Changing the default model account leaves the task on its original
 account. Disconnecting or replacing the recorded account prevents the task
 from using it. Resetting or compacting the private chat preserves its schedules.
-Each new occurrence uses the current conversation permissions.
+Each occurrence uses the conversation permissions in effect when it starts.
+Permission edits apply to the next occurrence.
 
 The Gateway sends the result from the same WhatsApp account to the same
 private chat. Gateway operators retain administrative access to the schedules.

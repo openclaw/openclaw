@@ -22,27 +22,21 @@ export async function acquireTranscriptLease(
     onRevoked?: (reason: unknown) => void;
   } = {},
 ) {
-  const {
-    assertCurrent,
-    assertNativeTransactionCurrent,
-    prepareRead,
-    readSessionSettings,
-    release,
-  } = await prepareLeaseFacts(
-    {
-      ...chat,
-      env: options.env,
-      sessionId: pin.sessionId,
-      lifecycleRevision: pin.lifecycleRevision ?? null,
-      exact: options.exact ?? "transcript",
-    },
-    options.onRevoked,
-  );
+  const { assertCurrent, assertNativeTransactionCurrent, prepareRead, release } =
+    await prepareLeaseFacts(
+      {
+        ...chat,
+        env: options.env,
+        sessionId: pin.sessionId,
+        lifecycleRevision: pin.lifecycleRevision ?? null,
+        exact: options.exact ?? "transcript",
+      },
+      options.onRevoked,
+    );
   return {
     assertCurrent,
     assertNativeTransactionCurrent,
     prepareRead,
-    readSessionSettings,
     release,
     toJSON: refuseStorage,
   };

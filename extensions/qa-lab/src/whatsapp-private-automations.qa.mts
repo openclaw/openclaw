@@ -348,13 +348,29 @@ async function run() {
         await ask(bob, "foreign-task", { action: "update", id: task.id, text: "Changed" }),
         /not found/i,
       );
+      const patchSearch = async (webSearch: boolean) => {
+        const result = (await gateway.call("sessions.patch", {
+          key: chatKey,
+          toolOverrides: { webSearch },
+        })) as { entry: { toolOverrides: { webSearch: boolean } } };
+        assert.equal(result.entry.toolOverrides.webSearch, webSearch);
+      };
+      await patchSearch(false);
       await setOrders([3, 8]);
       const countBeforeTask = outbound().length;
+      const dueRequest = provider.holdRequest("due-orders");
+      try {
+        // The due run has already reached inference under its admitted permissions.
+        await adapter.waitForCondition(() => dueRequest.reached || null, 155_000);
+        await patchSearch(true);
+      } finally {
+        dueRequest.release();
+      }
       const summary = await adapter
         .waitForOutbound({
           sinceIndex: countBeforeTask,
           textIncludes: "You have 2 orders for 11 units.",
-          timeoutMs: 155_000,
+          timeoutMs: 45_000,
         })
         .catch(async (error) => {
           throw new Error(

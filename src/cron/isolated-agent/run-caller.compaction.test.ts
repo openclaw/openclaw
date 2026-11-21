@@ -2,7 +2,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { admitScheduledOccurrence } from "../execution-context-admission.js";
@@ -10,7 +13,10 @@ import { cronTestJob } from "../service.fixture-builders.test-support.js";
 import { prepareCronCaller } from "./run-caller.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
 
-it("admits a WhatsApp occurrence against the committed compaction successor", async () => {
+it.each([
+  ["read-only", "workspace"],
+  ["workspace", "read-only"],
+] as const)("keeps admitted %s permissions after a switch to %s", async (before, after) => {
   await withOpenClawTestState(
     { label: "personal-cron-successor", scenario: "minimal" },
     async (state) => {
@@ -22,7 +28,16 @@ it("admits a WhatsApp occurrence against the committed compaction successor", as
       const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
       const cfg = { session: { store: storePath } };
       const target = { agentId, sessionKey, sessionId, storePath };
-      const entry = { sessionId, lifecycleRevision: "revision", updatedAt: 1 };
+      const initialPermissions = {
+        permissionMode: before,
+        toolOverrides: { webSearch: before === "workspace" },
+      };
+      const entry = {
+        sessionId,
+        lifecycleRevision: "revision",
+        updatedAt: 1,
+        ...initialPermissions,
+      };
       await replaceSessionEntry(target, entry);
       const payload = {
         kind: "agentTurn" as const,
@@ -68,7 +83,9 @@ it("admits a WhatsApp occurrence against the committed compaction successor", as
       try {
         expect(minted.result).toMatchObject({
           status: "ready",
-          facts: { principal: { kind: "parent", parent: { sessionKey, sessionId: "successor" } } },
+          facts: {
+            principal: { kind: "parent", parent: { sessionKey, sessionId: "successor" } },
+          },
         });
         const resolvedDelivery = {
           ok: false as const,
@@ -92,7 +109,19 @@ it("admits a WhatsApp occurrence against the committed compaction successor", as
         });
         const caller = expectDefined(personal, "personal occurrence");
         caller.requireParent(minted);
+        const newPermissions = {
+          permissionMode: after,
+          toolOverrides: { webSearch: after === "workspace" },
+        };
+        await patchSessionEntryCore({ agentId, sessionKey, storePath }, () => newPermissions);
         caller.assertCurrent();
+        expect(caller.runParams).toMatchObject(initialPermissions);
+        const next = await admitScheduledOccurrence({ cfg, job, agentId, trigger: "cron" });
+        try {
+          expect(next.parentPermissions).toMatchObject(newPermissions);
+        } finally {
+          next.release();
+        }
       } finally {
         minted.release();
         occurrence.release();
