@@ -170,7 +170,6 @@ class SkillsSettingsScreenTest {
       }
       composeRule.waitUntil {
         runtime.skillsState.value.summary
-          ?.skills
           ?.size == 1 && runtime.operatorAdminScopeAvailable.value
       }
       composeRule.onNodeWithText("Fixture skill").performScrollTo().performClick()
@@ -194,7 +193,6 @@ class SkillsSettingsScreenTest {
         updates.size == 2 &&
           runtime.skillMutationKeys.value.isEmpty() &&
           runtime.skillsState.value.summary
-            ?.skills
             ?.singleOrNull()
             ?.disabled == initiallyEnabled
       }

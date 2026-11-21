@@ -86,7 +86,7 @@ internal fun SkillsSettingsScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val canManageSkills = isConnected && operatorAdminScopeAvailable
-  val skills = skillsState.summary?.skills.orEmpty()
+  val skills = skillsState.summary.orEmpty()
   var selectedSkillKey by remember(activeGatewayStableId) { mutableStateOf<String?>(null) }
   var selectedTabName by rememberSaveable { mutableStateOf(SkillsTab.Installed.name) }
   var installedSearch by rememberSaveable { mutableStateOf("") }
@@ -144,7 +144,7 @@ internal fun SkillsSettingsScreen(
     when (selectedTab) {
       SkillsTab.Installed -> {
         SettingsSummaryContent(skillsState, isConnected, nativeString("Connect the gateway to load skills.")) { summary ->
-          SkillsOverviewPanel(summary.skills)
+          SkillsOverviewPanel(summary)
           InstalledSkillsPane(
             skills = skills,
             visibleSkills = visibleSkills,

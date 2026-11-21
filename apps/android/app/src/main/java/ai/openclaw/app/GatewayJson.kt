@@ -25,4 +25,6 @@ internal fun JsonObject?.nonBlankString(key: String): String? =
 
 internal fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
 
+internal fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
+
 internal inline fun <T : Any> JsonArray?.mapObjects(transform: (JsonObject) -> T?): List<T> = this?.mapNotNull { item -> item.asObjectOrNull()?.let(transform) }.orEmpty()
