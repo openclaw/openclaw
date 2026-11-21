@@ -31,6 +31,16 @@ describe("browser tool detail redaction", () => {
     }
   });
 
+  it("keeps a Bearer scheme prefix inside quoted source code", () => {
+    // Reported in #177100: the finalized render masked `"Bearer "` inside a
+    // PowerShell assignment and produced invalid code.
+    const source = '$headers = @{\n    "Authorization" = "Bearer " + $Token\n}';
+    expect(redactToolDetail(source)).toBe(source);
+    expect(redactToolDetail('authorization = "Bearer sk-abcdef1234567890"')).not.toContain(
+      "sk-abcdef1234567890",
+    );
+  });
+
   it("preserves long non-token identifiers containing Fireworks prefixes", () => {
     const input = [
       `fixturefw-${"C".repeat(40)}`,

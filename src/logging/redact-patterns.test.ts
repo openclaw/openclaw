@@ -105,6 +105,28 @@ describe("default pattern table", () => {
   });
 });
 
+describe("authentication scheme prefixes", () => {
+  it("keeps a quoted scheme-only value instead of masking source code", () => {
+    // A scheme prefix with no credential is not a secret; masking it corrupted
+    // displayed PowerShell and log lines. #177100
+    const source = '$headers = @{\n    "Authorization" = "Bearer " + $Token\n}';
+    expect(redactSensitiveText(source, { mode: "tools" })).toBe(source);
+    expect(redactSensitiveText('authorization = "Basic "', { mode: "tools" })).toBe(
+      'authorization = "Basic "',
+    );
+    expect(redactSensitiveText("proxy-authorization: 'Bot '", { mode: "tools" })).toBe(
+      "proxy-authorization: 'Bot '",
+    );
+  });
+
+  it("still masks a real credential in the same shape", () => {
+    const masked = redactSensitiveText('authorization = "Bearer sk-abcdef1234567890"', {
+      mode: "tools",
+    });
+    expect(masked).not.toContain("sk-abcdef1234567890");
+  });
+});
+
 describe("AWS candidate prefilter", () => {
   it("agrees with the original value rule on seeded credential and noncredential text", () => {
     // Freeze the pre-optimization predicate as the differential oracle.

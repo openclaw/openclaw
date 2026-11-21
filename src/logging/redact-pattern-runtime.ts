@@ -9,6 +9,14 @@ export function parseRedactPatternSource(raw: string): [source: string, flags: s
   return [source, flags.includes("g") ? flags : `${flags}g`];
 }
 
+/**
+ * An authentication scheme with no credential material (`Bearer`, `Basic`, `Bot`)
+ * carries no secret; masking it corrupted quoted source code and log lines. #177100
+ */
+export function isAuthenticationSchemeOnlyToken(value: string): boolean {
+  return /^(?:bearer|basic|bot)$/i.test(value.trim());
+}
+
 const OPEN_REPEAT_RE = /^\{(\d+),\}/;
 const BOUNDED_REPEAT_RE = /^\{(?:\d+(?:,\d*)?|,\d+)\}/;
 const HEX_DIGIT_RE = /[0-9A-Fa-f]/;
@@ -369,21 +377,34 @@ export function replaceRedactPattern(
   replace: (match: RedactMatch) => string,
   replaceRegex?: (...args: unknown[]) => string,
 ): string {
+  // A capture that is only an authentication scheme (`"Bearer "`, `'Basic '`) is not a
+  // secret; masking it corrupted quoted source code and log lines. #177100
+  const isSchemeOnly = (match: RedactMatch) => {
+    const captured = match.groups?.findLast(
+      (group) => typeof group === "string" && group.length > 0,
+    );
+    return captured !== undefined && isAuthenticationSchemeOnlyToken(captured);
+  };
   if (pattern instanceof RegExp) {
     if (patternPrefilters.get(pattern)?.(text) === false) {
       // Attached regexes are compiled global; native replacement resets even on a miss.
       pattern.lastIndex = 0;
       return text;
     }
-    return text.replace(
-      pattern,
-      replaceRegex ?? ((...args: unknown[]) => replace(readRedactMatch(args))),
-    );
+    const callerReplace = replaceRegex;
+    return text.replace(pattern, (substring: string, ...args: unknown[]): string => {
+      const matched = [substring, ...args];
+      const match = readRedactMatch(matched);
+      if (isSchemeOnly(match)) {
+        return match.match;
+      }
+      return callerReplace ? callerReplace(...matched) : replace(match);
+    });
   }
   const parts: string[] = [];
   let end = 0;
   visitRedactMatches(text, pattern, (match) => {
-    parts.push(text.slice(end, match.offset), replace(match));
+    parts.push(text.slice(end, match.offset), isSchemeOnly(match) ? match.match : replace(match));
     end = match.offset + match.match.length;
   });
   return parts.length ? parts.join("") + text.slice(end) : text;
