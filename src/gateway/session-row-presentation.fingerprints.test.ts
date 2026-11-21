@@ -311,76 +311,81 @@ it.each([
   expect(Reflect.set(after, "length", 3)).toBe(false);
 });
 
-it("keeps unrelated child activity prepared across interleaved keyed runs and audiences", async () => {
-  using clock = vi.spyOn(Date, "now");
-  clock.mockReturnValue(1_800_000_000_000);
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg = rolePolicyConfig();
-    cfg.agents = { entries: { main: {} }, defaults: { utilityModel: "" } };
-    const profiles = ["owner", "viewer"].map((name) =>
-      ensureProfileForEmail(`${name}@keyed-activity.test`),
-    );
-    const clients = profiles.map((profile) => {
-      const client = createSessionRowEventPeer(profile, profile.id, Date.now()).client;
-      prepareGatewayRecipientProfile(client);
-      return client;
-    });
-    const parents = [0, 1, 2].map((index) => `agent:main:parent-${index}`);
-    const children = parents.map((parent, index) => {
-      seedRow(parent, { sessionId: parent, updatedAt: Date.now(), visibility: "shared" });
-      return [0, 1].map((child) => {
-        const key = `agent:main:subagent:child-${index}-${child}`;
-        seedRow(key, {
-          sessionId: key,
-          updatedAt: Date.now(),
-          parentSessionKey: parent,
-          spawnedBy: parent,
-          visibility: child ? "draft" : "shared",
-          createdActor: { type: "human", source: "profile", id: profiles[0]!.id },
-        });
-        return key;
-      });
-    });
-    using projection = await createTestProjection({ cfg, modelCatalog: [] });
-    const read = (activeParent = -1) => {
-      const publication = prepareSessionRowPublication(projection, Date.now());
-      return clients.map((client, audience) =>
-        parents.map((key, index) => {
-          const row = publication(client).getPresentation().snapshot({ key, agentId: "main" }).row;
-          expect(row?.childSessions).toEqual(
-            audience === 0 ? children[index] : children[index]!.slice(0, 1),
-          );
-          expect(Boolean(row?.hasActiveSubagentRun)).toBe(index === activeParent);
-          return row;
-        }),
+it.each(["keyed", "alias"])(
+  "keeps unrelated child activity prepared across interleaved %s runs and audiences",
+  async (mode) => {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_800_000_000_000);
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg = rolePolicyConfig();
+      cfg.agents = { entries: { main: {} }, defaults: { utilityModel: "" } };
+      const profiles = ["owner", "viewer"].map((name) =>
+        ensureProfileForEmail(`${name}@keyed-activity.test`),
       );
-    };
-    read();
-    using projected = vi.spyOn(childDisplay, "projectPreparedSessionChild");
-    try {
-      for (const index of [0, 1, 0, 2]) {
-        const key = children[index]![0]!;
-        registerAgentRunContext("interleaved-activity", {
-          sessionKey: key,
-          sessionId: key,
-          agentId: "main",
-          projectSessionActive: true,
+      const clients = profiles.map((profile) => {
+        const client = createSessionRowEventPeer(profile, profile.id, Date.now()).client;
+        prepareGatewayRecipientProfile(client);
+        return client;
+      });
+      const parents = [0, 1, 2].map((index) => `agent:main:parent-${index}`);
+      const children = parents.map((parent, index) => {
+        seedRow(parent, { sessionId: parent, updatedAt: Date.now(), visibility: "shared" });
+        return [0, 1].map((child) => {
+          const key = `agent:main:subagent:child-${index}-${child}`;
+          seedRow(key, {
+            sessionId: key,
+            updatedAt: Date.now(),
+            parentSessionKey: parent,
+            spawnedBy: parent,
+            visibility: child ? "draft" : "shared",
+            createdActor: { type: "human", source: "profile", id: profiles[0]!.id },
+          });
+          return key;
         });
-        await projection.ensureMaterialized();
-        projected.mockClear();
-        read(index);
-        const keys = projected.mock.calls.map(([link]) => link.key);
-        // Moving a run can also invalidate its previous parent, but never an untouched sibling.
-        expect(keys.every((child) => child.endsWith("-0"))).toBe(true);
-        expect(keys.length).toBeLessThanOrEqual(2);
-        projected.mockClear();
-        read(index);
-        expect(projected).not.toHaveBeenCalled();
+      });
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      const read = (activeParent = -1) => {
+        const publication = prepareSessionRowPublication(projection, Date.now());
+        return clients.map((client, audience) =>
+          parents.map((key, index) => {
+            const row = publication(client)
+              .getPresentation()
+              .snapshot({ key, agentId: "main" }).row;
+            expect(row?.childSessions).toEqual(
+              audience === 0 ? children[index] : children[index]!.slice(0, 1),
+            );
+            expect(Boolean(row?.hasActiveSubagentRun)).toBe(index === activeParent);
+            return row;
+          }),
+        );
+      };
+      read();
+      using projected = vi.spyOn(childDisplay, "projectPreparedSessionChild");
+      try {
+        for (const index of [0, 1, 0, 2]) {
+          const key = children[index]![0]!;
+          registerAgentRunContext("interleaved-activity", {
+            sessionKey: mode === "keyed" ? key : "agent:main:run-alias:child",
+            sessionId: key,
+            agentId: "main",
+            projectSessionActive: true,
+          });
+          await projection.ensureMaterialized();
+          projected.mockClear();
+          read(index);
+          const keys = projected.mock.calls.map(([link]) => link.key);
+          // Moving a run can also invalidate its previous parent, but never an untouched sibling.
+          expect(keys.every((child) => child.endsWith("-0"))).toBe(true);
+          expect(keys.length).toBeLessThanOrEqual(2);
+          projected.mockClear();
+          read(index);
+          expect(projected).not.toHaveBeenCalled();
+        }
+      } finally {
+        clearAgentRunContext("interleaved-activity");
       }
-    } finally {
-      clearAgentRunContext("interleaved-activity");
-    }
-    await projection.ensureMaterialized();
-    read();
-  });
-});
+      await projection.ensureMaterialized();
+      read();
+    });
+  },
+);

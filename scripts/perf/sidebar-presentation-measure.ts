@@ -150,7 +150,7 @@ if (sources.size || values["surge-detail"]) {
       const loaded = next(url, context);
       const name = path.basename(url);
       const override =
-        url.includes("/src/gateway/") || url.includes("/src/agents/")
+        url.includes("/src/gateway/") || url.includes("/src/agents/") || url.includes("/src/infra/")
           ? sources.get(name)
           : undefined;
       if (override) {
@@ -173,7 +173,7 @@ if (sources.size || values["surge-detail"]) {
           source = source!.replace(before, after);
         };
         source =
-          'import { r2Task, r2Count } from "../../scripts/perf/session-row-churn-probe.js";\n' +
+          'import { r2Task, sessionRowChurnProbe } from "../../scripts/perf/session-row-churn-probe.js";\n' +
           source;
         if (name === "session-row-identity.ts") {
           replace("export function freezeSessionRow(", "function measuredFreezeSessionRow(");
@@ -188,7 +188,7 @@ if (sources.size || values["surge-detail"]) {
         } else if (name === "session-row-child-activity.ts") {
           replace(
             '  ): Omit<Contribution, "link"> {',
-            '  ): Omit<Contribution, "link"> {\n    r2Count("childContributions");',
+            '  ): Omit<Contribution, "link"> {\n    sessionRowChurnProbe.count("childContributions");',
           );
         } else {
           replace("  const present = (", "  const measuredPresent = (");
@@ -269,7 +269,7 @@ const [
   { createEmptyPluginRegistry },
   { setActivePluginRegistry },
   { addSession, createProcessSession, deleteSession },
-  { registerAgentRunContext, recordAgentRunModel, clearAgentRunContext },
+  { registerAgentRunContext, recordAgentRunModel, clearAgentRunContext, getAgentRunContext },
   { sessionChanges },
   { withPreparedEventRow },
   { prepareSessionRowPublication },
@@ -533,11 +533,8 @@ try {
   }
   // Only selected rows are materialized. Let their optional empty-transcript
   // backfill acknowledge null before recording the stable warm response.
-  const pendingBackfill = new Set(
-    Array.from({ length: pageSize }, (_, index) =>
-      keyFor(values.surge ? sessions - 150 - index * 150 : sessions - 1 - index),
-    ),
-  );
+  const selectedPage = await list(0, false);
+  const pendingBackfill = new Set(selectedPage.sessions.map((row) => row.key));
   if (values.surge) {
     for (const key of hotKeys) {
       pendingBackfill.add(key);
@@ -690,8 +687,7 @@ try {
             sessionKey: key,
             sessionId: `sidebar-${slot * 150 + 1}`,
             agentId: "main",
-            projectSessionActive: true,
-            registeredAt: 1_800_000_000_000 + index,
+            projectSessionActive: !getAgentRunContext(`surge-${slot}`)?.projectSessionActive,
           });
         }
         recordSyncSlice(mutationAt, mutationCpu);
@@ -906,6 +902,7 @@ try {
           "session-utils-row.ts",
           "session-row-projection-record.ts",
           "bash-process-observation.ts",
+          "agent-run-registry-state.ts",
         ].map((name) => [
           name,
           createHash("sha256")
@@ -913,7 +910,11 @@ try {
               sources.get(name) ??
                 readFileSync(
                   path.resolve(
-                    name === "bash-process-observation.ts" ? "src/agents" : "src/gateway",
+                    name === "bash-process-observation.ts"
+                      ? "src/agents"
+                      : name === "agent-run-registry-state.ts"
+                        ? "src/infra"
+                        : "src/gateway",
                     name,
                   ),
                   "utf8",

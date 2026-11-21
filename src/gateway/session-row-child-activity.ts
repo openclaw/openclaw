@@ -414,7 +414,12 @@ export function createSessionRowChildProjection(params: {
       if (!("all" in change)) {
         invalidate(change.sessionKey);
         if (change.scope === "runtime") {
-          // The keyed publication already invalidated this run's dependent ancestors.
+          if (change.runtimeSession) {
+            for (const row of params.matching({ key: change.runtimeSession.sessionId }, "id")) {
+              invalidate(row.key);
+            }
+          }
+          // Both runtime keys and session-ID aliases have invalidated their ancestors.
           activity.invalidateRuntime([]);
         }
         return;

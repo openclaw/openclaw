@@ -72,10 +72,6 @@ const bucket = (label: string) => {
   }
   return value;
 };
-export function r2Count(name: string) {
-  bucket(name).calls++;
-}
-
 function segment(value: Frame, at: number) {
   const duration = at - value.segmentAt;
   const task = bucket(value.label);
@@ -319,6 +315,9 @@ function snapshot() {
   };
 }
 export const sessionRowChurnProbe = {
+  count(name: string) {
+    bucket(name).calls++;
+  },
   begin(label: string, detail = false) {
     materializationStart = getSessionRowSelectionMetrics().materialization;
     detailed = detail;
