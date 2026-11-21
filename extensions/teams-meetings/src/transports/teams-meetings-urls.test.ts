@@ -14,6 +14,14 @@ const CONSUMER_COORDINATES = Buffer.from(
 describe("Microsoft Teams meeting URL normalization", () => {
   it.each([
     [WORK_URL, "teams-work:19:meeting_NzQ1ZDBjYzItZDAxNS00N2YxLTg4Y2EtYjQ1N2I4NDg2Njli@thread.v2"],
+    [
+      "https://teams.microsoft.com/meet/1234567890123?p=Synthetic-runtime-token",
+      "teams-work:meet:1234567890123:p:Synthetic-runtime-token",
+    ],
+    [
+      "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F1234567890123%3Fp%3DSynthetic-runtime-token",
+      "teams-work:meet:1234567890123:p:Synthetic-runtime-token",
+    ],
     ["https://teams.live.com/meet/9326458712345?p=abc", "teams-consumer:9326458712345:p:abc"],
     [
       "https://teams.live.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F9326458712345%3Fp%3Dabc",
@@ -60,5 +68,28 @@ describe("Microsoft Teams meeting URL normalization", () => {
     const normalized = normalizeTeamsMeetingUrl(`${WORK_URL}#ignored`);
     expect(normalized).toContain("context=");
     expect(normalized).not.toContain("#ignored");
+  });
+
+  it("resolves a work short-link and its server launcher redirect to the same key", () => {
+    const direct = "https://teams.microsoft.com/meet/1234567890123?p=Synthetic-runtime-token";
+    const redirected =
+      "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F1234567890123%3Fp%3DSynthetic-runtime-token";
+    expect(isSameTeamsMeetingUrl(direct, redirected)).toBe(true);
+  });
+
+  it("does not treat a different opaque passcode as the same work short-link meeting", () => {
+    const direct = "https://teams.microsoft.com/meet/1234567890123?p=Synthetic-runtime-token";
+    const other = "https://teams.microsoft.com/meet/1234567890123?p=Different-runtime-token";
+    expect(isSameTeamsMeetingUrl(direct, other)).toBe(false);
+  });
+
+  it.each([
+    "https://teams.microsoft.com/meet/1234567890123",
+    "https://teams.microsoft.com/meet/1234567890123?p=",
+    "https://teams.microsoft.com/meet/1234567890123?p=one&p=two",
+    "https://teams.microsoft.com/dl/launcher/launcher.html?url=https%3A%2F%2Fevil.example%2F_%23%2Fmeet%2F1234567890123%3Fp%3Dx",
+    "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2Fabc%3Fp%3Dx",
+  ])("rejects a malformed or missing-passcode work short-link: %s", (url) => {
+    expect(normalizeTeamsMeetingUrlForReuse(url)).toBeUndefined();
   });
 });
