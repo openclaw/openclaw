@@ -48,8 +48,13 @@ suite.define(() => {
       expect(pendingControl).not.toBeNull();
 
       await gateway.resolveDeferred("users.channelIdentity", { status: "ready", accounts });
-      await expect(row.getByRole("button")).not.toHaveAttribute("aria-busy", "true");
-      await expect(row).toContainText(accounts.length ? "Verified" : "Ask an admin to enable it.");
+      if (accounts.length) {
+        await expect(row.getByRole("button", { name: "Disconnect" })).toBeEnabled();
+        await expect(row).toContainText("Verified");
+      } else {
+        await expect(row).toContainText("An admin needs to set up a Discord account");
+        await expect(row.getByRole("button")).toHaveCount(0);
+      }
       expect(await row.boundingBox()).toEqual(pendingRow);
       expect(await control.boundingBox()).toEqual(pendingControl);
     });

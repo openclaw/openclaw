@@ -59,7 +59,11 @@ export function DiscordIdentity() {
                   <span class="identity-account">{view.read().selected?.senderIds.join(", ")}</span>
                 </span>
               ) : unavailable() ? (
-                t("profilePage.discord.unavailable")
+                view.read().available && view.read().accounts.length === 0 ? (
+                  t("profilePage.discord.noGatewayAccount")
+                ) : (
+                  t("profilePage.discord.unavailable")
+                )
               ) : (
                 // Holds the line while the status is pending or failed; the failure has its own row.
                 <span
@@ -96,18 +100,29 @@ export function DiscordIdentity() {
                   <Show
                     when={view.read().flow}
                     fallback={
-                      <button
-                        class="btn btn--sm"
-                        disabled={
-                          !view.read().available ||
-                          !view.read().selected?.available ||
-                          view.read().busy
+                      // Linking that isn't set up has no action here; the description says why.
+                      <Show
+                        when={!unavailable()}
+                        fallback={
+                          <SettingsStatus
+                            kind="muted"
+                            label={t("profilePage.discord.notConnected")}
+                          />
                         }
-                        aria-label={t("profilePage.discord.connect")}
-                        onClick={() => void state.connect()}
                       >
-                        {t("profilePage.discord.connectShort")}
-                      </button>
+                        <button
+                          class="btn btn--sm"
+                          disabled={
+                            !view.read().available ||
+                            !view.read().selected?.available ||
+                            view.read().busy
+                          }
+                          aria-label={t("profilePage.discord.connect")}
+                          onClick={() => void state.connect()}
+                        >
+                          {t("profilePage.discord.connectShort")}
+                        </button>
+                      </Show>
                     }
                   >
                     {(flow) => (
