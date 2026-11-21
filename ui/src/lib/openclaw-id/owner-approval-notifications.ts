@@ -14,20 +14,32 @@ export function bindOwnerApprovalNotifications(gateway: ApplicationGateway) {
   const failed = (error: unknown) =>
     showToast({ severity: "error", message: openClawIdErrorToast(error, "open") });
   // Toasts outlive this binding; once the feature is off they open nothing.
-  const openDevices = (client: GatewayBrowserClient) => {
-    if (disposed) {
+  const openDevices = (requestedClient: GatewayBrowserClient) => {
+    const current = gateway.snapshot;
+    if (
+      disposed ||
+      current.phase !== "connected" ||
+      current.client?.gatewayUrl !== requestedClient.gatewayUrl
+    ) {
       return;
     }
+    const client = current.client;
     void import("../../components/openclaw-id/owner-devices-dialog.tsx")
       .then(({ showOwnerDevicesDialog }) =>
         disposed ? undefined : showOwnerDevicesDialog({ client }),
       )
       .catch(failed);
   };
-  const openApproval = (client: GatewayBrowserClient) => {
-    if (disposed) {
+  const openApproval = (requestedClient: GatewayBrowserClient) => {
+    const current = gateway.snapshot;
+    if (
+      disposed ||
+      current.phase !== "connected" ||
+      current.client?.gatewayUrl !== requestedClient.gatewayUrl
+    ) {
       return;
     }
+    const client = current.client;
     void import("../../components/openclaw-id/owner-approval-dialog.tsx")
       .then(({ showOwnerApprovalDialog }) => {
         if (!disposed) {

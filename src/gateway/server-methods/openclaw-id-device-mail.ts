@@ -78,10 +78,14 @@ export async function handleOpenClawIdDeviceMail(
     }
     opts.respond(true, result);
   } catch {
+    // Upstream error text can contain credentials; log no request or cause.
+    opts.context.logGateway.warn("openclaw-id: owner-device mail could not be delivered");
     opts.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "Owner-device mail could not be delivered"),
+      errorShape(ErrorCodes.UNAVAILABLE, "Owner-device mail could not be delivered", {
+        retryable: true,
+      }),
     );
   }
 }
