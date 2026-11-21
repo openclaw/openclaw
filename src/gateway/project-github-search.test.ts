@@ -247,6 +247,17 @@ describe("project GitHub search", () => {
     expect(requestUrl(fetchImpl.mock.calls[0]?.[0])).not.toContain("sort=");
   });
 
+  it("keeps an emoji whole in a repository description", async () => {
+    const description = `${"d".repeat(499)}😀tail`;
+    const result = await search(
+      "emoji-description",
+      fetchReturning(page(repository("acme/emoji-repo", description))),
+    );
+
+    expect(result.projects[0]?.description).toBe("d".repeat(499));
+    expect(result.projects[0]?.description).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
   it.each([false, true])(
     "ranks and deduplicates affiliations with native credentials=%s",
     async (native) => {
