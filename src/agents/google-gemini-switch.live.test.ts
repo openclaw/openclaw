@@ -79,7 +79,18 @@ describeLive("gemini live switch", () => {
       if (modelId.includes("preview") && res.stopReason === "error") {
         return;
       }
-      expect(res.stopReason).not.toBe("error");
+      // Surface the sanitized provider error so a stable-model failure is diagnosable
+      // from the assertion alone (#166580). Credentials are redacted defensively and
+      // each field bounded; no request payload or credential material is included.
+      const sanitize = (value: string | undefined, fallback: string) =>
+        (value ?? fallback).split(GEMINI_KEY).join("[redacted]").slice(0, 500);
+      const providerErrorDetail =
+        `code=${sanitize(res.errorCode, "unknown")} ` +
+        `type=${sanitize(res.errorType, "unknown")} ` +
+        `message=${sanitize(res.errorMessage, "unknown provider error")}`;
+      expect(res.stopReason, `gemini provider error (${modelId}): ${providerErrorDetail}`).not.toBe(
+        "error",
+      );
     }, 20000);
   }
 });
