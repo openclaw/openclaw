@@ -1,0 +1,6 @@
+92
+# Exact net LF growth of listed canonical source adaptations; existing controls retained.
+# Baseline 81d3ee3faf729dc319dbbfeb5ffb72f3ab7825b4; canonical snapshot 339cdfcf0ab40c6be3e7ae6b163d31f40b9d423d.
+# Credit is valid only with the complete listed batch, including negative deltas.
+# 4ab1e8cd8de9aba88a096d1defddef0c26097469 62 fix: stop retaining configurations after model catalog refreshes (#192545)
+# 339cdfcf0ab40c6be3e7ae6b163d31f40b9d423d 30 perf(plugins): reuse catalog hook manifest inventory

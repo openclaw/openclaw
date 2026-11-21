@@ -1,0 +1,51 @@
+1292
+# Exact net LF growth of listed canonical source adaptations; existing controls retained.
+# Baseline 81d3ee3faf729dc319dbbfeb5ffb72f3ab7825b4; canonical snapshot 339cdfcf0ab40c6be3e7ae6b163d31f40b9d423d.
+# Credit is valid only with the complete listed batch, including negative deltas.
+# fbea2919e294b2619b8678930471cd6524f68dad -4 fix(cli): prevent config writes from empty builder options (#190896)
+# 876f6a55a711be4fdecda0434ac53108f7d54664 -2 fix: accept multiline JSON from streaming providers (#195019)
+# 159c85ca9b1d3fc1b8c66ee9a41912c645316432 -1 fix(google-meet): follow Calendar event pagination (#194103)
+# 44df111510c135f3a89a9268c6333509addf5fdd 2 fix(searxng): web_search reports "no results" when SearXNG's engines are unresponsive (#190619)
+# 21bda58f454df4d12f453357f354c9a5cbf8c949 -4 fix(discord): finish command deploy when obsolete commands are already gone (#194150)
+# 78fbd01c6544cbd5d0e8ec6d230cb273b4c3b3a2 1 fix: restore Git backups containing Unicode line separators (#188522)
+# 7a4af04d616ab677c58fa1f369b947bef45c382a -2 fix(workers): preserve missing-module startup errors (#194935)
+# cf62b191e81adf86f72ac06a096f6adb18a7d0d8 5 fix(goals): continue local Codex goals without operator roles (#194724)
+# 1ac0180aaa0419b63f5ca3b4886e67b32eb24a8a 43 fix(llama-cpp): isolate each caller's abort signal across shared model loads (#194494)
+# fb935e6912388314851b05cb698ef038b83bbd07 22 fix(cron): keep one-shot finalization working on PostgreSQL 16 (#194384)
+# 4e8445923f2522eb6b42ab705e15624a1a674a39 122 fix(gateway): park the service on older agent database schemas (#194599)
+# 63a60fa78bba92bec04a43a1686b78d896a6d887 96 fix: prevent missing exports in large standalone builds (#194956)
+# 67e565ba67ff2e2e235ef1b7df60584582c55db8 34 fix(deepinfra): honor thinking off for Nemotron 3.5 Super VL (#192979)
+# 92e7a9fa223b0dc35801f25f70be90b472d9a6b7 79 fix(update): find operator agents during failed-update triage (#194058)
+# 2ea2570de7f13823a8174590bfddfbfabdbcd915 13 fix(infer): cancel interrupted video description requests (#194251)
+# f8ccaa70bc9773d6bbb569bc0e275eee0c544ead 28 fix(plugins): portable plugin-state keys for PostgreSQL (#188693)
+# b6094e25375261a2c6be4f5cc9183d90d2598574 78 fix(signal): withhold view-once attachments (#196841)
+# 574eea5d3e26eb203c113dfb932ee443a38d839c 14 fix(models): auth list shows recovery advice after restrictions expire (#176331)
+# af609748bca14f61086ecfa82a961787701bdfcd 12 fix(knowledge): preserve encoded hashes in Markdown links
+# a37ea2b8d6dc0dd6caf54b5bf81444fedf3b5f94 14 fix(infra): reject CR/LF consistently in Windows command rendering (#190547)
+# 444b2f0feb4759790fd30221be3cdeaf5e00ea3f 11 fix(litellm): allow single-image Gemini edits (#190082)
+# 99486afd3a8e9300494e576c9239937a2b9977a4 19 fix(usage): retain z.ai quotas encoded as numeric strings (#190342)
+# c50f4d5953848c85bf5c9cd319e617c0acf2f1f7 8 fix(oc-path): blank writes make Markdown fields unreadable (#190644)
+# 6ae2c3af4737c3121e15c44328559b40f08c5a34 9 fix(web-fetch): article links stay relative on pages with a <base> tag (#189714)
+# aaeced5e205659fc38de065116c8047d371b0455 41 fix(ai): honor Model Studio compatible-mode output limits (#189870)
+# d5f6939d852c85253754eda34f8a898383da4dbe 88 fix: let isolated local workspaces initialize on Windows (#190281)
+# 271dfa9cf3097bd24415951d693ac886e66f5fc4 22 fix(cron): let scheduled jobs read their own delivery receipts (#190598)
+# 5604ce7a734238a6402eba02cba60175e3685012 18 fix(talk): Gateway transcript joins words when a provider sends a whitespace-only delta (#190271)
+# 8d56f2638a6562f7d30c76e173279bad3f1ab445 67 fix(feishu): restore reactions when chat type is missing (#190515)
+# 0c4590fdd3f22a662b21168ae748d2a11f86941d 54 fix(code-mode): retry failed QuickJS initialization (#191952)
+# 1595eff7afe398f993218465bdb50279be05bb0d 69 fix(cua): recover failed resource initialization (#192001)
+# eca17ab79d4fe7e3ca2d01daa1ebfd8e5df001df 41 fix(k8s): fail initialization when config seeding fails
+# fdc54208c35abf2a050d273fca2188409edd64bf 20 fix(memory): honor Memory Core dreaming opt-out under foreign slot (#188950)
+# 2573b2e33c6270c52d1c6fba7485c32f411f33ef 7 fix(bedrock): omit unsupported Grok 4.6 temperature (#192958)
+# 3781d836fb14f4f969ebd3d8070408ba9a0ce842 12 fix: keep OpenCode Go models available during endpoint outages (#193234)
+# 8428595520bcdcd4e495420eb03e3eeab78f121f 4 fix(sandbox): exclude NuGet and Convex caches from workspace results
+# 9672e341394a52f13116fd685f956aa41fb0c7c9 21 fix(cron): expose receipt-backed history run IDs (#188848)
+# 8715be0d6eefe4e4542c2fc0c009301d347f7497 -1 fix(llm-task): defer defaults to model resolution owner (#188758)
+# 96ca6a7e6135ee9c0cd46b50be0349bc9ec6bdac 1 fix(docker): retain reserved plugin SDK aliases (#181974)
+# f785acc0105ca7324919a483d5b13034fcb6d999 19 test(queue): cover prose and strict native directive controls
+# c2e0aa0726050a807f3fe9b9200f8aed7606c48b 4 test(queue): assert absent mode through optional field contract
+# 5c00da168a34fcd468575146489121335e037e73 -2 test(queue): check optional mode without requiring own property
+# 177b7cee32b11904b91104ea481fef9136569299 108 fix(install): retain actionable shell setup in final summary (#201383)
+# 3a301878d7bb244a145d0e59e25f4ff60e84f01b 16 fix: avoid duplicated replies from divergent final text resends (#189852)
+# fd24198696b5b8daa813d544f3e8d2a148c3c6ce 70 fix(agents): skip credential retries for missing models (#189716)
+# d5f56053a18b1b5f519ae214ebf1b4d2a43f821f 17 fix(security): reject workspace Azure resource redirects (#202031)
+# c5c6ac1cd7fa057c825310fabf29f84335c039c2 -1 fix(feishu): reject synthetic reply anchors
