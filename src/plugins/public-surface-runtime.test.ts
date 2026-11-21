@@ -2,11 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import {
   resolveBundledPluginPublicSurfacePath,
@@ -41,6 +44,202 @@ function resolveSource(sourceRoot: string, artifactBasename: string, dirName = "
 }
 
 describe("bundled plugin public surface runtime", () => {
+  it("loads the installed public surface matrix in native Node without a preload", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-native-public-surface-"));
+    const fixtures = ["physical", "link"].flatMap((layout) =>
+      ["dist", "dist-runtime"].flatMap((dist) =>
+        ["api.js", "runtime-api.js"].map((artifactBasename) => {
+          const caseRoot = path.join(root, layout, dist, artifactBasename);
+          const packageRoot = path.join(caseRoot, "lib/node_modules/openclaw");
+          const sourceRoot = path.join(packageRoot, "extensions/demo");
+          writeArtifact(path.join(packageRoot, "package.json"), '{"type":"module"}');
+          const sourceBasename = artifactBasename.replace(/\.js$/u, ".ts");
+          writeArtifact(
+            path.join(sourceRoot, sourceBasename),
+            'export const marker: string = "source";',
+          );
+          writeArtifact(
+            path.join(packageRoot, dist, "extensions/demo", artifactBasename),
+            'export const marker = "built";',
+          );
+          // A stale runtime copy must not win over dist when both are present.
+          if (dist === "dist") {
+            writeArtifact(
+              path.join(packageRoot, "dist-runtime/extensions/demo", artifactBasename),
+              'export const marker = "stale";',
+            );
+          }
+          const alias = path.join(caseRoot, "release-link");
+          if (layout === "link") {
+            fs.symlinkSync(packageRoot, alias, process.platform === "win32" ? "junction" : "dir");
+          }
+          return {
+            artifactBasename,
+            source: path.join(
+              layout === "link" ? alias : packageRoot,
+              "extensions/demo",
+              sourceBasename,
+            ),
+            pluginRoot: path.join(layout === "link" ? alias : packageRoot, "extensions/demo"),
+          };
+        }),
+      ),
+    );
+    const loaderUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.publicSurfaceLoader);
+    const result = spawnNodeEvalSync(
+      `
+        import assert from "node:assert/strict";
+        import { pathToFileURL } from "node:url";
+        import { loadPluginPublicArtifactModuleSync, loadBundledPluginPublicArtifactModuleFromCandidatesSync } from ${JSON.stringify(loaderUrl.href)};
+        for (const { pluginRoot, artifactBasename, source } of ${JSON.stringify(fixtures)}) {
+          // Establish the native Node restriction independently of the resolver.
+          await assert.rejects(import(pathToFileURL(source).href), {
+            code: "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING",
+          });
+          assert.equal(loadPluginPublicArtifactModuleSync({
+            pluginRoot, artifactBasename, origin: "bundled",
+          }).marker, "built", pluginRoot);
+          assert.equal(loadBundledPluginPublicArtifactModuleFromCandidatesSync({
+            dirName: "demo", artifactCandidates: [artifactBasename],
+            owner: { id: "demo", rootDir: pluginRoot, source, origin: "bundled" },
+          }).marker, "built", pluginRoot);
+        }
+        console.log("native matrix: 8 layouts, 16 public loads verified");
+      `,
+      {
+        timeout: 30_000,
+        env: {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("native matrix: 8 layouts, 16 public loads verified");
+  });
+
+  it.each(["bundled", "global"] as const)(
+    "uses the runtime record origin over the caller origin (%s)",
+    async (origin) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-record-origin-"));
+      const packageRoot = path.join(root, "node_modules/openclaw");
+      const pluginRoot = path.join(packageRoot, "extensions/demo");
+      const source = writeArtifact(path.join(pluginRoot, "index.ts"));
+      const sourceSurface = writeArtifact(path.join(pluginRoot, "api.ts"));
+      const builtRoot = path.join(packageRoot, "dist/extensions/demo");
+      const built = writeArtifact(path.join(builtRoot, "api.js"));
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(
+        createPluginRecord({ id: "demo", rootDir: pluginRoot, source, origin }),
+      );
+      const cache = createPluginCache();
+      try {
+        const resolved = withPluginRuntimeRegistryScope(registry, () =>
+          withPluginCache(cache, () =>
+            resolvePluginRootPublicSurfaceLocation({
+              pluginRoot,
+              artifactBasename: "api.js",
+              origin: origin === "bundled" ? "global" : "bundled",
+            }),
+          ),
+        );
+        expect(resolved).toEqual(
+          origin === "bundled"
+            ? { modulePath: built, boundaryRoot: builtRoot }
+            : { modulePath: sourceSurface, boundaryRoot: pluginRoot },
+        );
+      } finally {
+        await retirePluginCache(cache);
+      }
+    },
+  );
+
+  it.each([
+    { origin: "bundled", captured: true },
+    { origin: "global", captured: false },
+  ] as const)(
+    "pins installed $origin source membership (sidecar captured: $captured)",
+    async ({ origin, captured }) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-installed-instance-"));
+      const packageRoot = path.join(root, "node_modules/openclaw");
+      const pluginRoot = path.join(packageRoot, "extensions/demo");
+      const source = writeArtifact(path.join(pluginRoot, "index.ts"));
+      const sourceSurface = path.join(pluginRoot, "api.ts");
+      if (captured) {
+        writeArtifact(sourceSurface);
+      }
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({
+        id: "demo",
+        origin,
+        source,
+        rootDir: pluginRoot,
+      });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const cache = createPluginCache();
+      try {
+        withPluginCache(cache, () =>
+          bindPluginInstanceModuleLoader({
+            instance,
+            origin: record.origin,
+            source,
+            rootDir: pluginRoot,
+          }),
+        );
+        // Bundled instances retain their source family; captured global instances exclude new files.
+        writeArtifact(sourceSurface);
+        writeArtifact(path.join(packageRoot, "dist/extensions/demo/api.js"));
+        const resolved = withPluginRuntimeRegistryScope(registry, () =>
+          withPluginCache(cache, () =>
+            resolvePluginRootPublicSurfaceLocation({
+              pluginRoot,
+              pluginId: record.id,
+              artifactBasename: "api.js",
+              origin: "bundled",
+            }),
+          ),
+        );
+        expect(resolved).toEqual(
+          captured ? { modulePath: sourceSurface, boundaryRoot: pluginRoot } : null,
+        );
+      } finally {
+        await instance.dispose();
+        await retirePluginCache(cache);
+      }
+    },
+  );
+  it("resolves bundled source fallbacks to built artifacts behind a node_modules release link", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-public-surface-node-modules-"));
+    const packageRoot = path.join(root, "lib", "node_modules", "openclaw");
+    const pluginRoot = path.join(packageRoot, "extensions", "demo");
+    writeArtifact(path.join(pluginRoot, "api.ts"), 'export const marker = "source";');
+    const builtRoot = path.join(packageRoot, "dist", "extensions", "demo");
+    const built = writeArtifact(path.join(builtRoot, "api.js"), 'export const marker = "built";');
+    const alias = path.join(root, "openclaw");
+    fs.symlinkSync(packageRoot, alias, process.platform === "win32" ? "junction" : "dir");
+
+    expect(resolveSource(path.join(alias, "extensions"), "api.js")).toBe(built);
+    const params = {
+      pluginRoot: path.join(alias, "extensions", "demo"),
+      entrySource: path.join(alias, "extensions", "demo", "api.ts"),
+      artifactBasename: "api.js",
+    };
+    expect(resolvePluginRootPublicSurfaceLocation({ ...params, origin: "bundled" })).toEqual({
+      modulePath: built,
+      boundaryRoot: builtRoot,
+    });
+    expect(resolvePluginRootPublicSurfaceLocation({ ...params, origin: "global" })).toEqual({
+      modulePath: params.entrySource,
+      boundaryRoot: params.pluginRoot,
+    });
+  });
+
   it.each([false, true])(
     "loads sidecars from the selected artifact (runtime registered: %s)",
     async (runtimeRegistrationComplete) => {
