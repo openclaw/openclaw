@@ -68,39 +68,9 @@ live(
       output,
     );
     const serialized = JSON.stringify(saved);
-    const storedIds: string[] = [];
     try {
-      // Establish the old wire contract's first success, then its deterministic failure.
-      const wireOutput = compact.output;
-      if (!wireOutput.every((item) => item.type === "message" || item.type === "compaction")) {
-        throw new Error("Unexpected compact endpoint output item");
-      }
-      const input = [...wireOutput, { role: "user" as const, content: "Reply exactly ACK." }];
-      for (const attempt of [0, 1]) {
-        const stream = await client.responses.create({
-          model: model.id,
-          input,
-          store: true,
-          stream: true,
-          reasoning: { effort: "low" },
-          max_output_tokens: 256,
-        });
-        let conflict = false;
-        try {
-          for await (const event of stream) {
-            if (event.type === "response.completed") {
-              storedIds.push(event.response.id);
-            }
-          }
-        } catch (error) {
-          if (!(error instanceof OpenAI.APIError) || error.code !== "item_conflict") {
-            throw error;
-          }
-          conflict = true;
-        }
-        expect(conflict).toBe(attempt === 1);
-      }
-      expect(storedIds).toHaveLength(1);
+      // Exercise our stateless replay contract, not whether the provider still
+      // rejects a separate stored replay of the same checkpoint.
       for (let reload = 0; reload < 3; reload++) {
         const forceStoredReplay = reload === 2;
         cleanupSessionResources();
@@ -118,7 +88,6 @@ live(
                 createOpenAIResponsesTransportStreamFn()(selectedModel, context, {
                   ...options,
                   // A later payload hook must not undo stateless checkpoint replay.
-                  // Reusing this stored checkpoint otherwise fails after streaming output.
                   onPayload: (payload) => {
                     if (!isRecord(payload) || !Array.isArray(payload.input)) {
                       throw new Error("Expected a Responses input");
@@ -181,9 +150,6 @@ live(
       }
     } finally {
       cleanupSessionResources();
-      for (const id of storedIds) {
-        await client.responses.delete(id);
-      }
     }
   },
   180_000,
