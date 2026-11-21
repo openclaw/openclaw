@@ -214,31 +214,30 @@ describe("profile-targeted send", () => {
     const privateTarget = makeSubscription("bob-private", "bob", { detailLevel: "private" });
     setRecipients(identified, privateTarget);
 
-    await sendToBob({
+    const question = {
       category: "agent-question",
-      title: "Ticket assigned",
-      body: "Review\u0007 ticket 42",
+      title: "Ticket\nassigned",
+      body: "Review\u0007\r\n ticket 42\u202E",
       tag: "ticket-42",
       path: "chat/research/thread%2E1",
       urgency: "high",
       ttlSeconds: 60,
+    } as const;
+    // agent-question also requires the questions scope on the paired device. Devices the
+    // authority drops this way are not the recipient's to count: every counter stays zero.
+    await expect(sendToBob(question)).resolves.toEqual({
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      pruned: 0,
     });
-    // agent-question also requires the questions scope on the paired device.
     expect(mocks.send).not.toHaveBeenCalled();
 
     setPaired(
       pairedOperator(identified.deviceId, ["operator.read", "operator.questions"]),
       pairedOperator(privateTarget.deviceId, ["operator.read", "operator.questions"]),
     );
-    await sendToBob({
-      category: "agent-question",
-      title: "Ticket assigned",
-      body: "Review\u0007 ticket 42",
-      tag: "ticket-42",
-      path: "chat/research/thread%2E1",
-      urgency: "high",
-      ttlSeconds: 60,
-    });
+    await sendToBob(question);
     const calls = mocks.send.mock.calls.map(([call]) => call);
     const url = "chat/research/thread%2E1#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator";
     const delivery = { TTL: 60, urgency: "high", topic: expect.any(String) };
@@ -248,7 +247,7 @@ describe("profile-targeted send", () => {
           subscriptions: [identified],
           payload: {
             title: "Desk · Ticket assigned",
-            body: "Review\\u{7} ticket 42",
+            body: "Review ticket 42\\u{202E}",
             tag: "openclaw-send-ticket-42",
             renotify: false,
             url,

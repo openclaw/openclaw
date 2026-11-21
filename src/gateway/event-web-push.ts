@@ -403,10 +403,14 @@ function resolveProfileWebPushText(
   if (detailLevel === "private") {
     return generic;
   }
+  // Lock screens show one line: flatten line breaks and other controls to spaces before
+  // the shared sanitizer escapes the remaining spoofing characters.
+  const flatten = (text: string | undefined) =>
+    text?.replace(/ *[\p{Cc}\p{Zl}\p{Zp}][\p{Cc}\p{Zl}\p{Zp} ]*/gu, " ");
   return {
-    title: normalizeWebPushDisplayLabel(params.title) ?? generic.title,
+    title: normalizeWebPushDisplayLabel(flatten(params.title)) ?? generic.title,
     body:
-      normalizeWebPushDisplayLabel(params.body, 240) ??
+      normalizeWebPushDisplayLabel(flatten(params.body), 240) ??
       (agentLabel ? `${agentLabel}: ${generic.body}` : generic.body),
   };
 }
@@ -446,7 +450,9 @@ export async function sendProfileWebPush(
       requiredScopes: category === "agent-question" ? [READ_SCOPE, QUESTIONS_SCOPE] : [READ_SCOPE],
     });
     // The explicit recipient is the authoritative owner, so the sessionless multi-user
-    // suppression used for broadcast events does not apply here.
+    // suppression used for broadcast events does not apply here. Devices the authority
+    // drops (revoked, ID-unbound, or missing a required scope such as operator.questions
+    // for agent-question) are not the recipient's to count: they enter no counter.
     for (const target of targets) {
       if (target.userProfileId !== recipientProfileId) {
         continue;
