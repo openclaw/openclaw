@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { spawnProcess } from "../process/spawn-utils.js";
+import { spawnPlacedAgentShell } from "../process/spawn-utils.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 
 vi.mock("node:fs/promises", () => ({
@@ -12,8 +12,9 @@ vi.mock("node:fs/promises", () => ({
     access: vi.fn().mockResolvedValue(undefined),
   },
 }));
-vi.mock("../process/spawn-utils.js", () => ({
-  spawnProcess: vi.fn(() => {
+vi.mock("../process/spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/spawn-utils.js")>()),
+  spawnPlacedAgentShell: vi.fn(() => {
     const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
     queueMicrotask(() => child.emit("close", 0));
     return child;
@@ -63,6 +64,6 @@ describe.skipIf(process.platform === "win32")("shell snapshot cache", () => {
     }
     expect(retained).toBe(128);
     // Evicted entries reuse the owner's already validated, fresh disk artifacts.
-    expect(vi.mocked(spawnProcess).mock.calls.length).toBe(0);
+    expect(vi.mocked(spawnPlacedAgentShell).mock.calls.length).toBe(0);
   });
 });
