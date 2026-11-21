@@ -38,6 +38,8 @@ import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import { captureModelsJsonSource } from "./models-config-state.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
+import { readPersistedPluginCapabilityModels } from "./plugin-model-catalog-capabilities.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import { resolvePluginModelCatalogOwnerPluginId } from "./plugin-model-catalog.js";
 import { prepareAgentFacts } from "./prepared-model-runtime.agent-facts.js";
@@ -548,6 +550,9 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
     params.assertCurrent?.(facts.input);
     // A live inventory owns retention across account changes; saved rows only seed cold owners.
     const excludeGeneratedProviderIds = params.ownedCatalogProviders?.get(facts.input) ?? [];
+    const excludedCapabilityProviders = new Set(
+      excludeGeneratedProviderIds.map(normalizeProviderId),
+    );
     const { contents: modelsJsonContents } = await captureModelsJsonSource(facts.input.agentDir);
     // Signed-in providers whose manifest is their list browse it at once. Scope by current
     // credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
@@ -627,6 +632,20 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       prepareCapturedRuntimeFacts({
         agentFacts: facts,
         workspaceFacts: params.pluginGeneration,
+        capabilityModels: readPersistedPluginCapabilityModels({
+          catalogs: pluginCatalogs,
+          config: facts.input.config,
+          pluginMetadataSnapshot,
+          resolveProviderAuth: createProviderAuthResolver(
+            facts.env,
+            facts.authStore,
+            facts.input.config,
+            undefined,
+            facts.input.workspaceDir,
+          ),
+        }).filter(
+          ({ provider }) => !excludedCapabilityProviders.has(normalizeProviderId(provider)),
+        ),
         templateModelRegistry,
         configuredRuntimeModels,
       }),

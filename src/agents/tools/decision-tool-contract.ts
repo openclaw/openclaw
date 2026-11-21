@@ -77,6 +77,9 @@ export function capabilityGuidance(capabilities: ModelDecisionCapabilities): str
         ]
       : []),
     declared?.maxQuestions === undefined ? undefined : `at most ${declared.maxQuestions} questions`,
+    declared?.maxTotalOptions === undefined
+      ? undefined
+      : `at most ${declared.maxTotalOptions} total options (each boolean counts as two)`,
     ...(["choice", "score"] as const).flatMap((kind) => {
       const bounds = capabilities.questions?.[kind];
       const unit = kind === "choice" ? "Choice alternatives" : "Score levels";

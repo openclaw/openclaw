@@ -56,6 +56,7 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
+import { fingerprintPluginCatalogCredential } from "./plugin-model-catalog-auth.js";
 import {
   isRequestWideFailure,
   runProviderIsolated,
@@ -78,7 +79,10 @@ type ImplicitProviderParams = {
   staticCatalogProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
-  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  onProviderCatalogOutcome?: (
+    outcome: ProviderCatalogOutcome,
+    credentialFingerprint?: string,
+  ) => void;
   sourceModelFields?: SourceModelFields;
   /** Filled with the plugin whose discovery produced each provider id, hook aliases included. */
   discoveredProviderPluginIds?: Map<string, string>;
@@ -200,9 +204,28 @@ async function resolvePluginImplicitProviders(
           return undefined;
         }
         const catalogConfig = buildPluginCatalogConfig(ctx, provider);
+        const credentialBindings = new Map<string, Set<string>>();
+        const observeCredential = <
+          T extends Parameters<typeof fingerprintPluginCatalogCredential>[0],
+        >(
+          providerId: string,
+          auth: T,
+        ): T => {
+          const fingerprint = fingerprintPluginCatalogCredential(auth);
+          if (fingerprint) {
+            const key = `${normalizeProviderId(providerId)}\0${auth.profileId ?? ""}`;
+            const bindings = credentialBindings.get(key) ?? new Set<string>();
+            bindings.add(fingerprint);
+            credentialBindings.set(key, bindings);
+          }
+          return auth;
+        };
         const resolveCatalogProviderApiKey = (providerId?: string) => {
           const resolvedProviderId = providerId?.trim() || provider.id;
-          const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
+          const resolved = observeCredential(
+            resolvedProviderId,
+            ctx.resolveProviderApiKey(resolvedProviderId),
+          );
           if (resolved.apiKey) {
             return resolved;
           }
@@ -254,7 +277,10 @@ async function resolvePluginImplicitProviders(
                 env: ctx.env,
                 resolveProviderApiKey: resolveCatalogProviderApiKey,
                 resolveProviderAuth: (providerId, options) =>
-                  ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+                  observeCredential(
+                    providerId?.trim() || provider.id,
+                    ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+                  ),
                 reportCatalogOutcome: (outcome) => outcomes.push(outcome),
                 timeoutMs:
                   ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
@@ -286,7 +312,7 @@ async function resolvePluginImplicitProviders(
           },
           (acceptedProviders) => Object.keys(acceptedProviders ?? {}),
         );
-        return { provider, normalizedResult, includeProvider, outcomes };
+        return { provider, normalizedResult, includeProvider, outcomes, credentialBindings };
       }),
     });
     // Settle admitted hooks before propagating failure; completion order must not change
@@ -298,9 +324,15 @@ async function resolvePluginImplicitProviders(
       if (!result) {
         continue;
       }
-      const { provider, normalizedResult, includeProvider, outcomes } = result;
+      const { provider, normalizedResult, includeProvider, outcomes, credentialBindings } = result;
       for (const outcome of outcomes) {
-        ctx.onProviderCatalogOutcome?.(outcome);
+        const bindings = credentialBindings.get(
+          `${normalizeProviderId(outcome.provider)}\0${outcome.profileId ?? ""}`,
+        );
+        ctx.onProviderCatalogOutcome?.(
+          outcome,
+          bindings?.size === 1 ? bindings.values().next().value : undefined,
+        );
       }
       if (!normalizedResult) {
         continue;

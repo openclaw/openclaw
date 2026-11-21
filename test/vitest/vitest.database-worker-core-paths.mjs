@@ -10,6 +10,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/registry/subagent-registry-maintenance.completion.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-collector.test.ts",
   "src/agents/clawrouter-failover.integration.test.ts",
+  "src/decisions/clawrouter.integration.test.ts",
   "src/infra/backup-local-companion.test.ts",
   "src/commands/backup-verify-completeness.test.ts",
   "src/infra/approval-session-audience.sqlite.test.ts",

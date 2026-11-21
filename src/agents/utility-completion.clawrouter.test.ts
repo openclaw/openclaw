@@ -355,10 +355,18 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         },
       ]);
       expect(await readFile(state.configPath, "utf8")).toBe(settingsBefore);
+      // Each credential has one chat-cache miss plus a fresh capability check;
+      // later granted-key acquisitions reuse chat rows but still refresh capabilities.
       expect(fetched).toEqual([
         "Bearer synthetic-granted",
+        "Bearer synthetic-granted",
+        "Bearer synthetic-decisions-only",
         "Bearer synthetic-decisions-only",
         "Bearer synthetic-incompatible",
+        "Bearer synthetic-incompatible",
+        "Bearer synthetic-granted",
+        "Bearer synthetic-granted",
+        "Bearer synthetic-granted",
       ]);
     },
   );

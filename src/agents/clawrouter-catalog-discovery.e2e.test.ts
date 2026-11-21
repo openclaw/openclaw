@@ -180,7 +180,9 @@ describe("ClawRouter cold prepared catalog", () => {
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
+    // Cold chat discovery and the fresh capability check use the same selected credential.
     expect(requests).toEqual([
+      { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
       { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
     ]);
     return { agentId, baseUrl, config, pluginMetadataSnapshot, result };

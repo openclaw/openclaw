@@ -1,5 +1,9 @@
 import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
@@ -497,6 +501,55 @@ function buildRoutedModel(
           : {}),
       } satisfies RouteMetadata,
     },
+  };
+}
+
+export async function discoverClawRouterProviderCatalog(
+  ctx: ProviderCatalogContext,
+): Promise<ProviderCatalogResult> {
+  const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+  let discoveryApiKey = auth.discoveryApiKey;
+  if (!discoveryApiKey) {
+    try {
+      const { resolveApiKeyForProvider } =
+        await import("openclaw/plugin-sdk/provider-auth-runtime");
+      discoveryApiKey = (
+        await resolveApiKeyForProvider({
+          provider: PROVIDER_ID,
+          cfg: ctx.config,
+          ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+          ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+          ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
+        })
+      )?.apiKey;
+    } catch {
+      return null;
+    }
+  }
+  const apiKey = auth.apiKey ?? discoveryApiKey;
+  if (!apiKey || !discoveryApiKey) {
+    return null;
+  }
+  const provider = await buildClawRouterProviderConfig({
+    apiKey,
+    discoveryApiKey,
+    baseUrl: ctx.config?.models?.providers?.[PROVIDER_ID]?.baseUrl,
+  });
+  const { listClawRouterBasetenDecisionModels } = await import("./decision-baseten-offers.js");
+  const capabilityModels = await listClawRouterBasetenDecisionModels({
+    config: ctx.config,
+    resolveProviderApiKey: () => ({ apiKey, discoveryApiKey }),
+  });
+  return {
+    provider,
+    outcomes: [
+      {
+        provider: PROVIDER_ID,
+        ...(auth.profileId ? { profileId: auth.profileId } : {}),
+        status: "ready",
+        capabilityModels,
+      },
+    ],
   };
 }
 

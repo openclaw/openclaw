@@ -1,3 +1,6 @@
+import { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogOutcome, ProviderCatalogResult } from "./types.js";
 
@@ -5,7 +8,43 @@ function copyModelIds(value: readonly string[]): string[] {
   return [...new Set(value.map((id) => id.trim()).filter(Boolean))];
 }
 
-/** Projects only diagnostic fields; provider-specific fields may contain credentials. */
+/** Sparse typed identities never acquire conversational defaults or arbitrary plugin fields. */
+export function copyProviderCapabilityModels(value: unknown): ModelCatalogEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((candidate) => {
+    const model = asOptionalRecord(candidate);
+    const inference = ModelInferenceCapabilitiesSchema.safeParse(model?.inference);
+    if (
+      !model ||
+      typeof model.provider !== "string" ||
+      !model.provider.trim() ||
+      typeof model.id !== "string" ||
+      !model.id.trim() ||
+      typeof model.name !== "string" ||
+      !model.name.trim() ||
+      typeof model.baseUrl !== "string" ||
+      !model.baseUrl.trim() ||
+      !inference.success ||
+      inference.data.chat ||
+      !inference.data.decision
+    ) {
+      return [];
+    }
+    return [
+      {
+        provider: model.provider,
+        id: model.id,
+        name: model.name,
+        baseUrl: model.baseUrl,
+        inference: inference.data,
+      },
+    ];
+  });
+}
+
+/** Copies admitted discovery facts; provider-specific fields may contain credentials. */
 export function copyProviderCatalogOutcomes(
   result: { outcomes?: readonly ProviderCatalogOutcome[] } | null | undefined,
 ): ProviderCatalogOutcome[] {
@@ -21,6 +60,11 @@ export function copyProviderCatalogOutcomes(
       outcome.rejectionScope = entry.rejectionScope;
     }
     if (entry.status === "ready") {
+      if (entry.capabilityModels) {
+        outcome.capabilityModels = copyProviderCapabilityModels(entry.capabilityModels).filter(
+          (model) => model.provider === outcome.provider,
+        );
+      }
       if (entry.modelAccessPrograms) {
         outcome.modelAccessPrograms = entry.modelAccessPrograms.map((model) => ({
           ...model,

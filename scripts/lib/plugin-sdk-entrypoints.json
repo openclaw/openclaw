@@ -363,6 +363,7 @@
   "decisions",
   "decisions-openai-runtime",
   "decisions-http-runtime",
+  "decisions-unary-runtime",
   "secret-ref-readonly",
   "channel-status",
   "status-helpers",

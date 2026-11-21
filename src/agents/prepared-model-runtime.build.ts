@@ -293,11 +293,12 @@ async function buildSnapshotBatch(
               );
             } catch (error) {
               // Database admission can return the retired generation's raw abort reason.
-              // Recover the owning publication's supersession before startup joins it.
+              // Recover generation or publication supersession before startup joins it.
               if (
                 candidate.retirementSignal.aborted &&
                 error === candidate.retirementSignal.reason
               ) {
+                assertPreparedModelRuntimeInputCurrent(input, candidate.isGenerationCurrent);
                 assertBuildCurrent(input);
               }
               throw error;

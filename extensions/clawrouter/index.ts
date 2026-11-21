@@ -50,6 +50,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
+  discoverClawRouterProviderCatalog,
   decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,
@@ -588,43 +589,12 @@ export default defineSingleProviderPluginEntry({
       },
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-          let discoveryApiKey = auth.discoveryApiKey;
-          if (!discoveryApiKey) {
-            try {
-              const { resolveApiKeyForProvider } =
-                await import("openclaw/plugin-sdk/provider-auth-runtime");
-              discoveryApiKey = (
-                await resolveApiKeyForProvider({
-                  provider: PROVIDER_ID,
-                  cfg: ctx.config,
-                  ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-                  ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-                  ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
-                })
-              )?.apiKey;
-            } catch {
-              return null;
-            }
-          }
-          const apiKey = auth.apiKey ?? discoveryApiKey;
-          if (!apiKey || !discoveryApiKey) {
-            return null;
-          }
-          return {
-            provider: await buildClawRouterProviderConfig({
-              apiKey,
-              discoveryApiKey,
-              baseUrl: configuredBaseUrl(ctx.config),
-            }),
-          };
-        },
+        run: discoverClawRouterProviderCatalog,
       },
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.
-      augmentModelCatalog: ({ entries }) =>
-        entries.map((entry) =>
+      augmentModelCatalog: async (context) => {
+        const entries = context.entries.map((entry) =>
           entry.provider === PROVIDER_ID &&
           entry.id === "openai/gpt-6-luna" &&
           entry.api === "openai-responses"
@@ -633,7 +603,9 @@ export default defineSingleProviderPluginEntry({
                 inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
               }
             : entry,
-        ),
+        );
+        return entries;
+      },
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {

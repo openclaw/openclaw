@@ -315,6 +315,7 @@ async function runCatalogRequest(
       input: value.input,
       env: value.input.env,
       templateAuthStorage: AuthStorage.inMemory(credentials),
+      authStore,
       credentials,
       providerIds: [
         ...new Set(request.providerIds ?? [...value.providerIds, ...Object.keys(credentials)]),
