@@ -1,0 +1,2 @@
+# Preserve retained-tail eligibility, structural anchors, reset boundaries, and snapshot precedence across the independent usage-estimate regressions.
+145
