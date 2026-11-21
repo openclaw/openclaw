@@ -398,14 +398,15 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         execution: { status: "running" as const, startedAt: 3_000 },
         delivery: { status: "pending" as const },
       };
-      const removed = [makeRun("cleaned-a"), makeRun("cleaned-b")].map((entry) => ({
-        ...entry,
-        delivery: {
+      const removed = ["cleaned-a", "cleaned-b"].map((runId) => {
+        const entry = makeRun(runId);
+        entry.delivery = {
           status,
           ...(status === "discarded" ? { discardReason: "expired" as const } : {}),
-        },
-        cleanupCompletedAt: 2_500,
-      }));
+        };
+        entry.cleanupCompletedAt = 2_500;
+        return entry;
+      });
       const entries = [delivered, ...removed, running];
       const instance = createOperationalRunInstanceRef(REQUESTER_TURN);
       const source = await retainedOperatorFixture("yield-cleanup-receipts");
