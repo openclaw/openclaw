@@ -105,7 +105,7 @@ DMs that are not configured.
 - `pageToken`: pass the previous `nextPageToken` until it is absent. Filtering runs
   after Slack returns a page, so a page can hold fewer results than `limit`, or none.
 
-```json
+```json validate=false
 {
   "ok": true,
   "teamId": "T0123456789",

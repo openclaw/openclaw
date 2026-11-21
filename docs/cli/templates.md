@@ -114,6 +114,19 @@ chooses which skills and plugins to include and which routines belong in the
 Template. It writes the instructions a new owner needs, then opens the private
 review card. Nothing is published unless you choose **Publish**.
 
+You can also describe a Template that is not this agent, for example “create a
+new template that uses a video plugin and, each morning at 3am, makes a short
+video about the pull requests merged in a repository I choose.” The same skill
+drafts it in the same conversation and opens the same review card. It writes the
+instructions and automations from your description, so an automation does not
+have to exist on this agent, and it leaves out this agent's avatar, routines,
+and any skill or plugin you did not name. A plugin or skill you name is declared
+only with an exact published ClawHub release; if the agent cannot find one, it
+says so and leaves the dependency out. Details the Template needs from whoever
+adds it, such as a repository or their time zone, are asked by its first-run
+[`BOOTSTRAP.md`](/cli/templates#author-locally), which updates the declared automation and
+enables it after they agree.
+
 The optional **Create Template** action in the agent's left-sidebar row menu
 still invokes the same skill in that agent's existing main chat. Pinned agents
 keep this action in a focused row menu.
