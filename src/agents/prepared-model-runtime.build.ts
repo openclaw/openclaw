@@ -245,23 +245,11 @@ async function buildSnapshotBatch(
           // Otherwise file creation can retire the credentials this build just captured.
           // Discovery stays asynchronous; read-only admission must not borrow write permission.
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
-            try {
-              await prepareOpenClawAgentDatabaseExecution(
-                { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
-                () => assertBuildCurrent(input),
-                candidate.retirementSignal,
-              );
-            } catch (error) {
-              // Database admission can return the retired generation's raw abort reason.
-              // Recover the owning publication's supersession before startup joins it.
-              if (
-                candidate.retirementSignal.aborted &&
-                error === candidate.retirementSignal.reason
-              ) {
-                assertBuildCurrent(input);
-              }
-              throw error;
-            }
+            await prepareOpenClawAgentDatabaseExecution(
+              { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
+              () => assertBuildCurrent(input),
+              candidate.retirementSignal,
+            );
             assertBuildCurrent(input);
           }
         }
@@ -490,6 +478,13 @@ async function buildSnapshotBatch(
       throw new AggregateError([error, ...failures], "Prepared model build and cleanup failed", {
         cause: error,
       });
+    }
+    // Config builds can remain current after an individual owner retires.
+    // Normalize only that generation's exact abort so publication can join its replacement.
+    for (const candidate of candidates) {
+      if (candidate.retirementSignal.aborted && error === candidate.retirementSignal.reason) {
+        assertPreparedModelRuntimeInputCurrent(candidate.input, candidate.isGenerationCurrent);
+      }
     }
     throw error;
   }
