@@ -193,7 +193,9 @@ export async function captureUpdateDatabasesOnline(params: {
             `Capture while serving was skipped; every store is captured after the stop: ${failure}`,
           ],
         }
-      : {}),
+      : online?.backup.warnings.length
+        ? { warnings: online.backup.warnings }
+        : {}),
   };
   try {
     params.assertCurrent();

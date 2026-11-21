@@ -738,23 +738,32 @@ it("captures each PostgreSQL store while the Gateway serves, from its own captur
   expect(online.sourceDigests).toEqual({ [postgres]: "store-digest" });
 });
 
-it("defers a portable PostgreSQL export that would exceed the serving volume reserve", async () => {
-  const f = await fixture();
-  const postgres = path.join(f.root, "large-postgres.sqlite");
-  writePostgresAnchor(postgres);
-  const capture = mockObservedPostgresCaptures([], new Map());
-  vi.mocked(databaseBackup.estimatePostgresBackupExport).mockResolvedValue(100 * 1024 ** 2);
-  vi.spyOn(disk, "tryReadDiskSpace").mockReturnValue({
-    targetPath: f.directory,
-    checkedPath: f.directory,
-    totalBytes: null,
-    availableBytes: 100 * 1024 ** 2,
-  });
-  const backup = await f.capture({ additionalPaths: [postgres], postgresOnline: true });
-  expect(backup.databases).toEqual([]);
-  expect(backup.warnings).toContainEqual(expect.stringContaining("Deferred PostgreSQL capture"));
-  expect(capture).not.toHaveBeenCalled();
-});
+it.each(["portable", "server"] as const)(
+  "defers a PostgreSQL %s capture when it cannot preserve the serving volume reserve",
+  async (carrier) => {
+    const f = await fixture();
+    const postgres = path.join(f.root, "large-postgres.sqlite");
+    writePostgresAnchor(postgres);
+    const capture = mockObservedPostgresCaptures([], new Map());
+    const estimate = vi.mocked(databaseBackup.estimatePostgresBackupExport);
+    estimate.mockResolvedValue(100 * 1024 ** 2);
+    vi.spyOn(disk, "tryReadDiskSpace").mockReturnValue({
+      targetPath: f.directory,
+      checkedPath: f.directory,
+      totalBytes: null,
+      availableBytes: 100 * 1024 ** 2,
+    });
+    const backup = await f.capture({
+      additionalPaths: [postgres],
+      postgresOnline: true,
+      postgresSchemaCaptures: carrier === "server",
+    });
+    expect(backup.databases).toEqual([]);
+    expect(backup.warnings).toContainEqual(expect.stringContaining("until the Gateway stops"));
+    expect(capture).not.toHaveBeenCalled();
+    expect(estimate).toHaveBeenCalledTimes(carrier === "portable" ? 1 : 0);
+  },
+);
 
 it("keeps an unchanged online capture and captures a written store again under ownership", async () => {
   const f = await fixture();
