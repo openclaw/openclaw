@@ -79,6 +79,11 @@ it.each(["success", "retired", "failed", "load", "resolve", "cleanup"] as const)
           await state.writeJson(`plugins/${id}/openclaw.plugin.json`, {
             id,
             contracts: { tools: [id, `aaa_${id}`, "tts", "catalog-alpha"] },
+            toolMetadata: {
+              [id]: { profiles: id === "catalog-alpha" ? ["coding"] : ["messaging"] },
+              [`aaa_${id}`]: { profiles: ["messaging"] },
+              ...(id === "catalog-beta" ? { "catalog-alpha": { profiles: ["full"] } } : {}),
+            },
             configSchema: { type: "object", properties: {}, additionalProperties: false },
           });
         }
@@ -169,7 +174,7 @@ it.each(["success", "retired", "failed", "load", "resolve", "cleanup"] as const)
               optional: true,
               risk: "high",
               tags: ["fixture"],
-              defaultProfiles: [],
+              defaultProfiles: ["coding"],
             });
             expect(
               alpha?.parameters?.map((p) => [p.name, p.required, p.type, p.description]),
@@ -177,9 +182,13 @@ it.each(["success", "retired", "failed", "load", "resolve", "cleanup"] as const)
               ["destination", true, "string", "Call destination."],
               ["note", false, "string", "Optional note."],
             ]);
+            expect(groups[0]?.tools.find((tool) => tool.id === "aaa_catalog-alpha")).toMatchObject({
+              defaultProfiles: ["messaging"],
+            });
             if (mode === "success") {
               expect(groups[1]?.tools.find((tool) => tool.id === "catalog-beta")).toMatchObject({
                 label: "catalog-beta",
+                defaultProfiles: ["messaging"],
                 fullDescription: "Fallback description",
                 description: "Short summary",
               });

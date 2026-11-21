@@ -132,6 +132,11 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
         // could override the catalog label/description/risk/tags for another plugin's
         // tool by registering metadata with the same toolName.
         const metadataFor = createPluginToolMetadataLookup(catalogRegistry?.toolMetadata);
+        const manifests = new Map(
+          (getPluginRuntimeLoadContext(catalogRegistry)?.manifestRegistry?.plugins ?? []).map(
+            (plugin) => [plugin.id, plugin],
+          ),
+        );
         const seenToolIds = new Set<string>();
         const appendTool = (
           pluginId: string,
@@ -146,7 +151,11 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
             pluginId,
             tools: [],
           };
-          group.tools.push({ ...tool, source: "plugin", pluginId, defaultProfiles: [] });
+          const manifest = manifests.get(pluginId);
+          const defaultProfiles = manifest?.contracts?.tools?.includes(tool.id)
+            ? (manifest.toolMetadata?.[tool.id]?.profiles ?? [])
+            : [];
+          group.tools.push({ ...tool, source: "plugin", pluginId, defaultProfiles });
           seenToolIds.add(tool.id);
           pluginGroups.set(id, group);
         };
