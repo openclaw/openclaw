@@ -1,6 +1,8 @@
 // Resolves SecretRefs before applying Gateway credential precedence rules.
 import {
   cloneConfigWithResolutionFacts,
+  getAuthoredConfigSecretRef,
+  hasUnresolvedConfigPath,
   resolveConfigSecretRef,
 } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -71,6 +73,15 @@ async function resolveConfiguredGatewaySecretInput(params: {
         )
       : await materialize();
   if (!value) {
+    // Command config scrubbing drops unset env templates but keeps the load fact, so no ref
+    // object is left to fail resolution. Report them as unavailable like any other missing ref.
+    if (
+      !ref &&
+      (hasUnresolvedConfigPath(params.config, params.path) ||
+        getAuthoredConfigSecretRef(params.config, params.path))
+    ) {
+      throw new GatewaySecretRefUnavailableError(params.path);
+    }
     throw new Error(`${params.path} resolved to an empty or non-string value.`);
   }
   return value;

@@ -2,6 +2,10 @@ import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import {
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
   resolveGatewayProbeTarget,
@@ -28,6 +32,13 @@ const local = (auth: Gateway["auth"], options: Partial<Omit<Input, "cfg">> = {})
   env: {},
   ...options,
 });
+// Command config scrubbing drops an unset `${VAR}` value but keeps its load fact.
+const unsetTemplate = (mode: "token" | "password"): Input => {
+  const cfg = config({ auth: { mode } });
+  const warning = { varName: "UNSET", configPath: `gateway.auth.${mode}` };
+  setConfigResolutionFacts(cfg, createConfigResolutionFacts([warning]));
+  return { cfg, mode: "local", env: {} };
+};
 const envFirst = (auth: Gateway["auth"]) =>
   local(auth, {
     localPrecedence: "env-first",
@@ -144,6 +155,8 @@ it.each<ProbeCase>([
     {},
     ["gateway.auth.token", "unresolved"],
   ],
+  ["unset env token", unsetTemplate("token"), {}, ["gateway.auth.token", "unresolved"]],
+  ["unset env password", unsetTemplate("password"), {}, ["gateway.auth.password", "unresolved"]],
   ["remote token ref", remote({ token: ref("REMOTE") }), { token: "remote", password: undefined }],
   ["remote password", remote({ password: "remote" }), { token: undefined, password: "remote" }],
   [
