@@ -3,7 +3,6 @@ import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
 } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
@@ -29,12 +28,6 @@ import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildFallbackCandidateTurnParams } from "./agent-runner-run-params.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
-import { createGroupParticipationPolicy } from "./group-participation-policy.js";
-import {
-  createGroupParticipationReviewer,
-  groupParticipationPrompt,
-} from "./group-participation-review.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import {
@@ -376,26 +369,7 @@ export async function runEmbeddedFallbackCandidate(
             : undefined,
         };
       };
-      const participation = readGroupParticipationRun(turn.replyOperation);
-      if (participation?.isPrivate) {
-        const continuationPolicy = createGroupParticipationPolicy(embeddedRunParams, participation);
-        Object.assign(embeddedRunParams, continuationPolicy());
-        embeddedRunParams.reviewSettledDraft = createGroupParticipationReviewer({
-          owner: participation,
-          continuationPolicy,
-        });
-        if (participation.snapshot) {
-          embeddedRunParams.currentInboundContext = appendCurrentInboundContext(
-            embeddedRunParams.currentInboundContext,
-            [
-              {
-                kind: "runtime-instruction",
-                text: groupParticipationPrompt(participation.snapshot),
-              },
-            ],
-          );
-        }
-      }
+      params.scheduledInference?.assertCandidate(params.provider, false);
       return runEmbeddedAgent(embeddedRunParams);
     });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);

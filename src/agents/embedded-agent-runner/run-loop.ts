@@ -16,11 +16,7 @@ import type { ToolOutcomeObservation } from "../tool-outcome-observation.js";
 import { normalizeUsage } from "../usage.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import { log } from "./logger.js";
-import type { EmbeddedLogicalTurnContinuation } from "./logical-turn-continuation.js";
-import {
-  createPostCompactionLoopGuard,
-  PostCompactionLoopPersistedError,
-} from "./post-compaction-loop-guard.js";
+import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
@@ -42,7 +38,13 @@ import {
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import { createProviderReviewRun } from "./run/provider-review-run.js";
-import { beginRunAttempt, isRunRetryBudgetExhausted, recordRunRetry } from "./run/retry-budget.js";
+import {
+  beginRunAttempt,
+  createRunRetryBudget,
+  isRunRetryBudgetExhausted,
+  recordRunModelProgress,
+  recordRunRetry,
+} from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 import { settleEmbeddedRun } from "./run/run-settlement.js";
@@ -62,7 +64,7 @@ import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 export async function runPreparedEmbeddedLoop(
-  refresh: EmbeddedLogicalTurnContinuation,
+  refresh: EmbeddedPluginRuntimeRefresh,
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
   let { runParams: params, provider, modelId, preReplyGeneration } = input;
@@ -142,7 +144,7 @@ export async function runPreparedEmbeddedLoop(
   });
   const executionContract = strictAgenticActive ? "strict-agentic" : "default";
 
-  const runRetryBudget = refresh.retryBudget(
+  const runRetryBudget = createRunRetryBudget(
     resolveMaxRunRetryIterations(profileCandidates.length),
   );
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
@@ -629,100 +631,6 @@ export async function runPreparedEmbeddedLoop(
               },
         );
       }
-
-      let terminalReplyDisposition: "withhold" | undefined;
-      if (
-        params.reviewSettledDraft &&
-        terminalAttempt.terminal.kind === "ok" &&
-        resolvedTerminalState.outcome.status === "ok" &&
-        !terminalAttempt.yieldDetected &&
-        !terminalAttempt.clientToolCalls?.length &&
-        terminalAttempt.itemLifecycle.activeCount === 0
-      ) {
-        const review = await refresh.reviewSettledDraft(
-          {
-            ...normalization,
-            dispatchedAttempt: { ...dispatchedAttempt, rawAttempt: terminalAttempt },
-          },
-          payloadsWithToolMedia,
-          input.laneController.abortSignal,
-          assertAdmittedActive,
-          turnTaintState.isTainted,
-        );
-        if (review.continued) {
-          return providerReview.finish(review.continued);
-        }
-        terminalReplyDisposition = review.terminalReplyDisposition;
-      }
-
-      const terminalAuthPlan = preparedRuntime.snapshot().activePreparedAuthPlan;
-      const requestTransportOverrides =
-        terminalAuthPlan.modelRoute?.requestTransportOverrides ??
-        terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
-        "none";
-      const terminalResolution = await resolveEmbeddedRunTerminal({
-        terminalReplyDisposition,
-        runParams: params,
-        retryState: terminalRetryState,
-        attempt: terminalAttempt,
-        attemptAssistant: terminalAttemptAssistant,
-        activeErrorContext,
-        modelApi: effectiveModel.api,
-        executionContract,
-        terminalState: resolvedTerminalState,
-        payloadsWithToolMedia,
-        replyDeliveryState,
-        recoveredFinalAssistantPayloadsAfterPromptTimeout,
-        finalAssistantVisibleText,
-        finalAssistantRawText,
-        agentMeta,
-        attemptToolSummary,
-        failureSignal,
-        terminalToolFailure,
-        maxReasoningOnlyRetryAttempts: DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-        maxEmptyResponseRetryAttempts: DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
-        attemptCompactionCount: terminalAttemptCompactionCount,
-        replayState: accumulatedReplayState,
-        activePromptPersisted: sessionPromptState.activePrompt.persisted,
-        activateInternalPrompt: sessionPromptState.activateInternalPrompt,
-        markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
-        activateCompactionContinuation: sessionPromptState.activateCompactionContinuation,
-        clearCompactionContinuation: sessionPromptState.clearCompactionContinuation,
-        setSuppressNextUserMessagePersistence: (value) => {
-          sessionPromptState.suppressNextUserMessagePersistence = value;
-        },
-        armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
-        readTerminalToolPresentation: () => terminalToolPresentationText,
-        resolveReplayInvalid: resolveReplayInvalidForAttempt,
-        setTerminalLifecycleMeta,
-        maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-        assistantProfileFailureReason,
-        startedAtMs: started,
-        provider,
-        modelId,
-        modelTransportId: effectiveModel.id ?? modelId,
-        modelTransportApi: effectiveModel.api ?? model.api,
-        ...(effectiveModel.baseUrl ? { modelTransportBaseUrl: effectiveModel.baseUrl } : {}),
-        requestTransportOverrides,
-        authProfileId: lastProfileId,
-        profileFailureStore,
-        attemptAuthProfileStore,
-        apiKeyInfo: getApiKeyInfo(),
-        agentHarnessId: agentHarness.id,
-        settledTurnFinalizationOutcome,
-        pluginHarnessOwnsTransport,
-        pluginHarnessOwnsAuthBootstrap,
-        reportedModelRef,
-        traceAttempts,
-        traceAttemptUsesFallback: (traceAttempt) =>
-          traceAttempt.result === "rotate_profile" || traceAttempt.result === "fallback_model",
-        thinkLevel,
-        contextRecoveryState,
-      });
-      if (terminalResolution.action === "retry") {
-        continue;
-      }
-      return providerReview.finish(terminalResolution.result);
     }
   } finally {
     // Successful registration already cleared the marker; every earlier exit

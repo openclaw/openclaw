@@ -36,8 +36,10 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => ({
   getGlobalHookRunner,
 }));
 
+// mock-isolation: Transcript reads use test fixtures instead of persistent session state.
 vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
+  readRecentUserAssistantTurnsForSession: vi.fn(async () => []),
 }));
 
 beforeEach(() => {

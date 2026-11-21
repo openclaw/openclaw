@@ -1,10 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
+import { resolveRequestGitCoauthorPrompt } from "../../agents/git-coauthor-prompt.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
+import { buildPrAttributionPrompt, preparePrAttribution } from "../../agents/pr-attribution.js";
 import {
   isSyntheticSourceReplyTurn,
   resolveReplyCompletion,
@@ -34,6 +36,7 @@ import {
   isTextSlashCommandTurn,
   resolveCommandTurnContext,
 } from "../command-turn-context.js";
+import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import { getRequesterProfile } from "../requester-profile.js";
@@ -71,7 +74,6 @@ import {
 import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
 import {
   isInternalSourceReplyChannel,
-  isExplicitSourceReplyCommand,
   resolveSourceReplyExpectation,
 } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
@@ -617,7 +619,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         text: renderInboundContext(MESSAGE_TOOL_ONLY_DELIVERY_HINT),
         fragments: fragments.map((fragment) =>
           fragment.kind === "runtime-instruction" && fragment.text === deliveryDirective
-            ? { ...fragment, text: MESSAGE_TOOL_ONLY_DELIVERY_HINT }
+            ? Object.assign({}, fragment, { text: MESSAGE_TOOL_ONLY_DELIVERY_HINT })
             : fragment,
         ),
       };

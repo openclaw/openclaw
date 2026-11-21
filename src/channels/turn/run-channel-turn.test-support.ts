@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
     getGlobalHookRunner: vi.fn(),
     createMessageSentEmitter: vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
     readRecentUserAssistantTextForSession: vi.fn(),
+    readRecentUserAssistantTurnsForSession: vi.fn(async () => []),
   };
 });
 
@@ -68,6 +69,8 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
   return { ...actual, getGlobalHookRunner: mocks.getGlobalHookRunner };
 });
 
+// mock-isolation: Transcript reads use test fixtures instead of persistent session state.
 vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: mocks.readRecentUserAssistantTextForSession,
+  readRecentUserAssistantTurnsForSession: mocks.readRecentUserAssistantTurnsForSession,
 }));

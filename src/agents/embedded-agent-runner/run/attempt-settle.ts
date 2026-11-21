@@ -22,7 +22,6 @@ import { appendSessionTranscriptNote } from "../../sessions/session-manager-writ
 import { log } from "../logger.js";
 import { detachActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
-import { captureEmbeddedAttemptContinuation } from "./attempt-continuation.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import {
@@ -93,7 +92,13 @@ export async function runEmbeddedAttemptSettledPhase(
       error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
     );
   };
-  const continuation = captureEmbeddedAttemptContinuation(attempt, activeSession);
+  const markTimedOutDuringCompaction = () => {
+    state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+      kind: "timeout",
+      phase: "compaction",
+      source: "observation",
+    });
+  };
 
   try {
     const { promptStartedAt, transcriptLeafId } = await runEmbeddedAttemptPromptPhase(
@@ -317,16 +322,39 @@ export async function runEmbeddedAttemptSettledPhase(
       }
     }
   } finally {
-    continuation.close();
-    cleanupError = cleanupEmbeddedAttemptStreamExecution({
-      attempt,
-      clearAttemptTimeoutTimers,
-      isProbeSession,
-      queueHandle,
-      state,
-      unsubscribe,
-      deferredLifecycleOwner: preparedStreamRuntime.stream.deferredLifecycleOwner,
-    });
+    const attachment = preparedStreamRuntime.stream.registration;
+    const deferredLifecycleOwner = preparedStreamRuntime.stream.deferredLifecycleOwner;
+    clearAttemptTimeoutTimers();
+    // Every release belongs to this owner; one broken callback must not strand
+    // the active run or mask the prompt failure that caused teardown.
+    const cleanups: Array<readonly [string, () => void]> = [
+      ["unsubscribe", unsubscribe],
+      ["backend detach", () => attempt.replyOperation?.detachBackend(queueHandle)],
+    ];
+    if (!deferredLifecycleOwner) {
+      cleanups.push([
+        "active run cleanup",
+        () =>
+          detachActiveEmbeddedRun(
+            attempt.sessionId,
+            queueHandle,
+            attempt.sessionKey,
+            attempt.sessionFile,
+            undefined,
+            attachment,
+          ),
+      ]);
+    }
+    for (const [name, cleanup] of cleanups) {
+      try {
+        cleanup();
+      } catch (error) {
+        cleanupError ??= error instanceof Error ? error : new Error(String(error));
+        log.error(
+          `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
+        );
+      }
+    }
   }
 
   if (cleanupError !== undefined) {
@@ -341,13 +369,6 @@ export async function runEmbeddedAttemptSettledPhase(
     messagesSnapshot,
     ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
   });
-  if (result.terminal.kind === "ok") {
-    const messages = continuation.read();
-    if (messages) {
-      result.continuationMessages = messages;
-      result.pluginRuntimeRefreshMessages = messages;
-    }
-  }
   state.trajectoryEndRecorded = true;
   return result;
 }

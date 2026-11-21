@@ -2019,7 +2019,6 @@ describe("prepareCliRunContext", () => {
     },
     {
       name: "falls back to stored session metadata",
-      chatType: undefined,
       sessionEntryChatType: "channel" as const,
       expectedChatType: "channel" as const,
     },
@@ -2045,6 +2044,7 @@ describe("prepareCliRunContext", () => {
     expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
       expect.objectContaining({ chatType: testCase.expectedChatType }),
     );
+    expect(context.systemPrompt).toContain("a reaction may be enough.");
   });
 
   it("invalidates content drift when the backend cannot receive a resumed system prompt", async () => {

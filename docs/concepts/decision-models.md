@@ -32,9 +32,13 @@ page for its host requirements.
 Decision models have a separate **Decision** picker in the Control UI. Selection
 chooses the provider for explicit evaluation and supported consumers. The core
 `decision_evaluate` tool follows that selection plus ordinary tool policy.
-Automatic features also require the existing
-[Decision assistance opt-in](/concepts/experimental-features#decision-assistance),
-which defaults off. The primary model still writes replies and uses tools.
+Selection does not start background work or replace the chat model.
+Automatic experimental consumers additionally require explicit
+[Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
+The built-in OpenClaw runtime uses that opt-in for conversational tool filtering
+with bounded recent conversation. The selected Decision provider receives that
+secondary evidence; see the [privacy and fallback contract](/concepts/experimental-features#conversational-tool-filtering).
+Explicit `decision_evaluate` remains independent of Labs.
 
 ## Group participation
 

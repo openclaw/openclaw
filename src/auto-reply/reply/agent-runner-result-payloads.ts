@@ -62,7 +62,6 @@ import {
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import {
   resolveAutomationReplyState,
   retainAutomationReasoningWithFinal,
@@ -355,28 +354,8 @@ export async function prepareReplyAgentPayloads(state: {
     });
     return result.replyPayloads;
   };
-  if (readGroupParticipationRun(replyOperation)?.isPrivate) {
-    const approved = payloadArray.filter(
-      (payload) => getReplyPayloadMetadata(payload)?.publicationAuthority !== undefined,
-    );
-    const replyPayloads = await buildFinalPayloads(approved);
-    if (replyPayloads.length === 0) {
-      opts?.onDeliberateSilentTerminalReply?.();
-      return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
-    }
-    return {
-      kind: "continue" as const,
-      activeSessionEntry,
-      completedSourceReplyDelivery,
-      guardedReplyPayloads: replyPayloads,
-      responseUsageLine: undefined,
-    };
-  }
-  const returnPreparedFallbackPayload = async (
-    payload: ReplyPayload,
-  ): Promise<ReplyPayload | undefined> => {
-    const [preparedPayload] = await buildFinalPayloads([payload]);
-    if (!preparedPayload) {
+  const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+    if (backgroundMissingReply) {
       return undefined;
     }
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({

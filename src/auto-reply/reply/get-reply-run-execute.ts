@@ -429,14 +429,10 @@ export async function executePreparedReplyRun(
   }
   const followupRun = {
     createChannelCronAuthority,
-    ...(groupParticipation && !hasInboundAudio(sessionCtx)
-      ? {
-          groupParticipation: {
-            ...groupParticipation,
-            promptComponentByMode: assessedConversationContextByMode,
-          },
-        }
-      : {}),
+    groupParticipation:
+      groupParticipation && !hasInboundAudio(sessionCtx)
+        ? { ...groupParticipation, promptComponentByMode: assessedConversationContextByMode }
+        : undefined,
     prompt: queuedBody,
     readAdmissionConfig,
     sourceTurnId: resolveReplySourceTurnId({

@@ -1,4 +1,3 @@
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -25,18 +24,16 @@ import {
 } from "./run/attempt-delivery-state.js";
 import type { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./run/internal-params.js";
-import { createRunRetryBudget, type RunRetryBudget } from "./run/retry-budget.js";
 import {
   normalizeEmbeddedRunAttemptResult,
   resolveSuccessfulToolNames,
 } from "./run/run-attempt-result.js";
 import { createPendingToolMediaCarry } from "./run/tool-media-payloads.js";
-import type { EmbeddedTurnContinuationRequest } from "./run/turn-continuation.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import { toNormalizedUsage } from "./usage-accumulator.js";
 
-export type EmbeddedLogicalTurnContinuation = ReturnType<
-  typeof createEmbeddedLogicalTurnContinuation
+export type EmbeddedPluginRuntimeRefresh = ReturnType<
+  typeof createEmbeddedAgentPluginRuntimeRefresh
 >;
 
 // A reload from outside the run is not a change the model asked for, so it is not asked to verify one.
@@ -47,7 +44,7 @@ function continuationPrompt(source: PluginRuntimeRefreshSource | undefined): str
 }
 
 /** The embedded runner owns continuation data; tool controls never import its graph. */
-export function createEmbeddedLogicalTurnContinuation(
+export function createEmbeddedAgentPluginRuntimeRefresh(
   callbacks: RunEmbeddedAgentParamsWithSessionFile,
 ) {
   const refresh = createAgentPluginRuntimeRefresh();
@@ -55,8 +52,6 @@ export function createEmbeddedLogicalTurnContinuation(
   const successfulToolNames = new Set<string>();
   let delivered: AttemptDeliveryState | undefined;
   let continuation: RunEmbeddedAgentParamsWithSessionFile | undefined;
-  let deliveryCallbacks = callbacks;
-  let retryBudget: RunRetryBudget | undefined;
   const closeGeneration = () => {
     continuation = undefined;
     refresh.close();
@@ -67,11 +62,10 @@ export function createEmbeddedLogicalTurnContinuation(
     input: Parameters<typeof normalizeEmbeddedRunAttempt>[0],
     assertActive: () => void,
     isTurnTainted: () => boolean,
-    request?: EmbeddedTurnContinuationRequest,
   ): EmbeddedAgentRunResult | undefined {
     if (
       input.dispatchedAttempt.rawAttempt.terminal.kind !== "ok" ||
-      (!request && !captureAgentPluginRuntimeRefresh().isPending())
+      !captureAgentPluginRuntimeRefresh().continuesAfterAttempt()
     ) {
       return undefined;
     }
@@ -85,15 +79,8 @@ export function createEmbeddedLogicalTurnContinuation(
     pendingToolMedia.capture(attempt);
     const { runInput, sessionPromptState: session, usageAccumulator: usage } = input;
     const params = runInput.runParams;
-    const messages = attempt.continuationMessages ?? attempt.pluginRuntimeRefreshMessages;
-    const previousMessages =
-      params.continuationMessages ?? params.pluginRuntimeRefreshMessages ?? [];
-    if (request?.policy) {
-      deliveryCallbacks = { ...deliveryCallbacks, ...request.policy };
-    }
     continuation = {
       ...params,
-      ...request?.policy,
       sessionId: session.sessionId,
       sessionFile: session.sessionFile,
       sessionTarget: {
@@ -104,16 +91,18 @@ export function createEmbeddedLogicalTurnContinuation(
       initialTurnTainted: isTurnTainted(),
       preparedRunAdmission: undefined,
       pluginGeneration: undefined,
-      turnContinuation: true,
-      continuationMessages: messages ? [...previousMessages, ...messages] : previousMessages,
-      contextEngineLogicalTurnLease: undefined,
+      pluginRuntimeRefreshContinuation: true,
+      pluginRuntimeRefreshUserPrompt: params.pluginRuntimeRefreshUserPrompt ?? params.prompt,
+      pluginRuntimeRefreshMessages: [
+        ...(params.pluginRuntimeRefreshMessages ?? []),
+        ...(session.continuation?.messages ?? []),
+        ...(attempt.pluginRuntimeRefreshMessages ?? []),
+      ],
       modelHasVision: undefined,
       modelThinkingCapability: undefined,
       modelFallbackAvailability: undefined,
       suppressNextUserMessagePersistence: true,
-      prompt:
-        request?.prompt ??
-        "The plugin runtime has been refreshed. Continue the current task from the transcript using the updated tools. Verify the requested change; do not repeat completed actions or the original user request.",
+      prompt: continuationPrompt(captureAgentPluginRuntimeRefresh().requestSource()),
     };
     return {
       meta: {
@@ -132,54 +121,6 @@ export function createEmbeddedLogicalTurnContinuation(
   }
 
   return {
-    reviewSettledDraft: async (
-      input: Parameters<typeof normalizeEmbeddedRunAttempt>[0],
-      payloads: EmbeddedAgentRunResult["payloads"],
-      signal: AbortSignal,
-      assertActive: () => void,
-      isTurnTainted: () => boolean,
-    ): Promise<{
-      continued?: EmbeddedAgentRunResult;
-      terminalReplyDisposition?: "withhold";
-    }> => {
-      const params = input.runInput.runParams;
-      if (!params.reviewSettledDraft) {
-        return {};
-      }
-      const attempt = input.dispatchedAttempt.rawAttempt;
-      const assertCurrent = () => {
-        signal.throwIfAborted();
-        assertActive();
-      };
-      assertCurrent();
-      const disposition = await racePromiseWithAbortSignal(
-        params.reviewSettledDraft({
-          attempt,
-          payloads: payloads ?? [],
-          completedMessages: [
-            ...(params.continuationMessages ?? params.pluginRuntimeRefreshMessages ?? []),
-            ...(attempt.continuationMessages ?? attempt.pluginRuntimeRefreshMessages ?? []),
-          ],
-          signal,
-        }),
-        signal,
-      ).catch((error: unknown) => {
-        assertCurrent();
-        throw error;
-      });
-      assertCurrent();
-      if (disposition.action === "continue") {
-        const continued = continueAfterAttempt(input, assertActive, isTurnTainted, disposition);
-        if (!continued) {
-          throw new Error("A settled draft continuation requires a successful attempt");
-        }
-        return { continued };
-      }
-      return {
-        terminalReplyDisposition: disposition.action === "withhold" ? "withhold" : undefined,
-      };
-    },
-    retryBudget: (maxAttempts: number) => (retryBudget ??= createRunRetryBudget(maxAttempts)),
     run: <T>(run: () => T): T => {
       closeGeneration();
       return refresh.run(run);
@@ -195,10 +136,111 @@ export function createEmbeddedLogicalTurnContinuation(
             copyAttemptDeliveryState(normalizeEmbeddedRunAttemptResult(attempt), delivered),
           )
         : attempt,
-    withDeliveryCallbacks: (params: RunEmbeddedAgentParamsWithSessionFile) =>
-      delivered
-        ? { ...params, ...createInheritedDeliveryCallbacks(params, deliveryCallbacks, delivered) }
-        : params,
+    withDeliveryCallbacks: (
+      params: RunEmbeddedAgentParamsWithSessionFile,
+    ): RunEmbeddedAgentParamsWithSessionFile => {
+      if (!delivered) {
+        return params;
+      }
+      // Prior generations retain send facts; each runtime records only its own attempt.
+      const delivery = delivered;
+      const route = {
+        config: params.config,
+        messageProvider: params.messageChannel ?? params.messageProvider,
+        originatingTo: params.messageTo ?? params.currentMessagingTarget ?? params.currentChannelId,
+        originatingThreadId: params.messageThreadId ?? params.currentThreadTs,
+        accountId: params.agentAccountId,
+        messagingToolSentTargets: delivery.messagingToolSentTargets,
+      };
+      const decision = resolveMessagingToolPayloadDedupe(route);
+      const sentTexts = decision.shouldDedupePayloads
+        ? decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
+          ? decision.routeSentTexts
+          : delivery.messagingToolSentTexts
+        : [];
+      const sentMediaUrls = decision.shouldDedupePayloads
+        ? decision.matchingRoute && !decision.useGlobalSentMediaUrlEvidenceFallback
+          ? decision.routeSentMediaUrls
+          : delivery.messagingToolSentMediaUrls
+        : [];
+      const partial: Parameters<typeof resolveCurrentSourceMessagingToolPartial>[0] = {
+        currentSourceMessagingToolHeldPartial: undefined,
+        currentSourceMessagingToolSentTextsNormalized: sentTexts.map(normalizeTextForComparison),
+      };
+      const toolOnlySourceDelivered =
+        params.sourceReplyDeliveryMode === "message_tool_only" &&
+        (delivery.didDeliverSourceReplyViaMessageTool ||
+          (delivery.messagingToolSourceReplyPayloads?.length ?? 0) > 0);
+      const filter = (payload: ReplyPayload) =>
+        filterMessagingToolReplyPayload({
+          ...route,
+          payload,
+          sentTexts: delivery.messagingToolSentTexts,
+          sentMediaUrls: delivery.messagingToolSentMediaUrls,
+        }).filter((next) => next === payload || hasReplyPayloadContent(next));
+
+      return {
+        ...params,
+        onAssistantMessageStart: () => {
+          partial.currentSourceMessagingToolHeldPartial = undefined;
+          return callbacks.onAssistantMessageStart?.();
+        },
+        onPartialReply: callbacks.onPartialReply
+          ? (payload) => {
+              if (toolOnlySourceDelivered) {
+                return false;
+              }
+              const text = payload.text ?? payload.delta ?? "";
+              const held = partial.currentSourceMessagingToolHeldPartial;
+              const resolved = resolveCurrentSourceMessagingToolPartial(partial, {
+                evtType: payload.delta && !payload.replace ? "text_delta" : "text_end",
+                text,
+                visibleDelta: payload.delta ?? "",
+              });
+              if (resolved.hold && !payload.mediaUrls?.length) {
+                return false;
+              }
+              // A withheld prefix never reached the receiver; divergence releases a full snapshot.
+              const next = {
+                ...payload,
+                text: resolved.hold ? undefined : resolved.text,
+                ...(held || resolved.text !== text || resolved.hold
+                  ? { delta: resolved.hold ? undefined : resolved.text, replace: true as const }
+                  : {}),
+              };
+              const filtered = filterMessagingToolMediaDuplicates({
+                payloads: [next],
+                sentMediaUrls,
+              })[0];
+              return filtered && hasReplyPayloadContent(filtered)
+                ? callbacks.onPartialReply?.(filtered)
+                : false;
+            }
+          : undefined,
+        onBlockReply: callbacks.onBlockReply
+          ? async (payload, context) => {
+              const metadata = getReplyPayloadMetadata(payload);
+              if (metadata?.sourceReplyTranscriptMirror) {
+                await callbacks.onBlockReply?.(payload, context);
+                return;
+              }
+              if (toolOnlySourceDelivered && !metadata?.deliverDespiteSourceReplySuppression) {
+                return;
+              }
+              for (const next of filter(payload)) {
+                await callbacks.onBlockReply?.(copyReplyPayloadMetadata(payload, next), context);
+              }
+            }
+          : undefined,
+        onReasoningStream: callbacks.onReasoningStream
+          ? (payload) => {
+              if (!toolOnlySourceDelivered) {
+                return callbacks.onReasoningStream?.(payload);
+              }
+            }
+          : undefined,
+      };
+    },
     mergeTerminalReceipt: (result: EmbeddedAgentRunResult) => {
       const receipt = result.meta.agentMeta?.terminalReceipt;
       if (receipt && successfulToolNames.size > 0) {

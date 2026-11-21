@@ -6,8 +6,8 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { DecisionBatch } from "../../decisions/types.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { prepareGroupParticipation } from "./group-participation.js";
 import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
 
@@ -81,7 +81,9 @@ it("budgets rendered user evidence while retaining tool receipts and the current
         { maxStateAndQuestionTokens: 32000, maxRequestTokens: 64000 },
         options.signal,
       );
-      if (result !== undefined) prepared = { ...batch, state: result };
+      if (result !== undefined) {
+        prepared = { ...batch, state: result };
+      }
       // Stop at the actual Decision input boundary; no primary-model response supplies the proof.
       return { status: "unavailable", reason: "unsupported-input" };
     });

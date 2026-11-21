@@ -98,9 +98,6 @@ export function buildMessagingSection(params: {
   const showGenericInlineButtonHint = !params.customInlineButtonHint;
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
-  const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
-  const hasSubagents = params.availableTools.has("subagents");
-  const hasSessionsYield = params.availableTools.has("sessions_yield");
   const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
   const completionEventGuidance = suppressSilentTokenGuidance
     ? "- Completion events requesting an update: rewrite in normal voice and send; never forward raw metadata or a silent placeholder."
@@ -117,7 +114,7 @@ export function buildMessagingSection(params: {
       ? [
           "",
           "### message tool",
-          "- Proactive send/channel action (poll, reaction, etc.): `message`.",
+          "- Use `message` for proactive sends and channel actions (polls, reactions, etc.).",
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => a reaction may be enough. Needed text reply => `message(action=send)`; final text private."
             : "",
