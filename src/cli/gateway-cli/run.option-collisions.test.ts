@@ -43,7 +43,10 @@ import {
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
 import { registerGatewayLockFailureTests } from "./run-lock-failure.test-support.js";
-import { registerGatewayRunStartupRecoveryTests } from "./run-startup-recovery.test-support.js";
+import {
+  bootDecision,
+  registerGatewayRunStartupRecoveryTests,
+} from "./run-startup-recovery.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -124,15 +127,6 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.hoisted(() =>
     path: "/tmp/openclaw-stability.json",
   })),
 );
-function bootDecision(tripped = false, recovered = false) {
-  return {
-    tripped,
-    uncleanBoots: tripped ? 3 : 0,
-    windowMs: 300_000,
-    shouldWriteStabilityBundle: tripped,
-    recovered,
-  };
-}
 const bootLifecycle = vi.hoisted(() => ({
   manualChannelStartHint: `Start a channel manually with: openclaw gateway call channels.start --params '{"channel":"<id>"}'`,
   decisions: [] as ReturnType<typeof bootDecision>[],
@@ -202,6 +196,10 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
+}));
+
+vi.mock("../../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/gateway-port.js")>()),
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 

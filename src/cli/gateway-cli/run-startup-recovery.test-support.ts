@@ -11,6 +11,16 @@ type BootDecision = Pick<
   "tripped" | "uncleanBoots" | "windowMs" | "shouldWriteStabilityBundle" | "recovered"
 >;
 
+export function bootDecision(tripped = false, recovered = false) {
+  return {
+    tripped,
+    uncleanBoots: tripped ? 3 : 0,
+    windowMs: 300_000,
+    shouldWriteStabilityBundle: tripped,
+    recovered,
+  };
+}
+
 export function registerGatewayRunStartupRecoveryTests({
   bootLifecycle,
   bootDecision,

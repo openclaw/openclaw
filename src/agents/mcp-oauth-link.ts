@@ -1,7 +1,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
-import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOperatorMcpOAuthConnection } from "../plugins/mcp-auth-status.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";

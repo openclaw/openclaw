@@ -57,6 +57,11 @@ vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
   resolveIsNixMode: mocks.resolveIsNixMode,
 }));
+
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: (await import("../config/paths.js")).resolveGatewayPort,
+}));
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: mocks.findExtraGatewayServices,
   renderGatewayServiceCleanupHints: mocks.renderGatewayServiceCleanupHints,

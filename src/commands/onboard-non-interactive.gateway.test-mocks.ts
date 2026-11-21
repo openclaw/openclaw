@@ -104,8 +104,6 @@ vi.mock("../config/config.js", async (importActual) => {
       return committedConfigFiles.write(nextConfig, resolveTestConfigPath());
     },
     resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
-    // Keep the operator's port and profile out of these synthetic config snapshots.
-    resolveGatewayPort: (cfg: OpenClawConfig) => actual.resolveGatewayPort(cfg, {}),
     transformConfigFileWithRetry: async (
       params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
     ) => {
@@ -125,6 +123,15 @@ vi.mock("../config/config.js", async (importActual) => {
       });
       return committedConfigFiles.write(committed.config, snapshot.path);
     },
+  };
+});
+
+vi.mock("../config/gateway-port.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/gateway-port.js")>();
+  return {
+    ...actual,
+    // Keep the operator's port and profile out of these synthetic config snapshots.
+    resolveGatewayPort: (cfg: OpenClawConfig) => actual.resolveGatewayPort(cfg, {}),
   };
 });
 

@@ -44,6 +44,7 @@ import { registerStatusInstallRecordReadTests } from "./status.gather.install-re
 import { gatherDaemonStatus } from "./status.gather.js";
 import { registerStatusLaunchdScanTests } from "./status.gather.launchd.test-support.js";
 import {
+  callArg,
   callGatewayStatusProbe,
   capturePrintedDaemonStatus,
   findExtraGatewayServices,
@@ -205,8 +206,12 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/paths.js")>()),
   isDefaultInstallIdentity: (env?: NodeJS.ProcessEnv) => isDefaultInstallIdentity(env),
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
-  resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
   resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
+}));
+
+vi.mock("../../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/gateway-port.js")>()),
+  resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
 }));
 
 vi.mock("../../config/io.runtime.js", () => ({
@@ -385,14 +390,6 @@ vi.mock("../../plugins/installed-plugin-index-record-reader.js", () => ({
 vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
-
-function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call[0];
-}
 
 function probeInput() {
   const input = callGatewayStatusProbe.mock.calls[0]?.[0];

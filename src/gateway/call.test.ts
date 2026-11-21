@@ -100,8 +100,8 @@ vi.mock("../config/gateway-dispatch-config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
+vi.mock("../config/gateway-port.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/gateway-port.js")>();
   return {
     ...actual,
     resolveGatewayPort: gatewayConfigMocks.resolveGatewayPort,

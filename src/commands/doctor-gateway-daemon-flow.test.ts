@@ -83,8 +83,8 @@ const findInstalledSystemdGatewayScope = vi.hoisted(() =>
 );
 const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
-vi.mock("../config/config.js", async (original) => ({
-  ...(await original<typeof import("../config/config.js")>()),
+vi.mock("../config/gateway-port.js", async (original) => ({
+  ...(await original<typeof import("../config/gateway-port.js")>()),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
 vi.mock("../config/paths.js", async (original) => ({

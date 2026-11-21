@@ -11,7 +11,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { captureRuntimeConfigAsyncReader, readBestEffortConfig } from "../config/config.js";
-import { resolveGatewayPort } from "../config/paths.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 

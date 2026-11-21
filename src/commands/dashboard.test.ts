@@ -29,6 +29,11 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort,
 }));
 
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: (await import("../config/config.js")).resolveGatewayPort,
+}));
+
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   detectBrowserOpenSupport,

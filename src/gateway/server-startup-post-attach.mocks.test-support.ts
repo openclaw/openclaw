@@ -91,9 +91,13 @@ vi.mock("../config/paths.js", async () => {
     get CONFIG_PATH() {
       return actual.resolveConfigPath();
     },
-    resolveGatewayPort: vi.fn(() => 18789),
   };
 });
+
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: vi.fn(() => 18789),
+}));
 
 // mock-isolation: Exercise watcher scheduling without loading Gmail credentials or opening a watcher.
 vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({

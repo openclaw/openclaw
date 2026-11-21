@@ -22,6 +22,7 @@ import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.j
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import {
   expectSavedSetupCredential,
+  modelConfig,
   modelConfigWithApiKey,
   openAiAuthProfile,
   registerSetupCompletionTests,
@@ -148,10 +149,6 @@ function remotePromptCalls() {
     prompter,
     options,
   }));
-}
-
-function modelConfig(primary: string): OpenClawConfig {
-  return { agents: { defaults: { model: { primary } }, entries: { main: {} } } };
 }
 
 function prepareMockAuthProfilesIn(agentDir: string): void {
@@ -287,7 +284,6 @@ vi.mock("../config/config.js", async (importActual) => {
     DEFAULT_GATEWAY_PORT: 18789,
     createConfigIO: () => ({ readConfigFileSnapshot }),
     readConfigFileSnapshot,
-    resolveGatewayPort,
     replaceConfigFile,
     transformConfigFileWithRetry: async (
       params: Parameters<typeof actual.transformConfigFileWithRetry>[0],
@@ -314,6 +310,11 @@ vi.mock("../config/config.js", async (importActual) => {
     },
   };
 });
+
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort,
+}));
 vi.mock("./setup.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./setup.shared.js")>()),
   readSetupConfigAuthority: async () => ({

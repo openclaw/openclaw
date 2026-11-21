@@ -9,6 +9,14 @@ import { defaultRuntime } from "../../runtime.js";
 import type { probeGatewayStatus } from "./probe.js";
 import { printDaemonStatus } from "./status.print.js";
 
+export function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
+}
+
 export function capturePrintedDaemonStatus(...args: Parameters<typeof printDaemonStatus>) {
   const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});

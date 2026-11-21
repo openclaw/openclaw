@@ -2,7 +2,7 @@
 import type { PeerCertificate } from "node:tls";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";

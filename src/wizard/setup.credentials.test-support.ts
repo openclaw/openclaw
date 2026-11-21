@@ -37,6 +37,10 @@ export function createEmptyWizardPrompter() {
   });
 }
 
+export function modelConfig(primary: string): OpenClawConfig {
+  return { agents: { defaults: { model: { primary } }, entries: { main: {} } } };
+}
+
 export function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
   return {
     agents: {
