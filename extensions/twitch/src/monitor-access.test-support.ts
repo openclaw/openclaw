@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./client-manager-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client-manager-registry.js")>()),
   getOrCreateClientManager: mocks.manager,
+  getClientManager: mocks.manager,
 }));
 vi.mock("./twitch-ingress.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./twitch-ingress.js")>()),

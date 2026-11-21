@@ -8,7 +8,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getOrCreateClientManager } from "./client-manager-registry.js";
+import { getClientManager, getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import { createTwitchIngress } from "./twitch-ingress.js";
@@ -260,13 +260,8 @@ export async function monitorTwitchProvider(options: {
                 }),
                 deliver: async (payload) => {
                   try {
-                    const replyClientManager = getOrCreateClientManager(accountId, {
-                      info: (msg) => runtime.log?.(msg),
-                      warn: (msg) => runtime.log?.(msg),
-                      error: (msg) => runtime.error?.(msg),
-                      debug: (msg) => runtime.log?.(msg),
-                    });
-
+                    // A stopped account keeps its manager unpublished, so a late reply
+                    // reports the missing manager and leaves the account offline.
                     const result = await sendMessageTwitchInternal({
                       channel: message.channel,
                       text: [payload.text, ...resolveOutboundMediaUrls(payload)]
@@ -275,7 +270,7 @@ export async function monitorTwitchProvider(options: {
                       cfg: config,
                       account,
                       accountId,
-                      clientManager: replyClientManager,
+                      clientManager: getClientManager(accountId),
                     });
                     if (result.outcome === "not_sent") {
                       runtime.error?.(`No text to send in reply payload`);
