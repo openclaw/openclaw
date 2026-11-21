@@ -61,6 +61,10 @@ import {
   type PluginToolExecutionCapabilities,
 } from "./plugin-tool-execution.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  captureAgentWorkspaceReadiness,
+  runWithAgentWorkspaceReadiness,
+} from "./workspace-readiness.js";
 
 // mock-isolation: Keep model inference outside the real process and session-event ownership fixture.
 vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -646,32 +650,55 @@ test("wakes a dashboard conversation on silent success, with exit, duration, a b
   );
 });
 
-test("wakes the same conversation after its session id rotates while the command runs", async ({
+test("wakes the same conversation after its session id rotates and the launch readiness retires", async ({
   signal,
 }) => {
   const sessionKey = "agent:main:dashboard:rotated-waiter";
   await seedOrigin(sessionKey);
   const release = path.join(state.workspaceDir, "release-rotated-waiter");
-  const started = runningSession(
-    (
-      await backgroundExec(sessionKey, { agentId: "main" })(
-        "rotated-waiter",
-        waitForRelease(release),
-      )
-    ).details,
-  );
-  // Compaction installs a new physical session id and keeps the lifecycle revision.
-  const rotated = await upsertSessionEntryCore(
-    { agentId: "main", sessionKey },
-    { sessionId: "rotated-session" },
-  );
-  expect(rotated).toMatchObject({ sessionId: "rotated-session", lifecycleRevision: "original" });
-  await fs.writeFile(release, "release");
-  await withinTest(waitForExecScope(sessionKey), signal);
-  await completion(signal);
-  const [prompt] = expectDefined(model.mock.calls.at(-1), "rotated wake turn");
-  expect(prompt.sessionId).toBe("rotated-session");
-  expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
+  const retired = new Error("Session changed while preparing its project; retry the task.");
+  let current = true;
+  const readiness = {
+    sessionKey,
+    waitUntilReady: async () => {},
+    assertCurrent: () => {
+      if (!current) {
+        throw retired;
+      }
+    },
+  };
+  await runWithAgentWorkspaceReadiness(readiness, async () => {
+    const started = runningSession(
+      (
+        await backgroundExec(sessionKey, { agentId: "main" })(
+          "rotated-waiter",
+          waitForRelease(release),
+        )
+      ).details,
+    );
+    try {
+      // Compaction installs a new physical session id and keeps the lifecycle revision.
+      const rotated = await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sessionId: "rotated-session" },
+      );
+      expect(rotated).toMatchObject({
+        sessionId: "rotated-session",
+        lifecycleRevision: "original",
+      });
+      current = false;
+    } finally {
+      await fs.writeFile(release, "release");
+      await withinTest(waitForExecScope(sessionKey), signal);
+    }
+    await completion(signal);
+    const [prompt] = expectDefined(model.mock.calls.at(-1), "rotated wake turn");
+    expect(prompt.sessionId).toBe("rotated-session");
+    expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
+    // Readmission must not remove the original turn's same-session fence.
+    expect(captureAgentWorkspaceReadiness(sessionKey)).toBe(readiness);
+    expect(() => captureAgentWorkspaceReadiness(sessionKey)?.assertCurrent()).toThrow(retired);
+  });
 });
 
 test("wakes a reset conversation by its key", async ({ signal }) => {
