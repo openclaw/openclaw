@@ -334,6 +334,7 @@ export function startOpenClawStateReadOperation(
         !context.existingSchemaPath &&
         !context.maintenanceScope &&
         !getStateDatabaseSchemaLease(pathname) &&
+        context.databaseEngineSelection?.effectiveEngines.state !== "postgres" &&
         (!native ||
           (!isPostgresSqlConnection(native.database.db) &&
             canReadWarmNativeSourceIndependently(
