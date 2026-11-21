@@ -109,7 +109,9 @@ authenticator errors: at an `asserted` floor, a matching header can admit mail e
 when local DMARC verification returns `none` or `fail`. The receiving boundary MTA
 must strip or overwrite untrusted inbound `Authentication-Results` values that claim
 a configured authserv id. OpenClaw cannot establish header-hop provenance from the
-message alone.
+message alone. RFC-style comments around the authserv id, including nested or
+escaped comments, are treated as whitespace; their contents never supply an id or
+an authentication result. Malformed comments do not provide trusted evidence.
 
 ### Sender-bound tokens and freshness
 
