@@ -5,6 +5,10 @@ import type {
   WizardStep as ProtocolWizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import {
+  readProviderAuthFailure,
+  type ProviderAuthFailureReason,
+} from "../plugins/provider-auth-failure.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   DEVICE_CODE_PHISHING_WARNING,
@@ -240,6 +244,7 @@ export class WizardSession {
   >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
+  private failureReason: ProviderAuthFailureReason | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
   private preparedModelRef: string | undefined;
   private modelActivation: ProtocolWizardNextResult["modelActivation"];
@@ -298,6 +303,7 @@ export class WizardSession {
       done: true,
       status: this.status,
       error: this.error,
+      ...(this.failureReason ? { reason: this.failureReason } : {}),
       ...(this.configuredAccounts
         ? {
             channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
@@ -540,6 +546,7 @@ export class WizardSession {
       } else {
         this.status = "error";
         this.error = coerceErrorMessage(error);
+        this.failureReason = readProviderAuthFailure(error)?.reason;
       }
     } finally {
       this.settled = true;

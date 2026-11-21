@@ -102,19 +102,23 @@ it("preserves the exact issuer from an accepted browser callback", async () => {
   });
 });
 
-it("settles a provider denial without exposing provider-controlled text", async () => {
+it("keeps the sign-in open after a provider denial so the user can go back and allow", async () => {
   const login = await startLogin();
-  const rejected = expect(login.result).rejects.toThrow("declined");
   const response = callback("state=login-state&error=denied&error_description=%3Cscript%3Esecret");
   expect(response.res.statusCode).toBe(400);
+  expect(response.getBody()).toMatch(/Go back to the sign-in page and allow access/);
   expect(response.getBody()).not.toMatch(/script|secret/);
-  await rejected;
+  expect(callback("state=login-state&code=allowed").res.statusCode).toBe(200);
+  await expect(login.result).resolves.toEqual({ code: "allowed", state: "login-state" });
 });
 
 it.each(["restart", "origin", "timer", "deadline"])("rejects %s callbacks", async (event) => {
   const login = await startLogin(event === "timer" ? 20 : 60_000);
-  const message = event === "deadline" ? "expired" : undefined;
-  const rejected = expect(login.result).rejects.toThrow(message);
+  // A restart drains with the Gateway's own reason; every other end is a typed timeout.
+  const rejected =
+    event === "restart"
+      ? expect(login.result).rejects.toThrow()
+      : expect(login.result).rejects.toMatchObject({ reason: "timed_out" });
   if (event === "restart") {
     markGatewayRestartDraining();
   }
@@ -161,7 +165,7 @@ it.each<[string | undefined, string, boolean, boolean]>([
       }),
     ).resolves.toBe(`${origin}${PROVIDER_OAUTH_CALLBACK_PATH}`);
   } else {
-    await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
+    await expect(session.authorize(authorization)).rejects.toThrow("HTTPS address");
     expect(openUrl).not.toHaveBeenCalled();
   }
 });
@@ -253,7 +257,7 @@ it.each([
           controlUi: { allowedOrigins: [proxyOrigin] },
         },
       });
-      const rejected = expect(result).rejects.toThrow("expired");
+      const rejected = expect(result).rejects.toThrow("Sign-in timed out.");
       expect(callback("state=login-state&code=stale").res.statusCode).toBe(410);
       await rejected;
     } else {
@@ -284,7 +288,7 @@ it.each([
     const openUrl = vi.fn();
     const session = createSession({ browserOrigin: proxyBrowser, authPolicy, openUrl });
     expect(session.available).toBe(false);
-    await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
+    await expect(session.authorize(authorization)).rejects.toThrow("HTTPS address");
     expect(openUrl).not.toHaveBeenCalled();
   },
 );

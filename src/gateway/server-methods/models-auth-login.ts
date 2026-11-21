@@ -20,6 +20,7 @@ import { toSavedAuthSetupKind } from "../../system-agent/setup-inference-core.js
 import { WizardSession } from "../../wizard/session.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
+import { createProviderAuthNodes } from "../server-plugins.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -201,6 +202,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                   signal: browser?.signal ?? signal,
                   isRemote: !params.expectedOwnerId,
                   openUrl,
+                  nodes: createProviderAuthNodes(),
                   browserAuthorization: browser?.available ? browser.authorize : undefined,
                   assertCurrent: assertFlowCurrent,
                   beforePersistentEffect: () => {
@@ -218,12 +220,12 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
               }
               if (result.modelAccess && !result.modelAccess.applied) {
                 throw new ProviderCredentialsSavedError(
-                  "Your sign-in and model access were saved, but OpenClaw has not confirmed that model access is active. Close this dialog. Open Settings and select Apply changes, then send /models.",
+                  "Your sign-in and model access were saved, but OpenClaw has not confirmed that model access is active. Close this dialog. Open Settings and select Apply changes.",
                 );
               }
               if (result.authRefresh !== "refreshed") {
                 throw new ProviderCredentialsSavedError(
-                  "Your sign-in was saved, but the connection update could not be confirmed. Send /login refresh in chat to try again.",
+                  "Your sign-in was saved, but the connection update could not be confirmed. Close this dialog and reopen Models to check it.",
                 );
               }
               const profileId = result.profiles[0]?.profileId;

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
+import { ProviderAuthFailure } from "../plugins/provider-auth-failure.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { DEVICE_CODE_PHISHING_WARNING, type WizardPrompter } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
@@ -141,6 +142,19 @@ describe("WizardSession", () => {
       });
     },
   );
+
+  test("reports a typed provider sign-in failure reason on the error result", async () => {
+    const session = new WizardSession(async () => {
+      throw new ProviderAuthFailure("device_code_expired");
+    });
+    await session.whenSettled();
+    await expect(session.next()).resolves.toEqual({
+      done: true,
+      status: "error",
+      error: "The sign-in code expired before it was approved.",
+      reason: "device_code_expired",
+    });
+  });
 
   test.each(["error", "cancelled"] as const)(
     "withholds model outcomes after %s, even on late completion",
