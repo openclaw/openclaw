@@ -41,12 +41,7 @@ import {
   createFeishuBroadcastIngressSettlement,
   resolveBroadcastAgents,
 } from "./bot-broadcast.js";
-import {
-  normalizeFeishuCommandProbeBody,
-  parseFeishuMessageEvent,
-  resolveFeishuGroupSession,
-  resolveFeishuMediaList,
-} from "./bot-content.js";
+import { resolveFeishuGroupSession, resolveFeishuMediaList } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
 import { resolveFeishuBotName } from "./bot-name.js";
 import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
@@ -63,6 +58,7 @@ import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { isFeishuBroadcastMention, normalizeMentions } from "./mention.js";
+import { normalizeFeishuCommandProbeBody, parseFeishuMessageEvent } from "./message-content.js";
 import {
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
@@ -80,8 +76,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 import { isFeishuGroupChatType, type FeishuMessageContext } from "./types.js";
-export { parseFeishuMessageEvent } from "./bot-content.js";
-export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
+export type { FeishuMessageEvent } from "./event-types.js";
 
 // App-scoped cooldown prevents repeated permission notifications.
 const permissionErrorNotifiedAt = new Map<string, number>();

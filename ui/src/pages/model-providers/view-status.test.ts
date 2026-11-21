@@ -167,7 +167,7 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
     profiles: [oauth],
     catalogStatus: "ready",
   });
-  const viewProps = props({ cards: [providerCard], configuredModels: [] });
+  const viewProps = props({ cards: [providerCard], configuredModels: [], modelRequired: true });
   const container = mount(viewProps);
   const status = () => text(container.querySelector(".provider-row__status"));
   expect(status()).toBe("Ready");
@@ -371,7 +371,7 @@ it("counts a provider's only unavailable model in the singular", () => {
 
 it("hands the accent to an open API key form", () => {
   const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
-  const viewProps = props({ cards: [editable], configuredModels: [] });
+  const viewProps = props({ cards: [editable], configuredModels: [], modelRequired: true });
   const container = mount(viewProps);
   const connect = () => container.querySelector("[data-model-readiness] .btn") as HTMLButtonElement;
   expect(connect().classList.contains("primary")).toBe(true);

@@ -160,10 +160,10 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
 }
 
 /** Project current warnings and late diagnostics without reopening or regrading history. */
-export function projectUpdateRunResultSteps(
-  record: UpdateRunRecord,
+export function projectUpdateRunResultSteps<T extends Pick<UpdateRunRecord, "steps">>(
+  record: T,
   additionalSteps: readonly UpdateStepResult[],
-): UpdateRunRecord {
+): T {
   if (additionalSteps.length === 0) {
     return record;
   }

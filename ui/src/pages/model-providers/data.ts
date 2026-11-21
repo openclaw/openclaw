@@ -24,6 +24,7 @@ import {
   listSelectableAgents,
   normalizeAgentLabel,
   resolveAgentConfig,
+  resolveAgentModelPrimary,
 } from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
@@ -665,6 +666,10 @@ export function buildModelProviderPresentation(params: {
     agentLabel: selected ? normalizeAgentLabel(selected) : agentId,
     values: {
       configuredModels,
+      // Setup owns the page until this agent has a chosen model; an available catalog
+      // entry (for example a local model) is not a choice. Unloaded config is not "none".
+      modelRequired:
+        params.configObject !== null && !resolveAgentModelPrimary(params.configObject, agentId),
       defaultModels: defaults,
       decisionModels: catalog.decisionModels ?? [],
       authStatus: data.authStatus,

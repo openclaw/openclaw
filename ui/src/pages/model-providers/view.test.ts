@@ -643,6 +643,7 @@ describe("renderModelProviders", () => {
         ],
         configuredModels: [],
         defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        modelRequired: true,
         onConnectProvider,
       }),
     );
