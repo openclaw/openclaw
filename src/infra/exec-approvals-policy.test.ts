@@ -388,6 +388,34 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
+  it("merges a mixed-case roster key with its normalized approvals agent scope", () => {
+    const snapshots = effective.collectExecPolicyScopeSnapshots({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: DEFAULT_AGENT_ID } },
+          entries: {
+            [DEFAULT_AGENT_ID]: {},
+            Ops: { tools: { exec: { security: "allowlist", ask: "always" } } },
+          },
+        },
+      },
+      approvals: { version: 1, agents: { ops: { security: "deny" } } },
+    });
+
+    expect(snapshots.map((scope) => scope.scopeLabel)).toEqual(["tools.exec", "agent:ops"]);
+    expect(snapshots[1]).toMatchObject({
+      configPath: "agents.entries.Ops.tools.exec",
+      security: {
+        requested: "allowlist",
+        requestedSource: "agents.entries.Ops.tools.exec.security",
+        host: "deny",
+        effective: "deny",
+      },
+      ask: { requested: "always", effective: "always" },
+    });
+  });
+
   it("keeps the default agent scope when main has an explicit exec override", () => {
     const snapshots = collectScopes({ [DEFAULT_AGENT_ID]: { tools: { exec: { ask: "always" } } } });
 
