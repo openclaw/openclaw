@@ -1,9 +1,11 @@
 import { createMemo, For } from "solid-js";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SettingsRow } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { errorIdForField, CronSelect, FieldRow } from "./view-fields.tsx";
+import { TriggerSetupSection } from "./view-trigger-setup.tsx";
 import type { CronProps } from "./view-types.ts";
 
 export function EventSourceFields(props: CronProps) {
@@ -14,17 +16,24 @@ export function EventSourceFields(props: CronProps) {
     ...new Set([...(props.eventSource?.servers ?? []), props.form.eventServer].filter(Boolean)),
   ]);
   return (
-    <>
+    <TriggerSetupSection testId="cron-event-source">
       {props.form.eventSource !== "mcp-events" ? (
-        <p class="muted">{t("cron.events.readOnlySource", { source: props.form.eventSource })}</p>
+        <SettingsRow
+          title={t("cron.events.pluginSource")}
+          description={t("cron.events.readOnlySource")}
+          control={<span class="cron-event-source__plugin">{props.form.eventSource}</span>}
+        />
       ) : !props.eventSource?.available ? (
-        <InlineAlert tone="warning">{t("cron.events.unavailable")}</InlineAlert>
+        <div class="cron-event-source__message">
+          <InlineAlert tone="warning">{t("cron.events.unavailable")}</InlineAlert>
+        </div>
       ) : (
         <>
           <CronSelect
             {...props}
             field="eventServer"
             label={t("cron.events.server")}
+            required
             help={t("cron.events.serverHelp")}
             errorKey="eventServer"
             options={[
@@ -33,7 +42,7 @@ export function EventSourceFields(props: CronProps) {
             ]}
           />
           {props.eventSource.servers !== null && !serverOptions().length ? (
-            <p class="muted">{t("cron.events.noServers")}</p>
+            <p class="muted cron-event-source__message">{t("cron.events.noServers")}</p>
           ) : undefined}
           <CronSelect
             {...props}
@@ -54,7 +63,59 @@ export function EventSourceFields(props: CronProps) {
                 : []),
             ]}
           />
-          <div class="cron-inline-controls">
+          {props.eventSource.serversError ? (
+            <div class="cron-event-source__message">
+              <InlineAlert tone="danger">{props.eventSource.serversError}</InlineAlert>
+            </div>
+          ) : undefined}
+          {props.eventSource?.error ? (
+            <div class="cron-event-source__message">
+              <InlineAlert tone="danger">{props.eventSource.error}</InlineAlert>
+            </div>
+          ) : undefined}
+          {!props.eventSource?.loading &&
+          !props.eventSource?.error &&
+          props.form.eventServer &&
+          !props.eventSource?.events.length ? (
+            <p class="muted cron-event-source__message">{t("cron.events.noEvents")}</p>
+          ) : undefined}
+          {props.form.eventName || props.fieldErrors.eventArguments ? (
+            <>
+              <FieldRow
+                label={t("cron.events.arguments")}
+                controlId="cron-event-arguments"
+                help={t("cron.events.argumentsHelp")}
+                stacked
+                wide
+                error={props.fieldErrors.eventArguments}
+                errorId={errorIdForField("eventArguments")}
+                control={
+                  <textarea
+                    id="cron-event-arguments"
+                    class="settings-input mono"
+                    rows="4"
+                    value={props.form.eventArguments}
+                    aria-invalid={props.fieldErrors.eventArguments ? "true" : "false"}
+                    aria-describedby={
+                      props.fieldErrors.eventArguments
+                        ? errorIdForField("eventArguments")
+                        : undefined
+                    }
+                    onInput={(event) =>
+                      props.onFormChange({ eventArguments: event.currentTarget.value })
+                    }
+                  />
+                }
+              />
+              {definition() ? (
+                <details class="cron-event-source__schema">
+                  <summary>{t("cron.events.schema")}</summary>
+                  <pre class="code-block">{JSON.stringify(definition()?.inputSchema, null, 2)}</pre>
+                </details>
+              ) : undefined}
+            </>
+          ) : undefined}
+          <div class="cron-event-source__footer">
             <button
               type="button"
               class="btn btn--sm"
@@ -69,50 +130,12 @@ export function EventSourceFields(props: CronProps) {
               <span role="status">{t("cron.events.loading")}</span>
             ) : undefined}
           </div>
-          {props.eventSource.serversError ? (
-            <InlineAlert tone="danger">{props.eventSource.serversError}</InlineAlert>
-          ) : undefined}
-          {props.eventSource?.error ? (
-            <InlineAlert tone="danger">{props.eventSource.error}</InlineAlert>
-          ) : undefined}
-          {!props.eventSource?.loading &&
-          !props.eventSource?.error &&
-          props.form.eventServer &&
-          !props.eventSource?.events.length ? (
-            <p class="muted">{t("cron.events.noEvents")}</p>
-          ) : undefined}
-          <FieldRow
-            label={t("cron.events.arguments")}
-            controlId="cron-event-arguments"
-            help={t("cron.events.argumentsHelp")}
-            stacked
-            wide
-            error={props.fieldErrors.eventArguments}
-            errorId={errorIdForField("eventArguments")}
-            control={
-              <textarea
-                id="cron-event-arguments"
-                class="settings-input mono"
-                rows="5"
-                value={props.form.eventArguments}
-                aria-invalid={props.fieldErrors.eventArguments ? "true" : "false"}
-                aria-describedby={
-                  props.fieldErrors.eventArguments ? errorIdForField("eventArguments") : undefined
-                }
-                onInput={(event) =>
-                  props.onFormChange({ eventArguments: event.currentTarget.value })
-                }
-              />
-            }
-          />
-          {definition() ? (
-            <details class="cron-advanced">
-              <summary>{t("cron.events.schema")}</summary>
-              <pre class="code-block">{JSON.stringify(definition()?.inputSchema, null, 2)}</pre>
-            </details>
-          ) : undefined}
           {props.editingJob ? (
-            <div class="cron-schedule-summary" data-test-id="cron-event-status" role="status">
+            <div
+              class="cron-schedule-summary cron-event-source__message"
+              data-test-id="cron-event-status"
+              role="status"
+            >
               <strong>{t("cron.events.subscription")}</strong>
               {!props.editingJob.enabled
                 ? t("cron.events.paused")
@@ -144,10 +167,12 @@ export function EventSourceFields(props: CronProps) {
             </div>
           ) : undefined}
           {props.eventSource?.statusError ? (
-            <InlineAlert tone="danger">{props.eventSource.statusError}</InlineAlert>
+            <div class="cron-event-source__message">
+              <InlineAlert tone="danger">{props.eventSource.statusError}</InlineAlert>
+            </div>
           ) : undefined}
         </>
       )}
-    </>
+    </TriggerSetupSection>
   );
 }

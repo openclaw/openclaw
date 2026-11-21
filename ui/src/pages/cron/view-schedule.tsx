@@ -13,6 +13,7 @@ import {
   TrayInput,
 } from "./view-fields.tsx";
 import { ScheduleSentence } from "./view-schedule-sentence.tsx";
+import { ProcessTriggerSetup } from "./view-trigger-setup.tsx";
 import type { CronProps } from "./view-types.ts";
 export function DurationRow(
   props: CronProps & {
@@ -221,17 +222,15 @@ export function ScheduleTimeZone(props: CronProps) {
     </>
   );
 }
-/** Schedule settings too large for the tray: the event source and process-backed notes. */
+
+/** Source-specific controls live below the tray, not in the timing picker. */
 export function ScheduleDetails(props: CronProps) {
   return (
     <>
-      {props.form.scheduleKind === "on-exit" ? (
-        <p class="cron-help cron-schedule-note">{t("cron.form.onExitHelp")}</p>
-      ) : undefined}
       {props.form.scheduleKind === "event" ? (
-        <div class="settings-group cron-editor-card" data-test-id="cron-event-source">
-          <EventSourceFields {...props} />
-        </div>
+        <EventSourceFields {...props} />
+      ) : props.form.scheduleKind === "on-exit" || props.form.scheduleKind === "stream" ? (
+        <ProcessTriggerSetup {...props} />
       ) : undefined}
     </>
   );

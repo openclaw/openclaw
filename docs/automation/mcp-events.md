@@ -75,7 +75,9 @@ bearer tokens or webhook signing secrets in the automation's instructions.
 The plugin exposes the `mcp_events` discovery tool, which lists one page of
 webhook events and their argument schemas for a configured `serverName`. It does
 not create a separate subscription or scheduling system. The same catalog is
-available in the Automation editor.
+available in the Automation editor. Choose **Event** for timing, then choose the
+MCP server and event under **Trigger setup** below the composer. Once you choose
+an event, you can enter subscription arguments and inspect its input schema there.
 
 Create an automation with an event source, an agent-turn payload, and explicit
 output delivery. The source references the configured MCP server; it does not

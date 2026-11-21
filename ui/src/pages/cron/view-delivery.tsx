@@ -3,17 +3,11 @@ import { createMemo, createSignal } from "solid-js";
 import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
-import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  CronSelect,
-  CronInput,
-  ToggleRow,
-  FieldRow,
-  errorIdForField,
-  inputIdForField,
-} from "./view-fields.tsx";
+import { ConditionTriggerRows } from "./view-condition-trigger.tsx";
+import { CronSelect, CronInput, ToggleRow, FieldRow, inputIdForField } from "./view-fields.tsx";
 import { DurationRow } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
@@ -181,7 +175,11 @@ export function Advanced(
   const channelOptions = createMemo(() => buildChannelOptions(props));
   const [open, setOpen] = createSignal(false);
   const hasAdvancedError = createMemo(() =>
-    ADVANCED_FIELDS.some((field) => Boolean(props.fieldErrors[field])),
+    ADVANCED_FIELDS.some(
+      (field) =>
+        Boolean(props.fieldErrors[field]) &&
+        (field !== "triggerScript" || props.form.scheduleKind !== "stream"),
+    ),
   );
   return (
     <details
@@ -194,7 +192,7 @@ export function Advanced(
       <summary class="cron-advanced__summary" data-test-id="cron-advanced">
         {t("cron.form.advanced")}
         <Icon name="chevronDown" />
-        {props.form.triggerEnabled ? (
+        {props.form.triggerEnabled && props.form.scheduleKind !== "stream" ? (
           <span class="cron-trigger-summary">
             <Icon name="gitBranch" /> {t("cron.form.triggerConfigured")}
           </span>
@@ -231,7 +229,7 @@ export function Advanced(
               help={t("cron.form.startEnabledHelp")}
             />
           ) : undefined}
-          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
+          {props.form.scheduleKind === "at" ? (
             <ToggleRow
               {...props}
               field="deleteAfterRun"
@@ -374,7 +372,12 @@ export function Advanced(
               help={t("cron.form.skipIfScratchEmptyHelp")}
             />
           ) : undefined}
-          <TriggerRows {...props} />
+          {props.form.scheduleKind !== "stream" &&
+          (props.form.scheduleKind === "every" ||
+            props.form.scheduleKind === "cron" ||
+            props.form.triggerEnabled) ? (
+            <ConditionTriggerRows {...props} />
+          ) : undefined}
         </SettingsSection>
         <SettingsSection title={t("cron.form.advancedResults")}>
           <DeliveryRows {...props} channelOptions={channelOptions()} />
@@ -386,82 +389,6 @@ export function Advanced(
         ) : undefined}
       </div>
     </details>
-  );
-}
-function TriggerRows(props: CronProps) {
-  const scriptPayload = () => props.form.payloadKind === "script";
-  return (
-    <>
-      {!scriptPayload() && props.status === null ? undefined : props.status?.triggersEnabled !==
-          true || scriptPayload() ? (
-        <SettingsRow
-          title={t("cron.form.conditionTrigger")}
-          description={
-            scriptPayload()
-              ? t("cron.errors.triggerScriptPayloadUnsupported")
-              : props.form.triggerEnabled
-                ? t("cron.form.triggerDisabledConfigured")
-                : t("cron.form.triggerDisabled")
-          }
-          control={
-            props.form.triggerEnabled ? (
-              <button
-                type="button"
-                class="btn btn--sm"
-                onClick={() => props.onFormChange({ triggerEnabled: false })}
-              >
-                {t("cron.form.clearTrigger")}
-              </button>
-            ) : undefined
-          }
-        />
-      ) : (
-        <>
-          <ToggleRow
-            {...props}
-            field="triggerEnabled"
-            label={t("cron.form.conditionTrigger")}
-            help={t("cron.form.conditionTriggerHelp")}
-          />
-          {props.form.triggerEnabled ? (
-            <>
-              <FieldRow
-                label={t("cron.form.triggerScript")}
-                controlId="cron-trigger-script"
-                required
-                help={t("cron.form.triggerScriptHelp")}
-                error={props.fieldErrors.triggerScript}
-                errorId={errorIdForField("triggerScript")}
-                stacked
-                wide
-                control={
-                  <textarea
-                    id="cron-trigger-script"
-                    class="settings-input cron-trigger-script mono"
-                    rows="8"
-                    spellcheck="false"
-                    aria-invalid={props.fieldErrors.triggerScript ? "true" : "false"}
-                    aria-describedby={
-                      props.fieldErrors.triggerScript ? errorIdForField("triggerScript") : undefined
-                    }
-                    value={props.form.triggerScript}
-                    onInput={(event) =>
-                      props.onFormChange({ triggerScript: event.currentTarget.value })
-                    }
-                  />
-                }
-              />
-              <ToggleRow
-                {...props}
-                field="triggerOnce"
-                label={t("cron.form.triggerOnce")}
-                help={t("cron.form.triggerOnceHelp")}
-              />
-            </>
-          ) : undefined}
-        </>
-      )}
-    </>
   );
 }
 function FailureAlertRows(
