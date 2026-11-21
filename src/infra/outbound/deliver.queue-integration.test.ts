@@ -4,12 +4,17 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
+import type {
+  ChannelMessageDurableFinalAdapter,
+  ChannelMessageSendTextContext,
+} from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { isOutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { installQueueTestPlugin, matrixDeliveryResult } from "./deliver.custody.test-support.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -286,6 +291,71 @@ describe("durable outbound queue delivery", () => {
     await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
+
+  it.each(["returned", "thrown"] as const)(
+    "does not resend a final after a %s retryable reconciliation failure",
+    async (failure) => {
+      const deliveryIntentId = `cron-direct-delivery:v1:retryable-reconciliation-${failure}`;
+      const visibleMessages: string[] = [];
+      const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+        await ctx.onPlatformSendDispatch?.();
+        visibleMessages.push(ctx.text);
+        throw Object.assign(new Error("socket reset after acceptance"), { code: "ECONNRESET" });
+      });
+      const reconcileUnknownSend =
+        vi.fn<NonNullable<ChannelMessageDurableFinalAdapter["reconcileUnknownSend"]>>();
+      if (failure === "thrown") {
+        reconcileUnknownSend.mockRejectedValue(new Error("provider lookup timed out"));
+      } else {
+        reconcileUnknownSend.mockResolvedValue({
+          status: "unresolved",
+          error: "provider lookup timed out",
+          retryable: true,
+        });
+      }
+      installQueueTestPlugin({
+        message: {
+          id: "matrix",
+          durableFinal: {
+            capabilities: { text: true, reconcileUnknownSend: true },
+            reconcileUnknownSendKinds: { text: true },
+            reconcileUnknownSend,
+          },
+          send: { text: sendText },
+        },
+      });
+      const params = matrixRequest({
+        payloads: [{ text: "Final answer already accepted" }],
+        queuePolicy: "required",
+        deliveryIntentId,
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+        requireUnknownSendReconciliation: true,
+        retryAmbiguousFinalText: true,
+      });
+      await expect(deliverOutboundPayloads(params)).rejects.toThrow("socket reset");
+      expect(visibleMessages).toEqual(["Final answer already accepted"]);
+      expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+        id: deliveryIntentId,
+        recoveryState: "unknown_after_send",
+        attemptCount: 1,
+        lastError: expect.stringContaining("provider lookup timed out"),
+      });
+
+      reconcileUnknownSend.mockResolvedValue({
+        status: "sent",
+        ...matrixDeliveryResult("original-platform-message"),
+      });
+      await drainMatrixReconnect({ deliver: deliverOutboundPayloads, stateDir: tmpDir });
+      expect(reconcileUnknownSend).toHaveBeenCalledTimes(2);
+      expect(sendText).toHaveBeenCalledOnce();
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).toBe("completed");
+      await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
+      expect(sendText).toHaveBeenCalledOnce();
+    },
+  );
 
   it("holds one live claim while concurrent producers reuse a stable pending intent", async () => {
     let resolveSend!: (value: { messageId: string }) => void;

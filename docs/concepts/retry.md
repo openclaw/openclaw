@@ -144,8 +144,10 @@ waits until its last lease expires.
 
 Lease expiry does not erase evidence that a send already started. When the
 channel can reconcile such an entry, its answer decides: an already-sent message
-is settled and a proven unsent one is replayed. Without that proof, only an
-ordinary agent final text (no media, interactive controls, or tool-initiated
+is settled and a proven unsent one is replayed. A retryable reconciliation failure
+keeps the saved reply queued for another lookup within the existing recovery budget;
+it does not authorize a new send. Otherwise, only an ordinary agent final text
+(no media, interactive controls, or tool-initiated
 action) is resent, once per entry, accepting a rare duplicate over a lost reply.
 If that resend is also interrupted, recovery stops and the uncertainty notice is
 sent. An unreplaced owner can record a late result without authorizing another
