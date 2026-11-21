@@ -122,6 +122,22 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result?.nextConfig.gateway?.auth?.mode).toBe("token");
   });
 
+  it("points Funnel runs at the password instead of token auth", async () => {
+    const result = await applyGatewayConfig({
+      auth: { mode: "token", token: "existing-token" },
+      gateway: { tailscale: { mode: "funnel" } },
+      opts: { tailscale: "funnel" } as OnboardOptions,
+    });
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Tailscale Funnel requires password auth"),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("use --gateway-auth token"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("keeps password auth when a token-only rerun targets an existing Funnel", async () => {
     const result = await applyGatewayConfig({
       auth: { mode: "password", password: "test-password" },
