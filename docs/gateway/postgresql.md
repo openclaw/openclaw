@@ -1064,6 +1064,17 @@ A timeout is a failure to investigate, not permission to delete recovery state.
 Inspect server load, locks, network, and storage, and retry only
 after resolving the reported cause.
 
+Runtime connections enable TCP keepalive with a 10-second initial delay. Each
+bridge request carries its deadline, and the I/O service closes that request's
+connection 20 seconds before the deadline (100 seconds for default runtime requests).
+Maintenance requests retain their one-hour statement budget and use the same
+deadline forwarding, including nested work and the commit callback.
+A lost response then fails only that connection instead of resetting the healthy
+connections on its I/O service. Connection setup and idle validation queries have
+a separate 10-second client timeout, leaving time to reconnect before sending
+caller SQL. A lost write or commit reply still has an unknown outcome and is never
+replayed.
+
 OpenClaw inherits the operator's `synchronous_commit` and other durability
 settings. PostgreSQL's default `on` makes acknowledged commits durable across
 PostgreSQL or operating-system crashes. For SQLite WAL

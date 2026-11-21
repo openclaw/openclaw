@@ -3,7 +3,10 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { receiveMessageOnPort, threadId } from "node:worker_threads";
 import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
-import { POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS } from "../database-engine/policy.js";
+import {
+  POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS,
+  POSTGRES_STATEMENT_TIMEOUT_MS,
+} from "../database-engine/policy.js";
 import type {
   PostgresSqlConnection,
   PostgresTransactionOptions,
@@ -196,10 +199,12 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       throw this.loseConnection();
     }
     // Fingerprints span many SQL statements in one request; retain the maintenance
-    // budget through beforeCommit while ordinary requests keep their 120s deadline.
-    const deadline =
-      performance.now() +
-      (this.maintenance ? POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS + 30_000 : 120_000);
+    // budget through beforeCommit; the worker retires only this connection 20s early.
+    const deadlineMs =
+      (this.maintenance
+        ? POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS
+        : (this.bridgeParameters.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS)) + 30_000;
+    const deadline = performance.now() + deadlineMs;
     const retainedIdle = bridge.inTransaction === false;
     const reconnectIfIdle =
       (this.idleCheckout !== undefined || retainedIdle) &&
@@ -218,6 +223,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         ...(reconnectIfIdle ? { reconnectIfIdle } : {}),
         ...(validateIfIdle ? { validateIfIdle } : {}),
         id,
+        deadlineMs,
       },
       [],
     );

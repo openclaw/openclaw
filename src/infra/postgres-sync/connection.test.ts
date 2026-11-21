@@ -50,6 +50,7 @@ function transportFixture(
     | "timeout"
     | "service-death"
     | "delayed",
+  options?: ConstructorParameters<typeof PostgresSyncConnection>[4],
 ) {
   let mode = initialMode;
   let command: string | undefined;
@@ -59,7 +60,7 @@ function transportFixture(
   control.set([1, 1]);
   const service = new Int32Array(new SharedArrayBuffer(8));
   // Exercise the connection over real ports; live tests cover worker startup and admission.
-  const db = harness.connection();
+  const db = harness.connection(options);
   Object.assign(db, {
     bridge: { port: port1, control, service, requestId: 1 },
   });
@@ -202,6 +203,7 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         reconnectIfIdle: true,
         ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
         id: 3,
+        deadlineMs: 120_000,
       },
       {
         operation: "query",
@@ -210,6 +212,7 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         parameters: [],
         reconnectIfIdle: true,
         id: 4,
+        deadlineMs: 120_000,
       },
     ]);
   } finally {
@@ -235,6 +238,36 @@ it("lets maintenance finish beyond the runtime deadline, then restores runtime l
   expect(() => fixture.db.exec("SELECT 7")).toThrow("PostgreSQL connection lost");
   expect(fixture.db.isOpen).toBe(false);
 });
+
+it.each([undefined, 2000])(
+  "forwards the maintenance deadline and restores runtime budget (%s)",
+  (statementTimeoutMs) => {
+    const fixture = transportFixture("normal", { statementTimeoutMs });
+    fixture.command("COMMIT");
+    fixture.db.exec("SELECT before_maintenance");
+    fixture.db.runTransaction(
+      () => {
+        fixture.db.runTransaction(() => fixture.db.exec("SELECT nested_maintenance"));
+      },
+      {
+        maintenance: true,
+        withCommit(commit) {
+          fixture.db.exec("SELECT before_commit");
+          commit();
+        },
+      },
+    );
+    fixture.db.exec("SELECT after_maintenance");
+    const requests = fixture.sent.mock.calls.map(([request]) => request);
+    expect(requests[0]).toMatchObject({ deadlineMs: (statementTimeoutMs ?? 90_000) + 30_000 });
+    expect(requests.at(-1)).toMatchObject({ deadlineMs: (statementTimeoutMs ?? 90_000) + 30_000 });
+    expect(requests.slice(1, -1).length).toBeGreaterThan(0);
+    for (const request of requests.slice(1, -1)) {
+      expect(request).toMatchObject({ deadlineMs: 3_630_000 });
+    }
+    expect(requests.map((request) => request.sql)).toContain("SELECT before_commit");
+  },
+);
 
 it("validates retained idle connections after suspended wall time, never inside a transaction", () => {
   const fixture = transportFixture("normal");
@@ -274,7 +307,7 @@ it("checks transport status after a query error instead of reusing an earlier id
     fixture.sent.mockClear();
     fixture.db.releaseIdleTransport();
     expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
-      { operation: "release", id: 4 },
+      { operation: "release", id: 4, deadlineMs: 120_000 },
     ]);
   } finally {
     vi.advanceTimersByTime(3 * 60_000);

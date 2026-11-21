@@ -19,13 +19,14 @@ export function usePostgresFixture() {
   return {
     cleanups,
     nativeDatabase,
-    connection() {
+    connection(options?: ConstructorParameters<typeof PostgresSyncConnection>[4]) {
       // Exercise the real connection methods without starting a bridge.
       const db = Object.create(PostgresSyncConnection.prototype) as PostgresSyncConnection;
       Object.defineProperties(db, {
         [Symbol.for("openclaw.postgres-sync-connection")]: { value: true },
         anchor: { value: nativeDatabase() },
         advisoryLockKey: { value: -42n },
+        bridgeParameters: { value: options ?? {} },
       });
       return Object.assign(db, { isOpen: true, isTransaction: false, mutationRevision: 0 });
     },
