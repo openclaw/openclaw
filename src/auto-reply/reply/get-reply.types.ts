@@ -27,6 +27,7 @@ import type { MsgContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
+import type { ReplyCallbackCustodyBinding } from "./reply-callback-custody.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplySourceBinding } from "./reply-source-binding.types.js";
 import type {
@@ -153,7 +154,8 @@ export type InternalGetReplyOptions = GetReplyOptions &
   PluginCommandReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithOperationRunState &
-  ReplySourceBinding;
+  ReplySourceBinding &
+  ReplyCallbackCustodyBinding;
 
 /** Pin the host-issued source before public options cross asynchronous preparation. */
 export function prepareInternalGetReplyOptions(
