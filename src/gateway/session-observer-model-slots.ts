@@ -6,7 +6,8 @@ const MAX_CONCURRENT_MODEL_SESSIONS = 6;
 
 export function createSessionObserverModelSlots(params: {
   states: Map<string, SessionObserverState>;
-  resolve: (agentId: string) => string | undefined;
+  /** Resolves the utility model for an agent, scoped to a session's route when known. */
+  resolve: (agentId: string, state?: SessionObserverState) => string | undefined;
   demote: (state: SessionObserverState) => void;
 }) {
   const demoted = new WeakSet<SessionObserverState>();
@@ -26,7 +27,7 @@ export function createSessionObserverModelSlots(params: {
       running.delete(state);
     },
     claim(agentId: string, current?: SessionObserverState): string | undefined {
-      const resolved = params.resolve(agentId);
+      const resolved = params.resolve(agentId, current);
       if (!resolved || current?.utilityModelRef === resolved) {
         return resolved;
       }

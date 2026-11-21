@@ -92,7 +92,7 @@ export function createSessionObserverAudienceLifecycle(params: {
   states: Map<string, SessionObserverState>;
   subscribers: SessionMessageSubscriberRegistry;
   isCurrent: (state: SessionObserverState) => boolean;
-  resolveUtilityModelRef: (agentId: string) => string | undefined;
+  resolveUtilityModelRef: (agentId: string, state: SessionObserverState) => string | undefined;
   suspend: (state: SessionObserverState) => void;
   demote: (state: SessionObserverState) => void;
 }) {
@@ -138,7 +138,7 @@ export function createSessionObserverAudienceLifecycle(params: {
     Boolean(state.utilityModelRef) &&
     (observedAudience ?? params.audience.classify(state.sessionKey, state.agentId)) === "direct" &&
     params.isCurrent(state) &&
-    params.resolveUtilityModelRef(state.agentId) === state.utilityModelRef;
+    params.resolveUtilityModelRef(state.agentId, state) === state.utilityModelRef;
 
   return { stateIsCurrent, modelStateIsCurrent, reconcileAll, unsubscribe };
 }
