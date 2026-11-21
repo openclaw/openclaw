@@ -190,9 +190,11 @@ const response = await dispatchGatewayMethod("push.web.send", {
 Authorization:
 
 - The requester needs `operator.write`, the same as `push.web.test`.
-- With named operator roles enabled (`gateway.roles.default` is set), a
-  requester without `operator.admin` can notify only their own profile,
-  including its merged aliases. Any other profile returns `FORBIDDEN`.
+- When named operator roles apply to the requester, a requester without
+  `operator.admin` can notify only their own profile, including its merged
+  aliases. Any other profile returns `FORBIDDEN`. Roles apply to everyone when
+  `gateway.roles.default` is set, and to current OpenClaw ID members whenever
+  `gateway.roles` is configured, even without a default.
 
 The Gateway chooses the devices, never the caller. It resolves merged profiles,
 rechecks each browser's pairing, current role, OpenClaw ID binding and scopes,

@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { setOpenClawIdMemberAccountLookup } from "../openclaw-id/tunnel-principal.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
 import { pushSubscription } from "./push.test-support.js";
@@ -58,7 +59,10 @@ vi.mock("../../state/user-channel-identity-operations.js", () => ({
 // mock-isolation: Resolve synthetic push recipients without opening a shared-state worker.
 vi.mock("../../state/user-profile-list.js", () => ({
   prepareUserProfileCatalog: async () => ({
-    readCurrentIdentity: (id: string) => ({ profileId: mocks.resolveProfileId(id) }),
+    readCurrentIdentity: (id: string) => {
+      const profileId = mocks.resolveProfileId(id);
+      return profileId && { profileId, openclawIdAccountIds: [`account-${profileId}`] };
+    },
     release: vi.fn(),
   }),
 }));
@@ -352,22 +356,25 @@ describe("push.web.test handler", () => {
 });
 
 describe("push.web.send handler", () => {
-  const agentsConfig = { agents: { list: [{ id: "main", default: true }, { id: "research" }] } };
-  const rolesConfig = {
-    ...agentsConfig,
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: { member: { scopes: ["operator.write"], sessions: { others: "none" } } },
-      },
-    },
+  const agentsConfig = { agents: { entries: { main: {}, research: {} } } };
+  const roles = {
+    definitions: { member: { scopes: ["operator.write"], sessions: { others: "none" } } },
   };
+  const rolesConfig = { ...agentsConfig, gateway: { roles: { ...roles, default: "member" } } };
+  const catalogConfig = { ...agentsConfig, gateway: { openclawId: { enabled: true }, roles } };
   const counts = { sent: 1, failed: 0, skipped: 0, pruned: 0 };
-  const sendAs = (
-    params: Record<string, unknown>,
-    options: { config?: object; userProfileId?: string; scopes?: string[] } = {},
-  ) =>
-    request(
+  const notify = { profileId: "bob", category: "agent-finished" };
+  type SendOptions = {
+    config?: object;
+    userProfileId?: string;
+    scopes?: string[];
+    principal?: "member" | "owner";
+    linkedMember?: boolean;
+  };
+  const peerKey = `iroh:${"c".repeat(64)}`;
+  const sendAs = (params: Record<string, unknown>, options: SendOptions = {}) => {
+    setOpenClawIdMemberAccountLookup(options.linkedMember ? () => true : undefined);
+    return request(
       "push.web.send",
       params,
       { getRuntimeConfig: () => (options.config ?? agentsConfig) as never },
@@ -376,67 +383,75 @@ describe("push.web.send handler", () => {
         ...(options.userProfileId
           ? { authenticatedUserProfile: { profileId: options.userProfileId } }
           : {}),
+        ...(options.principal === "member"
+          ? { internal: { openclawIdPrincipal: { kind: "member", peerKey, accountId: "a" } } }
+          : options.principal === "owner"
+            ? { internal: { openclawIdPrincipal: { kind: "owner", peerKey } } }
+            : {}),
       } as never,
     );
+  };
 
   beforeEach(() => {
     mocks.sendProfileWebPush.mockReset();
     mocks.sendProfileWebPush.mockResolvedValue(counts);
     mocks.resolveProfileId.mockImplementation((profileId) =>
-      profileId === "alice-old" ? "alice" : profileId,
+      profileId === "alice-old" ? "alice" : profileId === "ghost" ? undefined : profileId,
     );
   });
+  afterEach(() => setOpenClawIdMemberAccountLookup(undefined));
 
   it("requires operator.write", () => {
-    expect(authorizeOperatorScopesForMethod("push.web.send", ["operator.read"]).allowed).toBe(
-      false,
-    );
-    expect(authorizeOperatorScopesForMethod("push.web.send", ["operator.write"]).allowed).toBe(
-      true,
-    );
+    for (const [scope, allowed] of [
+      ["operator.read", false],
+      ["operator.write", true],
+    ] as const) {
+      expect(authorizeOperatorScopesForMethod("push.web.send", [scope]).allowed).toBe(allowed);
+    }
   });
 
-  it.each<[string, Record<string, unknown>]>([
-    ["missing profile", { category: "agent-finished" }],
-    ["missing category", { profileId: "bob" }],
-    ["approval category", { profileId: "bob", category: "approval-requested" }],
-    ["human-mention category", { profileId: "bob", category: "human-mentioned" }],
-    ["unknown category", { profileId: "bob", category: "marketing" }],
-    ["absolute URL path", { profileId: "bob", category: "agent-finished", path: "https://x.test" }],
-    ["protocol-relative path", { profileId: "bob", category: "agent-finished", path: "//x.test" }],
-    ["token query", { profileId: "bob", category: "agent-finished", path: "chat?token=x" }],
-    [
-      "gateway URL query",
-      { profileId: "bob", category: "agent-finished", path: "chat?gatewayUrl=wss://evil.test" },
-    ],
-    ["fragment", { profileId: "bob", category: "agent-finished", path: "chat#token=x" }],
-    ["dot segment", { profileId: "bob", category: "agent-finished", path: "a/../evil" }],
-    ["encoded dot segment", { profileId: "bob", category: "agent-finished", path: "a/%2e%2E/x" }],
-    ["empty segment", { profileId: "bob", category: "agent-finished", path: "a//b" }],
-    ["oversized title", { profileId: "bob", category: "agent-finished", title: "t".repeat(81) }],
-    ["oversized body", { profileId: "bob", category: "agent-finished", body: "b".repeat(241) }],
-    ["invalid tag", { profileId: "bob", category: "agent-finished", tag: "has space" }],
-    ["invalid TTL", { profileId: "bob", category: "agent-finished", ttlSeconds: 86_401 }],
-    ["unknown field", { profileId: "bob", category: "agent-finished", icon: "x" }],
-  ])("rejects %s before delivery", async (_name, params) => {
-    const respond = await sendAs(params);
-    expectErrorResponse(respond, "invalid push.web.send params");
+  it.each<[string, Record<string, unknown>, string?]>([
+    ["missing profile", { profileId: undefined }],
+    ["missing category", { category: undefined }],
+    ["approval category", { category: "approval-requested" }],
+    ["human-mention category", { category: "human-mentioned" }],
+    ["unknown category", { category: "marketing" }],
+    ["oversized title", { title: "t".repeat(81) }],
+    ["oversized body", { body: "b".repeat(241) }],
+    ["invalid tag", { tag: "has space" }],
+    ["invalid TTL", { ttlSeconds: 86_401 }],
+    ["unknown field", { icon: "x" }],
+    ...[
+      "https://x.test",
+      "//x.test",
+      "chat?token=x",
+      "chat?gatewayUrl=wss://evil.test",
+      "chat#token=x",
+      "a/../evil",
+      "a/%2e%2E/x",
+      "a//b",
+      "a/%zz",
+      "a/%",
+    ].map((path): [string, Record<string, unknown>, string] => [
+      `path ${path}`,
+      { path },
+      "at /path: must be a relative Control UI path without query, fragment, empty or dot segments",
+    ]),
+  ])("rejects %s before delivery", async (_name, overrides, message) => {
+    const respond = await sendAs({ ...notify, ...overrides });
+    expectErrorResponse(respond, message ?? "invalid push.web.send params");
     expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
   });
 
   it("rejects an agent that is not configured", async () => {
-    const respond = await sendAs({
-      profileId: "bob",
-      category: "agent-finished",
-      agentId: "ghost",
-    });
+    const respond = await sendAs({ ...notify, agentId: "ghost" });
     expectErrorResponse(respond, 'agent "ghost" not found');
     expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
   });
 
   it("returns delivery counts with the normalized agent id", async () => {
     const params = {
-      profileId: "bob",
+      ...notify,
       category: "agent-question",
       tag: "ticket-42",
       path: "chat/research/thread%2E1",
@@ -446,51 +461,47 @@ describe("push.web.send handler", () => {
       urgency: "high",
       ttlSeconds: 60,
     };
-    const respond = await sendAs(params);
-    expectSuccess(respond, counts);
+    expectSuccess(await sendAs(params), counts);
     expect(mocks.sendProfileWebPush).toHaveBeenCalledWith(expect.any(Function), {
       ...params,
       agentId: "research",
     });
   });
 
-  it.each<
-    [string, { config?: object; userProfileId?: string; scopes?: string[] }, string, boolean]
-  >([
+  const roleCaller = { config: rolesConfig, userProfileId: "alice" };
+  const idCaller = { config: catalogConfig, userProfileId: "alice" };
+  const idMember = { ...idCaller, principal: "member" } as const;
+  it.each<[string, SendOptions, string, boolean]>([
     ["no roles, another profile", {}, "bob", true],
-    ["roles, own profile", { config: rolesConfig, userProfileId: "alice" }, "alice", true],
-    ["roles, own merged alias", { config: rolesConfig, userProfileId: "alice" }, "alice-old", true],
-    ["roles, another profile", { config: rolesConfig, userProfileId: "alice" }, "bob", false],
-    ["roles, unknown profile", { config: rolesConfig, userProfileId: "alice" }, "ghost", false],
+    ["roles, own profile", roleCaller, "alice", true],
+    ["roles, own merged alias", roleCaller, "alice-old", true],
+    ["roles, another profile", roleCaller, "bob", false],
+    ["roles, unknown profile", roleCaller, "ghost", false],
     ["roles, no caller profile", { config: rolesConfig }, "alice", false],
-    [
-      "roles, admin to another profile",
-      { config: rolesConfig, userProfileId: "alice", scopes: ["operator.admin"] },
-      "bob",
-      true,
-    ],
+    ["roles, admin", { ...roleCaller, scopes: ["operator.admin"] }, "bob", true],
+    ["catalog, local caller", idCaller, "bob", true],
+    ["catalog, ID member", idMember, "bob", false],
+    ["catalog, ID member, own profile", idMember, "alice", true],
+    ["catalog, ID-linked member", { ...idCaller, linkedMember: true }, "bob", false],
+    ["catalog, ID member, no profile", { ...idMember, userProfileId: undefined }, "bob", false],
+    ["catalog, ID owner", { ...idCaller, principal: "owner" }, "bob", true],
   ])("authorizes the recipient: %s", async (_name, options, profileId, allowed) => {
-    if (profileId === "ghost") {
-      mocks.resolveProfileId.mockImplementation((id) => (id === "ghost" ? undefined : id));
-    }
-    const respond = await sendAs({ profileId, category: "agent-finished" }, options);
+    const respond = await sendAs({ ...notify, profileId }, options);
     if (allowed) {
       expectSuccess(respond, counts);
-      expect(mocks.sendProfileWebPush).toHaveBeenCalledOnce();
     } else {
       expect(firstRespondCall(respond)).toMatchObject([
         false,
         undefined,
         { code: ErrorCodes.FORBIDDEN, message: expect.stringContaining("operator.admin") },
       ]);
-      expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
     }
+    expect(mocks.sendProfileWebPush).toHaveBeenCalledTimes(allowed ? 1 : 0);
   });
 
   it("reports transport preparation failures as unavailable", async () => {
     mocks.sendProfileWebPush.mockRejectedValue(new Error("invalid VAPID key"));
-    const respond = await sendAs({ profileId: "bob", category: "agent-finished" });
-    expect(firstRespondCall(respond)).toMatchObject([
+    expect(firstRespondCall(await sendAs(notify))).toMatchObject([
       false,
       undefined,
       { code: ErrorCodes.UNAVAILABLE },

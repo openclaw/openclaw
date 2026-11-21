@@ -45,7 +45,11 @@ import {
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { sendProfileWebPush } from "../event-web-push.js";
 import { prepareDeviceTokenBindingLookup } from "../openclaw-id/device-token-binding.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "../operator-role-enforcement.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
@@ -117,26 +121,42 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
 }
 
 /**
- * With named operator roles, a caller may notify only its own (canonical) profile unless
- * it holds `operator.admin`. Without roles, `operator.write` keeps the installation-wide
- * model that `push.web.test` already uses.
+ * When named operator roles govern the caller, it may notify only its own (canonical)
+ * profile unless it holds `operator.admin`. Roles govern every caller when
+ * `gateway.roles.default` is set, and a current OpenClaw ID member whenever a role catalog
+ * exists. Otherwise `operator.write` keeps the installation-wide model of `push.web.test`.
  */
 async function mayTargetWebPushProfile(
   options: Pick<GatewayRequestHandlerOptions, "client">,
-  cfg: Parameters<typeof isNamedOperatorRoleEnforcementEnabled>[0],
+  cfg: Parameters<typeof isOperatorRoleEnforcedFor>[0],
   profileId: string,
 ): Promise<boolean> {
-  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || hasGatewayAdminScope(options.client)) {
+  if (cfg?.gateway?.roles === undefined || hasGatewayAdminScope(options.client)) {
     return true;
   }
+  const memberPrincipal = options.client?.internal?.openclawIdPrincipal?.kind === "member";
   const ownReference = options.client?.authenticatedUserProfile?.profileId;
   if (!ownReference) {
-    return false;
+    return !isOperatorRoleEnforcedFor(cfg, {
+      profileId: undefined,
+      openclawIdMember: memberPrincipal,
+    });
   }
   const profiles = await prepareUserProfileCatalog();
   try {
-    const own = profiles.readCurrentIdentity(ownReference)?.profileId;
-    return Boolean(own && own === profiles.readCurrentIdentity(profileId)?.profileId);
+    const own = profiles.readCurrentIdentity(ownReference);
+    const subject = operatorRoleSubject(own);
+    if (
+      !isOperatorRoleEnforcedFor(cfg, {
+        ...subject,
+        openclawIdMember: subject.openclawIdMember || memberPrincipal,
+      })
+    ) {
+      return true;
+    }
+    return Boolean(
+      own?.profileId && own.profileId === profiles.readCurrentIdentity(profileId)?.profileId,
+    );
   } finally {
     profiles.release();
   }
