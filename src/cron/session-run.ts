@@ -282,6 +282,7 @@ export async function runCronSessionTurn(
         deliveryAttemptFence:
           requestedChat && (route || conversationDelivery)
             ? {
+                recordWithheld: params.deliveryAttemptFence?.recordWithheld,
                 beforeAttempt: beforeDeliver,
                 assertCurrent: () => {
                   params.deliveryAttemptFence?.assertCurrent();

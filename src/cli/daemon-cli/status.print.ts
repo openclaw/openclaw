@@ -47,11 +47,11 @@ import {
   resolveRuntimeStatusColor,
   safeDaemonEnv,
 } from "./shared.js";
+import type { DaemonStatus } from "./status.gather.js";
 import {
-  type DaemonStatus,
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
-} from "./status.gather.js";
+} from "./status.port-format.js";
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
