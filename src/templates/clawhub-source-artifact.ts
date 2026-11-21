@@ -277,14 +277,17 @@ async function describeManifestDiagnostics(
   return ` ${reported.join("; ")}${remaining > 0 ? ` (${remaining} more)` : ""}`;
 }
 
-export async function readVerifiedArtifactSource(params: {
-  sourceRoot: string;
-  packageName: string;
-  version: string;
-  artifactSha256: string;
-  artifactByteLength: number;
-}): Promise<ResolvedClawHubSource> {
-  const loaded = await readTemplateManifestFile(params.sourceRoot);
+export async function readVerifiedArtifactSource(
+  params: {
+    sourceRoot: string;
+    packageName: string;
+    version: string;
+    artifactSha256: string;
+    artifactByteLength: number;
+  },
+  onWorkspaceSource?: Parameters<typeof readTemplateManifestFile>[1],
+): Promise<ResolvedClawHubSource> {
+  const loaded = await readTemplateManifestFile(params.sourceRoot, onWorkspaceSource);
   if (!loaded.ok) {
     throw new ClawHubSourceError(
       "clawhub_manifest_invalid",
