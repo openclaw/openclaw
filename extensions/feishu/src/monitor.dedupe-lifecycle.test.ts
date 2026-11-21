@@ -77,6 +77,7 @@ vi.mock("./send.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./send.js")>()),
   sendCardFeishu: mocks.sendCard,
 }));
+// mock-isolation: Keep bot dispatch and its cooldown state out of tests that control handler settlement.
 vi.mock("./bot.js", () => ({
   handleFeishuMessage: mocks.handleMessage,
 }));
