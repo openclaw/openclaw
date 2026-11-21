@@ -400,7 +400,11 @@ export async function executePreparedReplyRun(
     InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
     InputProvenance: inputProvenance,
   });
-  const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
+  const channelOwnerAuthority = getCommandOwnerAuthority(ctx);
+  const senderIsOwner =
+    providedReplyOperation && channelOwnerAuthority
+      ? channelOwnerAuthority.isCurrent()
+      : command.senderIsOwner;
   const authorityRunId =
     freshChannelCronAuthorityTurn && command.senderIsOwner
       ? (opts?.runId ?? crypto.randomUUID())
@@ -536,10 +540,9 @@ export async function executePreparedReplyRun(
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
       // Queued system events are prompt content in the same trusted session;
       // they do not rewrite the sender identity used by command/action auth.
-      senderIsOwner: command.senderIsOwner,
+      senderIsOwner,
       gitContributorProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
-      traceAuthorized:
-        command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+      traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,
       verboseLevelOverride: params.directives.verboseLevel,
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
@@ -652,7 +655,7 @@ export async function executePreparedReplyRun(
     );
   }
   copyChildSessionPublication(sessionCtx, followupRun.run);
-  if (command.senderIsOwner && channelOwnerAuthority) {
+  if (channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
   }
   if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin) {

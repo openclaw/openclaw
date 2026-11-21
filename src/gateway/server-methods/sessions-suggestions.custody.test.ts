@@ -140,7 +140,16 @@ it.each([
     if (change === "profile after custody") {
       const transcript = loadTranscriptEventsSync(fixture.scope);
       expect(transcript).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(transcript.at(-1)).toMatchObject({ message: { role: "user", content: text } });
+      expect(transcript.at(-1)).toMatchObject({
+        message: {
+          role: "user",
+          content: text,
+          __openclaw: {
+            senderIdentity: { type: "profile", id: profile.id },
+            requesterOrigin: { operatorProfileId: profile.id },
+          },
+        },
+      });
       expect(recorder.getAdmissionReceipt()).toBeDefined();
       expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
       const retry = await resolveSuggestion(mergedProfile.id);

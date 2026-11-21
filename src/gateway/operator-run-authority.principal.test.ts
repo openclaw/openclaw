@@ -390,17 +390,14 @@ describe("canonical membership role admission", () => {
     agents: ["main"],
     sessions: { others: "none" as const },
   };
-  const config: OpenClawConfig = {
-    gateway: { openclawId: { enabled: true }, roles: { definitions: { reader } } },
-  };
   afterEach(() => setOpenClawIdMemberAccountLookup(undefined));
 
   it("keeps the global default switch separate from per-person catalog enforcement", () => {
     for (const member of [false, true]) {
       const subject = { profileId: "person", openclawIdMember: member };
       expect(isOperatorRoleEnforcedFor({}, subject)).toBe(false);
-      expect(isNamedOperatorRoleEnforcementEnabled(config)).toBe(false);
-      expect(isOperatorRoleEnforcedFor(config, subject)).toBe(member);
+      expect(isNamedOperatorRoleEnforcementEnabled(memberConfig)).toBe(false);
+      expect(isOperatorRoleEnforcedFor(memberConfig, subject)).toBe(member);
       expect(
         isOperatorRoleEnforcedFor({ gateway: { roles: { default: "reader" } } }, subject),
       ).toBe(true);
@@ -430,13 +427,13 @@ describe("canonical membership role admission", () => {
           profileId: profile.id,
           openclawIdMember: false,
         });
-        expect(resolveOperatorRolePolicyForProfile(profile.id, config)).toBeUndefined();
+        expect(resolveOperatorRolePolicyForProfile(profile.id, memberConfig)).toBeUndefined();
         members.add("member");
         expect(operatorRoleSubject(prepared)).toEqual({
           profileId: profile.id,
           openclawIdMember: true,
         });
-        expect(resolveOperatorRolePolicyForProfile(profile.id, config)).toEqual(reader);
+        expect(resolveOperatorRolePolicyForProfile(profile.id, memberConfig)).toEqual(reader);
         expect(
           resolveOperatorRolePolicyForProfile(profile.id, {
             gateway: { openclawId: { enabled: true } },
@@ -446,13 +443,13 @@ describe("canonical membership role admission", () => {
           resolveOperatorRolePolicyForAssignment(
             profile.id,
             null,
-            config,
+            memberConfig,
             null,
             operatorRoleSubject(prepared),
           )?.scopes,
         ).toEqual([]);
         members.delete("member");
-        expect(resolveOperatorRolePolicyForProfile(profile.id, config)).toBeUndefined();
+        expect(resolveOperatorRolePolicyForProfile(profile.id, memberConfig)).toBeUndefined();
         sql.expectIdle();
       } finally {
         sql.restore();
@@ -464,7 +461,7 @@ describe("canonical membership role admission", () => {
       expect(prepared?.isCurrent()).toBe(false);
       const unlinked = await prepareUserProfileRoleAuthority(profile.id);
       expect(operatorRoleSubject(unlinked).openclawIdMember).toBe(false);
-      expect(resolveOperatorRolePolicyForProfile(profile.id, config)).toBeUndefined();
+      expect(resolveOperatorRolePolicyForProfile(profile.id, memberConfig)).toBeUndefined();
     });
   });
 
@@ -487,11 +484,11 @@ describe("canonical membership role admission", () => {
           gateway: { openclawId: { enabled: true }, roles: { definitions: { reader: role } } },
         };
         setRuntimeConfigSnapshot(cfg);
-        const fixture = await recoveryFixture(stateDir, profile.id, {
+        const recovery = await recoveryFixture(stateDir, profile.id, {
           config: cfg,
           scopes: ["operator.read"],
         });
-        const recovered = await fixture.restore();
+        const recovered = await recovery.restore();
         try {
           if (initiallyMember) {
             expect(recovered.authority.rolePolicy).toMatchObject({
@@ -506,7 +503,7 @@ describe("canonical membership role admission", () => {
             expect(recovered.authority.rolePolicy).toBeUndefined();
             member = true;
             expect(recovered.authority.rolePolicy).toBeUndefined();
-            const next = await fixture.restore();
+            const next = await recovery.restore();
             try {
               expect(next.authority.rolePolicy).toMatchObject({
                 sessionAccessCap: "none",
@@ -527,30 +524,30 @@ describe("canonical membership role admission", () => {
 
   it("rechecks a retained PR audience after membership-only admission", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fixture = await createPrFixture("operator.read");
+      const audience = await createPrFixture("operator.read");
       try {
         await linkCanonicalOpenClawIdUserProfile({
-          profileId: fixture.profile.id,
+          profileId: audience.profile.id,
           accountId: "pr-reader",
           email: null,
         });
-        const cfg = structuredClone(fixture.cfg);
+        const cfg = structuredClone(audience.cfg);
         cfg.gateway!.openclawId = { enabled: true };
         delete cfg.gateway!.roles!.default;
         cfg.gateway!.roles!.definitions.reader!.sessions.others = "none";
         setRuntimeConfigSnapshot(cfg);
-        prepareGatewayRecipientProfile(fixture.client);
+        prepareGatewayRecipientProfile(audience.client);
         let member = false;
         setOpenClawIdMemberAccountLookup((accountId) => member && accountId === "pr-reader");
         const sessionKey = "agent:main:member-audience";
-        await fixture.seed(sessionKey, fixture.other.id, { visibility: "shared" });
-        await fixture.subscribe([sessionKey]);
+        await audience.seed(sessionKey, audience.other.id, { visibility: "shared" });
+        await audience.subscribe([sessionKey]);
         const read = createControlUiSessionPrRead({
-          client: fixture.client,
+          client: audience.client,
           sessionKey,
-          getRuntimeConfig: fixture.context.getRuntimeConfig,
-          getSessionRowProjection: () => getSessionRowProjection(fixture.context),
-          isCurrentClient: () => !fixture.client.invalidated,
+          getRuntimeConfig: audience.context.getRuntimeConfig,
+          getSessionRowProjection: () => getSessionRowProjection(audience.context),
+          isCurrentClient: () => !audience.client.invalidated,
         });
         expect(read).toBeDefined();
         const target = await read?.();
@@ -559,7 +556,7 @@ describe("canonical membership role admission", () => {
         member = true;
         expect(await read?.()).toBeUndefined();
       } finally {
-        await fixture.close();
+        await audience.close();
       }
     });
   });

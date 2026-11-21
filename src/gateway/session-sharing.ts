@@ -524,7 +524,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const admittedInput = createAdmittedSessionSharingAuthority({
     target: chatTarget,
     request: params,
-    ownSessionProfileId,
     consumeSharing,
     assertTargetCurrent,
     changed: targetChanged,
@@ -663,7 +662,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       targets: authorizedTargets,
       sourceConfig: getCfg(),
       request: params,
-      ownSessionProfileId,
       talk: talkInput,
       assertTalkTargetCurrent,
       assertTargetCurrent,

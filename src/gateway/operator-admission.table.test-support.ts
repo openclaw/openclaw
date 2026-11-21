@@ -250,15 +250,22 @@ export class AdmissionFixture {
     const running = c.latestRunId;
     const admin = await this.admin(c.signal);
     if (c.scenario === "stop") {
-      expect(await admin.request("chat.abort", { sessionKey: c.sessionKey })).toMatchObject({
-        aborted: true,
-      });
+      const operation =
+        c.row.credential === "channel"
+          ? c.original?.controllerInput?.mailbox.owner.active
+          : undefined;
+      const stopped =
+        c.row.credential === "channel"
+          ? await admin.request("sessions.abort", { key: c.sessionKey })
+          : await admin.request("chat.abort", { sessionKey: c.sessionKey });
+      expect(stopped).toMatchObject({ aborted: true });
       c.releaseRecovered.resolve();
       if (c.row.credential === "channel") {
         const claim = c.original?.controllerInput?.claim;
         assert(claim);
+        assert(operation);
         await c.wait(claim.settlement.promise);
-        expect(claim.abortController.signal.aborted).toBe(true);
+        expect(operation.abortSignal.aborted).toBe(true);
       } else {
         expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
       }

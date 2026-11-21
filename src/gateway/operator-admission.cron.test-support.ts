@@ -81,7 +81,7 @@ export async function runCronAdmissionCase(
           expect(params.attempt.runId).not.toBe(creatorRunId);
           expect(authority.requesterOwner).toBe(true);
         } else {
-          const tool = tools.toolsRaw.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME);
+          const tool = tools.toolsRaw.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME);
           assert(params.attempt.admittedRunContext);
           creatorTool = tool
             ? wrapToolWithGatewayCallerIdentity(

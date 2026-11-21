@@ -642,7 +642,7 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
                 "Revocation",
                 {
                   claw_id: c.claw.clawId,
-                  seq: state.authority.seq + 1,
+                  seq: state.authority.seq,
                   target_fp: await fingerprint(c.claw.cert.body.device_pub),
                   target_kind: "owner_device",
                   reason: "lost",

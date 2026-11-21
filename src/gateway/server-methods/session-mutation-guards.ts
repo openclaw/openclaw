@@ -315,11 +315,9 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
   if (source.assertAdmittedInputCurrent) {
     const assertAdmittedInputCurrent = source.assertAdmittedInputCurrent;
     const assertTransferredHandlerCurrent = () => {
-      source.assertOperatorCurrent?.();
-      // An adapter may add an opaque host guard. Only the unchanged producer
-      // guard has the known tool-receipt/source split; retain any new guard in full.
+      // Retain an adapter's explicit host fence, not the submitting transport or permissions.
       if (transport.sessionMutationCommitGuard !== request.sessionMutationCommitGuard) {
-        assertRequestAuthorityCurrent(transport);
+        transport.sessionMutationCommitGuard?.();
       }
     };
     authority.assertAdmittedInputCurrent = () => {

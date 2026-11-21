@@ -418,10 +418,11 @@ export async function createFixture(
       await addCron({ ...rpc("cron.add", definition), respond });
       expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
     }
-    return expectDefined(
+    const persisted = expectDefined(
       (await creator.read()).find((job) => job.declarationKey === definition.declarationKey),
       "persisted recipe",
     );
+    return persisted;
   };
   const selected = await add(target);
   if (authenticated) {

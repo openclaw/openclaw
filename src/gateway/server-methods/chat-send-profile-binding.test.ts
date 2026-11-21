@@ -309,7 +309,7 @@ it("preserves accepted native input across profile merge without adopting the re
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 });
 
-it.each(["host", "session ACL", "lifecycle"] as const)(
+it.each(["host", "lifecycle"] as const)(
   "retains original %s authority after committed browser custody and profile merge",
   async (boundary) => {
     await using fixture = await createFixture({
@@ -319,9 +319,6 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
     const runId = fixture.params.idempotencyKey;
     let hostCurrent = true;
     const { profile, merge } = bindProfile(fixture);
-    if (boundary === "session ACL") {
-      fixture.client.connect.scopes = ["operator.read", "operator.write"];
-    }
     const ack = await fixture.send(undefined, {
       expectedProfileId: profile.id,
       sessionMutationCommitGuard: () => {
@@ -342,8 +339,6 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
     merge();
     if (boundary === "host") {
       hostCurrent = false;
-    } else if (boundary === "session ACL") {
-      await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
     } else {
       rotateAgentEventLifecycleGeneration();
     }
