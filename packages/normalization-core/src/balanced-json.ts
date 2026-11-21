@@ -85,12 +85,14 @@ function extractStrictJsonFragments(
     const char = source[index];
     const inSpan = index <= spanEnd;
     const opaque = inSpan && spanOpaque;
-    const discovery = inSpan ? (opaque && char !== "\r" && char !== "\n" ? " " : char) : raw[index];
+    // Discovery selects openers, not record boundaries. Only accepted framing
+    // acts as whitespace; original line breaks and indentation own recovery.
     lineStart =
-      discovery === "\n" ||
-      (opts.recoverAtLineStart === true && discovery === "\r") ||
-      (lineStart && (discovery === " " || discovery === "\t" || discovery === "\r"));
+      char === "\n" ||
+      (opts.recoverAtLineStart === true && char === "\r") ||
+      (lineStart && (opaque || char === " " || char === "\t" || char === "\r"));
     if (opaque) continue;
+    const discovery = inSpan ? char : raw[index];
     // Except for declared framing, original text owns structure and strings.
     // Hidden discovery quotes must not turn string interiors into child records.
     if (inString) {
@@ -223,13 +225,16 @@ function extractBalancedJsonAt(
       start += 1;
     }
   }
-  const stack: {
-    opener: JsonOpeningDelimiter;
-    start: number;
-    lineStart: boolean;
-    recovered: number;
-    epoch: number;
-  }[] = [];
+  const stack: JsonOpeningDelimiter[] = [];
+  // Existing delimiter-only callers need no per-opener recovery objects.
+  const recovery:
+    | {
+        start: number;
+        lineStart: boolean;
+        recovered: number;
+        epoch: number;
+      }[]
+    | undefined = opts.recoverAtLineStart ? [] : undefined;
   let inString = false;
   let escaped = false;
   let epoch = 0;
@@ -260,26 +265,24 @@ function extractBalancedJsonAt(
       if (stack.length === 0) {
         start = index;
       }
-      stack.push({
-        opener: char,
+      stack.push(char);
+      recovery?.push({
         start: index,
         lineStart: atLineStart,
         recovered: recovered.length,
         epoch,
       });
-    } else if (stack.length > 0 && char === (stack.at(-1)?.opener === "{" ? "}" : "]")) {
-      const closed = stack.pop();
-      if (!closed) {
-        continue;
-      }
-      if (closed.epoch !== epoch) {
+    } else if (stack.length > 0 && char === (stack.at(-1) === "{" ? "}" : "]")) {
+      stack.pop();
+      const closed = recovery?.pop();
+      if (closed && closed.epoch !== epoch) {
         continue;
       }
       if (stack.length === 0) {
-        recovered.length = closed.recovered;
+        if (closed) recovered.length = closed.recovered;
         return { json: raw.slice(start, index + 1), startIndex: start, endIndex: index };
       }
-      if (opts.recoverAtLineStart && closed.lineStart) {
+      if (closed?.lineStart) {
         // Keep only outermost completed record candidates. A completed root wins;
         // an unmatched warning uses these spans without rescanning its suffix.
         recovered.length = closed.recovered;
