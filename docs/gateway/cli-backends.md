@@ -458,9 +458,9 @@ otherwise preapprove a call. Native requests pass through standard
 `before_tool_call` policy, with native tool names and file arguments projected
 into their OpenClaw equivalents. Per-agent and session restrictions on which
 tools a run keeps still apply. OpenClaw's exec policy and approvals do not
-gate Claude's own tools: a call that passes `before_tool_call` runs without an
-approval prompt. OpenClaw-owned MCP tools remain authorized by the Gateway.
-Other MCP tools stay host-permission controlled.
+gate Claude's own tools or third-party MCP tools Claude calls: a call that
+passes `before_tool_call` runs without an approval prompt. OpenClaw-owned MCP
+tools remain authorized by the Gateway.
 
 Claude's native `AskUserQuestion` uses OpenClaw's structured question flow and
 the canonical `ask_user` tool capability. Long option descriptions are shortened
@@ -472,7 +472,7 @@ skips a valid question, Claude instead continues with its best judgment.
 
 ### Claude browser tools and 1Password sign-in
 
-Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it. Register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. The Chrome window, the extension, and any 1Password approval prompts live on the Gateway host. Someone must be at that machine to approve credential use.
+Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it. Register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. OpenClaw's exec policy does not gate the browser tools; use a `before_tool_call` plugin to restrict them. The Chrome window, the extension, and any 1Password approval prompts live on the Gateway host. Someone must be at that machine to approve credential use.
 
 The backend maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. For models that allow fixed thinking budgets, it also launches Claude Code with `MAX_THINKING_TOKENS`: `off=0`, `minimal=1024`, `low=2048`, `medium=8192`, `high`/`xhigh=16384`, and `max=32768`. Positive fixed budgets disable adaptive thinking. Claude Code decides per model whether those budgets apply; models that only support adaptive thinking ignore them and use `--effort`. When fast mode is on, the backend also passes `--fast-mode on`; Claude Code ignores it for models without fast mode. `adaptive` removes configured effort flags and fixed-budget environment overrides, so Claude Code resolves effective thinking from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to map the selected level before `/think` affects the spawned CLI.
 

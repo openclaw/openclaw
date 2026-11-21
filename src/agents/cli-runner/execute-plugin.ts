@@ -51,8 +51,9 @@ function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
 }
 
-// OpenClaw answers Claude's own permission requests. It allows a native call that is available to
-// this run and passes plugins' before_tool_call policy; exec policy and approvals do not apply.
+// OpenClaw answers Claude's permission requests, including for third-party MCP tools. It allows a
+// call that is available to this run and passes plugins' before_tool_call policy; exec policy and
+// approvals do not apply.
 function createPluginToolPermissionHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
