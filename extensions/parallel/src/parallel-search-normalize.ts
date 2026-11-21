@@ -16,7 +16,6 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeBoundedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-free-web-search-provider.shared.js";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
 const PARALLEL_MAX_SEARCH_COUNT = 40;
@@ -26,9 +25,6 @@ const PARALLEL_MAX_SEARCH_COUNT = 40;
 const PARALLEL_MAX_SEARCH_QUERY_CHARS = 200;
 const PARALLEL_MAX_OBJECTIVE_CHARS = 5000;
 const PARALLEL_MAX_SEARCH_QUERIES = 5;
-// Paid v1 REST accepts session ids up to 1000 chars, but the free Search MCP
-// `tools/list` schema caps session_id at 100. Each runtime passes its own limit
-// (and advertises it in the tool schema) so callers never send an out-of-contract id.
 const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
 
@@ -95,9 +91,7 @@ export async function executeParallelSearchRequest(params: {
     }),
     sessionId: normalizeBoundedOptionalString(
       readStringParam(args, "session_id"),
-      params.provider === "parallel"
-        ? PARALLEL_SESSION_ID_MAX_LENGTH
-        : PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
+      PARALLEL_SESSION_ID_MAX_LENGTH,
     ),
     clientModel:
       truncateUtf16Safe(
@@ -141,7 +135,7 @@ export async function executeParallelSearchRequest(params: {
   if (Array.isArray(response.usage) && response.usage.length > 0) {
     payload.usage = response.usage;
   }
-  // Generated session ids belong to this call, never to unrelated cache hits.
+  // New search sessions belong to this call, never to unrelated cache hits.
   const cachePayload = !request.sessionId && "sessionId" in payload ? { ...payload } : payload;
   if (!request.sessionId) {
     delete cachePayload.sessionId;
