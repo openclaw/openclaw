@@ -1,7 +1,12 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
@@ -16,17 +21,18 @@ const codex = await loadBundledPluginFacade<{
       pluginHarnessToolPolicyRestricted: boolean;
       pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
     },
-    config: undefined,
+    config: Record<string, unknown> | undefined,
     options: { nativeCodeModeEnabled: boolean; hostSystemAgentActive: boolean },
   ) => Record<string, unknown>;
 }>({ pluginId: "codex", artifactBasename: "test-api.js" });
 const tempDirs = useSessionStoreTempDirs(afterAll, "codex-child-policy-");
 const prepare = (
   params: Omit<Parameters<typeof preparePluginHarnessToolPolicies>[0], "provider" | "modelId">,
+  safeDenyToolNames: readonly string[] = codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 ) =>
   preparePluginHarnessToolPolicies(
     { agentId: "main", provider: "openai", modelId: "test-model", ...params },
-    codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+    safeDenyToolNames,
     codex.CODEX_NATIVE_TOOL_REQUIREMENTS,
   );
 const threadConfig = (policy: {
@@ -39,11 +45,98 @@ const threadConfig = (policy: {
       pluginHarnessToolPolicyRestricted: policy.toolPolicyRestricted,
       pluginHarnessToolPolicySafeDeniedTools: policy.safeDeniedToolNames,
     },
-    undefined,
+    { "features.apps": true },
     { nativeCodeModeEnabled: true, hostSystemAgentActive: false },
   );
 
 describe("Codex subagent native tool policy", () => {
+  it.each([
+    { name: "exact intent denial", tools: { deny: ["intent"] }, restricted: false },
+    { name: "agent intent denial", tools: { deny: [" INTENT "] }, agent: true, restricted: false },
+    {
+      name: "LanceDB denial",
+      tools: { deny: ["memory_store"] },
+      plugin: "memory-lancedb",
+      tool: "memory_store",
+      restricted: false,
+    },
+    {
+      name: "wiki denial",
+      tools: { deny: ["wiki_search"] },
+      plugin: "memory-wiki",
+      tool: "wiki_search",
+      restricted: false,
+    },
+    {
+      name: "unrelated audited plugin denial",
+      tools: { deny: ["fixture_lookup"] },
+      plugin: "fixture",
+      tool: "fixture_lookup",
+      audit: true,
+      restricted: false,
+    },
+    {
+      name: "unaudited plugin denial",
+      tools: { deny: ["fixture_lookup"] },
+      plugin: "fixture",
+      tool: "fixture_lookup",
+      restricted: true,
+    },
+    { name: "mixed unsafe denial", tools: { deny: ["intent", "nodes"] }, restricted: true },
+    { name: "wildcard denial", tools: { deny: ["intent*"] }, restricted: true },
+    { name: "finite allowlist", tools: { allow: ["message"], deny: ["intent"] }, restricted: true },
+    {
+      name: "missing plugin declaration",
+      tools: { deny: ["intent"] },
+      declared: false,
+      restricted: true,
+    },
+  ])(
+    "preserves hosted apps only for an audited $name",
+    async ({ tools, restricted, declared, plugin, tool, audit, agent }) => {
+      const toolName = tool ?? "intent";
+      const config: OpenClawConfig = agent
+        ? { agents: { entries: { main: { tools } } } }
+        : { tools };
+      const workspaceDir = process.cwd();
+      const manifestRegistry = makeRegistry(
+        declared === false
+          ? []
+          : [
+              {
+                id: plugin ?? "memory-core",
+                origin: "bundled",
+                channels: [],
+                contracts: { tools: [toolName] },
+              },
+            ],
+      );
+      setCurrentPluginMetadataSnapshot(
+        createPluginMetadataSnapshot({ config, manifestRegistry, workspaceDir }),
+        { config, workspaceDir },
+      );
+      try {
+        const policy = await prepare(
+          {
+            config,
+            workspaceDir,
+            sessionKey: "agent:main:main",
+            sessionId: "intent-policy",
+          },
+          [...codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES, ...(audit ? [toolName] : [])],
+        );
+        expect(isToolAllowedByPolicies(toolName, policy.runtimePolicies)).toBe(false);
+        expect(policy.toolPolicyRestricted).toBe(restricted);
+        expect(threadConfig(policy)["features.apps"]).toBe(!restricted);
+        if (!restricted) {
+          expect(policy.safeDeniedToolNames).toEqual([toolName]);
+        }
+      } finally {
+        setCurrentPluginMetadataSnapshot(undefined);
+      }
+    },
+  );
+
   it("preserves native tools for OpenClaw admin/status-only denial", async () => {
     const deny = ["agents_list", "openclaw", "session_status", "progress_card"];
     const policy = await prepare({
