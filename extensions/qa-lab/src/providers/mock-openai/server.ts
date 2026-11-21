@@ -16,10 +16,7 @@ import {
 } from "../shared/mock-model-config.js";
 import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
 import { registerQaSessionObserver } from "../shared/session-observer-registry.js";
-import {
-  buildMessagesPayload,
-  normalizeAnthropicMessagesRequest,
-} from "./mock-anthropic-messages.js";
+import { buildMessagesPayload } from "./mock-anthropic-messages.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
@@ -41,7 +38,6 @@ import {
   type StreamEvent,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
-  type AnthropicMessagesRequest,
   type QaMockProviderDispatchRequest,
   type QaMockProviderDispatchResult,
   TINY_PNG_BASE64,
@@ -167,6 +163,7 @@ import {
   extractAllToolOutputText,
   extractFollowthroughEvidenceText,
   normalizeResponsesInput,
+  normalizeQaMockProviderRequest,
   buildSlackMpimHistoryReply,
   extractUserTurnTexts,
   extractInstructionsText,
@@ -1841,15 +1838,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
   const dispatchProvider = async (
     request: QaMockProviderDispatchRequest,
   ): Promise<QaMockProviderDispatchResult> => {
-    const normalized =
-      request.route === "anthropic-messages"
-        ? normalizeAnthropicMessagesRequest(request.body as AnthropicMessagesRequest)
-        : {
-            body: request.body,
-            input: normalizeResponsesInput(request.body.input),
-            model: typeof request.body.model === "string" ? request.body.model : "",
-          };
+    const normalized = normalizeQaMockProviderRequest(request);
     const { body, input, model } = normalized;
+    if (normalized.invalidToolOutput) {
+      return { events: buildAssistantEvents("BUG-TOOL-PROGRESS-CALL-MISMATCH"), model };
+    }
     if (isRemoteCompactionV2Request(input)) {
       return { events: buildRemoteCompactionV2Events(), model };
     }

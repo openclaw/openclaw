@@ -33,7 +33,7 @@ it.each([
 });
 
 it.each(["function_call_output", "custom_tool_call_output"])(
-  "keeps linked evidence and its user tail when later %s carries only context",
+  "keeps linked %s evidence and its user tail after named context",
   (type) => {
     const value = { text: "completed work" };
     const continuation = "Continue the OpenClaw runtime event.";
@@ -41,7 +41,13 @@ it.each(["function_call_output", "custom_tool_call_output"])(
       { role: "user", content: "Read the setup file." },
       { type, call_id: "setup-read", output: value, is_error: false },
       { role: "user", content: continuation },
-      { type, call_id: " ", output: "sender context", is_error: true },
+      {
+        type: "function_call_output",
+        name: "notifications",
+        namespace: "slack",
+        output: "sender context",
+        is_error: true,
+      },
     ];
     expect(hasToolOutput(input)).toBe(true);
     expect(countCurrentToolOutputs(input)).toBe(1);

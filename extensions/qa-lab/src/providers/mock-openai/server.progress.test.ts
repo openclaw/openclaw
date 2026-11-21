@@ -42,6 +42,19 @@ const EXEC_PROMPT =
 const ERROR_PROMPT =
   "Tool progress error QA check: read `denied.txt` before answering. After the read fails, reply exactly `PROGRESS_OK`.";
 
+const SENDER_CONTEXT = {
+  type: "function_call_output",
+  name: "openclaw_current_sender",
+  output: '{"sender":{"id":"qa-user"}}',
+};
+const NOTIFICATION_CONTEXT = {
+  type: "function_call_output",
+  name: "notifications",
+  namespace: "slack",
+  call_id: null,
+  output: "Alice mentioned you.",
+};
+
 const RUNNING_OUTPUT =
   "Command still running (session lucky-slug, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 const EXIT_ZERO = "\n\nProcess exited with code 0.";
@@ -96,14 +109,74 @@ async function requestProgress(route: string, prompt: string, results: ProgressR
   return (await expectOk(postJson(server, `/v1/${route}`, body))).json();
 }
 
+it.each([
+  {
+    name: "apply_patch",
+    prompt:
+      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+  },
+  { name: "exec", prompt: EXEC_PROMPT },
+])("rejects malformed $name completion without planning another call", async ({ name, prompt }) => {
+  const server = await startMockServer();
+  const options = { tools: [{ type: "function", name }] };
+  const call = outputToolCall(await respond(server, prompt, options), name);
+  const linked = {
+    type: "function_call_output",
+    call_id: outputToolCallId(call, "completed-call"),
+    output: "",
+  };
+  for (const context of [SENDER_CONTEXT, NOTIFICATION_CONTEXT]) {
+    expect(
+      outputToolCall(await respond(server, userInputs(prompt, context), options), name),
+    ).toMatchObject({ name });
+    const completed = await respond(
+      server,
+      userInputs(prompt, context, call, linked, context),
+      options,
+    );
+    expect(outputItems(completed).map((item) => item.type)).toEqual(["message"]);
+  }
+  // Current Codex additionalContext is a marked user message before the authored input.
+  const currentContext = {
+    type: "message",
+    role: "user",
+    content: [
+      textBlock(
+        '<external_openclaw_current_sender>{"sender":{"id":"qa-user"}}</external_openclaw_current_sender>',
+      ),
+    ],
+  };
+  expect(
+    outputToolCall(await respond(server, userInputs(currentContext, prompt), options), name),
+  ).toMatchObject({ name });
+  for (const withCall of [false, true]) {
+    for (const type of ["function_call_output", "custom_tool_call_output"]) {
+      for (const linkage of [
+        {},
+        { call_id: null },
+        { call_id: " ", tool_call_id: "\t", tool_use_id: "\n" },
+      ]) {
+        const failed = await respond(
+          server,
+          userInputs(prompt, ...(withCall ? [call] : []), {
+            type,
+            ...(type === "custom_tool_call_output" ? { name } : {}),
+            ...linkage,
+            output: "Ordinary tool completed.",
+          }),
+          options,
+        );
+        expectResponseText(failed, "BUG-TOOL-PROGRESS-CALL-MISMATCH");
+        expect(outputItems(failed).map((item) => item.type)).toEqual(["message"]);
+      }
+    }
+  }
+});
+
 it("finishes native Responses tool progress with unlinked sender context in its history", async () => {
   const server = await startMockServer();
   const options = { tools: [{ type: "function", name: "exec" }] };
-  const input = userInputs(
-    EXEC_PROMPT,
-    { type: "function_call_output", output: "Sender context, not a completed call." },
-    { type: "custom_tool_call_output", call_id: "", output: "More sender context." },
-  );
+  const input = userInputs(EXEC_PROMPT, SENDER_CONTEXT, NOTIFICATION_CONTEXT);
   const plan = await respond(server, input, options);
   const call = outputToolCall(plan, "exec");
   expect(call).toMatchObject({
@@ -116,7 +189,7 @@ it("finishes native Responses tool progress with unlinked sender context in its 
       ...input,
       call,
       makeToolOutputWithCallId(String(call.call_id), ""),
-      { type: "function_call_output", call_id: " ", output: "Trailing sender context." },
+      { ...NOTIFICATION_CONTEXT, output: "Trailing sender context." },
     ],
     options,
   );
@@ -127,7 +200,7 @@ it.each([
   ["function", "function_call", "function_call_output"],
   ["custom", "custom_tool_call", "custom_tool_call_output"],
 ] as const)(
-  "ignores unlinked %s output without losing linked native results",
+  "keeps named context separate from linked native %s results",
   async (toolType, callType, outputType) => {
     const server = await startMockServer();
     const prompt =
@@ -155,16 +228,8 @@ it.each([
       expect(debug).not.toHaveProperty("plannedToolName");
     }
 
-    for (const linkage of [{}, { call_id: " ", tool_call_id: "\t", tool_use_id: "\n" }]) {
-      const pending = await respond(
-        server,
-        userInputs(prompt, {
-          type: outputType,
-          ...linkage,
-          output: "Sender context only; no tool ran.",
-        }),
-        options,
-      );
+    for (const context of [SENDER_CONTEXT, NOTIFICATION_CONTEXT]) {
+      const pending = await respond(server, userInputs(prompt, context), options);
       expect(outputItem(pending)).toMatchObject({ type: callType, name: "apply_patch" });
     }
   },

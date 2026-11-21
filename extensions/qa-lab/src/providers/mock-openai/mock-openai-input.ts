@@ -1,8 +1,11 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { countImageInputs } from "../shared/image-inputs.js";
 import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
+import { normalizeAnthropicMessagesRequest } from "./mock-anthropic-messages.js";
 import {
   type ResponsesInputItem,
+  type AnthropicMessagesRequest,
+  type QaMockProviderDispatchRequest,
   type MockOpenAiRequestKind,
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -78,6 +81,30 @@ export function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
     return [{ role: "user", content: [{ type: "input_text", text: value }] }];
   }
   return [];
+}
+
+export function normalizeQaMockProviderRequest(request: QaMockProviderDispatchRequest) {
+  const normalized =
+    request.route === "anthropic-messages"
+      ? normalizeAnthropicMessagesRequest(request.body as AnthropicMessagesRequest)
+      : {
+          body: request.body,
+          input: normalizeResponsesInput(request.body.input),
+          model: typeof request.body.model === "string" ? request.body.model : "",
+        };
+  const invalidToolOutput = normalized.input.some((item) => {
+    if (!isToolOutputItem(item) || isResponsesToolCallOutput(item)) {
+      return false;
+    }
+    // Codex standalone context is a named function output with no call reference;
+    // namespace is optional and source names are not limited to current-sender context.
+    return (
+      item.type !== "function_call_output" ||
+      typeof item.name !== "string" ||
+      [item.call_id, item.tool_call_id, item.tool_use_id].some((id) => id != null)
+    );
+  });
+  return { ...normalized, invalidToolOutput };
 }
 
 export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern?: RegExp) {
@@ -368,12 +395,12 @@ function readToolOutputCallId(item: ResponsesInputItem | undefined) {
   );
 }
 
+function isToolOutputItem(item: ResponsesInputItem) {
+  return item.type === "function_call_output" || item.type === "custom_tool_call_output";
+}
+
 export function isResponsesToolCallOutput(item: ResponsesInputItem) {
-  // Unlinked outputs can carry sender context, not completed tool calls.
-  return (
-    (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
-    readToolOutputCallId(item) !== ""
-  );
+  return isToolOutputItem(item) && readToolOutputCallId(item) !== "";
 }
 
 function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
