@@ -37,7 +37,6 @@ import {
 import {
   hasVerifiedProvider,
   isProviderUsable,
-  needsModelSetup,
   renderMutationMessage,
   ModelProviderConnectAction,
 } from "./view-status.tsx";
@@ -105,7 +104,7 @@ function AddProvider(props: ModelProvidersViewProps) {
                   class="btn primary"
                   disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
                   // With no usable model yet, saving also makes this key the agent's model.
-                  onClick={() => props.onAddProvider(needsModelSetup(props))}
+                  onClick={() => props.onAddProvider(props.modelRequired)}
                 >
                   {props.busy["check:add"]
                     ? t("modelProviders.apiKey.checking")
@@ -132,17 +131,20 @@ function AddProvider(props: ModelProvidersViewProps) {
   );
 }
 
-/** Setup prompt shown only until a usable model exists; Provider access takes over after. */
+/** Setup prompt shown only until the agent has a model; Provider access takes over after. */
 function ModelReadiness(props: ModelProvidersViewProps) {
-  const signedIn = () => props.cards.some(hasVerifiedProvider);
+  // "No usable models" is true only while nothing in the catalog can be chosen.
+  const signedInNoModels = () =>
+    props.cards.some(hasVerifiedProvider) &&
+    !props.configuredModels.some((model) => model.available !== false);
   return (
-    <Show when={needsModelSetup(props)}>
+    <Show when={props.modelRequired}>
       <div class="model-providers__setup" data-model-readiness="model-required">
         <SettingsSection title={t("modelProviders.readiness.title")}>
           <SettingsRow
             title={t("modelProviders.readiness.heading")}
             description={
-              signedIn()
+              signedInNoModels()
                 ? t("modelProviders.readiness.signedInNoModels")
                 : t("modelProviders.readiness.notConfigured")
             }
@@ -151,7 +153,7 @@ function ModelReadiness(props: ModelProvidersViewProps) {
                 <SettingsStatus
                   kind="warn"
                   label={
-                    signedIn()
+                    signedInNoModels()
                       ? t("modelProviders.readiness.noModels")
                       : t("modelProviders.readiness.modelRequired")
                   }
@@ -268,7 +270,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
       : undefined;
   // Setup with nothing connected has no list to filter.
   const nothingToSearch = () =>
-    needsModelSetup(props) && props.cards.length === 0 && !props.error && !search();
+    props.modelRequired && props.cards.length === 0 && !props.error && !search();
   const providerRows = () => (
     <>
       <Show when={!nothingToSearch()}>
@@ -357,7 +359,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           <button type="button" class="btn btn--sm btn--ghost" onClick={() => props.onOpenUsage()}>
             {t("modelProviders.viewUsage")}
           </button>
-          {needsModelSetup(props) ? undefined : props.providerScope}
+          {props.modelRequired ? undefined : props.providerScope}
           <RefreshButton
             class="model-providers__refresh-button"
             label={t("common.refresh")}

@@ -1,11 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { admitChatHistoryPages } from "../chat-pane-history-packets.runtime.ts";
 import { createRefreshChatPane } from "../chat-pane-history.test-support.ts";
 import * as transcriptResidency from "../chat-pane-transcript-residency.ts";
+import { openAIModel } from "../chat-thread-fixtures.test-support.ts";
 import {
   createTestTranscript as createTranscript,
   stubAnimationFrames,
@@ -336,9 +338,10 @@ it.each([false, true])(
         timestamp: 0,
         ...(framed ? { __openclaw: { idempotencyKey: "source-run:user" } } : {}),
       },
-      { ...sourceMessage, ...(framed ? { runId: "source-run" } : {}) },
+      { ...sourceMessage, ...openAIModel, ...(framed ? { runId: "source-run" } : {}) },
       {
         role: "assistant",
+        ...openAIModel,
         phase: "final_answer",
         content: "Final answer",
         timestamp: 1_500,
@@ -369,10 +372,12 @@ it.each([true, false])(
       turn("question", "user", "How was that approved?", prompt, 1_000),
       {
         ...turn("commentary", "assistant", "Checking the saved approval.", run, 2_000),
+        ...openAIModel,
         phase: "commentary",
       },
       {
         ...turn("answer", "assistant", "An operator approved it.", run, 3_000),
+        ...openAIModel,
         stopReason: "stop",
       },
     ]);

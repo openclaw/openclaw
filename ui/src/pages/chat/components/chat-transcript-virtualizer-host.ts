@@ -86,16 +86,14 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.#scheduleEndReconcile();
   };
   readonly layout = new TranscriptLayoutOwner(this.#recordEndLayoutCorrection);
-  readonly #followEnd = () =>
-    this.scrollToEnd({
-      source: "auto",
-      behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
-    });
-  readonly #reconcilePosition = () => {
+  readonly #followEnd = (behavior = this.offsetState.scrollCommand?.behavior ?? "auto") =>
+    this.scrollToEnd({ source: "auto", behavior });
+  readonly #reconcileCommittedPosition = () => this.#reconcilePosition(true);
+  readonly #reconcilePosition = (committed = false) => {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
       if (
         !this.offsetState.touchActive &&
-        this.prependAnchor.update(this.virtualizer, this.#readerAnchor.rowsMeasured)
+        this.prependAnchor.update(this.virtualizer, this.#readerAnchor.rowsMeasured, committed)
       ) {
         this.offsetState.syncNativeOffset?.();
         this.#presentation.commitChange(this.invalidate, true);
@@ -142,7 +140,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   readonly #rowRefs: TranscriptRowRefs;
   // The retained renderer must not capture a historical render snapshot.
   readonly #measureRowRefFor = (key: string) => this.#rowRefs.forKey(key);
-  readonly #readerAnchor = new TranscriptReaderAnchor(this, this.#reconcilePosition);
+  readonly #readerAnchor = new TranscriptReaderAnchor(this, this.#reconcileCommittedPosition);
   readonly #captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event, this.#readerAnchor.readerElement);
     if (!anchor) {
@@ -228,7 +226,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
         // Native resize delivery can read a fast scroll before its scroll event.
         // Keep its position, but replace observed rows outside the delivery cycle.
-        // A row landing before the flow already moved scrollTop; its flow must move this frame.
+        // A measured predecessor needs a geometry projection without another deferred turn.
         const defer =
           redraw && !(moved || flowMoved || this.canFollowEnd || offsetState.hasPendingAnchor);
         this.#presentation.commitChange(
@@ -402,7 +400,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.offsetState.reconcileInteractionResize(this.scrollElement, this.virtualizer);
     if (!interactionResizePending && this.prependAnchor.messageKey !== null) {
-      this.renderer.queueAfterCommit(this.#reconcilePosition);
+      this.renderer.queueAfterCommit(this.#reconcileCommittedPosition);
     }
     if (
       !this.#bookmarkState.bookmark &&

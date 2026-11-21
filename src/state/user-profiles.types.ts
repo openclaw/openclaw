@@ -29,6 +29,7 @@ export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" 
 
 type UserProfileAuthority = {
   profileId: string;
+  openclawIdAccountIds?: readonly string[];
   role: string | null;
   githubLogin?: string | null;
   aliases: string[];
@@ -37,7 +38,7 @@ type UserProfileAuthority = {
 
 export type UserProfileRoleAuthority = Pick<
   UserProfileAuthority,
-  "profileId" | "role" | "githubLogin"
+  "profileId" | "role" | "githubLogin" | "openclawIdAccountIds"
 >;
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
@@ -84,6 +85,7 @@ export type UserChannelIdentitySelector =
   | { authorizationId: string; policy: UserChannelAuthorizationPolicy };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {
+  openclawIdAccountIds?: readonly string[];
   authorization?: UserChannelAuthorization;
   profileId: string;
   displayName: string | null;
@@ -130,6 +132,7 @@ export type UserProfileAccessFacts = Readonly<{
   profileId: string;
   /** Provider identity only; never proof of current membership or role. */
   hasOpenClawIdIdentity?: boolean;
+  openclawIdAccountIds?: readonly string[];
   emails: readonly string[];
   githubAccountIds?: readonly number[];
   enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
@@ -148,7 +151,10 @@ export type PreparedUserProfileIdentity = {
     this: void,
     requiredEmailBindingIds?: readonly string[],
     requiredGithubAccountIds?: readonly number[],
-  ): Pick<UserProfileAccessFacts, "profileId" | "assignedRole" | "githubLogin">;
+  ): Pick<
+    UserProfileAccessFacts,
+    "profileId" | "assignedRole" | "githubLogin" | "openclawIdAccountIds"
+  >;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
     this: void,
@@ -198,6 +204,7 @@ export type ProfileDisplayRow = Pick<
 > & {
   has_avatar: SqlBool;
   hasOpenClawIdIdentity?: boolean;
+  openclawIdAccountIds?: readonly string[];
   githubAccountIds?: readonly number[];
   /** The canonical Enterprise reader's proof-validated host/account pairs; aliases alone never set them. */
   enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;

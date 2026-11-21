@@ -520,6 +520,7 @@ it("recovers a current owner certificate independently of the linked profile's r
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     try {
       const person = ensureProfileForEmail("restart-owner@example.test");
+      setUserProfileRole(person.id, "reader");
       const fixture = await recoveryFixture(stateDir, person.id, {
         config: cfg,
         scopes: ["operator.read", "operator.write"],
@@ -536,9 +537,19 @@ it("recovers a current owner certificate independently of the linked profile's r
       try {
         expect(restored.authority.scopes).toEqual(["operator.read", "operator.write"]);
         expect(restored.authority.profileId).toBe(person.id);
+        expect(restored.authority.rolePolicy).toBeUndefined();
+        setUserProfileRole(person.id, null);
         restored.authority.assertCurrent();
         setOpenClawIdTunnelPrincipalLookup(() => undefined);
-        expect(() => restored.authority.assertCurrent()).toThrow();
+        expect(restored.authority.assertCurrent).not.toThrow();
+        expect(restored.authority.reauthorize).toThrow();
+        await expect(
+          prepareSessionSystemTurnAuthority({
+            context: fixture.context,
+            ...fixture.target,
+            operatorSource: { kind: "gateway", snapshot: fixture.snapshot },
+          }),
+        ).rejects.toThrow();
       } finally {
         restored.release();
       }

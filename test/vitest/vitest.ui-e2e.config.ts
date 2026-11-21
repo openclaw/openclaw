@@ -81,6 +81,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-owner-filter.real-gateway.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
+  "ui/src/e2e/labs-graduation.real-gateway.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/memory-overview-source.e2e.test.ts",
@@ -99,6 +100,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
+  "ui/src/e2e/provider-browser-login-first-model.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
@@ -120,6 +122,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",
   "ui/src/e2e/toast-page-offset.e2e.test.ts",
+  "ui/src/e2e/unknown-route.real-gateway.e2e.test.ts",
   "ui/src/pages/plugins/plugins-base-path.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));

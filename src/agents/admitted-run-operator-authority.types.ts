@@ -31,6 +31,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
   /** Assignment and verified login from one check of the original live profile authority. */
   readCurrentRoleFacts?: (this: void) => Readonly<{
+    openclawIdAccountIds?: readonly string[];
     assignedRole: string | null;
     githubLogin?: string | null;
     /** Non-named source policy, checked by the original authority before each read. */

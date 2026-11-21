@@ -636,6 +636,9 @@ export type StatusSummary = Omit<
     };
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;
     processMemory?: NonNullable<SystemInfoResult["processMemory"]>;
+    resources?: ReturnType<
+      typeof import("../gateway/server/resource-diagnostics.js").readGatewayResourceDiagnostics
+    >;
     pluginReload?: GatewayPluginReloadStatus;
     degradedSecretOwners?: Array<
       Omit<

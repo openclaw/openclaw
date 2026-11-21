@@ -17,6 +17,7 @@ import { readToolEffectReceipt } from "../../tool-effect-receipt.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
+import type { EmbeddedAgentRunResult } from "../types.js";
 import {
   hasAsyncActivity,
   hasAttemptTerminalState,
@@ -25,12 +26,19 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
+  countSettledTurnDeliveryPayloads,
   hasPositiveOutputTokenUsage,
   isOllamaIncompleteTurnProvider,
   joinAssistantTexts,
   shouldApplyNonVisibleTurnRetryGuard,
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
+import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
+import {
+  isEmbeddedRunTerminalAbort,
+  isEmbeddedRunTerminalTimeout,
+  type EmbeddedRunTerminalState,
+} from "./terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 // Allow one immediate continuation plus one follow-up continuation before
@@ -563,4 +571,61 @@ export function resolveNonVisibleTurnRetryInstructions(
   return settled?.disableTools === false
     ? [null, settled.instruction]
     : [resolveReasoningOnlyRetryInstruction(params), resolveEmptyResponseRetryInstruction(params)];
+}
+
+export function resolveSettledTurnFinalizationRequest(input: {
+  runParams: TerminalRunParams;
+  attempt: EmbeddedRunAttemptResult;
+  activeErrorContext: { provider: string; model: string };
+  modelApi: string | undefined;
+  executionContract: string | undefined;
+  payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
+  recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
+  hasTerminalToolPresentation: boolean;
+  terminalState: EmbeddedRunTerminalState;
+  settledTurnFinalizationAvailable: boolean;
+  replyDeliveryState?: ReplyDeliveryState;
+}): string | null {
+  if (
+    !input.settledTurnFinalizationAvailable ||
+    resolveReplyExpectation(input.runParams) === "optional" ||
+    isTerminalAssistantError(resolveCurrentAttemptAssistant(input.attempt)) ||
+    (input.replyDeliveryState ?? "missing") !== "missing"
+  ) {
+    return null;
+  }
+  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
+  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
+  // Generated errors and pre-tool commentary are fallback surfaces, not authored answers.
+  const preparedPayloadCount = countSettledTurnDeliveryPayloads({
+    payloads: input.payloadsWithToolMedia,
+    attempt: input.attempt,
+  });
+  const payloadCount =
+    input.recoveredFinalAssistantPayloadsAfterPromptTimeout?.length ?? preparedPayloadCount;
+  const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
+    terminalReplyExpectation: resolveReplyExpectation(input.runParams),
+    payloadCount,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
+    attempt: input.attempt,
+  });
+  if (emptyAssistantReplyIsSilent) {
+    return null;
+  }
+  const continuation = resolveSettledToolTerminalContinuation({
+    provider: input.activeErrorContext.provider,
+    modelId: input.activeErrorContext.model,
+    modelApi: input.modelApi,
+    executionContract: input.executionContract,
+    terminalReplyExpectation: resolveReplyExpectation(input.runParams),
+    replyDeliveryState: input.replyDeliveryState ?? "missing",
+    allowEmptyStopContinuation: true,
+    payloadCount,
+    hasTerminalToolPresentation: input.hasTerminalToolPresentation,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
+    attempt: input.attempt,
+  });
+  return continuation?.disableTools ? continuation.instruction : null;
 }

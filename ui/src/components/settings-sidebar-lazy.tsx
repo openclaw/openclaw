@@ -4,7 +4,7 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { t } from "../lib/reactive/i18n.ts";
 import type { SettingsSidebarProps } from "./settings-sidebar.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
-import { Icon } from "./solid/icon.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
 
 const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
@@ -113,17 +113,21 @@ function SettingsSidebarFallback(props: {
       >
         <aside class="settings-sidebar" aria-busy={props.failed ? undefined : "true"}>
           <header class="settings-sidebar__header" onMouseDown={beginNativeWindowDragFromTopInset}>
-            <button
-              type="button"
+            <IconButton
               class="settings-sidebar__back"
+              icon="arrowLeft"
+              label={t("nav.exitSettings")}
               onClick={() => props.sidebarProps.onExit()}
-            >
-              <span class="settings-sidebar__back-icon" aria-hidden="true">
-                <Icon name="arrowLeft" />
-              </span>
-              {t("nav.exitSettings")}
-            </button>
+            />
             <h1 class="settings-sidebar__title">{t("nav.settings")}</h1>
+            <Show when={!props.failed}>
+              <div
+                class="settings-sidebar__agent settings-sidebar__agent--header"
+                aria-hidden="true"
+              >
+                <span class="skeleton settings-sidebar__loading-agent" />
+              </div>
+            </Show>
           </header>
           <Show when={props.failed} fallback={<SettingsSidebarSkeleton {...props.sidebarProps} />}>
             <div class="settings-sidebar__empty" role="alert">
@@ -156,9 +160,6 @@ function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
     visibleSettingsNavigationGroups(props.canAdmin, props.nativeDeviceSettings ?? null);
   return (
     <>
-      <div class="settings-sidebar__agent" aria-hidden="true">
-        <span class="skeleton settings-sidebar__loading-agent" />
-      </div>
       <div class="settings-sidebar__search" aria-hidden="true">
         <span class="skeleton settings-sidebar__loading-search" />
       </div>

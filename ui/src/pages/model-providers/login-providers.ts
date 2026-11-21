@@ -8,7 +8,7 @@ import type {
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";
+import { resolveAgentModelPrimary } from "../../lib/agents/display.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 
 registerModelSetupEnglish();
@@ -113,8 +113,7 @@ export function resolveLoginSelection(
   agentId: string | null,
   authStatus?: ModelAuthStatusResult | null,
 ) {
-  const { entry, defaults } = resolveAgentConfig(config, agentId ?? "");
-  const modelRef = resolveModelPrimary(entry?.model) ?? resolveModelPrimary(defaults?.model);
+  const modelRef = resolveAgentModelPrimary(config, agentId ?? "");
   if (!modelRef || !authStatus?.ts || authStatus.unavailable) {
     return { modelRef, missing: null };
   }

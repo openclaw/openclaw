@@ -4,6 +4,7 @@ import type {
   SessionTypingEvent,
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -475,11 +476,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           }
         }
         if (state) {
-          if (event.event === "config.changed") {
+          const configChanged = isConversationConfigChange(event);
+          if (configChanged) {
             this.invalidateSessionSharing(undefined);
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
           }
-          if (event.event === "config.changed" || event.event === "agent.identity.changed") {
+          if (configChanged || event.event === "agent.identity.changed") {
             chatAvatars.invalidateChatAvatarCache(state);
             void chatAvatars.refreshChatAvatar(state);
             void chatAvatars.refreshSenderAgentAvatars(state);

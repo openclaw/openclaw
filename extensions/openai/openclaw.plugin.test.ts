@@ -86,7 +86,7 @@ it("classifies regional API hosts as public OpenAI endpoints", () => {
 it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
   expect(manifest.mediaUnderstandingProviderMetadata?.openai).toMatchObject({
     capabilities: ["image", "audio"],
-    defaultModels: { image: "gpt-6-astra", audio: "gpt-4o-transcribe" },
+    defaultModels: { image: "gpt-6-astra", audio: "gpt-transcribe" },
     autoPriority: { image: 20, audio: 20 },
   });
 });

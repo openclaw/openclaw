@@ -1,229 +1,121 @@
 // One Gateway session through every mid-session trigger: each provider request must extend the
-// previous one byte for byte, except at a compaction (explicit, or the provider's own). Its hidden
+// previous one byte for byte, except at a compaction (explicit, or the provider's own). Triggers
+// include a steer into a running tool call, a scheduled job that comes due in the chat, and an
+// unrelated chat that overflows its window and compacts while the target runs. Its hidden
 // subagent, which later receives a parent turn, must stay append-only too.
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, expect } from "vitest";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../src/config/types.models.js";
 import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
 import { waitForGatewayActiveWork } from "../src/infra/gateway-active-work.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import {
+  buildFakeProvider,
+  requestSession,
+  fakeTransportRuntime,
+  hasToolResult as containsToolResult,
+  latestInput as lastMessage,
+  readWireRequest,
+  toolNames,
+  writeReply,
+  type FakeReply as Reply,
+  type FakeTransport as Api,
+  type WireRequest,
+} from "./helpers/fake-model-transports.js";
 import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.test-support.js";
 
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
+// An unrelated chat on a small context window: its tool results overflow, then it compacts
+// while the target runs.
+const OTHER = "agent:other:prefix-stability-other";
+// A chat whose first turn is a scheduled job; its next owner turn must list the same tools.
+const CRON_FIRST = "agent:main:prefix-stability-cron-first";
+const OVERFLOW_CHUNKS = 24;
+const OVERFLOW_CHUNK_CHARS = 8_000;
 
-export type Api = "anthropic-messages" | "openai-completions" | "openai-responses";
-type Reply = { text: string; compaction?: true } | { tool: string; args: Record<string, unknown> };
-type WireRequest = { system: string; tools: string; messages: string[]; text: string };
+/** True when `current` is `previous` with each changed message passing `changed`, plus new ones. */
+function onlyMessagesChanged(
+  previous: WireRequest,
+  current: WireRequest,
+  changed: (before: string, after: string) => boolean,
+): boolean {
+  return (
+    previous.system === current.system &&
+    previous.tools === current.tools &&
+    current.messages.length >= previous.messages.length &&
+    previous.messages.every(
+      (message, index) =>
+        current.messages[index] === message || changed(message, current.messages[index]!),
+    )
+  );
+}
 
-// Cache markers move to the newest message on every request, and the newest message carries
-// its text as a block so it can hold one. Providers cache the processed prompt, where a string
-// and a single text block are the same content, so neither difference is a prefix change.
-function withoutCacheMarkers(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(withoutCacheMarkers);
-  }
-  if (value && typeof value === "object") {
-    const content = (value as { content?: unknown }).content;
-    if (typeof content === "string" && "role" in value) {
-      return withoutCacheMarkers({ ...value, content: [{ type: "text", text: content }] });
+type GeminiParts = { parts?: Array<{ functionResponse?: { response?: { output?: unknown } } }> };
+
+/** True when `after` is `before` with only shortened, truncation-marked tool outputs. */
+function outputTrimmed(before: string, after: string): boolean {
+  const original = JSON.parse(before) as GeminiParts;
+  const trimmed = JSON.parse(after) as GeminiParts;
+  let changed = false;
+  for (const [index, part] of (trimmed.parts ?? []).entries()) {
+    const response = part.functionResponse?.response;
+    const full = original.parts?.[index]?.functionResponse?.response?.output;
+    const output = response?.output;
+    // The kept text around the notice must be the original's head and tail. The notice itself
+    // can be cut short at the end of the output.
+    const notice =
+      typeof output === "string"
+        ? /\s*\[\.\.\. \d+ more characters truncated(?:[^\]]*\]\s*|[^\]]*$)/.exec(output)
+        : null;
+    if (
+      response &&
+      notice &&
+      typeof output === "string" &&
+      typeof full === "string" &&
+      output.length < full.length &&
+      full.startsWith(output.slice(0, notice.index)) &&
+      full.endsWith(output.slice(notice.index + notice[0].length))
+    ) {
+      // Restore the known change; everything else in the message must still match.
+      response.output = full;
+      changed = true;
     }
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => key !== "cache_control")
-        .map(([key, entry]) => [key, withoutCacheMarkers(entry)]),
-    );
   }
-  return value;
+  return changed && JSON.stringify(trimmed) === before;
 }
 
-function readWireRequest(api: Api, body: Record<string, unknown>): WireRequest {
-  if (api === "openai-responses") {
-    const system = JSON.stringify(body.instructions ?? null);
-    const messages = ((body.input as unknown[] | undefined) ?? []).map((item) =>
-      JSON.stringify(item),
-    );
-    return {
-      system,
-      tools: JSON.stringify(body.tools ?? []),
-      messages,
-      text: `${system}\n${messages.join("\n")}`,
-    };
-  }
-  const all = (body.messages as Array<{ role?: unknown }> | undefined) ?? [];
-  // Chat Completions sends the system prompt as leading system messages.
-  const lead =
-    api === "openai-completions"
-      ? all.findIndex(({ role }) => role !== "system" && role !== "developer")
-      : 0;
-  const json = (value: unknown) => JSON.stringify(withoutCacheMarkers(value));
-  const system = json(api === "openai-completions" ? all.slice(0, lead) : body.system);
-  const messages = all.slice(lead).map(json);
-  return {
-    system,
-    tools: json(body.tools ?? []),
-    messages,
-    text: `${system}\n${messages.join("\n")}`,
-  };
-}
-
-/** Messages after the newest assistant reply: the current input, carriers and tool results. */
-function lastMessage(request: WireRequest): string {
-  const assistant = request.messages.findLastIndex((message) =>
-    /"role":"assistant"|"type":"(function_call|compaction)"/.test(message),
-  );
-  return request.messages.slice(assistant + 1).join("\n");
-}
-
-function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: number) {
-  response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
-  if (api === "anthropic-messages") {
-    const block =
-      "text" in reply
-        ? { type: "text", text: "" }
-        : { type: "tool_use", id: `toolu_${ordinal}`, name: reply.tool, input: {} };
-    const delta =
-      "text" in reply
-        ? { type: "text_delta", text: reply.text }
-        : { type: "input_json_delta", partial_json: JSON.stringify(reply.args) };
-    const events = [
-      {
-        type: "message_start",
-        message: {
-          id: `msg_${ordinal}`,
-          type: "message",
-          role: "assistant",
-          model: "claude-opus-5",
-          content: [],
-          stop_reason: null,
-          usage: { input_tokens: 10, output_tokens: 0 },
-        },
-      },
-      { type: "content_block_start", index: 0, content_block: block },
-      { type: "content_block_delta", index: 0, delta },
-      { type: "content_block_stop", index: 0 },
-      {
-        type: "message_delta",
-        delta: { stop_reason: "text" in reply ? "end_turn" : "tool_use", stop_sequence: null },
-        usage: { output_tokens: 5 },
-      },
-      { type: "message_stop" },
-    ];
-    response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
-    return;
-  }
-  if (api === "openai-responses") {
-    const items = [
-      // The provider compacts the request it received and returns the checkpoint first.
-      ...("compaction" in reply && reply.compaction
-        ? [{ type: "compaction", id: `cmp_${ordinal}`, encrypted_content: `checkpoint-${ordinal}` }]
-        : []),
-      "text" in reply
-        ? {
-            type: "message",
-            id: `msg_${ordinal}`,
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: reply.text, annotations: [] }],
-          }
-        : {
-            type: "function_call",
-            id: `fc_${ordinal}`,
-            call_id: `call_${ordinal}`,
-            name: reply.tool,
-            arguments: JSON.stringify(reply.args),
-            status: "completed",
-          },
-    ];
-    const events = [
-      ...items.flatMap((item, index) => [
-        { type: "response.output_item.added", output_index: index, item },
-        { type: "response.output_item.done", output_index: index, item },
-      ]),
-      {
-        type: "response.completed",
-        response: {
-          id: `resp_${ordinal}`,
-          object: "response",
-          status: "completed",
-          model: "gpt-5.4",
-          output: items,
-          usage: {
-            input_tokens: 10,
-            input_tokens_details: { cached_tokens: 0 },
-            output_tokens: 5,
-            total_tokens: 15,
-          },
-        },
-      },
-    ];
-    response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
-    return;
-  }
-  const chunk = (delta: unknown, finish: string | null) =>
-    `data: ${JSON.stringify({
-      id: `chatcmpl_${ordinal}`,
-      object: "chat.completion.chunk",
-      created: 0,
-      model: "gpt-5.4-mini",
-      choices: [{ index: 0, delta, finish_reason: finish }],
-      ...(finish ? { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } } : {}),
-    })}\n\n`;
-  const delta =
-    "text" in reply
-      ? { role: "assistant", content: reply.text }
-      : {
-          role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: `call_${ordinal}`,
-              type: "function",
-              function: { name: reply.tool, arguments: JSON.stringify(reply.args) },
-            },
-          ],
-        };
-  response.end(
-    `${chunk(delta, null)}${chunk({}, "text" in reply ? "stop" : "tool_calls")}data: [DONE]\n\n`,
-  );
-}
-
-function buildProvider(api: Api, baseUrl: string) {
-  const routes: Record<Api, readonly [providerId: string, id: string]> = {
-    "anthropic-messages": ["fake-anthropic", "claude-opus-5"],
-    "openai-completions": ["fake-completions", "gpt-5.4-mini"],
-    "openai-responses": ["fake-responses", "gpt-5.4"],
-  };
-  const [providerId, id] = routes[api];
-  const model: ModelDefinitionConfig = {
-    id,
-    name: `Fake ${id}`,
-    api,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 4096,
-  };
-  const config: ModelProviderConfig = {
-    baseUrl: api === "anthropic-messages" ? baseUrl : `${baseUrl}/v1`,
-    apiKey: "prefix-stability-key", // pragma: allowlist secret
-    api,
-    // The fake provider listens on loopback.
-    request: { allowPrivateNetwork: true },
-    models: [model],
-  };
-  return { providerId, modelRef: `${providerId}/${id}`, config } as const;
-}
+// Breaks that main still has. Each entry checks the whole request, so its known change cannot hide
+// another one. Remove an entry when its owner lands; the journey then fails until it goes.
+export const KNOWN_BREAKS: ReadonlyArray<{
+  api: Api;
+  chat: "target" | "other";
+  accepts: (previous: WireRequest, current: WireRequest) => boolean;
+  owner: string;
+}> = [
+  {
+    // The pre-request pressure check trims tool results that earlier requests already sent.
+    api: "google-generative-ai",
+    chat: "other",
+    accepts: (previous, current) => onlyMessagesChanged(previous, current, outputTrimmed),
+    owner: "https://github.com/openclaw/openclaw/pull/199530",
+  },
+];
 
 /** Requests that do not extend the previous request in the same session, with the first change. */
-function prefixBreaks(requests: readonly WireRequest[]): Array<{ at: number; change: string }> {
+function prefixBreaks(
+  requests: readonly WireRequest[],
+  isKnown: (previous: WireRequest, current: WireRequest) => boolean = () => false,
+): Array<{ at: number; change: string }> {
   const breaks: Array<{ at: number; change: string }> = [];
   for (let index = 1; index < requests.length; index++) {
     const previous = requests[index - 1]!;
     const current = requests[index]!;
+    if (isKnown(previous, current)) {
+      continue;
+    }
     const message = previous.messages.findIndex(
       (entry, position) => current.messages[position] !== entry,
     );
@@ -255,20 +147,48 @@ export function usePrefixStabilityJourney() {
     process.env.OPENCLAW_PROMPT_CACHE_ASSERT = assertSetting;
   });
   return async (api: Api) => {
-    const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "1");
+    // Cron stays on: a scheduled job runs into the target chat when it comes due.
+    const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "0");
     const targetRequests: WireRequest[] = [];
     // The hidden subagent: its spawn task turn has no inter-session provenance, later turns do.
     const childRequests: WireRequest[] = [];
+    // The journey step that was active when each target request arrived, for failure reports.
+    const targetSteps: string[] = [];
+    let step = "first turn";
+    const slowSteps = new Set<string>();
+    const otherRequests: WireRequest[] = [];
+    const cronFirstRequests: WireRequest[] = [];
     let childKey: string | undefined;
     const seen: string[] = [];
     let ordinal = 0;
+    // Sessions the journey does not expect; every request must belong to a known chat.
+    const unclassified: string[] = [];
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
-      const hasToolResult = /tool_result|"role":"tool"|function_call_output/.test(latest);
-      if (request.tools === "[]") {
+      const hasToolResult = containsToolResult(latest);
+      // Only a compaction summary request has no session of its own.
+      const session = requestSession(request);
+      if (!session) {
         return { text: "Summary: the session ran the probe journey." };
       }
-      if (request.text.includes(`session=${SENDER}`)) {
+      if (session === OTHER) {
+        otherRequests.push(request);
+        const chunk = Number(/overflow-chunk-(\d+)/.exec(latest)?.[1] ?? 0);
+        if (
+          hasToolResult ? chunk > 0 && chunk < OVERFLOW_CHUNKS : latest.includes("STEP-OVERFLOW")
+        ) {
+          return {
+            tool: "exec",
+            args: { command: `yes overflow-chunk-${chunk + 1} | head -c ${OVERFLOW_CHUNK_CHARS}` },
+          };
+        }
+        return { text: `other ${otherRequests.length}` };
+      }
+      if (session === CRON_FIRST) {
+        cronFirstRequests.push(request);
+        return { text: "ok" };
+      }
+      if (session === SENDER) {
         return hasToolResult || !latest.includes("forward a ping")
           ? { text: "REPLY_SKIP" }
           : {
@@ -276,9 +196,7 @@ export function usePrefixStabilityJourney() {
               args: { sessionKey: TARGET, message: "INTER-SESSION ping", timeoutSeconds: 0 },
             };
       }
-      // The request's own session leads its system prompt; later text can name the child.
-      const session = /session=(\S+)/.exec(request.text)?.[1];
-      const child = session?.startsWith("agent:main:subagent:") ? session : undefined;
+      const child = session.startsWith("agent:main:subagent:") ? session : undefined;
       if (child) {
         childKey ??= child;
         if (child === childKey) {
@@ -286,10 +204,12 @@ export function usePrefixStabilityJourney() {
         }
         return { text: "child-done" };
       }
-      if (!request.text.includes(`session=${TARGET}`)) {
+      if (session !== TARGET) {
+        unclassified.push(session);
         return { text: "child-done" };
       }
       targetRequests.push(request);
+      targetSteps.push(step);
       if (hasToolResult) {
         return { text: "acknowledged" };
       }
@@ -297,6 +217,19 @@ export function usePrefixStabilityJourney() {
         return {
           tool: "sessions_send",
           args: { sessionKey: childKey, message: "CHILD-FOLLOWUP ping", timeoutSeconds: 0 },
+        };
+      }
+      // Matched anywhere in the request: a late transcript entry must not hide the step.
+      const slow = [...request.text.matchAll(/STEP-SLOW [a-z ]+/g)]
+        .map(([match]) => match)
+        .find((match) => !slowSteps.has(match));
+      if (slow) {
+        // A foreground tool call keeps the run active until the journey releases it.
+        const gate = path.join(fixture.workspaceDir, `release-${slowSteps.size}`);
+        slowSteps.add(slow);
+        return {
+          tool: "exec",
+          args: { command: `until [ -f '${gate}' ]; do sleep 0.1; done; echo slow-finished` },
         };
       }
       if (latest.includes("STEP-EXEC")) {
@@ -323,16 +256,36 @@ export function usePrefixStabilityJourney() {
         body += chunk;
       });
       request.on("end", () => {
-        const wire = readWireRequest(api, JSON.parse(body) as Record<string, unknown>);
+        const json = JSON.parse(body) as Record<string, unknown>;
+        const wire = readWireRequest(api, json);
         const reply = script(wire);
         const session = /session=(\S+)/.exec(wire.text)?.[1] ?? "?";
-        seen.push(`${session} last=${lastMessage(wire).slice(-300)} -> ${JSON.stringify(reply)}`);
-        writeReply(api, response, reply, ++ordinal);
+        seen.push(
+          `${session} bytes=${body.length} last=${lastMessage(wire).slice(-300)} -> ${JSON.stringify(reply)}`,
+        );
+        writeReply(api, response, reply, ++ordinal, {
+          inputTokens: Math.ceil(body.length / 4),
+          listed: toolNames(wire.tools),
+          ...(typeof json.model === "string" ? { model: json.model } : {}),
+        });
       });
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    // The Gateway reports a steer once the target run's queue holds it.
+    let steersTaken = 0;
+    let transportEnv: ReturnType<typeof captureEnv> | undefined;
     try {
-      const provider = buildProvider(api, await listenProofProvider(server));
+      const provider = buildFakeProvider(api, await listenProofProvider(server));
+      const runtime = fakeTransportRuntime(api);
+      transportEnv = captureEnv(Object.keys(runtime.env));
+      for (const [key, value] of Object.entries(runtime.env)) {
+        setTestEnvValue(key, value);
+      }
+      if (runtime.pluginId) {
+        // The owning bundled plugin registers this transport.
+        deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+        deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
+      }
       await fs.writeFile(path.join(fixture.workspaceDir, "AGENTS.md"), "# Rules\n- Be brief.\n");
       const cfg = fixture.config(
         provider,
@@ -346,19 +299,42 @@ export function usePrefixStabilityJourney() {
         },
         {
           diagnostics: { cacheTrace: { enabled: true } },
-          plugins: { enabled: false },
+          plugins: runtime.pluginId
+            ? {
+                allow: [runtime.pluginId],
+                entries: { [runtime.pluginId]: { enabled: true } },
+                slots: { memory: "none" },
+              }
+            : { enabled: false },
           tools: {
+            // The default surface: Tool Search on.
             codeMode: { enabled: false },
-            toolSearch: false,
             exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
           },
         },
       );
+      // The unrelated chat belongs to an exec-only agent on a small window, so a few large
+      // tool results reach the pressure check.
+      cfg.agents!.ownership = "explicit";
+      cfg.agents!.entries!.other = {
+        model: { primary: provider.smallModelRef },
+        tools: { allow: ["exec"] },
+      };
       gateway = await startGatewayWithClient({
         cfg,
         configPath: fixture.configPath,
         token: TOKEN,
         clientDisplayName: "prefix-stability",
+        onEvent: ({ event, payload }) => {
+          const change = payload as { reason?: string; sessionKey?: string } | undefined;
+          if (
+            event === "sessions.changed" &&
+            change?.reason === "agent.input.steering" &&
+            change.sessionKey === TARGET
+          ) {
+            steersTaken++;
+          }
+        },
       });
       const client = gateway.client;
       // Background work (exec wakes, child completions) settles once requests stop arriving.
@@ -372,24 +348,27 @@ export function usePrefixStabilityJourney() {
           });
         }
       };
-      const send = async (sessionKey: string, message: string) => {
-        const started = await client.request<{ runId?: string }>("chat.send", {
+      const start = (sessionKey: string, message: string, queueMode?: "steer") =>
+        client.request<{ runId?: string }>("chat.send", {
           sessionKey,
           message,
+          ...(queueMode ? { queueMode } : {}),
           deliver: false,
           idempotencyKey: `prefix-stability-${api}-${++ordinal}`,
         });
+      const wait = async (label: string, started: { runId?: string }) => {
         const waited = await client.request(
           "agent.wait",
           { runId: started.runId, timeoutMs: 60_000 },
           { timeoutMs: 65_000 },
         );
-        seen.push(
-          `send ${sessionKey} ${message}: ${JSON.stringify(started)} ${JSON.stringify(waited)}`,
-        );
+        seen.push(`send ${label}: ${JSON.stringify(started)} ${JSON.stringify(waited)}`);
+      };
+      const send = async (sessionKey: string, message: string) => {
+        await wait(`${sessionKey} ${message}`, await start(sessionKey, message));
         await settle();
       };
-      const until = async (predicate: () => boolean) => {
+      const reached = async (predicate: () => boolean) => {
         const deadline = Date.now() + 60_000;
         while (!predicate()) {
           expect(Date.now(), seen.join("\n")).toBeLessThan(deadline);
@@ -397,8 +376,12 @@ export function usePrefixStabilityJourney() {
             setTimeout(resolve, 100);
           });
         }
+      };
+      const until = async (predicate: () => boolean) => {
+        await reached(predicate);
         await settle();
       };
+      const sentToTarget = (marker: string) => targetRequests.some((r) => r.text.includes(marker));
 
       try {
         await send(TARGET, "TARGET first user turn");
@@ -414,7 +397,94 @@ export function usePrefixStabilityJourney() {
         // Inter-session input from another session.
         await send(SENDER, "forward a ping to the target");
         await until(() => targetRequests.some((r) => lastMessage(r).includes("INTER-SESSION")));
+        // A user message steers into the run while its tool call is still running.
+        step = "steer";
+        await client.request("sessions.subscribe", {});
+        const steered = await start(TARGET, "STEP-SLOW steer target");
+        await reached(() => sentToTarget("STEP-SLOW steer target"));
+        // A steer from the chat composer; the tool is held until the run has taken it.
+        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer");
+        await reached(() => steersTaken > 0);
+        await fs.writeFile(path.join(fixture.workspaceDir, "release-0"), "");
+        await wait("steer", steered);
+        await until(() => sentToTarget("STEER-INPUT"));
+        // The steered input joins the same run, right after the tool result it waited for.
+        expect(
+          targetRequests.some((r) => /slow-finished[\s\S]*STEER-INPUT/.test(lastMessage(r))),
+        ).toBe(true);
+        step = "cron";
+        const cronJob = {
+          agentId: "main",
+          name: "prefix-stability cron",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(Date.now() + 3_000).toISOString() },
+          // Keep the run record for the wait below; the job is removed afterwards.
+          deleteAfterRun: false,
+          sessionTarget: `session:${TARGET}`,
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "CRON-TICK scheduled turn" },
+          delivery: { mode: "none" },
+        };
+        if (api === "bedrock-converse-stream") {
+          // Intended behavior: a scheduled job needs a stored inference account, and a provider
+          // that authenticates through the AWS SDK has none, so cron.add refuses it.
+          await expect(client.request("cron.add", cronJob)).rejects.toThrow(
+            /requires a stored inference account/,
+          );
+        } else {
+          // A scheduled job comes due and runs in the target chat (`cron.run` would skip the
+          // trigger).
+          const cronDeadline = Date.now() + 60_000;
+          const job = await client.request<{ id: string }>("cron.add", cronJob);
+          await reached(() => sentToTarget("CRON-TICK"));
+          // The scheduled run settles (its result reaches the chat) before the next step.
+          for (let runs: { entries: unknown[] } = { entries: [] }; runs.entries.length === 0;) {
+            expect(Date.now(), seen.join("\n")).toBeLessThan(cronDeadline);
+            await new Promise((resolve) => {
+              setTimeout(resolve, 200);
+            });
+            runs = await client.request("cron.runs", { id: job.id, limit: 1 });
+          }
+          await settle();
+          await client.request("cron.remove", { id: job.id });
+          step = "cron-first chat";
+          const first = await client.request<{ id: string }>("cron.add", {
+            ...cronJob,
+            sessionTarget: `session:${CRON_FIRST}`,
+            schedule: { kind: "at", at: new Date(Date.now() + 3_000).toISOString() },
+          });
+          await reached(() => cronFirstRequests.length > 0);
+          await settle();
+          await client.request("cron.remove", { id: first.id });
+          await send(CRON_FIRST, "OWNER turn after a scheduled first turn");
+          const owner = cronFirstRequests.at(-1)!;
+          expect(owner.text).toContain("OWNER turn after a scheduled first turn");
+          // Whole declarations in order: the owner turn lists the scheduled turn's tools.
+          const cronFirstBreaks = prefixBreaks(cronFirstRequests);
+          expect(cronFirstBreaks, JSON.stringify(cronFirstBreaks, null, 2)).toEqual([]);
+        }
+        // An unrelated chat on a small window: its tool results fill the window inside one run,
+        // and the pressure check before the next request acts.
+        step = "other chat overflow";
+        await send(OTHER, "OTHER first turn");
+        const overflowStartAt = otherRequests.length;
+        await send(OTHER, "STEP-OVERFLOW read large output");
+        const overflowEndAt = otherRequests.length;
+        // The unrelated chat compacts while the target is mid tool call.
+        step = "other chat compacts during a target run";
+        const busy = await start(TARGET, "STEP-SLOW while another chat compacts");
+        await reached(() => sentToTarget("STEP-SLOW while another chat compacts"));
+        const busyAt = targetRequests.length;
+        await client.request("sessions.compact", { key: OTHER }, { timeoutMs: 65_000 });
+        // The target tool call is still held open.
+        expect(targetRequests.length).toBe(busyAt);
+        await fs.writeFile(path.join(fixture.workspaceDir, "release-1"), "");
+        await wait("busy", busy);
+        await settle();
+        const otherCompactionAt = otherRequests.length;
+        await send(OTHER, "OTHER after compaction");
         // A skill appears and a workspace bootstrap file changes mid-session.
+        step = "skill and workspace edit";
         const skillDir = path.join(fixture.workspaceDir, "skills", "probe-skill");
         await fs.mkdir(skillDir, { recursive: true });
         await fs.writeFile(
@@ -436,12 +506,54 @@ export function usePrefixStabilityJourney() {
               })()
             : undefined;
         // Explicit compaction is the one allowed rebuild point in this journey.
+        step = "explicit compaction";
         await client.request("sessions.compact", { key: TARGET }, { timeoutMs: 65_000 });
         await settle();
         const compactionAt = targetRequests.length;
         await send(TARGET, "TARGET after compaction");
         expect(targetRequests.length).toBeGreaterThan(compactionAt);
-        const breaks = prefixBreaks(targetRequests);
+        // The unrelated chat rebuilds only at its compactions: the one its pressure check ran
+        // inside the overflow run, and the explicit one. A silent rewrite of a tool result
+        // it already sent would show as another break.
+        const matched = new Set<(typeof KNOWN_BREAKS)[number]>();
+        const isKnown =
+          (chat: "target" | "other") => (previous: WireRequest, current: WireRequest) => {
+            const known = KNOWN_BREAKS.find(
+              (entry) =>
+                entry.api === api && entry.chat === chat && entry.accepts(previous, current),
+            );
+            if (known) {
+              matched.add(known);
+            }
+            return known !== undefined;
+          };
+        const allOtherBreaks = prefixBreaks(otherRequests);
+        const otherMessage = JSON.stringify(allOtherBreaks, null, 2);
+        const inOverflow = ({ at }: { at: number }) => at > overflowStartAt && at < overflowEndAt;
+        const otherBreaks = prefixBreaks(otherRequests, isKnown("other"));
+        // The pressure check compacted once inside the overflow run (a known trim alone does not
+        // count), then the explicit compaction.
+        const overflowCompactions = otherBreaks.filter(inOverflow);
+        expect(overflowCompactions.length, otherMessage).toBe(1);
+        expect(
+          otherBreaks.map(({ at }) => at),
+          otherMessage,
+        ).toEqual([overflowCompactions[0]!.at, otherCompactionAt]);
+        for (const { at } of otherBreaks) {
+          // The summary leads the rebuilt history (after the instructions item on Responses).
+          expect(otherRequests[at]!.messages.slice(0, 2).join("\n"), otherMessage).toContain(
+            "compacted into the following summary",
+          );
+        }
+        expect(unclassified).toEqual([]);
+        expect(childRequests.length).toBeGreaterThan(1);
+        const childBreaks = prefixBreaks(childRequests);
+        expect(childBreaks, JSON.stringify(childBreaks, null, 2)).toEqual([]);
+        const breaks = prefixBreaks(targetRequests, isKnown("target")).map(({ at, change }) => ({
+          at,
+          step: targetSteps[at],
+          change,
+        }));
         expect(
           breaks.map(({ at }) => at),
           JSON.stringify(breaks, null, 2),
@@ -450,6 +562,12 @@ export function usePrefixStabilityJourney() {
             ? [compactionAt]
             : [providerCompactionAt, compactionAt],
         );
+        // A known break that no longer occurs has landed: remove its entry.
+        expect(
+          KNOWN_BREAKS.filter((known) => known.api === api && !matched.has(known)).map(
+            ({ chat, owner }) => `${chat}: ${owner}`,
+          ),
+        ).toEqual([]);
         if (providerCompactionAt !== undefined) {
           // The cache observer attributes the provider checkpoint to compaction, not to drift.
           const trace = await fs.readFile(
@@ -478,14 +596,12 @@ export function usePrefixStabilityJourney() {
             );
           expect(attributed).toHaveLength(1);
         }
-        expect(childRequests.length).toBeGreaterThan(1);
-        const childBreaks = prefixBreaks(childRequests);
-        expect(childBreaks, JSON.stringify(childBreaks, null, 2)).toEqual([]);
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }
     } finally {
       await fixture.close(gateway, server, true);
+      transportEnv?.restore();
     }
   };
 }

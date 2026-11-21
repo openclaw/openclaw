@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals-allow-always.js";
-import { recordAllowlistMatchesUse } from "../infra/exec-approvals-authorization.js";
+import { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 import {
   prepareExecApprovalsCurrentRead,
   updateExecApprovals,
@@ -34,6 +34,7 @@ import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
@@ -116,6 +117,7 @@ it("preserves serialized records, first-answer wins, consumption and history thr
 
 it("keeps Allow Once executable during approval bookkeeping but rejects a later policy denial", async () => {
   const databaseOptions = options();
+  vi.stubEnv("OPENCLAW_STATE_DIR", databaseOptions.env.OPENCLAW_STATE_DIR);
   const context = captureOpenClawStateWorkerContext(databaseOptions);
   const policy = await updateExecApprovals(
     { update: { kind: "replace", file: { version: 1, defaults: { security: "allowlist" } } } },
@@ -133,21 +135,18 @@ it("keeps Allow Once executable during approval bookkeeping but rejects a later 
       databaseOptions,
     }),
   ).toMatchObject({ outcome: "resolved", record: { decision: "allow-once" } });
-  const assertCurrent = await recordAllowlistMatchesUse(
-    {
-      agentId: "main",
-      matches: [],
-      command: "printf 'héllo  world'",
-      authorization: {
-        source: "explicit-approval",
-        security: "allowlist",
-        ask: "always",
-        allowlistSatisfied: false,
-        policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
-      },
+  const assertCurrent = await commitExecAuthorizationLocked({
+    agentId: "main",
+    matches: [],
+    command: "printf 'héllo  world'",
+    authorization: {
+      source: "explicit-approval",
+      security: "allowlist",
+      ask: "always",
+      allowlistSatisfied: false,
+      policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
     },
-    context,
-  );
+  });
   const stages: string[] = [];
   const failures: unknown[] = [];
   const admissionProbe = probe.admission(workerAdmission, (request, grant, admit) => {

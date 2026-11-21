@@ -320,13 +320,14 @@ export function startManagedGatewayConfigReloader(
     initialPluginInstallRecords: params.initialPluginInstallRecords,
     // Single notification point for every persisted config change — gateway
     // RPC writes, agent/CLI config_set, doctor, and hand edits all land here
-    // once the candidate is accepted. Hash-only; clients refresh via config.get.
+    // once the candidate is accepted. Paths scope derived views; config editors still refresh.
     onConfigCandidateCommitted: (info) => {
       invalidateConfigGetResponseCache();
       params.broadcast(
         "config.changed",
         {
           path: info.path,
+          changedPaths: info.changedPaths,
           hash: info.persistedHash
             ? params.configRevisionProjector.projectRawHash(info.persistedHash)
             : null,

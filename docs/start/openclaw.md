@@ -14,7 +14,7 @@ A connected agent is a capable one: depending on your tool policy it can run com
 
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Review the jobs in `openclaw automations list --all`. Setup creates an ordinary proactive-check job once for the ambient owner; disable it with `openclaw automations disable <job-id>` while you evaluate the setup. Immediate event-driven follow-ups can still run, so keep tool policy and sandboxing conservative until you trust the setup.
+- Review the jobs in `openclaw automations list --all`. Fresh setup leaves the **Proactive check** disabled. Enable it with `openclaw automations enable <job-id>` if you want periodic checks. Immediate event-driven follow-ups can still run, so keep tool policy and sandboxing conservative until you trust the setup.
 
 ## Prerequisites
 
@@ -166,8 +166,8 @@ Example:
 ## Proactive automations
 
 Proactive checks are ordinary editable [Automations](/automation/cron-jobs).
-Explicit setup provisions a default check once for the ambient owner, normally
-every 30 minutes. When that agent uses Anthropic OAuth/token authentication,
+Fresh setup creates a disabled check for the ambient owner. Once enabled, it
+normally runs every 30 minutes. When that agent uses Anthropic OAuth/token authentication,
 including Claude CLI reuse, the provider's setup default is one hour. Later
 provider changes do not rewrite an existing job's schedule.
 
@@ -182,7 +182,7 @@ openclaw automations list --all
 openclaw automations show <job-id>
 openclaw automations edit <job-id> --every 30m
 openclaw automations scratch <job-id> --set "Check only for newly blocked work."
-openclaw automations disable <job-id>
+openclaw automations enable <job-id>
 ```
 
 The default job sets `skipIfScratchEmpty`: explicitly empty scratch (blank lines,

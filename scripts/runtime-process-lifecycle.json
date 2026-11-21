@@ -1,0 +1,52 @@
+{
+  "directoryWatchHost": {
+    "subscriptions": {
+      "owner": "src/infra/directory-watch-host.ts",
+      "start": "lazy",
+      "retire": "Close stdin after the last directory subscription releases; macOS also rolls over the shared helper.",
+      "memory": { "scope": "process-rss", "expectedMiB": null }
+    }
+  },
+  "directoryWatchParent": {
+    "parentMonitor": {
+      "owner": "src/infra/directory-watch-parent.worker.ts",
+      "start": "eager",
+      "retire": "Exit with the watch host; stop the host when its owner PID disappears.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "spawnBroker": {
+    "gatewayCommands": {
+      "owner": "src/process/spawn-broker/context.ts",
+      "start": "eager",
+      "retire": "Retire with the Gateway owner; startup admits this mode only on qualified Linux hosts.",
+      "memory": { "scope": "process-rss", "expectedMiB": null }
+    },
+    "nativeResourceClaims": {
+      "owner": "src/infra/worker-native-lifecycle.ts",
+      "start": "lazy",
+      "retire": "Apply NATIVE_BROKER_IDLE_MS after claims and workers release; process-exit pins remain owned by the runtime.",
+      "memory": { "scope": "process-rss", "expectedMiB": null }
+    }
+  },
+  "sqliteReadOnly": {
+    "pooledReads": {
+      "owner": "src/infra/sqlite-readonly-worker-pool.ts",
+      "start": "lazy",
+      "retire": "Apply the pool's idle TTL and memory-pressure policy after the read returns.",
+      "memory": { "scope": "process-rss", "expectedMiB": null }
+    },
+    "scopedSync": {
+      "owner": "src/infra/sqlite-readonly-worker.ts",
+      "start": "lazy",
+      "retire": "Close the read-only child with its lexical inspection scope.",
+      "memory": { "scope": "process-rss", "expectedMiB": null }
+    },
+    "oneShot": {
+      "owner": "src/infra/sqlite-readonly-worker.ts",
+      "start": "lazy",
+      "retire": "The inspection command owns child completion and cancellation.",
+      "memory": { "scope": "process-rss", "expectedMiB": null }
+    }
+  }
+}
