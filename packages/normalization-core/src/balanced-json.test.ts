@@ -510,6 +510,56 @@ describe("balanced JSON extraction", () => {
   );
 
   it.each(["\n", "\r\n", "\r"])(
+    "retires closed ancestors and their dangling children before later prose quotes (%j)",
+    (newline) => {
+      const actual = '{"actual":1}';
+      const cases = [
+        { prefix: "warning: [expected {]", openers: ["{", "["] as const, emitted: [] },
+        { prefix: "warning: {expected [}", openers: ["{", "["] as const, emitted: [] },
+        { prefix: '{"items":[}', openers: ["{"] as const, emitted: ['{"items":[}'] },
+        { prefix: '[{"items":]', openers: ["["] as const, emitted: ['[{"items":]'] },
+      ];
+      for (const { prefix, openers, emitted } of cases) {
+        const next = openers.some((opener) => opener === "{") ? actual : "[3]";
+        for (const closed of [false, true]) {
+          const raw = `${prefix}${newline}banner "example${newline}[1,2]${newline}{}${newline}end${closed ? '"' : ""}${newline}${next}`;
+          expect(
+            extractBalancedJsonFragments(raw, { recoverAtLineStart: true, openers }),
+            raw,
+          ).toEqual(fragmentsAt(raw, closed ? [...emitted, next] : emitted));
+          expect(extractBalancedJsonFragments(raw, { ...strictRecovery, openers }), raw).toEqual(
+            fragmentsAt(raw, closed ? [next] : []),
+          );
+        }
+      }
+    },
+  );
+
+  it.each(["\n", "\r\n", "\r"])(
+    "preserves outer ownership across a completed filtered fragment and stray closers (%j)",
+    (newline) => {
+      const first = '{"items":[}';
+      const actual = '{"actual":1}';
+      const raw = `warning: [${newline}${first}${newline}}${newline}"unfinished${newline}${actual}`;
+      expect(
+        extractBalancedJsonFragments(raw, { recoverAtLineStart: true, openers: ["{"] }),
+      ).toEqual(fragmentsAt(raw, [first, actual]));
+      expect(extractBalancedJsonFragments(raw, { ...strictRecovery, openers: ["{"] })).toEqual(
+        fragmentsAt(raw, [actual]),
+      );
+    },
+  );
+
+  it("retires deeply nested dangling owners once without reviving them on stray closers", () => {
+    const depth = 4096;
+    const actual = '{"actual":1}';
+    const raw = `[${"{".repeat(depth)}]${"}".repeat(depth)}\n"example\n[1,2]\nend"\n${actual}`;
+    for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+      expect(extractBalancedJsonFragments(raw, options)).toEqual(fragmentsAt(raw, [actual]));
+    }
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
     "uses the same recovery boundary for completed records and invalid strings (%j)",
     (newline) => {
       const child = '{"ok":true}';
