@@ -41,6 +41,13 @@ compact PR layout. File membership, worker limits, row caps, and deadlines are
 unchanged. Smaller tails and hourly main validation keep their existing packing;
 these bounds do not replace fresh whole-row timing qualification.
 
+Full-validation hosted compact Gateway runtime-server children (more than 64 files)
+also retain separate serial jobs. Ordinary push and hourly main packing stay
+unchanged. A full-validation job exceeded its one-hour deadline after a
+twenty-minute server child left
+only 92 seconds for the final group. File coverage, two-worker child limits,
+row caps, and job deadlines are unchanged.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 

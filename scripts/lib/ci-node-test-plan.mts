@@ -4890,8 +4890,15 @@ function createCompactNodeTestShardBundles(
         options.runnerBackend === "github" &&
         // Hourly main validation keeps its separately bounded 77-row packing.
         (((compactMode === "push" || !options.mainValidation) &&
-          /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
-          (planned.group.includePatterns?.length ?? 0) > 32) ||
+          ((/^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
+            (planned.group.includePatterns?.length ?? 0) > 32) ||
+            // Hosted run 44868973741 spent twenty minutes in a server child.
+            // Keep large children off already populated serial hosts.
+            (compactMode !== "push" &&
+              /^agentic-control-plane-runtime-server(?:-hosted-\d+)?$/u.test(
+                planned.group.shard_name,
+              ) &&
+              (planned.group.includePatterns?.length ?? 0) > 64))) ||
           (compactMode === "push" &&
             (/^agentic-control-plane-agent-chat(?:-hosted-\d+)?$/u.test(planned.group.shard_name) ||
               planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST))));

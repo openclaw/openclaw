@@ -135,6 +135,32 @@ it.each(["push", "full"] as const)("bounds hosted groups (%s)", (mode) => {
     expect(new Set(actual).size).toBe(actual.length);
   }
 
+  if (full) {
+    const serverOwner = owners.find(
+      (owner) => owner.shardName === "agentic-control-plane-runtime-server",
+    )!;
+    const serverGroups = jobs.flatMap((job) =>
+      job.groups
+        .filter((group) =>
+          /^agentic-control-plane-runtime-server(?:-hosted-\d+)?$/u.test(group.shard_name),
+        )
+        .map((group) => {
+          if ((group.includePatterns?.length ?? 0) > 64) {
+            expect(job.groups).toHaveLength(1);
+            expect(job.planConcurrency).toBe(1);
+            expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+          }
+          return group;
+        }),
+    );
+    expect(serverGroups.length).toBeGreaterThan(0);
+    expect(serverGroups.flatMap((group) => group.includePatterns!).toSorted()).toEqual(
+      (serverOwner.includePatterns ?? listWholeConfigSplitFiles(serverOwner.shardName)!)
+        .filter((file) => isRuntimeTestFileIncluded(file, selectedOptions))
+        .toSorted(),
+    );
+  }
+
   const updateJobs = jobs.filter((job) =>
     job.groups.some((group) => group.includePatterns?.includes("src/cli/update-cli.test.ts")),
   );
