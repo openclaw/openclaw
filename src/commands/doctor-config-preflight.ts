@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
@@ -98,6 +98,8 @@ async function runDoctorConfigPreflightOperation(
       if (existsSync(databasePath)) {
         // Harden before SQLite can retain a read-only handle for an owned 0444 file.
         ensureOpenClawStatePermissions(databasePath, process.env);
+        // An already-current database may need no writes, but immutable state still needs repair.
+        closeSync(openSync(databasePath, "r+"));
       }
     });
   }
