@@ -1,0 +1,2 @@
+# Mixed-case agents.entries key addressing regressions in the roster integration suite (issue #193534).
+57

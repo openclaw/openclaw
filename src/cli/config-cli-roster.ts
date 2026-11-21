@@ -121,3 +121,33 @@ export class ConfigMutationAgentRoster {
     delete agents.list;
   }
 }
+
+/**
+ * Rewrites the `agents.entries.<id>` key segment to its stored spelling when the
+ * requested key differs only by casing. The runtime and `agents` commands identify
+ * entries by their normalized id, while the config file keeps the authored key.
+ * Exact keys always win, ambiguity stays untouched so the duplicate-id validation
+ * keeps its current behavior, and ids that differ beyond casing never match — do
+ * not "simplify" this to normalizeAgentId, which sanitizes characters and maps
+ * unrepresentable input to `main`.
+ */
+export function resolveStoredAgentsEntryKey(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+): PathSegment[] {
+  if (path[0] !== "agents" || path[1] !== "entries" || path.length < 3) {
+    return path;
+  }
+  const requested = path[2];
+  if (!requested) {
+    return path;
+  }
+  const agents = root.agents;
+  const entries = isRecord(agents) ? agents.entries : undefined;
+  if (!isRecord(entries) || Object.hasOwn(entries, requested)) {
+    return path;
+  }
+  const normalized = requested.toLowerCase();
+  const matches = Object.keys(entries).filter((key) => key.toLowerCase() === normalized);
+  return matches.length === 1 ? [path[0], path[1], matches[0]!, ...path.slice(3)] : path;
+}
