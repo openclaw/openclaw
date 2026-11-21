@@ -401,7 +401,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         ).toHaveProperty("lifecycleRunId", "live");
         expect(loadExactSessionEntry(sessionTarget("yielded"))?.entry).toMatchObject({
           status: "failed",
-          lastRunError: expect.stringContaining("child completion"),
+          lastRunError: expect.stringContaining("no registered continuation"),
         });
         expect(
           loadExactSessionEntry(sessionTarget("yielded"))?.entry.lifecycleRunId,
