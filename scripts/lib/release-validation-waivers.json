@@ -417,6 +417,31 @@
           }
         ]
       }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-29 (node)",
+      "reason": "Accepted recovery-budget deferral after the same unmodified 45-test recovery file passed locally; no lost-delivery or duplicate-send defect demonstrated.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/infra/outbound/delivery-queue.recovery.test.ts",
+            "test": "delivery-queue recovery > finalizes a persisted conversation operation during queue recovery :: AssertionError: [[\"Recovery time budget exceeded — remaining entries deferred to next startup\"]]: expected +0 to be 1 // Object.is equality\n\n- Expected\n+ Received\n\n- 1\n+ 0\n\n❯ src/infra/outbound/delivery-queue.recovery.test.ts:403:67\n401|     });\n402|     const { result, log } = await recover({ deliver });\n403|     expect(result.recovered, JSON.stringify(log.warn.mock.calls)).toBe…\n|                                                                   ^\n404|     expect(await getConversationDeliveryOperation(scope, \"operation-re…\n405|       status: \"sent\","
+          }
+        ]
+      }
     }
   ]
 }
