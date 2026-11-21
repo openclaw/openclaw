@@ -3,6 +3,10 @@ import {
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  isControlCommandMessage,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -108,16 +112,20 @@ export async function resolveSignalAccessState(params: {
   groupId?: string;
   isGroup?: boolean;
   cfg?: Pick<OpenClawConfig, "accessGroups" | "commands">;
-  hasControlCommand?: boolean;
+  /** Inbound text; any command syntax, including registered plugin commands, needs command access. */
+  commandText?: string;
   readStoreAllowFrom?: () => Promise<string[]>;
   contextBinding?: ChannelIngressContextBinding;
 }) {
   const isGroup = params.isGroup ?? params.groupId != null;
   const command =
-    params.hasControlCommand === true
+    params.commandText !== undefined &&
+    shouldComputeCommandAuthorized(params.commandText, params.cfg)
       ? {
           allowTextCommands: true,
           directGroupAllowFrom: "effective" as const,
+          // Only built-in controls may block an unauthorized message; plugin commands just need authority.
+          hasControlCommand: isControlCommandMessage(params.commandText, params.cfg),
         }
       : undefined;
   const ingress = getSignalRuntime().channel.inbound.ingress.createResolver({
