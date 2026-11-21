@@ -16,7 +16,7 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolvePersonalGitHubOwnerInDatabase } from "../state/user-github-connections.kernel.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
-import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import { projectWorktreePublicationTranscriptReport } from "./github-publication-receipt.js";
 
 export type PersonalGitHubPublicationRow = DB["github_personal_publication_requests"];
 const table = "github_personal_publication_requests";
@@ -194,12 +194,7 @@ export function listUnreportedPersonalGitHubPublicationsInDatabase(db: EngineCon
         "My GitHub publication receipt is corrupt; reconnect and create a new request.",
       );
     }
-    return {
-      sessionId: row.session_id,
-      sessionKey: row.session_key,
-      agentId: row.agent_id,
-      result: projectGitHubPublicationResult(row),
-    };
+    return projectWorktreePublicationTranscriptReport(row);
   });
 }
 

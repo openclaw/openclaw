@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import type {
   commandResult as publicationCommandResult,
   githubPublicationTestMocks,
@@ -207,8 +207,8 @@ export async function createRealPublicationWorkspace(params: {
   const isolatedEnv = {
     HOME: home,
     XDG_CONFIG_HOME: home,
-    GIT_CONFIG_GLOBAL: os.devNull,
-    GIT_CONFIG_SYSTEM: os.devNull,
+    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+    GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     GIT_DIR: undefined,
     GIT_WORK_TREE: undefined,
     GH_TOKEN: undefined,
