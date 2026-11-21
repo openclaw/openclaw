@@ -439,6 +439,29 @@ export function createWorkerProjectPreparation(params: {
               purpose: preparation.purpose,
               demandAtMs: preparation.demandAtMs,
             },
+            prepareSnapshot: async (transport: {
+              runScript: (script: string, signal: AbortSignal) => Promise<string>;
+            }) => {
+              requireCurrent();
+              const output = await transport.runScript(
+                createProjectSetupScript(
+                  { ...sourceInput, ...preparationInput, snapshot: true },
+                  true,
+                ),
+                signal,
+              );
+              requireCurrent();
+              let inspected: unknown;
+              try {
+                inspected = JSON.parse(output);
+              } catch {
+                throw new Error("Project snapshot verification returned invalid JSON");
+              }
+              if (!isRecord(inspected) || inspected.baseCommit !== sourceInput.baseCommit) {
+                throw new Error("Project snapshot has no matching completed workspace");
+              }
+              preparedWorkspace = readPreparedWorkspace(inspected);
+            },
             inspectPreparedWorkspace: async (transport: {
               runScript: (script: string, signal: AbortSignal) => Promise<string>;
               recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;

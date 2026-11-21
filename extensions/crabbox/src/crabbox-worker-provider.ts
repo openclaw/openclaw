@@ -6,6 +6,7 @@ import {
   type WorkerProvider,
   type WorkerResourceReceipt,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { measureCrabboxProvisionPhase as measurePhase } from "./crabbox-provision-timing.js";
 import type { LeaseCommandContext } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import type { ParsedInspect } from "./crabbox-worker-inspect.js";
@@ -441,6 +442,7 @@ export function createCrabboxWorkerProvider(
           const plan = await prepareCrabboxWorkerRuntime({
             context: inspectedParams,
             prepareNodeRuntime: options?.prepareNodeRuntime,
+            project,
             leaseId,
             preparationSignal,
             assertCurrent,
@@ -575,20 +577,22 @@ export function createCrabboxWorkerProvider(
             ? AbortSignal.any([preparationSignal, enrollment.signal])
             : (preparationSignal ?? enrollment.signal);
         // These owned scripts do not restart SSH; authenticated enrollment proves node readiness.
-        await runProvisionSetup({
-          ...inspectedParams,
-          phase: "node enrollment setup",
-          signal: enrollmentSignal,
-          setup: nodeEnrollmentSetup.command,
-          // Combine the existing phase budgets; desktop work starts after node launch.
-          timeoutMs:
-            resolveCrabboxNodeEnrollmentTimeoutMs(enrollment.bootstrapTimeoutMs) +
-            (desktop && !project ? CRABBOX_SETUP_TIMEOUT_MS : 0),
-          forwardedEnv: nodeEnrollmentSetup.forwardedEnv,
-        });
+        await measurePhase("node.enrollment.command", () =>
+          runProvisionSetup({
+            ...inspectedParams,
+            phase: "node enrollment setup",
+            signal: enrollmentSignal,
+            setup: nodeEnrollmentSetup.command,
+            // Combine the existing phase budgets; desktop work starts after node launch.
+            timeoutMs:
+              resolveCrabboxNodeEnrollmentTimeoutMs(enrollment.bootstrapTimeoutMs) +
+              (desktop && !project ? CRABBOX_SETUP_TIMEOUT_MS : 0),
+            forwardedEnv: nodeEnrollmentSetup.forwardedEnv,
+          }),
+        );
         let deviceId: string;
         try {
-          deviceId = await enrollment.waitForDeviceId();
+          deviceId = await measurePhase("node.readiness", () => enrollment.waitForDeviceId());
           signal?.throwIfAborted();
         } catch (error) {
           signal?.throwIfAborted();

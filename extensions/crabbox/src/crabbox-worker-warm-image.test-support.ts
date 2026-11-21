@@ -217,6 +217,7 @@ export function createProjectOptions(
       ...(preparation ? { preparation } : {}),
       signal,
       assertCurrent,
+      prepareSnapshot: vi.fn(async () => {}),
       prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
         await transport.runScript("project-checkout", signal);
         events.push("project-prepared");
