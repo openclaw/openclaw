@@ -167,7 +167,12 @@ function loadIdentityAvatar(
       if (identityAvatarCache.get(url) !== entry) {
         return null;
       }
-      const response = await fetchGatewayContextResource(url, IDENTITY_AVATAR_FETCH_TIMEOUT_MS);
+      const response = await fetchGatewayContextResource(
+        url,
+        IDENTITY_AVATAR_FETCH_TIMEOUT_MS,
+        undefined,
+        "image",
+      );
       if (!response.ok) {
         return null;
       }
