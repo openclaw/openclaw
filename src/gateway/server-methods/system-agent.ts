@@ -14,6 +14,7 @@ import {
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -359,6 +360,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const { params: rawParams, respond, client, context } = options;
     const reject = (error: ReturnType<typeof errorShape>) => respond(false, undefined, error);
     const authority = readGatewayRequestMutationAuthority(options);
+    const approvalSignals = getGatewayToolCallerIdentity()?.approvalSignals;
     const params = sanitizeSystemAgentChatParams(rawParams);
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
@@ -374,7 +376,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     // Accepted logbook work belongs to the serialized task, not socket cancellation.
     const assertSessionCurrent = () => {
       if (context.systemAgentSessions.get(params.sessionId) !== ownedSession) {
-        throw new Error("OpenClaw session changed during audit persistence");
+        throw new Error(
+          "This OpenClaw chat changed while the change was being saved. Check the current settings before making a new request.",
+        );
       }
     };
     const transcript = createSystemAgentTranscriptStore({
@@ -385,14 +389,23 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       env,
       assertCurrent: assertSessionCurrent,
     });
-    const assertCurrent = () => {
-      authority.assertCurrent();
+    const assertSessionStoresCurrent = () => {
       transcript.assertCurrent();
       greetingCache.assertCurrent();
     };
+    const assertInitializationCurrent = () => {
+      options.signal?.throwIfAborted();
+      if (approvalSignals) {
+        for (const signal of approvalSignals) {
+          signal.throwIfAborted();
+        }
+      }
+      assertSessionStoresCurrent();
+    };
     const pending = await runSystemAgentGatewayTask(async () => {
       ownedSession = context.systemAgentSessions.get(params.sessionId);
-      assertCurrent();
+      authority.assertCurrent();
+      assertSessionStoresCurrent();
       const sessions = context.systemAgentSessions;
       const sessionId = params.sessionId;
       // Initialization, resets, turns, and approval application share this task owner.
@@ -504,7 +517,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           // model context clean; only ordinary fresh sessions receive its tail.
           if (!params.reset) {
             const turns = await transcript.readTail(SYSTEM_AGENT_SEED_HISTORY_LIMIT, true);
-            assertCurrent();
+            assertInitializationCurrent();
             engine.seedHistory(turns.map(({ role, text }) => ({ role, text })));
           }
           const welcomeHistoryStart = engine.historyLength();
@@ -523,7 +536,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           } else {
             const overview = await engine.loadOverview();
             const facts = await loadSystemAgentGreetingFacts({ env, cacheStore: greetingCache });
-            assertCurrent();
+            assertInitializationCurrent();
             greetingAuditSequence = facts.auditSequence;
             persistWelcome ||= facts.recentExternalEdit;
             welcome = await resolveSystemAgentGreeting({
@@ -534,7 +547,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               cacheStore: greetingCache,
               cacheOwner: sessions,
             });
-            assertCurrent();
+            assertInitializationCurrent();
             welcomeQuestion = buildSystemAgentGreetingQuestion(overview, facts);
             engine.noteAssistantMessage(welcome);
           }
@@ -544,7 +557,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             await persistSystemAgentEngineHistory(engine, welcomeHistoryStart, transcript);
           }
           await evictOldestSession(sessions, context);
-          assertCurrent();
+          assertInitializationCurrent();
         } catch (error) {
           await engine.dispose().catch(() => undefined);
           if (!isSystemAgentInferenceUnavailableError(error)) {
@@ -689,7 +702,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       if (pendingApproval) {
         return pendingApproval;
       }
-      assertCurrent();
+      assertSessionStoresCurrent();
       respond(true, buildSystemAgentChatResult({ sessionId, reply }), undefined);
       return undefined;
     });
@@ -698,7 +711,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     // retires this observation without changing the pending decision or its handoff.
     if (pending) {
       const reply = await racePromiseWithAbortSignal(pending.completion, getAsyncWorkSignal());
-      assertCurrent();
+      assertSessionStoresCurrent();
       respond(true, buildSystemAgentChatResult({ sessionId: params.sessionId, reply }), undefined);
     }
   }),

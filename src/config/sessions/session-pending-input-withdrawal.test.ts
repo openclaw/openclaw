@@ -4,7 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,

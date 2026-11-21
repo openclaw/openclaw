@@ -29,6 +29,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 import {
   buildChannelUserTurnSender,
@@ -42,8 +43,6 @@ import {
 } from "./user-turn-transcript.test-support.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
-  PersistedUserTurnMessage,
-  UserTurnInput,
   UserTurnOriginalInputCommit,
 } from "./user-turn-transcript.types.js";
 

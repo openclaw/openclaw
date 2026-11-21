@@ -918,6 +918,9 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
     "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
   );
   expect(preparedPlan.if).toBe(preparedSetup.if);
+  expect(preparedInstall.if).toBe(preparedSetup.if);
+  expect(preparedInstall["working-directory"]).toBe(".release-tooling");
+  expect(preparedSetup.uses).toBe("./.release-tooling/.github/actions/setup-pnpm-store-cache");
   expect(previewSteps.indexOf(sourceSetup)).toBeGreaterThan(trustedIndex);
   expect(previewSteps.indexOf(preparedSetup)).toBeGreaterThan(trustedIndex);
   expect(previewSteps.indexOf(preparedInstall)).toBeGreaterThan(

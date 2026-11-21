@@ -19,6 +19,7 @@ import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import {
   commandError,
   worktreePathExists,
@@ -47,6 +48,7 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   enabled: boolean;
   /** Pool builders must not consume another ready slot or schedule themselves. */
   useWarmPool?: boolean;
+  backgroundUsedAt?: number;
   repoRoot: string;
   commonDir: string;
   worktreeRoot: string;
@@ -75,6 +77,7 @@ function assertOwned(options: WorktreeFilesystemOptions) {
 
 function gitOptions(options: WorktreeFilesystemOptions) {
   return {
+    idleIoPriority: options.idleIoPriority,
     signal: options.signal,
     beforeRun: composeSessionSourceAssertion([options.commitGuard], (assertSource) => {
       options.signal?.throwIfAborted();
@@ -101,7 +104,7 @@ function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitC
   };
 }
 
-async function prepareTemplate(options: CheckoutOptions) {
+export async function prepareManagedWorktreeTemplate(options: CheckoutOptions) {
   const backend = await detectWorktreeFilesystemBackend(path.dirname(options.destination), options);
   if (!backend) {
     return undefined;
@@ -190,6 +193,7 @@ async function prepareTemplate(options: CheckoutOptions) {
         commonDir: options.commonDir,
         worktreeRoot: options.worktreeRoot,
         sourceCommit: commit,
+        backgroundUsedAt: options.backgroundUsedAt,
         backend: backend.id,
         reuseOnly: options.deferGitCheckout,
         requireSpace: options.requireSpace,
@@ -437,7 +441,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     }
     return result.code === 0 ? added : result;
   };
-  let retainedTemplate: Awaited<ReturnType<typeof prepareTemplate>>;
+  let retainedTemplate: Awaited<ReturnType<typeof prepareManagedWorktreeTemplate>>;
   const prepare = async (): Promise<CheckoutResult> => {
     if (profile && commit !== profile.commit) {
       preserve = true;
@@ -448,7 +452,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     const checkoutBytes = await timeWorktreePreparationPhase("commitPrepare", async () =>
       options.prepareCommit?.(commit),
     );
-    let template: Awaited<ReturnType<typeof prepareTemplate>>;
+    let template: Awaited<ReturnType<typeof prepareManagedWorktreeTemplate>>;
     let cloneBytes: number | undefined;
     setWorktreePreparationTemplate("unavailable", {
       reason: !options.enabled
@@ -462,7 +466,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     if (options.enabled && checkoutBytes !== 0 && !profile) {
       try {
         template = retainedTemplate = await timeWorktreePreparationPhase("templatePrepare", () =>
-          prepareTemplate(options),
+          prepareManagedWorktreeTemplate(options),
         );
         const preparedTemplate = template;
         cloneBytes = preparedTemplate
@@ -623,7 +627,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         // A lost registration cannot validate it; remove the settled clone while
         // its template reader is still held, so the same PR can provision again.
         rollbackGuard();
-        await fs.rm(options.destination, { recursive: true, force: true });
+        await nativeWorktreeFilesystem.remove(options.destination, { commitGuard: rollbackGuard });
         throw error;
       }
       await assertRegistration(rollbackOptions);
@@ -642,7 +646,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         throw error;
       }
       rollbackGuard();
-      await fs.rm(options.destination, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(options.destination, { commitGuard: rollbackGuard });
       rollbackGuard();
       await fs.mkdir(options.destination);
       rollbackGuard();

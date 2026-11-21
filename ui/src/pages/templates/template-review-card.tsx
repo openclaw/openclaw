@@ -146,7 +146,7 @@ export function TemplateReviewCard(props: {
         <Show
           when={category()}
           fallback={
-            <span class="template-package-art template-creator__art">
+            <span class="template-art template-package-art template-creator__art">
               <TemplateArtwork src={review().iconUrl} />
             </span>
           }
@@ -187,10 +187,10 @@ export function TemplateReviewCard(props: {
                   <Show when={section.kind === "file" || entries(section.kind).length > 0}>
                     <button
                       type="button"
-                      class="template-package-row template-creator__row"
+                      class="row template-package-row template-creator__row"
                       onClick={() => setCategory(section.kind)}
                     >
-                      <span class="template-creator__row-icon">
+                      <span class="template-art template-creator__row-icon">
                         <Icon name={section.icon} />
                       </span>
                       <span>
@@ -216,21 +216,21 @@ export function TemplateReviewCard(props: {
             when={selected()}
             fallback={
               <div class="template-creator__category">
-                <span class="template-creator__category-icon">
+                <span class="template-art template-creator__category-icon">
                   <Icon name={currentSection().icon} />
                 </span>
                 <p class="template-creator__hint">{hint()}</p>
-                <div class="template-creator__contents">
+                <div class="template-creator__contents stack">
                   <For each={categoryEntries()} keyed={(item) => item.id}>
                     {(item) => (
                       <button
                         type="button"
-                        class="template-package-row template-creator__row"
+                        class="row template-package-row template-creator__row"
                         aria-label={item().label}
                         onClick={() => setSelectedId(item().id)}
                       >
                         <Show when={category() === "file"}>
-                          <span class="template-creator__row-icon">
+                          <span class="template-art template-creator__row-icon">
                             <Icon name={item().fileIcon!} />
                           </span>
                         </Show>
@@ -247,10 +247,10 @@ export function TemplateReviewCard(props: {
                   <Show when={category() === "file" && !allFiles()}>
                     <button
                       type="button"
-                      class="template-package-row template-creator__row"
+                      class="row template-package-row template-creator__row"
                       onClick={() => setAllFiles(true)}
                     >
-                      <span class="template-creator__row-icon">
+                      <span class="template-art template-creator__row-icon">
                         <Icon name="folder" />
                       </span>
                       <span>

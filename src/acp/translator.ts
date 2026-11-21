@@ -457,6 +457,7 @@ export class AcpGatewayAgent {
   readonly closeSession = async (params: CloseSessionRequest): Promise<CloseSessionResponse> => {
     const session = this.requireSession(params.sessionId);
     await this.promptStream.cancelSessionWork(session);
+    await this.promptStream.releaseSessionMessages(params.sessionId);
     this.sessionStore.deleteSession(params.sessionId);
     this.log(`closeSession: ${params.sessionId}`);
     return {};

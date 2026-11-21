@@ -95,8 +95,8 @@ index**, or set the Boolean in config:
 The default is **off**; only explicit `true` enables it. The embedded OpenClaw
 runtime ranks the [Code Mode index](/tools/code-mode), the
 [Tool Search deferred-schema directory](/tools/tool-search), and the
-[MCP tool directory](/tools/tool-search#mcp-tool-directory) in the `tool_search`
-description, including MCP servers installed as plugins. Codex-native surfaces
+[MCP tool directory](/tools/tool-search#mcp-tool-directory), including MCP
+servers installed as plugins. Codex-native surfaces
 are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
 does not enable Code Mode or Tool Search, authorize any tool, or change search
 results. Core coding tools retain their pinned places. Each surface reserves part
@@ -391,8 +391,12 @@ No service URL has a production default yet; the Gateway reports
 
 ### Member roles
 
-OpenClaw ID members use their membership role's definition in
-`gateway.roles.definitions`, not a named role assigned to their Gateway profile.
+OpenClaw ID members use their linked Gateway profile's effective role in
+`gateway.roles.definitions`, through the same resolution as other sign-in routes.
+Invite approval assigns the invite's role to that profile. The membership role
+is a display label; the Gateway publishes the profile's current role to Discovery.
+If the role catalog is unavailable while OpenClaw ID is enabled, identified
+members are refused rather than receiving unrestricted scopes.
 When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
 writes any missing presets without overwriting owner-edited definitions. Installing
 presets uses the standard config writer: it rewrites the config file as JSON and
@@ -448,8 +452,8 @@ permission ceiling. Custom definitions may include `operator.admin`. A member
 whose role has no definition cannot connect or start retained/recovered work.
 Editing a definition reconnects affected members with current permissions;
 removing one denies that role. Missing presets are installed again on the next
-activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
-clearing a stored profile role with `null` remains allowed. With a role catalog
+activation or Gateway start. Manage membership on **Access**. Owners and `operator.admin` administrators can
+assign or clear profile roles with `users.setRole`, including member profiles. With a role catalog
 present, Doctor reads membership locally while the Gateway is stopped, reports
 undefined member roles, and offers to restore missing presets. Accepting that
 repair rewrites JSON and removes comments, just like activation; it preserves
@@ -467,8 +471,10 @@ letter. Other configured names are shown as unavailable rather than renamed.
 Approving a request grants exactly the role named in its invite.
 
 From an approved owner browser, choose **Change role** on a member, select a defined
-role, and save. The browser signs the membership change with its owner device key.
-The member's devices disconnect and reconnect with the new limits. Members whose
+role, and save. The browser signs the membership change with its owner device key, and the Gateway
+assigns that role to the linked profile. The member's connections and active work
+are cut off; reconnects use the new profile limits. A raised role reaches browsers
+that were already approved without a new device approval. Members whose
 role was deleted are marked **Blocked** with the missing role's name; choose another
 role to restore access. Members who can load the Access plugin see their own role,
 not other people's access or owner controls. The plugin currently requires
@@ -476,12 +482,27 @@ not other people's access or owner controls. The plugin currently requires
 open it.
 
 Preset installation never sets or changes `gateway.roles.default` or
-`gateway.roles.assignments`. Without a default, other sign-in methods keep their
-existing behavior, including device-token-only reconnects. The connection decides
-the policy: an OpenClaw ID member role and a profile role reached through another
-sign-in method are not combined. Stored profile assignments have no effect without
-a named default; Doctor warns about them. Existing team Gateways
-keep their default and enforcement. Owner devices and nodes are unchanged.
+`gateway.roles.assignments`. Without a default, explicit assignments govern only
+current members linked to their canonical Gateway profile, on every identified route.
+Nonmembers keep their existing authentication, attribution, scopes, and session access;
+a stored account link without current membership does not activate role enforcement.
+A default enables enforcement for other identified profiles too. An enforced profile
+with no resolvable role, or a zero-scope role, cannot connect. An empty device or header
+scope ceiling alone does not refuse an otherwise permitted connection. Clearing a role
+with `null` exposes a configured GitHub mapping or default, if present. Owner devices
+and nodes are unchanged.
+
+On upgrade while OpenClaw ID is enabled, an existing member with no explicit profile
+assignment receives their current membership role once. Disabled startup still loads
+token-origin bindings, but leaves role assignments, saved sources, and migration
+markers unchanged. Re-enabling completes pending imports without another membership
+write. Existing explicit assignments are preserved. Saved
+automation and recovery sources receive the imported assignment only when their
+captured membership policy matches the role definition; their grants and restrictions
+are unchanged. Mismatched sources remain refused. The Gateway persists that migration
+per member, so clearing an assignment is not undone on restart or reconnect. A fresh
+invitation assigns its selected role again.
+
 A preset-write failure is logged and reported in OpenClaw ID service status;
 undefined member roles remain refused and owners retain access. Nothing is written
 while OpenClaw ID is off. Startup finishes installing presets before publishing
@@ -567,6 +588,11 @@ The browser keeps the account and its ID token until the token expires or you si
 out. Signing in only proves which OpenClaw ID account the browser holds; on its own
 it grants nothing.
 
+In the Mac app, local sign-in opens an app-owned login window and returns to the
+original Control UI. The app keeps its own account; signing in in Safari or Chrome
+does not automatically sign the app in. The Gateway still verifies and redeems
+the authorization code.
+
 ### Link OpenClaw ID to your profile
 
 Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
@@ -598,7 +624,7 @@ The approval card says **Will join as** the selected person. Your selection and
 approval are enough: the member does not need to confirm the profile or match its
 email. Approval links their OpenClaw ID to that profile, so their name and existing
 conversations stay together. The selection alone gives no access, and the member's
-permissions still come from their approved membership role.
+profile receives the role selected in the approved invitation.
 
 The selection stays on this Gateway; it is not in the invite link or signed invite.
 If the selected profile was deleted, merged away, or linked to another account

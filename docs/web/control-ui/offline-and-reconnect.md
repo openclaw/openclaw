@@ -442,7 +442,8 @@ or suspension, and red when disconnected or a refresh is required. The sidebar f
 explains the interruption without moving the page and briefly shows **Connected** after recovery.
 With the sidebar collapsed, a flag beside the avatar appears for four seconds on status changes.
 Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
-controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
+controls, the avatar tooltip shows only the connection status. Hovering or focusing the avatar
+shows no tooltip during normal operation or while the flag is visible.
 On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
 shows the full footer row. Initial connection attempts use the two-second grace;
 an observed connection close shows status immediately.

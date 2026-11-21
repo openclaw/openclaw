@@ -44,6 +44,7 @@ function createChatComposerState(): ChatComposerState {
     textareaRef: null,
     composerInputRef: null,
     stopRunFromEscape: null,
+    sendDraft: null,
     dictation: null,
     composerDraftScope: null,
     dictationSelection: null,

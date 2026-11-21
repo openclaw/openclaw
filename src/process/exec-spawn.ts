@@ -7,7 +7,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { execa, type Options as ExecaOptions } from "execa";
 import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
-import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { ensureOpenClawExecMarkerOnProcess } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
@@ -706,14 +706,7 @@ export function spawnCommandWithInvocation<
           () => execa(limited.command, limited.args, commandOptions),
           "command",
         );
-  // nice execs Git in the same child; retain its family and operation attribution.
-  const niceGit = argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git";
-  recordChildProcessSpawn(
-    niceGit ? "git" : invocation.command,
-    child.nodeChildProcess,
-    undefined,
-    niceGit ? argv.slice(4) : invocation.args,
-  );
+  recordChildProcessSpawn(invocation.command, child.nodeChildProcess, undefined, invocation.args);
   if (scope) {
     retainCommandProcess(scope, child, inheritScopeCancellation, reservation);
   }
@@ -757,5 +750,5 @@ export function resolveCommandEnv(params: {
     resolvedEnv.NPM_CONFIG_FUND ??= "false";
     resolvedEnv.npm_config_fund ??= "false";
   }
-  return markOpenClawExecEnv(resolvedEnv);
+  return ensureOpenClawExecMarkerOnProcess(resolvedEnv);
 }

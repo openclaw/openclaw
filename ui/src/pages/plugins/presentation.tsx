@@ -70,6 +70,8 @@ type ArtTileProps = {
   loading?: boolean;
   class?: string;
   whiteBackground?: boolean;
+  /** Plugin catalog rows and the plugin page show a quiet plug glyph instead of a monogram. */
+  neutralFallback?: boolean;
 };
 
 export function PluginArtTile(props: ArtTileProps): JSX.Element {
@@ -142,16 +144,20 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
         </span>
       ) : (
         <span
-          class={[className(), `${className()}--fallback`]}
+          class={[
+            className(),
+            `${className()}--fallback`,
+            { "plugins-tile--neutral": props.neutralFallback },
+          ]}
           data-plugin-icon-id={slug()}
           style={
-            className() === "plugins-tile"
+            className() === "plugins-tile" && !props.neutralFallback
               ? { background: `linear-gradient(135deg, ${gradient()[0]}, ${gradient()[1]})` }
               : undefined
           }
           aria-hidden="true"
         >
-          {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}
+          {monogram() && !props.neutralFallback ? <span>{monogram()}</span> : <Icon name="plug" />}
         </span>
       )}
     </>

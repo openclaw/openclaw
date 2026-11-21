@@ -242,7 +242,7 @@ it("awaits terminal shell results past the yield window without enabling notific
     expect(settled).toBe(false);
   });
   await expect(execution).resolves.toMatchObject({
-    details: { status: "completed", exitCode: 0, aggregated: "before\nafter" },
+    details: { status: "completed", exitCode: 0, aggregated: "before\nafter\n" },
   });
   expect(peekSystemEvents(sessionKey)).toEqual([]);
   await expect(
