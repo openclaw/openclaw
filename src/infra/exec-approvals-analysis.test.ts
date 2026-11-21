@@ -130,14 +130,28 @@ describe("exec command analysis", () => {
     ["", '""'],
     ["hello world", '"hello world"'],
     ['say "hi"', '"say ""hi"""'],
+    ["a&b|c<d>e;f^g(h)!", '"a&b|c<d>e;f^g(h)!"'],
+    ["$5 share$", '"$5 share$"'],
   ])("escapes Windows argument %j", (value, escaped) => {
     expect(windowsEscapeArg(value)).toEqual({ ok: true, escaped });
   });
 
-  it("rejects expansion tokens", () => {
-    for (const value of ["%PATH%", "$env:SECRET", "$var", "${var}", "$(whoami)", "$?", "$$"]) {
-      expect(windowsEscapeArg(value)).toEqual({ ok: false });
-    }
+  it.each([
+    "%PATH%",
+    "$env:SECRET",
+    "$var",
+    "${var}",
+    "$(whoami)",
+    "$?",
+    "$$",
+    "a`b",
+    "a\nb",
+    "a\rb",
+    "a\r\nb",
+    'a"\nb',
+  ])("rejects unsafe Windows argument %j in analysis and rendering", (value) => {
+    expect(analyzeWindows(`node tool.js "${value.replaceAll('"', '""')}"`).ok).toBe(false);
+    expect(windowsEscapeArg(value)).toEqual({ ok: false });
   });
 
   it("evaluates inline cmd payloads against the inner executable", () => {
