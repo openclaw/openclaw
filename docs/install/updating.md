@@ -53,6 +53,19 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor removes empty snapshot directories left by cancellation between
+private directory creation and native-token acquisition, after its inspection
+workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
+remain retained. The candidate must contain this repair; installed updaters need
+no schema or protocol change.
+
+Git release conversion leaves the serving link unchanged until candidate checks
+and service ownership revalidation finish. At activation, the legacy
+`git-install/lib/node_modules/openclaw` link follows `git-install/openclaw`, so
+existing CLI paths keep working without retaining a separate release selection.
+This also applies with `--no-restart`; the launcher selects the pending candidate
+on its next start. The installed updater must contain this repair.
+
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
 older service definitions without adopting another global installation. The
