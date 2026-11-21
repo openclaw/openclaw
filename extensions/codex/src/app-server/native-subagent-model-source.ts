@@ -342,6 +342,7 @@ export function releaseNativeParentModelSources(
   for (const owner of state.owners.values()) {
     owner.modelSource?.release();
   }
+  state.deliveryReceipts.discardSampled();
   for (const known of children) {
     if (known.parent === state) {
       for (const pending of known.pendingTurns) {
@@ -603,6 +604,9 @@ export async function captureNativeModelSource(
     const owner = executionOwner(request, state, dependencies);
     if (owner) {
       dependencies.assertInputCurrent(request.threadId, owner);
+      if (state.parentThreadId === request.threadId) {
+        state.deliveryReceipts.holdSampled(request);
+      }
       return captureExecutionOwner(owner, () =>
         dependencies.assertInputCurrent(request.threadId, owner),
       );

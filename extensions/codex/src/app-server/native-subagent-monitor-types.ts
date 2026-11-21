@@ -21,6 +21,7 @@ import type {
   CodexNativeSubagentSubmissionAcknowledgement,
   CodexNativeSubagentSubmissionStore,
 } from "./native-subagent-submission.js";
+import type { JsonValue } from "./protocol.js";
 
 type DescendantCancellation = NonNullable<AgentHarness["withDescendantCancellation"]>;
 type NativeRequestCustody = NonNullable<
@@ -77,6 +78,8 @@ export type NativeModelSourceRequest = {
   parentThreadId?: string;
   parentTurnId?: string;
   rootTurnId?: string;
+  /** Input of an ordinary sampling request, read for this turn's native receipts. */
+  input?: JsonValue;
   signal?: AbortSignal;
 };
 export type NativeModelInputRequest = {

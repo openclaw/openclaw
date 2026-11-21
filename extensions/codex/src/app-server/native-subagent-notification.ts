@@ -12,6 +12,8 @@ export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
   "item/reasoning/summaryTextDelta",
   "item/started",
   "item/completed",
+  // Parent turns only: a stopping hook can complete a turn without another sampling.
+  "hook/started",
   // App-server exposes no typed terminal subagent result. Keep this one raw
   // boundary until its protocol provides the child's terminal status and text.
   "rawResponseItem/completed",
@@ -158,6 +160,30 @@ export function readCodexNativeSubagentNotification(
     }
   }
   return { threadId: readString(params, "threadId")?.trim(), completions, receipts };
+}
+
+/** Read the same completion receipts from current-turn items of a parent's model input. */
+export function readCodexNativeSubagentInputReceipts(
+  threadId: string,
+  turnId: string,
+  input: JsonValue | undefined,
+): CodexNativeSubagentNotification["receipts"] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input.flatMap((item) => {
+    const metadata = isJsonObject(item)
+      ? item.internal_chat_message_metadata_passthrough
+      : undefined;
+    // History repeats earlier turns' envelopes; only this turn's input is new evidence.
+    if (!isJsonObject(item) || !isJsonObject(metadata) || metadata.turn_id !== turnId) {
+      return [];
+    }
+    return readCodexNativeSubagentNotification({
+      method: "rawResponseItem/completed",
+      params: { threadId, turnId, item },
+    }).receipts;
+  });
 }
 
 function readCompletionStatus(
