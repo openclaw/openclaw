@@ -1,0 +1,3 @@
+# Real Worker/SQLite regression holds the commit decision beyond the former
+# five-second deadline; the other cases retain revocation and rollback coverage.
+1
