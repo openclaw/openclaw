@@ -475,7 +475,6 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
       });
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider);
-        const guardedFetch = buildGuardedModelFetch(canonicalModel);
         const providerContext = supportsGoogleNativeVideo(model)
           ? await resolveProviderContext(context, options)
           : context;
@@ -522,6 +521,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           kind === "google-generative-ai" &&
           model.provider === "clawrouter" &&
           new URL(requestUrl).pathname.includes("/v1/native/google-gemini/");
+        // Continuation receipts require every terminal error to survive through HTTP EOF.
+        const guardedFetch = routedContinuation
+          ? buildGuardedModelFetch(canonicalModel, undefined, { sanitizeSse: false })
+          : buildGuardedModelFetch(canonicalModel);
         if (options?.googleContinuation && !routedContinuation) {
           throw new Error("Google continuation requires the original ClawRouter native route");
         }
