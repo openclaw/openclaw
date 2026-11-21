@@ -170,16 +170,14 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   );
   // Personal pins and rail shortcuts do not mutate shared session groups.
   const rowDraggable = createMemo(() => pinnable() || groupWriteAccess().allowed);
-  const marqueeLabelTemplate = () => {
-    const labelValue = label();
-    return renderHoverMarquee(
+  const marqueeLabelTemplate = () =>
+    renderHoverMarquee(
       <>
         {indicators.originIndicators}
-        {labelValue}
+        {label()}
       </>,
       "sidebar-recent-session__name",
     );
-  };
   const marqueeLabel = createMemo(() =>
     display() ? (
       <Show
@@ -355,6 +353,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           disabled={Boolean(session().snapshot)}
           data-child-session-toggle={session().key}
           aria-expanded={childrenExpanded() ? "true" : "false"}
+          aria-busy={childrenExpanded() && session().loadingChildren ? "true" : undefined}
           aria-label={t(
             childrenExpanded()
               ? "sessionsView.hideChildSessions"
@@ -550,14 +549,6 @@ export function renderSessionTree(params: {
           <For each={session().childLoadParentKeys ?? [session().key]}>
             {(key) => renderChildSessionLoadError(host, key)}
           </For>
-          {session().loadingChildren && session().children.length === 0 ? (
-            <span
-              class="sidebar-session-tree__loading skeleton skeleton-line skeleton-line--medium"
-              role="status"
-              aria-busy="true"
-              aria-label={t("common.loading")}
-            />
-          ) : undefined}
         </div>
       ) : undefined}
     </div>
