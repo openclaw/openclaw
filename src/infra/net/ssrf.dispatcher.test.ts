@@ -126,7 +126,7 @@ describe("createPinnedDispatcher", () => {
       connect: {
         lookup,
         autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
+        autoSelectFamilyAttemptTimeout: 1_000,
       },
       allowH2: false,
     });
@@ -239,7 +239,7 @@ describe("createPinnedDispatcher", () => {
       proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
+        autoSelectFamilyAttemptTimeout: 1_000,
         ca: "proxy-ca",
       },
     });
@@ -250,7 +250,7 @@ describe("createPinnedDispatcher", () => {
     expect(directOptions.allowH2).toBe(false);
     expect(directOptions.connect).toEqual({
       autoSelectFamily: true,
-      autoSelectFamilyAttemptTimeout: 300,
+      autoSelectFamilyAttemptTimeout: 1_000,
       lookup,
       ca: "target-ca",
     });
@@ -278,7 +278,7 @@ describe("createPinnedDispatcher", () => {
       proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
+        autoSelectFamilyAttemptTimeout: 1_000,
       },
       allowH2: false,
       requestTls: {

@@ -191,7 +191,7 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
       allowH2: false,
       connect: {
         autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
+        autoSelectFamilyAttemptTimeout: 1_000,
       },
     });
     expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
