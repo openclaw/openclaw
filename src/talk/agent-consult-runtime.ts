@@ -20,6 +20,10 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
+import {
+  GatewayDrainingError,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
 import type { ReplyToolAuthorityOverlay } from "../sessions/session-controller.contracts.js";
@@ -319,7 +323,38 @@ export function consultRealtimeVoiceAgentInSessionRuntime(params: ConsultRealtim
   return consultRealtimeVoiceAgentInternal(params, true);
 }
 
+/**
+ * Owns the root admission shared by both realtime voice consult entry points.
+ *
+ * Voice bridges issue consults from callbacks (tool calls, spoken questions) that
+ * were created while an earlier request root was still live; by consult time that
+ * root is often released, which the session-effect admission correctly refuses.
+ * Both entry points therefore own their root admission here, before any session
+ * effect: under a live caller root the consult nests and counts once (the browser
+ * Talk contract behind `consultRealtimeVoiceAgentInSessionRuntime`), under a
+ * released or absent root it opens a fresh independent root (channel bridges such
+ * as FaceTime, phone calls, and meeting bots), and during a genuine gateway restart
+ * drain or suspension it still refuses the consult.
+ */
 async function consultRealtimeVoiceAgentInternal(
+  params: ConsultRealtimeVoiceAgentParams,
+  dispatchesInSessionRuntime: boolean,
+): Promise<RealtimeVoiceAgentConsultResult> {
+  params.abortSignal?.throwIfAborted();
+  const admission = tryBeginGatewayRootWorkAdmission("realtime-voice-agent-consult");
+  if (!admission) {
+    throw new GatewayDrainingError();
+  }
+  try {
+    return await admission.run(() =>
+      runRealtimeVoiceAgentConsult(params, dispatchesInSessionRuntime),
+    );
+  } finally {
+    admission.release();
+  }
+}
+
+async function runRealtimeVoiceAgentConsult(
   params: ConsultRealtimeVoiceAgentParams,
   dispatchesInSessionRuntime: boolean,
 ): Promise<RealtimeVoiceAgentConsultResult> {

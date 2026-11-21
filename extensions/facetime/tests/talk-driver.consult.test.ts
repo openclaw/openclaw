@@ -1,11 +1,34 @@
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../src/process/gateway-work-admission.js";
+import { resolveFaceTimeConfig } from "../src/config.js";
 import {
   mocks,
   resetTalkDriverMocks,
   startParams,
   startReadyFaceTimeTalkDriver,
 } from "./talk-driver.test-support.js";
+
+const forkSessionEntryFromParent = vi.hoisted(() =>
+  vi.fn(async () => ({
+    status: "skipped" as const,
+    reason: "decision-skip" as const,
+    sessionEntry: { sessionId: "", updatedAt: 1 },
+  })),
+);
+
+// The real fork writes through the sqlite-backed session store, which is not
+// available inside vitest worker threads; the admission behavior under test
+// does not depend on the fork decision.
+vi.mock("../../../src/auto-reply/reply/session-fork.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../src/auto-reply/reply/session-fork.js")>();
+  return { ...actual, forkSessionEntryFromParent };
+});
 
 function deferConsult() {
   const { promise, resolve } = Promise.withResolvers<{ text: string }>();
@@ -268,5 +291,117 @@ describe("FaceTime talk driver consult delivery", () => {
     expect(mocks.consult.mock.calls[0]?.[0].extraSystemPrompt).toContain("answer immediately");
     // Owner status comes from commands.ownerAllowFrom in the host, never from this plugin.
     expect(mocks.consult.mock.calls[0]?.[0]).not.toHaveProperty("senderIsOwner");
+  });
+});
+
+describe("FaceTime talk driver consult root admission", () => {
+  let actualConsultRealtimeVoiceAgent: (
+    params: Record<string, unknown>,
+  ) => Promise<{ text: string; yielded?: true }>;
+
+  beforeAll(async () => {
+    const actualRealtimeVoice = await vi.importActual<{
+      consultRealtimeVoiceAgent: (
+        params: Record<string, unknown>,
+      ) => Promise<{ text: string; yielded?: true }>;
+    }>("openclaw/plugin-sdk/realtime-voice");
+    actualConsultRealtimeVoiceAgent = actualRealtimeVoice.consultRealtimeVoiceAgent;
+  });
+
+  function createConsultAgentRuntime() {
+    const sessionStore: Record<string, Record<string, unknown>> = {};
+    const runEmbeddedAgent = vi.fn(async () => ({
+      payloads: [{ text: "17 times 23 is 391." }],
+      meta: {},
+    }));
+    return {
+      runEmbeddedAgent,
+      runtime: {
+        runEmbeddedAgent,
+        resolveAgentDir: vi.fn(() => "/tmp/facetime-agent"),
+        resolveAgentWorkspaceDir: vi.fn(() => "/tmp/facetime-workspace"),
+        ensureAgentWorkspace: vi.fn(async () => {}),
+        resolveAgentTimeoutMs: vi.fn(() => 30_000),
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/facetime-sessions.json"),
+          getSessionEntry: vi.fn(
+            ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey],
+          ),
+          getSessionEntryAsync: vi.fn(
+            async ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey],
+          ),
+          prepareSessionEntryPatch: vi.fn(
+            async ({
+              sessionKey,
+              fallbackEntry,
+              prepare,
+            }: {
+              sessionKey: string;
+              fallbackEntry: Record<string, unknown>;
+              prepare: (
+                entry: Record<string, unknown>,
+              ) => Promise<Record<string, unknown>> | Record<string, unknown>;
+            }) => {
+              const current = sessionStore[sessionKey] ?? fallbackEntry;
+              const patch = await prepare({ ...current });
+              const next = { ...current, ...patch };
+              sessionStore[sessionKey] = next;
+              return next;
+            },
+          ),
+        },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    resetTalkDriverMocks();
+    resetGatewayWorkAdmission();
+  });
+
+  afterEach(() => {
+    resetGatewayWorkAdmission();
+  });
+
+  it("answers a consult issued from a released plugin-service root", async () => {
+    const agentRuntime = createConsultAgentRuntime();
+    mocks.consult.mockImplementationOnce((consultParams) =>
+      actualConsultRealtimeVoiceAgent(consultParams as never),
+    );
+    const logger = { warn: vi.fn() };
+    const params = startParams({
+      config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.com"] }),
+      runtime: { agent: agentRuntime.runtime } as never,
+      logger: logger as never,
+    });
+
+    const serviceRoot = tryBeginGatewayRootWorkAdmission("facetime:plugin-service");
+    expect(serviceRoot).not.toBeNull();
+    const start = Promise.withResolvers<void>();
+    let toolCall: Promise<unknown> | undefined;
+    // Mirrors the reported bug: the realtime bridge and its tool-call callback are
+    // created while the plugin service's startup root is still live, and the voice
+    // model only issues the consult after that root has released.
+    await serviceRoot!.run(async () => {
+      await startReadyFaceTimeTalkDriver(params);
+      toolCall = (async () => {
+        await start.promise;
+        return consult("item-1", "call-1", "What is 17 times 23?");
+      })();
+    });
+    serviceRoot!.release();
+    start.resolve();
+    await toolCall;
+
+    // The real consult runtime loads its session lifecycle lazily; allow for that.
+    await vi.waitFor(
+      () =>
+        expect(mocks.bridge.submitToolResult).toHaveBeenCalledWith("call-1", {
+          text: "17 times 23 is 391.",
+        }),
+      { timeout: 15_000 },
+    );
+    expect(agentRuntime.runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 });
