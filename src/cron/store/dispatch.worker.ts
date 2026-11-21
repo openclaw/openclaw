@@ -38,10 +38,15 @@ const loadProactive = createLazyRuntimeModule(() => import("../default-proactive
 let proactive: typeof import("../default-proactive-job.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  // Scheduled and requested runs finalize later, possibly during shutdown after an update
+  // replaced chunks, so their finalization loads with the owner that claims them.
   if (String(type).startsWith("cron.scheduler") && !schedulerActor) {
-    return loadSchedulerActor().then((loaded) => {
-      schedulerActor = loaded;
-    });
+    return Promise.all([loadSchedulerActor(), loadFinalization()]).then(
+      ([loaded, loadedFinalization]) => {
+        schedulerActor = loaded;
+        finalization = loadedFinalization;
+      },
+    );
   }
   if (
     [
@@ -52,8 +57,9 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     ].includes(String(type)) &&
     !queue
   ) {
-    return loadQueue().then((loaded) => {
+    return Promise.all([loadQueue(), loadFinalization()]).then(([loaded, loadedFinalization]) => {
       queue = loaded;
+      finalization = loadedFinalization;
     });
   }
   if (type === "cron.finalizeRuns" && !finalization) {
