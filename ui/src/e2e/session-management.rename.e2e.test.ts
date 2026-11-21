@@ -39,7 +39,10 @@ suite.define(() => {
       await row.locator(".sidebar-recent-session__name").dblclick();
       const field = page.locator(".sidebar-recent-session__rename-input");
       await field.fill("Release notes draft");
-      await field.press("Control+Shift+ArrowLeft");
+      // Select the last word without depending on OS word-navigation shortcuts.
+      for (const _ of "draft") {
+        await field.press("Shift+ArrowLeft");
+      }
       const selection = () =>
         field.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd]);
       const selected = await selection();
@@ -61,7 +64,8 @@ suite.define(() => {
           evaluateControlUiContext(
             page,
             ({ sessions }, key) =>
-              sessions.presentation.result?.sessions.find((row) => row.key === key)?.lastActivityAt,
+              sessions.presentation.result?.sessions.find((sessionRow) => sessionRow.key === key)
+                ?.lastActivityAt,
             edited.key,
           ),
         )
@@ -466,7 +470,7 @@ suite.define(() => {
       await expect.poll(() => name.locator("xpath=ancestor::a").count()).toBe(1);
       expect(await page.locator(".sidebar-recent-session input").count()).toBe(0);
       const opened = context.waitForEvent("page");
-      await name.click({ modifiers: ["Control"] });
+      await name.click({ modifiers: ["ControlOrMeta"] });
       const linked = await opened;
       await linked.waitForURL(/viewer/);
       await expect.poll(() => title.textContent()).toContain("Shared reference");

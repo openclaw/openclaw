@@ -76,13 +76,13 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
     const movedKey = order().at(-1)!;
     const moved = rowFor(movedKey)!.querySelector("a")!;
     moved.focus();
+    const current = next.result!.sessions.find((row) => row.key === movedKey)!;
+    const refreshed = { ...current, lastActivityAt: Date.now() + 1000 };
     harness.publishList({
       ...next,
       result: {
         ...next.result!,
-        sessions: next.result!.sessions.map((row) =>
-          row.key === movedKey ? { ...row, lastActivityAt: Date.now() + 1000 } : row,
-        ),
+        sessions: next.result!.sessions.map((row) => (row === current ? refreshed : row)),
       },
     });
     await waitForSolid(() => expect(order()[0]).toBe(movedKey));
