@@ -118,6 +118,22 @@ describe("DefaultResourceLoader", () => {
     expect(loader.getThemes().diagnostics).toEqual([]);
   });
 
+  it("reports a theme with a malformed hex color as a warning instead of loading it", async () => {
+    const root = tempDirs.make("openclaw-resource-bad-hex-");
+    const themePath = join(root, "bad-hex.json");
+    const colors = { ...darkTheme.colors, accent: "#1z2y3x" };
+    await writeFile(themePath, JSON.stringify({ ...darkTheme, name: "bad-hex", colors }));
+    const loader = createLoader(root);
+
+    await loader.reload();
+    loader.extendResources({ themePaths: [entry(themePath)] });
+
+    expect(loader.getThemes()).toEqual({
+      themes: [],
+      diagnostics: [{ type: "warning", path: themePath, message: "Invalid hex color: #1z2y3x" }],
+    });
+  });
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "retains theme directory warnings while unreadable prompts remain best effort",
     async () => {
