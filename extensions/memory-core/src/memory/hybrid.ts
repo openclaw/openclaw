@@ -228,7 +228,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       rankingScore,
       score:
         entry.exactPathSpecificity > 0
-          ? projectScoreMultiplier(entry.projectKey, activeProjects)
+          ? entry.eligibilityScore
           : entry.contentScore === 0
             ? 0
             : entry.score,
@@ -255,7 +255,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       mmrConfig.lambda,
     ).map((entry) =>
       Object.assign(entry, {
-        score: projectScoreMultiplier(entry.projectKey, activeProjects),
+        score: entry.eligibilityScore,
       }),
     );
   };
