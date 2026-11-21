@@ -1090,7 +1090,7 @@
   > .chat-tool-msg-collapse--lifecycle
   + openclaw-chat-tool-card
   > .chat-tool-msg-collapse {
-  margin-block-start: calc(3 * var(--chat-run-block-gap) - var(--chat-message-gap));
+  margin-block-start: calc(2 * var(--chat-run-block-gap) - var(--chat-message-gap));
 }
 
 @keyframes chat-work-settle-in {
