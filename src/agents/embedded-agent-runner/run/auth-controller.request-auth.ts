@@ -49,26 +49,26 @@ export function createEmbeddedRequestAuth(params: {
           await assertSettledAuthProfileAuthorization(assertCurrent, authSignal);
           while (true) {
             const resolved = await getApiKeyForModelCore({
-            model: params.model,
-            cfg: params.config,
-            profileId: params.profileId,
-            lockedProfile: true,
-            allowAuthProfileFallback: false,
-            agentDir: params.agentDir,
-            workspaceDir: params.workspaceDir,
-            signal: authSignal,
-            assertRefreshAdmission: assertCurrent,
-            validateOAuthCredential: (credential) => {
-              if (
-                credential.provider !== params.selected.provider ||
-                credential.authFlow !== params.selected.authFlow ||
-                !isSafeToCopyOAuthIdentity(params.selected, credential) ||
-                (!hasOAuthIdentity(params.selected) &&
-                  credential.refresh !== params.selected.refresh)
-              ) {
-                throw new Error("Provider request credentials changed account identity.");
-              }
-            },
+              model: params.model,
+              cfg: params.config,
+              profileId: params.profileId,
+              lockedProfile: true,
+              allowAuthProfileFallback: false,
+              agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
+              signal: authSignal,
+              assertRefreshAdmission: assertCurrent,
+              validateOAuthCredential: (credential) => {
+                if (
+                  credential.provider !== params.selected.provider ||
+                  credential.authFlow !== params.selected.authFlow ||
+                  !isSafeToCopyOAuthIdentity(params.selected, credential) ||
+                  (!hasOAuthIdentity(params.selected) &&
+                    credential.refresh !== params.selected.refresh)
+                ) {
+                  throw new Error("Provider request credentials changed account identity.");
+                }
+              },
             });
             // Re-read if a peer published credentials after this lookup.
             if (!(await assertSettledAuthProfileAuthorization(assertCurrent, authSignal))) {

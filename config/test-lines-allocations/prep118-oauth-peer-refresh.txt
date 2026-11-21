@@ -1,0 +1,5 @@
+166
+# Selected source 31b28e921fa72d530219eec77a8900b232c346e0 (#192906), adapted as ea4f10d527efe57ba54994a51263bee0ee13eed8.
+# Exact LF growth: peer-refresh regression file +162; existing request-auth.test-support.ts deadline wiring +4.
+# The checker counts *.test-support.ts; preserve all five regressions and original controls.
+# Applies only with this selected OAuth candidate; no scalar change or unselected-source credit.
