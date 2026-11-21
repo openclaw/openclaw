@@ -150,7 +150,6 @@ describe("native completion settlement", () => {
       });
       const releasePin = vi.fn();
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
         retainParentThread: () => releasePin,
       });
       const parent = await registerParent(monitor);

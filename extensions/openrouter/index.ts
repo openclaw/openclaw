@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -17,6 +18,7 @@ import {
 import {
   buildPassthroughGeminiSanitizingReplayPolicy,
   DEFAULT_CONTEXT_TOKENS,
+  resolveDefaultModelMaxTokens,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getLoadedOpenRouterModelCapabilities,
@@ -36,7 +38,8 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildOpenRouterDecisionProvider, isOpenRouterDecisionModel } from "./decision-provider.js";
+import { isOpenRouterDecisionModel } from "./decision-codec.js";
+import { buildOpenRouterDecisionProvider } from "./decision-provider.js";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
@@ -166,7 +169,6 @@ function resolveOpenRouterToolFamily(modelId: string) {
 }
 
 const PROVIDER_ID = "openrouter";
-const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 // Upstream families with OpenRouter prompt caching, so pruning waits out the cache TTL.
 // OpenRouter documents implicit Gemini caching only for the 2.5 series and newer.
@@ -178,7 +180,8 @@ const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 type EndpointResult =
   | { ok: true; data: Record<string, unknown> }
   | { ok: false; status: number }
-  | { ok: false; reason: "malformed" | "transport" };
+  | { ok: false; reason: "malformed" }
+  | { ok: false; reason: "transport"; error: string };
 
 type OpenRouterLimitReset = "daily" | "weekly" | "monthly";
 
@@ -262,6 +265,11 @@ type OpenRouterFusionPromptContext = {
 type OpenRouterFusionPromptContribution = {
   dynamicSuffix?: string;
 };
+
+function normalizeRouterBaseUrl<T extends { baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpenRouterBaseUrl(value.baseUrl);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
 
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
@@ -372,7 +380,8 @@ export default defineSingleProviderPluginEntry({
           : {}),
         cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,
+        maxTokens:
+          capabilities?.maxTokens ?? resolveDefaultModelMaxTokens(capabilities?.contextWindow),
       };
     }
 
@@ -447,22 +456,9 @@ export default defineSingleProviderPluginEntry({
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
         );
       },
-      normalizeConfig: ({ providerConfig }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-          : undefined;
-      },
+      normalizeConfig: ({ providerConfig }) => normalizeRouterBaseUrl(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-          ? {
-              api: apiLocal,
-              baseUrl: normalizedBaseUrl,
-            }
-          : undefined;
-      },
+      normalizeTransport: ({ api, baseUrl }) => normalizeRouterBaseUrl({ api, baseUrl }),
       classifyFailoverReason: ({ provider, errorMessage }) => {
         if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
           return undefined;
@@ -527,8 +523,8 @@ export default defineSingleProviderPluginEntry({
               policy: ssrfPolicy,
               auditContext: "openrouter-usage",
             });
-          } catch {
-            return { ok: false, reason: "transport" };
+          } catch (error) {
+            return { ok: false, reason: "transport", error: formatErrorMessage(error) };
           }
           try {
             const { response } = guardedResponse;
@@ -537,18 +533,16 @@ export default defineSingleProviderPluginEntry({
               // Awaiting one branch here can hold the error result until the other ends.
               return { ok: false, status: response.status };
             }
-            try {
-              const root = readRecord(
-                await readProviderJsonResponse(response, "OpenRouter usage", {
-                  maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
-                  chunkTimeoutMs: 0,
-                }),
-              );
-              const data = readRecord(root?.data);
-              return data ? { ok: true, data } : { ok: false, reason: "malformed" };
-            } catch {
-              return { ok: false, reason: "malformed" };
-            }
+            const root = readRecord(
+              await readProviderJsonResponse(response, "OpenRouter usage", {
+                maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
+                chunkTimeoutMs: 0,
+              }),
+            );
+            const data = readRecord(root?.data);
+            return data ? { ok: true, data } : { ok: false, reason: "malformed" };
+          } catch {
+            return { ok: false, reason: "malformed" };
           } finally {
             await guardedResponse.release();
           }
@@ -567,14 +561,16 @@ export default defineSingleProviderPluginEntry({
           if (status !== undefined) {
             return buildUsageHttpErrorSnapshot({ provider: "openrouter", status });
           }
-          const transportFailed = [creditsResult, keyResult].some(
+          const transportFailure = [creditsResult, keyResult].find(
             (result) => "reason" in result && result.reason === "transport",
           );
           return {
             provider: "openrouter",
             displayName: "OpenRouter",
             windows: [],
-            error: transportFailed ? "Usage unavailable" : "Malformed usage response",
+            error: transportFailure
+              ? `Usage unavailable: ${transportFailure.error}`
+              : "Malformed usage response",
           };
         }
         const credits = creditsResult.ok ? creditsResult.data : undefined;

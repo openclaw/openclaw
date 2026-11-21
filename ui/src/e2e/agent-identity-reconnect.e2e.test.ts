@@ -1,13 +1,13 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
   reconnectMockGateway,
-  type MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
+import { captureUiProof } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent identity save reconnect" });
@@ -17,19 +17,10 @@ suite.define(() => {
     await suite.withPage({ locale: "en-US" }, async ({ page }) => {
       await page.clock.install();
       const gateway = await installMockGateway(page, {
-        assistantName: "Atlas",
         historyMessages: [],
         methodResponses: {
           "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
-          "cron.list": {
-            jobs: [],
-            snapshotRevision: "idle",
-            total: 0,
-            offset: 0,
-            limit: 50,
-            hasMore: false,
-            nextOffset: null,
-          },
+          "cron.list": cronJobsListResponse([], { snapshotRevision: "idle" }),
         },
       });
       await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
@@ -52,50 +43,59 @@ suite.define(() => {
       }
       const idle = await counts();
 
-      await page.evaluate(() => {
-        const fixture = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-        fixture.setRequestHandler("agent.identity.get", () => {
-          const request = fixture.findRequests("agent.identity.get").at(-1)!;
-          fixture.deliverLatest({
-            type: "res",
-            id: request.id,
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: "agent.identity.get unavailable during gateway restart",
-              retryable: true,
-              retryAfterMs: 1_000,
-              details: { reason: "gateway-restarting" },
-            },
-          });
-        });
+      await gateway.setMethodResponse("agent.identity.get", {
+        __mockError: {
+          code: "UNAVAILABLE",
+          message: "agent.identity.get unavailable during gateway restart",
+          retryable: true,
+          retryAfterMs: 1_000,
+          details: { reason: "gateway-restarting" },
+        },
       });
-      await gateway.emitGatewayEvent("config.changed", { hash: "synthetic-restart" });
+      const unaffected = [
+        "models.list",
+        "session.members.listEvidence",
+        "sessions.processes.list",
+        "sessions.describe",
+        "agents.list",
+        "agent.identity.get",
+      ];
+      const beforeProfiles = await Promise.all(
+        unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+      );
+      for (const changedPaths of [
+        ["browser.profiles.temporary"],
+        ["browser.profiles"],
+        ["ui.prefs.sidebarEntries"],
+        ["logging.level"],
+        ["browser.headless"],
+      ]) {
+        await gateway.emitGatewayEvent("config.changed", { changedPaths });
+        await page.clock.runFor(1_000);
+      }
+      expect(
+        await Promise.all(
+          unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+        ),
+      ).toEqual(beforeProfiles);
+
+      await gateway.emitGatewayEvent("config.changed", {
+        hash: "synthetic-restart",
+        changedPaths: ["agents.entries.main.identity"],
+      });
       await page.clock.runFor(1_000);
       const beforeDrain = await counts();
       await gateway.emitGatewayEvent("shutdown", { restartExpectedMs: 1_500 });
       await page.clock.runFor(600_000);
       const afterDrain = await counts();
-      const drainCalls = Object.fromEntries(
-        methods.map((method) => [method, afterDrain[method] - beforeDrain[method]]),
-      );
-      console.log(
-        JSON.stringify({ connected, idle, idleMinutes: 10, drainMinutes: 10, drainCalls }),
-      );
-      await page.evaluate(() => {
-        (window as MockGatewayWindow).openclawControlUiE2eGateway!.setRequestHandler(
-          "agent.identity.get",
-          ({ respond }) =>
-            respond({ agentId: "main", name: "Cedar", avatar: "🌻", nameSource: "agent" }),
-        );
+      await gateway.setMethodResponse("agent.identity.get", {
+        agentId: "main",
+        name: "Cedar",
       });
       await page.clock.resume();
       await reconnectMockGateway(page, gateway);
-      await expect
-        .poll(() => page.locator(".agent-chat__welcome-identity h2").textContent())
-        .toBe("Cedar");
-      expect(idle).toEqual(connected);
-      expect(Object.values(drainCalls)).toEqual([0, 0, 0, 0]);
+      await page.getByPlaceholder("Message Cedar", { exact: true }).waitFor();
+      expect({ idle, afterDrain }).toEqual({ idle: connected, afterDrain: beforeDrain });
     });
   });
 
@@ -105,20 +105,18 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
-          const artifacts = createControlUiE2eArtifactDir("agent-identity-reconnect");
           const config = { agents: { entries: { main: {} } } };
           const gateway = await installMockGateway(page, {
-            featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "agents.list",
+              "agents.update",
+              "config.get",
+              "agent.identity.get",
+            ],
             methodResponses: {
               "agents.update": { ok: true },
-              "config.get": {
-                config,
-                sourceConfig: config,
-                hash: "identity-fixture",
-                issues: [],
-                raw: JSON.stringify(config),
-                valid: true,
-              },
+              "config.get": sourceConfigSnapshot(config, "identity-fixture"),
             },
           });
           await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
@@ -140,10 +138,7 @@ suite.define(() => {
           await gateway.waitForRequest(heldMethod, { after: before });
           const beforeRetry = (await gateway.getRequests("agents.update")).length;
           await reconnectMockGateway(page, gateway);
-          await page.screenshot({
-            path: path.join(artifacts, "reconnected.png"),
-            animations: "disabled",
-          });
+          await captureUiProof(suite, page, "identity", "reconnected.png");
           const retried = await gateway.waitForRequest("agents.update", { after: beforeRetry });
           expect(retried.params).toMatchObject({ agentId: "main", name: "Lunar museum guide" });
           await expect.poll(() => name.isEnabled()).toBe(true);

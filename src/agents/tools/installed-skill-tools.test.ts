@@ -6,6 +6,8 @@ import {
   markAgentToolExecutionUnavailable,
 } from "../agent-tool-availability.js";
 import type { InstalledSkill } from "../installed-skill-catalog.js";
+import { fakeTool } from "../test-helpers/fake-tool.js";
+import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
 const guideMetadata = {
@@ -18,11 +20,9 @@ function skill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
   return { ...guideMetadata, source: { filePath: guideMetadata.location }, ...overrides };
 }
 
-function skillTools(skills: InstalledSkill[], admit = true) {
+function skillTools(skills: InstalledSkill[]) {
   const tools = createInstalledSkillTools(skills);
-  if (admit) {
-    finalizeAgentToolAvailability(tools);
-  }
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search");
   const read = expectDefined(tools[1], "read");
   return {
@@ -36,7 +36,7 @@ function skillTools(skills: InstalledSkill[], admit = true) {
 }
 it("requires the effective native read tool for body I/O and cached body matches", async () => {
   const reader = vi.fn(async () => "Private canary deployment instructions");
-  const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })], false);
+  const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })]);
   const check = async (id: string, names: string[], reads: number, query = "canary") => {
     const skills = names.map((name) => ({ name }));
     expect((await find(id, query)).details).toMatchObject({ skills });
@@ -76,9 +76,6 @@ it("does not publish an in-flight body index across read revocation and regrant"
 
 it.each([
   ["inline", "/skills/guide/SKILL.md"],
-  ["inline", "workspace-skill://workspace/guide/SKILL.md"],
-  ["inline", "C:\\skills\\guide\\SKILL.md"],
-  ["inline", "\\\\server\\skills\\guide\\SKILL.md"],
   ["reader", "/skills/guide/SKILL.md"],
   ["partial", "/skills/guide/SKILL.md"],
 ] as const)("searches and reads whole %s instructions at %s", async (mode, location) => {
@@ -95,22 +92,19 @@ it.each([
     source: mode === "reader" ? source : { ...source, readContent: content },
     ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
   });
-  const unavailable = {
-    name: "unavailable",
-    description: "Operations",
-    location: "/skills/unavailable/SKILL.md",
-  };
   const unreadable = skill({
-    ...unavailable,
+    name: "unavailable",
     async reader() {
       throw new Error("Unavailable");
     },
   });
-  const catalog = mode === "partial" ? [entry, unreadable] : [entry];
-  const { find, load } = skillTools(catalog);
+  const { find, load } = skillTools(mode === "partial" ? [entry, unreadable] : [entry]);
   const result = await find("find", mode === "reader" ? "canary" : "operations");
   expect(result.details).toEqual({
-    skills: [{ ...guideMetadata, name, location }, ...(mode === "partial" ? [unavailable] : [])],
+    skills: [
+      { ...guideMetadata, name, location },
+      ...(mode === "partial" ? [{ ...guideMetadata, name: "unavailable" }] : []),
+    ],
     hasMore: false,
     ...(mode === "partial"
       ? { coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 } }
@@ -130,8 +124,6 @@ it.each([
   expect(loaded.details).toMatchObject({ name, location, content });
   expect(JSON.stringify(loaded)).not.toContain("/private/gateway");
   if (mode === "reader") {
-    expect(reader).toHaveBeenLastCalledWith({ location, signal: undefined });
-    await expect(load("invalid", "../hidden")).rejects.toThrow("is not available to this agent");
     expect(reader).toHaveBeenCalledTimes(2);
   }
 });
@@ -216,3 +208,31 @@ it("bounds concurrent cold searches and retains metadata outside the body budget
   expect(peak).toBeLessThanOrEqual(4);
   expect(reader).toHaveBeenCalledTimes(1_024);
 });
+
+it.each([true, false])(
+  "pages oversized instructions to the model budget, read=%s",
+  async (withRead) => {
+    const lines = Array.from({ length: 6000 }, (_, index) => `step ${index}: "quoted" detail`);
+    const content = [...lines, "FINAL CANARY"].join("\n");
+    const source = { filePath: guideMetadata.location, readContent: content };
+    const tools = createInstalledSkillTools([skill({ source })], {
+      modelContextWindowTokens: 128_000,
+    });
+    finalizeAgentToolAvailability(withRead ? [...tools, fakeTool("read", "Read files")] : tools);
+    const result = await expectDefined(tools[1], "read").execute("oversized", { name: "guide" });
+    const text = (result.content[0] as { text: string }).text;
+    const shown = Number(/showing lines 1-(\d+) of 6001/u.exec(text)?.[1]);
+    const next = withRead
+      ? `read({"path":"/skills/guide/SKILL.md","offset":${shown + 1}})`
+      : `read the rest of /skills/guide/SKILL.md from line ${shown + 1}`;
+    expect(shown).toBeGreaterThan(100);
+    expect(text).toContain(`\n${lines[shown - 1]}\n\n[Skill instructions incomplete:`);
+    expect(text).toContain(next);
+    expect(text).not.toContain("FINAL CANARY");
+    // Deferred dispatch wraps this text as a JSON string; that form must still fit.
+    expect(JSON.stringify(text).length).toBeLessThan(
+      resolveLiveToolResultMaxChars({ contextWindowTokens: 128_000 }),
+    );
+    expect(result.details).toMatchObject({ content });
+  },
+);

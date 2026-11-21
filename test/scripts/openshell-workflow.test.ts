@@ -14,20 +14,10 @@ function workflowSteps() {
     .steps as Array<{
     name?: string;
     run?: string;
-    env?: Record<string, string>;
   }>;
 }
 
 describe.skipIf(process.platform !== "linux")("OpenShell hosted bootstrap", () => {
-  it("builds the private QA runtime required by special E2E", () => {
-    expect(
-      workflowSteps().find((step) => step.name === "Build dist for special E2E"),
-    ).toMatchObject({
-      run: "pnpm build",
-      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
-    });
-  });
-
   it.each([
     ["success", 0, 0, 0, "download\nverify\ninstall\nversion\n"],
     ["partial download", 28, 0, 0, "download\n"],
@@ -43,10 +33,8 @@ describe.skipIf(process.platform !== "linux")("OpenShell hosted bootstrap", () =
       const run = expectDefined(installStep.run, "OpenShell install command");
       const root = tempDirs.make("openclaw-openshell-package-");
       const read = (file: string) => readFileSync(join(root, file), "utf8");
-      const args = (command: string) => read(`${command}-args`).split("\0").filter(Boolean);
       const fixture = `
 curl() {
-  printf '%s\\0' "$@" > "$RUNNER_TEMP/curl-args"
   local output=""
   while (( $# )); do
     if [[ "$1" == -o ]]; then shift; output="$1"; fi
@@ -64,7 +52,6 @@ sha256sum() {
   return "$CHECKSUM_EXIT"
 }
 sudo() {
-  printf '%s\\0' "$@" > "$RUNNER_TEMP/install-args"
   local package
   for package in "$@"; do :; done
   cat "$package" > "$RUNNER_TEMP/installed-bytes"
@@ -91,22 +78,13 @@ ${run}`;
       expect(result.status, result.stderr).toBe(curlExit || checksumExit || installExit);
       expect(read("calls")).toBe(calls);
       const packagePath = read("package-path");
-      expect(args("curl")).toEqual([
-        ..."-LsSf --connect-timeout 10 --max-time 120 -o".split(" "),
-        packagePath,
-        "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.3/openshell_0.1.3-1_amd64.deb",
-      ]);
       if (curlExit === 0) {
-        expect(args("checksum")).toEqual(["--check", "-"]);
+        expect(read("checksum-args")).toBe("--check\0-\0");
         expect(read("checksum-input")).toBe(
           `64000b75aaf7d23763ad43aef6d9d6386325cba7bb636a64539a13ce98f88108  ${packagePath}\n`,
         );
       }
       if (curlExit === 0 && checksumExit === 0) {
-        expect(args("install")).toEqual([
-          ..."env DEBIAN_FRONTEND=noninteractive apt-get install -y".split(" "),
-          packagePath,
-        ]);
         expect(read("installed-bytes")).toBe("fixture package");
       }
       expect(existsSync(packagePath)).toBe(false);

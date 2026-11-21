@@ -44,6 +44,7 @@ function acquireLease() {
   const install = path.join(fixture.root, "install");
   fs.mkdirSync(install);
   expect(store.acquire(install, "owner", { kind: "update" }).kind).toBe("acquired");
+  expect(fileMode()).toBe(0o600);
   return store;
 }
 
@@ -51,11 +52,6 @@ unix("recovers a store left world-readable by an interrupted first write", async
   interruptFirstWrite();
   expect(fileMode()).toBe(0o644);
   await writeConfig();
-  expect(fileMode()).toBe(0o600);
-});
-
-unix("keeps the private mode once an ordinary lease has been admitted", () => {
-  acquireLease();
   expect(fileMode()).toBe(0o600);
 });
 

@@ -9,6 +9,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -35,6 +36,28 @@ import type { PreparedSessionSourceAuthority } from "./session-source-authority.
 import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = createTempDirTracker();
+function makeScope(prefix: string, sessionKey: string) {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make(prefix) };
+  return {
+    agentId: "main",
+    sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+}
+
+function withoutHostIo(run: () => void) {
+  const sql = observeMainThreadSql();
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  try {
+    run();
+    sql.expectIdle();
+    expect(requests).not.toHaveBeenCalled();
+  } finally {
+    requests.mockRestore();
+    sql.restore();
+  }
+}
 
 function beginOtherAgentDeletion(env: { OPENCLAW_STATE_DIR: string }) {
   beginAgentDeletionJournal(
@@ -58,13 +81,8 @@ it.each<{ change: string; patch: Partial<InternalSessionEntry>; current: boolean
 ])(
   "compares an initial snapshot with a concurrent $change publication",
   async ({ patch, current }) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-acquisition-") };
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:entry-current",
-      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-      env,
-    };
+    const scope = makeScope("entry-current-acquisition-", "agent:main:entry-current");
+    const { env } = scope;
     const initial: InternalSessionEntry = { sessionId: "same", updatedAt: 1, execHost: "node" };
     replaceSessionEntrySync(scope, initial);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
@@ -127,13 +145,8 @@ afterEach(async () => {
 });
 
 it("keeps prepared entry authority current through native and worker writes without host SQL", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-publication-") };
-  const scope = {
-    agentId: "main",
-    sessionKey: "agent:main:entry-current",
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-    env,
-  };
+  const scope = makeScope("entry-current-publication-", "agent:main:entry-current");
+  const { env } = scope;
   const initial: InternalSessionEntry = {
     sessionId: "original",
     updatedAt: 1,
@@ -158,6 +171,8 @@ it("keeps prepared entry authority current through native and worker writes with
   };
   const expectCurrent = async (check: Prepared, current: boolean) => {
     const sql = observeHostDataSql();
+    const stat = vi.spyOn(fs, "statSync");
+    const realpath = vi.spyOn(fs.realpathSync, "native");
     try {
       if (current) {
         expect(() => check.source()).not.toThrow();
@@ -168,7 +183,11 @@ it("keeps prepared entry authority current through native and worker writes with
       }
       await expect(check.isCurrent()).resolves.toBe(current);
       expect(sql.queries).toEqual([]);
+      expect(stat).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
     } finally {
+      stat.mockRestore();
+      realpath.mockRestore();
       sql.restore();
     }
   };
@@ -226,14 +245,6 @@ it("keeps prepared entry authority current through native and worker writes with
       skipMaintenance: true,
     });
     await expectCurrent(lifecycle, false);
-    const unreadable = await capture();
-    const moved = `${scope.storePath}.unavailable`;
-    fs.renameSync(scope.storePath, moved);
-    try {
-      await expectCurrent(unreadable, false);
-    } finally {
-      fs.renameSync(moved, scope.storePath);
-    }
     const latest = await capture();
     latest.release();
     await expectCurrent(latest, false);
@@ -245,14 +256,72 @@ it("keeps prepared entry authority current through native and worker writes with
   }
 });
 
+// Retained sources follow owner publications; unmanaged replacement is checked at write admission.
+it.skipIf(process.platform === "win32").each(["before preparation", "during preparation"] as const)(
+  "refuses a guarded entry write after database replacement %s",
+  async (phase) => {
+    const scope = makeScope("entry-current-replacement-", "agent:main:entry-current");
+    const original = { sessionId: "selected", updatedAt: 1 };
+    replaceSessionEntrySync(scope, original);
+    const database = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      path: scope.storePath,
+      env: scope.env,
+    });
+    const check = await captureSessionEntryCurrentCheckAsyncInternal(scope);
+    const foreignPath = `${scope.storePath}.foreign`;
+    const originalPath = `${scope.storePath}.original`;
+    const foreign = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      path: foreignPath,
+      env: scope.env,
+    });
+    replaceSessionEntrySync(
+      { ...scope, storePath: foreignPath },
+      { ...original, label: "foreign" },
+    );
+    let replaced = false;
+    const replace = () => {
+      fs.renameSync(scope.storePath, originalPath);
+      fs.renameSync(foreignPath, scope.storePath);
+      replaced = true;
+    };
+    try {
+      if (phase === "before preparation") {
+        replace();
+      }
+      await expect(
+        patchSessionEntryCore(
+          scope,
+          async () => {
+            if (!replaced) {
+              replace();
+            }
+            await Promise.resolve();
+            return { label: "must not persist" };
+          },
+          { workerGuard: { source: check.source }, skipMaintenance: true },
+        ),
+      ).rejects.toThrow(/identity|target changed|selected session changed/i);
+      expect(replaced).toBe(true);
+      for (const opened of [database, foreign]) {
+        const row = opened.db
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(scope.sessionKey);
+        expect(String(row?.entry_json)).not.toContain("must not persist");
+      }
+    } finally {
+      check.release();
+      if (replaced) {
+        fs.renameSync(scope.storePath, foreignPath);
+        fs.renameSync(originalPath, scope.storePath);
+      }
+    }
+  },
+);
+
 it("revokes absent entry authority when a managed write creates its missing database", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-missing-database-") };
-  const scope = {
-    agentId: "main",
-    sessionKey: "agent:main:entry-current",
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-    env,
-  };
+  const scope = makeScope("entry-current-missing-database-", "agent:main:entry-current");
   expect(fs.existsSync(scope.storePath)).toBe(false);
   const check = await captureSessionEntryCurrentCheckAsyncInternal({
     ...scope,
@@ -285,13 +354,8 @@ it("revokes absent entry authority when a managed write creates its missing data
 });
 
 it("retains ID-selected policy and absence without revoking unrelated publications", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-id-") };
-  const scope = {
-    agentId: "main",
-    sessionKey: "agent:main:selected",
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-    env,
-  };
+  const scope = makeScope("entry-current-id-", "agent:main:selected");
+  const { env } = scope;
   const initial: InternalSessionEntry = { sessionId: "selected", updatedAt: 1, execHost: "node" };
   replaceSessionEntrySync(scope, initial);
   const selected = await captureSessionEntryCurrentCheckAsyncInternal({
@@ -364,32 +428,19 @@ function conversationEntry(sessionId: string, updatedAt: number): InternalSessio
 type CurrentCheck = Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>;
 
 function expectConversationCurrentWithoutSql(check: CurrentCheck, current: boolean) {
-  const sql = observeMainThreadSql();
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  try {
+  withoutHostIo(() => {
     if (current) {
       expect(() => check.source()).not.toThrow();
     } else {
       expect(() => check.source()).toThrow("selected session changed");
     }
-    sql.expectIdle();
-    expect(requests).not.toHaveBeenCalled();
-  } finally {
-    requests.mockRestore();
-    sql.restore();
-  }
+  });
 }
 
 it.each([true, false])(
   "publishes current conversation ownership through worker writes (matchGeneration=%s)",
   async (matchGeneration) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-worker-") };
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:chosen",
-      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-      env,
-    };
+    const scope = makeScope("conversation-current-worker-", "agent:main:chosen");
     const competitor = { ...scope, sessionKey: "agent:main:competitor" };
     await replaceSessionEntry(scope, conversationEntry("chosen", 10));
     const check = await captureSessionEntryCurrentCheckAsyncInternal({
@@ -427,13 +478,8 @@ it.each([true, false])(
 );
 
 it("keeps tentative conversation authority local to native commit and rollback", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-rollback-") };
-  const scope = {
-    agentId: "main",
-    sessionKey: "agent:main:chosen",
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-    env,
-  };
+  const scope = makeScope("conversation-current-rollback-", "agent:main:chosen");
+  const { env } = scope;
   const competitor = { ...scope, sessionKey: "agent:main:competitor" };
   await replaceSessionEntry(scope, conversationEntry("chosen", 10));
   const check = await captureSessionEntryCurrentCheckAsyncInternal({
@@ -463,13 +509,7 @@ it("keeps tentative conversation authority local to native commit and rollback",
 });
 
 it("revokes cold conversation authority when its database reader is retired", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-retirement-") };
-  const scope = {
-    agentId: "main",
-    sessionKey: "agent:main:chosen",
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-    env,
-  };
+  const scope = makeScope("conversation-current-retirement-", "agent:main:chosen");
   await replaceSessionEntry(scope, conversationEntry("chosen", 10));
   await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
   const check = await captureSessionEntryCurrentCheckAsyncInternal({
@@ -493,13 +533,8 @@ it.each([
 ])(
   "isolates foreign conversation absence (existing store=$existing, native=$native)",
   async ({ existing, native }) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-stores-") };
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:chosen",
-      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-      env,
-    };
+    const scope = makeScope("conversation-current-stores-", "agent:main:chosen");
+    const { env } = scope;
     const foreign = {
       agentId: "other",
       sessionKey: "agent:other:foreign",
@@ -580,13 +615,7 @@ it.each([
 );
 
 it("matches an absent conversation capture key to the writer receipt canonicalPath", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-canonical-capture-") };
-  const scope = {
-    agentId: "main",
-    sessionKey: "agent:main:canonical-capture",
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-    env,
-  };
+  const scope = makeScope("conversation-canonical-capture-", "agent:main:canonical-capture");
   const { conversationRef } = buildConversationIdentity({
     ...conversationAddress,
     deliveryTarget: conversationAddress.peerId,
@@ -605,16 +634,9 @@ it("matches an absent conversation capture key to the writer receipt canonicalPa
     expect(binding.currentSessionKey(conversationRef)).toBeNull();
     await replaceSessionEntry(scope, conversationEntry("canonical-capture", 10));
     expect(receiptPaths).toContain(captureKey);
-    const sql = observeMainThreadSql();
-    const requests = vi.spyOn(Worker.prototype, "postMessage");
-    try {
+    withoutHostIo(() => {
       expect(binding.currentSessionKey(conversationRef)).toBe(scope.sessionKey);
-      sql.expectIdle();
-      expect(requests).not.toHaveBeenCalled();
-    } finally {
-      requests.mockRestore();
-      sql.restore();
-    }
+    });
   } finally {
     unsubscribe();
     binding.release();

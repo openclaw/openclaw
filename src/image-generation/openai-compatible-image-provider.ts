@@ -16,18 +16,14 @@ import {
   isProviderApiKeyConfigured,
   isProviderApiKeyConfiguredAsync,
 } from "../plugins/provider-auth-availability.js";
+import type { ImageGenerationSourceImage } from "./asset-types.js";
 import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "./image-assets.js";
 import { inlineOpenAiCompatibleImageUrls } from "./openai-compatible-image-urls.js";
-import type {
-  ImageGenerationProvider,
-  ImageGenerationProviderCapabilities,
-  ImageGenerationRequest,
-  ImageGenerationResult,
-  ImageGenerationSourceImage,
-} from "./types.js";
+import type { ImageGenerationProvider, ImageGenerationRequest } from "./provider-types.js";
+import type { ImageGenerationProviderCapabilities, ImageGenerationResult } from "./types.js";
 
 // Match the guarded HTTP default, including when no request timeout is supplied.
 const DEFAULT_IMAGE_OPERATION_TIMEOUT_MS = 60_000;
@@ -138,6 +134,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
+        signal: req.signal,
       });
       if (!auth.apiKey) {
         throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
@@ -207,6 +204,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         url: `${baseUrl.replace(/\/+$/u, "")}/images/${mode === "edit" ? "edits" : "generations"}`,
         headers: new Headers(headers),
         timeoutMs,
+        signal: req.signal,
         fetchFn: fetch,
         allowPrivateNetwork: resolvedAllowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
@@ -245,6 +243,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
           maxDownloads: maxImages,
           maxBytes,
           timeoutMs: remainingTimeoutMs,
+          signal: req.signal,
           // A loopback API endpoint does not authorize arbitrary private image hosts.
           allowPrivateNetwork: configuredRequest?.allowPrivateNetwork,
           ssrfPolicy: req.ssrfPolicy,

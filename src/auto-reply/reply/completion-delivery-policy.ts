@@ -17,12 +17,10 @@ const COMPLETION_TARGET_CHAT_TYPES = new Map<string, CompletionChatType>([
   ["user:", "direct"],
 ]);
 
-type CompletionDeliverySessionEntry = Pick<SessionEntry, "chatType" | "delivery">;
-
 function resolveCompletionChatType(params: {
   requesterSessionKey?: string | null;
   targetRequesterSessionKey?: string | null;
-  requesterEntry?: CompletionDeliverySessionEntry;
+  requesterEntry?: Pick<SessionEntry, "chatType" | "delivery">;
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
 }): CompletionChatType {
@@ -49,7 +47,6 @@ function resolveCompletionChatType(params: {
 export function completionRequiresMessageToolDelivery(
   params: Parameters<typeof resolveCompletionChatType>[0] & {
     cfg: OpenClawConfig;
-    messageToolAvailable?: boolean;
   },
 ): boolean {
   return (
@@ -58,7 +55,6 @@ export function completionRequiresMessageToolDelivery(
       ctx: {
         ChatType: resolveCompletionChatType(params),
       },
-      messageToolAvailable: params.messageToolAvailable,
     }) === "message_tool_only"
   );
 }

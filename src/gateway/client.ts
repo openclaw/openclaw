@@ -6,6 +6,7 @@ import type {
   GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
 } from "../../packages/gateway-client/src/client.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -20,7 +21,10 @@ import {
   loadDeviceIdentityIfPresentAsync,
   loadOrCreateDeviceIdentityAsync,
 } from "../infra/device-identity-async.js";
-import { publicKeyRawBase64UrlFromPem, signDevicePayload } from "../infra/device-identity.js";
+import {
+  publicKeyRawBase64UrlFromEd25519Pem as publicKeyRawBase64UrlFromPem,
+  signEd25519Payload as signDevicePayload,
+} from "../infra/ed25519-signature.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
   registerManagedProxyGatewayLoopbackBypass,
@@ -211,7 +215,8 @@ export class GatewayClient {
       registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
       logDebug,
       logError,
-      redactForLog: redactToolPayloadText,
+      redactForLog: (message) =>
+        redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(message))),
       ...baseOptions.hostDeps,
       ...(readOnly
         ? {

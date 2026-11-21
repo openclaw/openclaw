@@ -1,61 +1,68 @@
+import { channel } from "node:diagnostics_channel";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { collectSessionMemoryEntries } from "./session-memory-entry.worker.test-support.js";
+
+type Scope = Parameters<typeof replaceTranscriptEventsSync>[0];
+function userEvent(id: string, content: string) {
+  return { type: "message", id, message: { role: "user", content } };
+}
+function replace(scope: Scope, events: ReturnType<typeof userEvent>[]) {
+  expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
+}
+function scopeFor(storePath: string, sessionId: string) {
+  return { agentId: "main", sessionId, sessionKey: `agent:main:chat:${sessionId}`, storePath };
+}
+const contentEntry = (content: string) => ({ entry: { content } });
+const bodyReads = (queries: readonly string[]) =>
+  queries.filter((sql) => sql.includes(' as "event_json"'));
+function observeReads() {
+  const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  return Object.assign(observer, { [Symbol.dispose]: () => observer.restore() });
+}
 
 it("batches export metadata while observing committed appends, rewrites and cold transitions", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-batch" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
-    const scopes = Array.from({ length: 12 }, (_, index) => ({
-      agentId: "main",
-      sessionId: `session-${index}`,
-      sessionKey: `agent:main:chat:session-${index}`,
-      storePath,
-    }));
+    const scopes = Array.from({ length: 12 }, (_, index) =>
+      scopeFor(storePath, `session-${index}`),
+    );
     for (const [index, scope] of scopes.entries()) {
       replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      expect(
-        replaceTranscriptEventsSync(scope, [
-          {
-            type: "message",
-            id: `question-${index}`,
-            message: { role: "user", content: `Preference ${index}.` },
-          },
-        ]),
-      ).toBe(true);
+      replace(scope, [userEvent(`question-${index}`, `Preference ${index}.`)]);
     }
     const requests = scopes.map((scope) => ({ absPath: scope.sessionKey, options: scope }));
-    const readBatch = async () => {
-      const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-      try {
-        const entries = await collectSessionMemoryEntries(requests);
-        expect(
-          observer.queries.filter(
-            (sql) => /\bcount\(/i.test(sql) && /transcript_events/i.test(sql),
-          ),
-        ).toHaveLength(2);
-        expect(
-          observer.queries.filter((sql) =>
-            /\bfrom\s+"session_transcript_cold_archives"/i.test(sql),
-          ),
-        ).toHaveLength(0);
-        expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(1);
-        return entries;
-      } finally {
-        observer.restore();
-      }
+    const readBatch = async (expectedPayloadReads = 1) => {
+      using observer = observeReads();
+      const entries = await collectSessionMemoryEntries(requests);
+      const count = (pattern: RegExp) => observer.queries.filter((sql) => pattern.test(sql)).length;
+      expect({
+        counts: observer.queries.filter(
+          (sql) => /\bcount\(/i.test(sql) && /transcript_events/i.test(sql),
+        ).length,
+        cold: count(/\bfrom\s+"session_transcript_cold_archives"/i),
+        bodies: bodyReads(observer.queries).length,
+      }).toEqual({ counts: 2, cold: 0, bodies: expectedPayloadReads });
+      return entries;
     };
 
-    expect(await readBatch()).toMatchObject(
-      scopes.map((_, index) => ({ entry: { content: `User: Preference ${index}.` } })),
+    const initial = await readBatch();
+    expect(initial).toMatchObject(
+      scopes.map((_, index) => contentEntry(`User: Preference ${index}.`)),
     );
+    expect(await readBatch(0)).toEqual(initial);
+    channel("openclaw.memory.critical").publish(undefined);
+    expect(await readBatch()).toEqual(initial);
+    expect(await readBatch(0)).toEqual(initial);
 
     expect(
       appendTranscriptMessageSync(scopes[0]!, {
@@ -63,69 +70,44 @@ it("batches export metadata while observing committed appends, rewrites and cold
         message: { role: "assistant", content: "The committed answer." },
       }),
     ).toMatchObject({ ok: true });
-    expect(
-      replaceTranscriptEventsSync(scopes[1]!, [
-        {
-          type: "message",
-          id: "replacement",
-          message: { role: "user", content: "The rewritten preference." },
-        },
-      ]),
-    ).toBe(true);
+    replace(scopes[1]!, [userEvent("replacement", "The rewritten preference.")]);
     // This owner consumes the cold marker; archive restoration is covered by its own tests.
     runOpenClawAgentWriteTransaction(
       (database) => {
-        database.db
-          .prepare(
-            `INSERT INTO session_transcript_cold_archives
+        const db = database.db;
+        db.prepare(
+          `INSERT INTO session_transcript_cold_archives
             (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes,
              archive_bytes, last_seq, archived_at, storage)
            VALUES (?, 'cold-generation', 'fixture.jsonl.zst', ?, 1, 1, 1, 0, 1, 'file')`,
-          )
-          .run(scopes[2]!.sessionId, "0".repeat(64));
-        database.db
-          .prepare("DELETE FROM transcript_events WHERE session_id = ?")
-          .run(scopes[2]!.sessionId);
+        ).run(scopes[2]!.sessionId, "0".repeat(64));
+        db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(scopes[2]!.sessionId);
       },
       { agentId: "main", env: state.env },
     );
 
     expect(await readBatch()).toMatchObject([
-      { entry: { content: "User: Preference 0.\nAssistant: The committed answer." } },
-      { entry: { content: "User: The rewritten preference." } },
+      contentEntry("User: Preference 0.\nAssistant: The committed answer."),
+      contentEntry("User: The rewritten preference."),
       { cold: true },
-      ...scopes
-        .slice(3)
-        .map((_, index) => ({ entry: { content: `User: Preference ${index + 3}.` } })),
+      ...scopes.slice(3).map((_, index) => contentEntry(`User: Preference ${index + 3}.`)),
     ]);
   });
 });
 
 it("keeps repeated sessions isolated by their admitted input bounds", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-fences" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "shared",
-      sessionKey: "agent:main:chat:shared",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+    const scope = scopeFor(path.join(state.sessionsDir(), "sessions.json"), "shared");
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    expect(
-      replaceTranscriptEventsSync(scope, [
-        { type: "message", id: "first", message: { role: "user", content: "First." } },
-        { type: "message", id: "second", message: { role: "user", content: "Second." } },
-        { type: "message", id: "third", message: { role: "user", content: "Third." } },
-      ]),
-    ).toBe(true);
-    const request = { absPath: scope.sessionKey, options: scope };
-    expect(await collectSessionMemoryEntries([request])).toMatchObject([
-      { entry: { content: "User: First.\nUser: Second.\nUser: Third." } },
+    replace(scope, [
+      userEvent("first", "First."),
+      userEvent("second", "Second."),
+      userEvent("third", "Third."),
     ]);
+    const request = { absPath: scope.sessionKey, options: scope };
     const requests = ["second", "third"].map((entryId) => {
       const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId });
-      if (!anchor) {
-        throw new Error(`Expected persisted input anchor for ${entryId}`);
-      }
+      assert(anchor, `Expected persisted input anchor for ${entryId}`);
       return {
         absPath: request.absPath,
         options: request.options,
@@ -143,10 +125,10 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
     );
     try {
       expect(await collectSessionMemoryEntries(requests)).toMatchObject([
-        { entry: { content: "User: First." } },
-        { entry: { content: "User: First.\nUser: Second." } },
+        contentEntry("User: First."),
+        contentEntry("User: First.\nUser: Second."),
       ]);
-      expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(1);
+      expect(bodyReads(observer.queries)).toHaveLength(1);
       // Each admission range needs at most one session and one sequence bound.
       expect(payloadBindings).toBeLessThanOrEqual(4);
     } finally {
@@ -157,52 +139,35 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
 
 it("waits for delivery before reading later export batches and retries a failed delivery", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-delivery" }, async (state) => {
-    const requests = Array.from({ length: 3 }, (_, index) => ({
-      absPath: "agent:main:chat:delivery-" + index,
-      options: {
-        agentId: "main",
-        sessionId: "delivery-" + index,
-        sessionKey: "agent:main:chat:delivery-" + index,
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      },
-    }));
+    const requests = Array.from({ length: 3 }, (_, index) => {
+      const options = scopeFor(path.join(state.sessionsDir(), "sessions.json"), `d-${index}`);
+      return { absPath: options.sessionKey, options };
+    });
     const body = "bounded fixture ".repeat(150_000);
     for (const { options } of requests) {
       replaceSessionEntrySync(options, { sessionId: options.sessionId, updatedAt: 1 });
-      expect(
-        replaceTranscriptEventsSync(options, [
-          {
-            type: "message",
-            id: "initial",
-            message: { role: "user", content: body },
-          },
-        ]),
-      ).toBe(true);
+      replace(options, [userEvent("initial", body)]);
     }
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
     const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     const pending = collectSessionMemoryEntries(requests, async (index, value) => {
       expect(index).toBe(0);
-      if (!("entry" in value) || !value.entry) {
-        throw new Error("Expected a hot export");
-      }
-      expect(value.entry.content.startsWith("User: bounded fixture ")).toBe(true);
-      expect(value.entry.content.endsWith("fixture")).toBe(true);
+      assert("entry" in value && value.entry, "Expected a hot export");
+      expect(value.entry.content).toMatch(/^User: bounded fixture .*fixture$/s);
       entered.resolve();
       await resume.promise;
       throw new Error("delivery unavailable");
     });
     const observed = pending.catch((error: unknown) => error);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        pending.then(() => {
-          throw new Error("Export finished before delivery was acknowledged");
-        }),
-      ]);
+        pending,
+        "Export finished before delivery was acknowledged",
+      );
       // Two sources exceed the byte group: none of the later bodies may be prefetched.
-      expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(1);
+      expect(bodyReads(observer.queries)).toHaveLength(1);
       resume.resolve();
       await expect(pending).rejects.toThrow("delivery unavailable");
     } finally {
@@ -210,24 +175,79 @@ it("waits for delivery before reading later export batches and retries a failed 
       await observed;
       observer.restore();
     }
-    expect(
-      replaceTranscriptEventsSync(requests[2]!.options, [
-        {
-          type: "message",
-          id: "newer",
-          message: { role: "user", content: "Committed after failure." },
-        },
-      ]),
-    ).toBe(true);
+    // Above snapshot retention, each request renders and consumes its own export snapshot.
+    replace(requests[2]!.options, [userEvent("newer", "Later. ".repeat(684_000))]);
     const delivered: number[] = [];
     expect(
-      await collectSessionMemoryEntries(requests, async (index, value) => {
+      await collectSessionMemoryEntries([...requests, requests[2]!], async (index, value) => {
         delivered.push(index);
-        if (index === 2) {
-          expect(value).toMatchObject({ entry: { content: "User: Committed after failure." } });
+        if (index >= 2) {
+          expect(value).toMatchObject(
+            contentEntry(expect.stringMatching(/^(User: Later\.( Later\.)*\n?){6000}$/)),
+          );
         }
       }),
-    ).toHaveLength(3);
-    expect(delivered).toEqual([0, 1, 2]);
+    ).toHaveLength(4);
+    expect(delivered).toEqual([0, 1, 2, 3]);
+  });
+});
+
+it.each([true, false])("resets a changed sliced export (rendered pages: %s)", async (pages) => {
+  await withOpenClawTestState({ label: "session-memory-entry-restart" }, async (state) => {
+    const scope = scopeFor(path.join(state.sessionsDir(), "sessions.json"), "restart");
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    // Six 1 MB rows exceed snapshot retention and the 2 MiB slice budget.
+    const rows = Array.from({ length: 6 }, (_, index) =>
+      userEvent(`row-${index}`, `row${index} `.repeat(200_000)),
+    );
+    replace(scope, rows);
+    const updates: string[] = [];
+    const observedMessages: string[] = [];
+    let appended = false;
+    const [exported] = await collectSessionMemoryEntries(
+      [{ absPath: scope.sessionKey, options: scope, pages, messages: !pages }],
+      undefined,
+      (_index, update) => {
+        updates.push("reset" in update ? "reset" : "page");
+        if ("reset" in update) {
+          observedMessages.length = 0;
+        } else if (!pages) {
+          expect(update.page.lines).toEqual([]);
+          for (const { message } of update.page.messages ?? []) {
+            assert(message && typeof message === "object" && "content" in message);
+            assert(typeof message.content === "string");
+            observedMessages.push(message.content.split(" ")[0]!);
+          }
+        }
+        if (!appended) {
+          appended = true;
+          expect(
+            appendTranscriptMessageSync(scope, {
+              eventId: "concurrent",
+              message: { role: "assistant", content: "Concurrent answer." },
+            }),
+          ).toMatchObject({ ok: true });
+        }
+      },
+    );
+    assert(exported && "entry" in exported && exported.entry, "Expected a hot export");
+    // The restarted export reads the transcript current at its fresh head.
+    expect(updates).toContain("reset");
+    expect(updates.indexOf("reset")).toBeGreaterThan(0);
+    if (pages) {
+      expect(exported.entry.content.endsWith("\nAssistant: Concurrent answer.")).toBe(true);
+      expect(exported.entry.content.startsWith("User: row0 row0")).toBe(true);
+      expect(exported.entry.lineCount).toBe(exported.entry.content.split("\n").length);
+    } else {
+      expect(observedMessages).toEqual([
+        "row0",
+        "row1",
+        "row2",
+        "row3",
+        "row4",
+        "row5",
+        "Concurrent",
+      ]);
+    }
   });
 });

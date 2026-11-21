@@ -17,9 +17,6 @@ export function createQaLabWebSearchProviderBase(): Omit<WebSearchProviderPlugin
     credentialPath: "",
     inactiveSecretPaths: [],
     getCredentialValue: () => undefined,
-    setCredentialValue: (searchConfigTarget, value) => {
-      void searchConfigTarget;
-      void value;
-    },
+    setCredentialValue: () => {},
   };
 }

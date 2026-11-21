@@ -52,6 +52,30 @@ describe("resolveCurrentDirectiveLevels", () => {
       expected: { currentReasoningLevel: "stream" },
       defaultCalls: 1,
     },
+    {
+      name: "session verbose override",
+      sessionEntry: { verboseLevel: "off" },
+      agentEntry: { verboseDefault: "full" as const },
+      agentCfg: { verboseDefault: "on" },
+      expected: { currentVerboseLevel: "off" },
+      defaultCalls: 1,
+    },
+    {
+      name: "agent verbose default",
+      sessionEntry: {},
+      agentEntry: { verboseDefault: "full" as const },
+      agentCfg: { verboseDefault: "on" },
+      expected: { currentVerboseLevel: "full" },
+      defaultCalls: 1,
+    },
+    {
+      name: "config verbose default",
+      sessionEntry: {},
+      agentEntry: {},
+      agentCfg: { verboseDefault: "on" },
+      expected: { currentVerboseLevel: "on" },
+      defaultCalls: 1,
+    },
   ])("resolves $name", async ({ sessionEntry, agentCfg, agentEntry, expected, defaultCalls }) => {
     const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("high");
     const result = await resolveCurrentDirectiveLevels({

@@ -1,24 +1,17 @@
+import { getPublishedConfigRuntimeEnvState } from "../config/config-env-vars.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { createPluginActivationSource, normalizePluginsConfig } from "./config-state.js";
 import {
-  createPluginActivationSource,
-  normalizePluginsConfig,
-  type NormalizedPluginsConfig,
-  type PluginActivationConfigSource,
-} from "./config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-
-type PluginActivationInputs = {
-  rawConfig?: OpenClawConfig;
-  config?: OpenClawConfig;
-  normalized: NormalizedPluginsConfig;
-  activationSourceConfig?: OpenClawConfig;
-  activationSource: PluginActivationConfigSource;
-  autoEnabledReasons: Record<string, string[]>;
-};
+import { getPluginMetadataSnapshotCache } from "./plugin-cache.js";
 
 type PluginActivationParams = {
   rawConfig?: OpenClawConfig;
@@ -88,58 +81,68 @@ export function withActivatedPluginIds(params: {
   };
 }
 
-function applyPluginAutoEnableForActivation(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  discovery?: PluginDiscoveryResult;
-  manifestRegistry?: PluginManifestRegistry;
-}) {
-  const currentSnapshot = params.manifestRegistry
-    ? undefined
-    : getCurrentPluginMetadataSnapshot({
-        config: params.config,
-        env: params.env,
-        workspaceDir: params.workspaceDir,
-        allowWorkspaceScopedSnapshot: true,
-      });
-  const defaultDiscoverySnapshot =
-    !params.manifestRegistry && normalizePluginsConfig(params.config.plugins).loadPaths.length === 0
-      ? getCurrentPluginMetadataSnapshot({
-          env: params.env,
-          workspaceDir: params.workspaceDir,
-          allowWorkspaceScopedSnapshot: true,
-          requireDefaultDiscoveryContext: true,
-        })
-      : undefined;
-  const currentManifestRegistry =
-    params.manifestRegistry ??
-    currentSnapshot?.manifestRegistry ??
-    defaultDiscoverySnapshot?.manifestRegistry;
-  return applyPluginAutoEnable({
-    config: params.config,
-    env: params.env,
-    manifestRegistry: currentManifestRegistry,
-    discovery:
-      params.discovery ?? currentSnapshot?.discovery ?? defaultDiscoverySnapshot?.discovery,
-  });
-}
-
-export function resolveBundledCompatActivationInputs(
-  params: BundledCompatActivationParams,
-): PluginActivationInputs {
+export function resolveBundledCompatActivationInputs(params: BundledCompatActivationParams) {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
   let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
   let autoEnabledReasons = params.autoEnabledReasons;
 
   if (params.applyAutoEnable && rawConfig !== undefined) {
-    const autoEnabled = applyPluginAutoEnableForActivation({
+    const capturedConfig =
+      rawConfig === getRuntimeConfigSnapshot()
+        ? getRuntimeConfigSnapshot({ capture: true })!
+        : isDeeplyFrozenPlainData(rawConfig)
+          ? rawConfig
+          : undefined;
+    const currentSnapshot =
+      params.manifestRegistry && !capturedConfig
+        ? undefined
+        : getCurrentPluginMetadataSnapshot({
+            config: rawConfig,
+            env,
+            workspaceDir: params.workspaceDir,
+            allowWorkspaceScopedSnapshot: true,
+          });
+    const defaultDiscoverySnapshot =
+      !params.manifestRegistry && normalizePluginsConfig(rawConfig.plugins).loadPaths.length === 0
+        ? getCurrentPluginMetadataSnapshot({
+            env,
+            workspaceDir: params.workspaceDir,
+            allowWorkspaceScopedSnapshot: true,
+            requireDefaultDiscoveryContext: true,
+          })
+        : undefined;
+    const currentManifestRegistry =
+      params.manifestRegistry ??
+      currentSnapshot?.manifestRegistry ??
+      defaultDiscoverySnapshot?.manifestRegistry;
+    const discovery =
+      params.discovery ??
+      (!params.manifestRegistry
+        ? (currentSnapshot?.discovery ?? defaultDiscoverySnapshot?.discovery)
+        : undefined);
+    // Only the runtime owner can extend preparation beyond a mutable setup turn.
+    // Config policy receives these identities without importing the snapshot owner.
+    const runtimePreparation =
+      capturedConfig &&
+      currentSnapshot &&
+      isCurrentPluginMetadataSnapshotRuntimeGeneration(currentSnapshot) &&
+      currentManifestRegistry === currentSnapshot.manifestRegistry &&
+      (!discovery || discovery === currentSnapshot.discovery) &&
+      (env === process.env || isDeeplyFrozenPlainData(env))
+        ? {
+            capturedConfig,
+            cache: getPluginMetadataSnapshotCache(currentSnapshot).metadata.autoEnable,
+            metadataKey: currentSnapshot,
+            envKey: env === process.env ? getPublishedConfigRuntimeEnvState() : env,
+          }
+        : undefined;
+    const autoEnabled = applyPluginAutoEnable({
       config: rawConfig,
       env,
-      workspaceDir: params.workspaceDir,
-      discovery: params.discovery,
-      manifestRegistry: params.manifestRegistry,
+      manifestRegistry: currentManifestRegistry,
+      discovery,
+      ...(runtimePreparation ? { runtimePreparation } : {}),
     });
     resolvedConfig = autoEnabled.config;
     autoEnabledReasons = autoEnabled.autoEnabledReasons;

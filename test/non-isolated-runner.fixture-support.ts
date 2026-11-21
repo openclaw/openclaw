@@ -5,6 +5,18 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const vitestDir = path.dirname(createRequire(import.meta.url).resolve("vitest/package.json"));
 
+export function createRunnerFixtureEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key, value]) =>
+        value !== undefined &&
+        !key.startsWith("VITEST") &&
+        !key.startsWith("OPENCLAW_VITEST") &&
+        key !== "GITHUB_ACTIONS",
+    ),
+  );
+}
+
 export async function withRunnerFixture(
   name: string,
   run: (fixture: { root: string; args: string[]; env: NodeJS.ProcessEnv }) => Promise<void>,
@@ -28,15 +40,7 @@ export async function withRunnerFixture(
         "runner",
         "--reporter=verbose",
       ],
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([key, value]) =>
-            value !== undefined &&
-            !key.startsWith("VITEST") &&
-            !key.startsWith("OPENCLAW_VITEST") &&
-            key !== "GITHUB_ACTIONS",
-        ),
-      ),
+      env: createRunnerFixtureEnv(),
     });
     await fs.rm(root, { recursive: true, force: true });
   } catch (error) {

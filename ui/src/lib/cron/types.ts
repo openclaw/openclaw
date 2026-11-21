@@ -22,6 +22,7 @@ export type CronFormState = {
   name: string;
   description: string;
   agentId: string;
+  ownerProfileId: string;
   sessionKey: string;
   clearAgent: boolean;
   enabled: boolean;
@@ -41,6 +42,14 @@ export type CronFormState = {
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";
+  activeHoursEnabled: boolean;
+  activeHoursStart: string;
+  activeHoursEnd: string;
+  activeHoursTimezone: string;
+  idleOnly: boolean;
+  payloadSkipIfScratchEmpty: boolean;
+  deliveryTarget: "" | "owner";
+  deliveryDirectPolicy: "" | "allow" | "block";
   triggerEnabled: boolean;
   triggerScript: string;
   triggerOnce: boolean;
@@ -54,6 +63,7 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
+  payloadIncludeReasoning: boolean;
   deliveryMode: "" | CronDelivery["mode"];
   deliveryChannel: string;
   deliveryTo: string;
@@ -69,6 +79,7 @@ export type CronFormState = {
   failureAlertTo: string;
   failureAlertDeliveryMode: "" | "announce" | "webhook";
   failureAlertAccountId: string;
+  failureAlertThreadId: CronDelivery["threadId"] | undefined;
   timeoutSeconds: string;
 };
 
@@ -80,13 +91,18 @@ export type CronFieldKey =
   | "scheduleAt"
   | "everyAmount"
   | "cronExpr"
+  | "cronTz"
   | "staggerAmount"
+  | "activeHoursStart"
+  | "activeHoursEnd"
+  | "activeHoursTimezone"
   | "triggerScript"
   | "payloadText"
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
   | "deliveryMode"
+  | "deliveryDirectPolicy"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";
@@ -100,6 +116,8 @@ export type CronJobsState<Row = CronJob> = {
   connected: boolean;
   cronLoading: boolean;
   cronJobsError: string | null;
+  /** A rejected inventory read, independent of the last connection advertisement. */
+  cronJobsReadDenied?: boolean;
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
@@ -121,10 +139,14 @@ export type CronJobsState<Row = CronJob> = {
 };
 
 export type CronState<Row = CronJob> = CronJobsState<Row> & {
+  // History reads follow the presented surface, independently of scheduler reads.
+  canRefreshRuns?: () => boolean;
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;
   cronError: string | null;
+  // Neutral outcome of the last action, e.g. a queued run; failures use cronError.
+  cronNotice: string | null;
   cronForm: CronFormState;
   // True while the create panel owns the detail pane; job selection (editing)
   // always wins over it when deriving the visible panel.

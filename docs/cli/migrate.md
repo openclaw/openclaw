@@ -110,6 +110,9 @@ Shared flags work in either position, so `openclaw migrate --no-auth-credentials
   </Accordion>
   <Accordion title="Backups">
     Apply creates and verifies an OpenClaw backup before applying the migration. If no local OpenClaw state exists yet, the backup step is skipped and the migration continues. To skip a backup when state exists, pass both `--no-backup` and `--force`.
+
+    `openclaw migrate` writes the archive where `openclaw backup create` does: the current directory, or the `--backup-output` path. Memory imports from the Control UI or Gateway, and migrations started during onboarding, write it to your home directory, or to the current directory when your home directory is itself backed up (for example, when it is an agent workspace).
+
   </Accordion>
   <Accordion title="Conflicts">
     Apply refuses to continue when the plan has conflicts. Review the plan, then rerun with `--overwrite` if replacing existing targets is intentional. Providers may still write item-level backups for overwritten files in the migration report directory.
@@ -156,6 +159,9 @@ Native plugin inventory discovery separately follows Codex's authentication
 behavior, including during a dry run. The default
 agent-scoped runtime does not consume a copied or mounted `auth.json` directly.
 Import those credentials into the owning agent's OpenClaw auth store explicitly.
+If native account state changes during inspection, OpenClaw retries the credential
+read once within the same deadline. A startup account announcement can therefore
+recover; another change during the retry leaves the credential unimported.
 Replace `<agent-id>` with that configured agent's ID:
 
 ```bash

@@ -1,0 +1,2 @@
+# #199080: reader-stability regressions for the chat transcript: a strict scroll e2e over a mixed agent session, the late Mermaid render e2e, the top-row anchor rules, the retained-content landing case, and seven lines for the projected-reply fixture's missing native measurement/admission step. It also covers the strict scroll e2e's phone-size WebKit flick case, the only regression test for the WebKit reverse jump (it fails at 65 px without the fix), and the cold-load restore check reading its reader once the rows a wheel step brings in have joined the flow.
+142

@@ -113,7 +113,7 @@ suite.define(() => {
         kind: "oauth",
       },
     ]);
-    const savedProfile = { type: "api_key", profileId: `${loginProvider}:default` };
+    const savedProfile = { type: "oauth", profileId: `${loginProvider}:default` };
     const approve = async (page: Page) => {
       const callback = page.waitForResponse(
         (response) => new URL(response.url()).pathname === "/oauth/provider/callback",
@@ -180,7 +180,7 @@ suite.define(() => {
         const cancelledPage = await begin();
         expect(pagePreviewRequests).toBe(0);
         expect(await page.locator(".link-hovercard").count()).toBe(0);
-        await closeModal("Cancel");
+        await closeModal("Cancel sign-in");
         const cancelledResponse = await approve(cancelledPage);
         await expectRejected(cancelledResponse);
         await cancelledPage.waitForURL(cancelledResponse.url());
@@ -194,9 +194,7 @@ suite.define(() => {
         await freshPage.waitForURL(freshResponse.url());
         expect(new URL(freshResponse.url()).origin).toBe(loginOrigin);
         await expect.poll(profile).toMatchObject(savedProfile);
-        await modal
-          .getByRole("heading", { name: `${loginLabel} is connected`, exact: true })
-          .waitFor();
+        await modal.getByRole("heading", { name: `${loginLabel} is ready`, exact: true }).waitFor();
         await page
           .getByText(`${loginLabel}: Provider credentials saved.`, { exact: true })
           .waitFor();

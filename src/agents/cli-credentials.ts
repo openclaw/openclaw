@@ -8,8 +8,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
+import { attestClaudeNativeLoginOwner } from "../plugin-sdk/provider-auth-claude-compat.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
@@ -478,4 +480,41 @@ export function readGeminiCliCredentialsCached(
   options?: CliFileCredentialOptions,
 ): GeminiCliCredential | null {
   return readCachedGemini(options);
+}
+
+/** Native login owner attested at a boundary that may wait on the network. */
+export type NativeCliLoginAttestation = {
+  /** Non-secret owner reference, set only when the provider attested the credential. */
+  owner?: string;
+};
+
+/**
+ * Attestation sends the CLI's own access token to its provider, so it runs only when the
+ * owning plugin opts in. For Claude that is
+ * `plugins.entries.anthropic.config.historyRecovery.attestNativeLogin: true`. Off by default:
+ * the native login then has no owner, so no account is recorded for its turns.
+ */
+export function isNativeCliLoginAttestationEnabled(
+  backendId: string,
+  config: OpenClawConfig | undefined,
+): boolean {
+  const pluginConfig = asOptionalRecord(config?.plugins?.entries?.anthropic?.config);
+  return (
+    backendId === "claude-cli" &&
+    asOptionalRecord(pluginConfig?.historyRecovery)?.attestNativeLogin === true
+  );
+}
+
+/**
+ * Owner of the native login a local run of this CLI backend would use under
+ * `env`, attested by the provider for the credential itself rather than read
+ * from local account metadata. No owner when the backend has no native login or
+ * the attestation fails; callers must then treat history as unknown.
+ */
+export async function resolveNativeCliLoginOwner(
+  backendId: string,
+  /** Environment the CLI process receives; the Gateway process is not the identity source. */
+  env: NodeJS.ProcessEnv,
+): Promise<NativeCliLoginAttestation> {
+  return backendId === "claude-cli" ? await attestClaudeNativeLoginOwner({ env }) : {};
 }

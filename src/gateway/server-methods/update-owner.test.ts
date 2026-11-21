@@ -19,7 +19,7 @@ import {
   detectRespawnSupervisorMock as detectSupervisor,
   isRestartEnabledMock as restartEnabled,
   mockGlobalInstallSurface as globalInstall,
-  readGatewayOwnerLeaseMock as ownerLease,
+  readGatewayOwnerLeaseAsyncMock as ownerLease,
   resolveStartupInstallStatusMock as installStatus,
   scheduleGatewayRestartMock as scheduleRestart,
   sendGatewayLifecycleNoticeMock as notice,
@@ -216,14 +216,13 @@ it.each(promptUpdateCases)(
         toolNames,
         runtimeInfo: { channel },
       });
-      const guidance = expectDefined(
-        prompt.split("\n").find((line) => line.startsWith("For the Gateway hosting this session:")),
-        "hosting Gateway guidance",
-      );
       const action = expectDefined(
-        guidance.match(/Update OpenClaw: `gateway` action ([\w.]+)/u)?.[1],
-        "prompt-advertised update action",
+        prompt.match(
+          /`gateway`: use ([\w.]+) only when the installation uses the built-in updater/u,
+        )?.[1],
+        "prompt-advertised built-in update action",
       );
+      expect(action).toBe("update.run");
       const result = await tool.execute("update", {
         action,
         requesterSenderId: "model-supplied-sender",
@@ -249,9 +248,8 @@ it.each(promptUpdateCases)(
         handoffId: handoff.handoffId,
       });
       if (!supervisor) {
-        expect(ownerLease).toHaveBeenCalledWith({ current: true });
         const owner = expectDefined(
-          ownerLease.mock.results.at(-1)?.value,
+          await ownerLease.mock.results.at(-1)?.value,
           "current foreground Gateway owner",
         );
         expect(owner).toMatchObject({ mode: "foreground", state: "live", pid: process.pid });
@@ -279,12 +277,6 @@ it.each(promptUpdateCases)(
           }),
         );
       }
-      expect(guidance).toContain("only on an explicit owner request");
-      expect(guidance).toContain("relay the tool's exact recovery instructions");
-      expect(guidance).toContain("operator to run outside the Gateway service");
-      expect(guidance).toContain(
-        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
-      );
     });
   },
 );
@@ -433,7 +425,7 @@ it.each([false, true])(
     expect(notice).toHaveBeenLastCalledWith(
       expect.objectContaining({
         message:
-          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
       }),
       expect.any(Object),
     );

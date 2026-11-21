@@ -1,14 +1,11 @@
-import "./port-command-worker.test-support.js";
-import assert from "node:assert/strict";
+import "./database-suite-workers.test-support.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  doctorDatabasePort,
-  type DatabasePortOptions,
-} from "../../commands/doctor-database-port.js";
+import { readConfigSnapshotForEngineSelection } from "../../commands/config-preflight-snapshot.js";
+import { doctorDatabasePort as port } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { capturePostgresBackup, readBackupEngine } from "../../snapshot/database-backup.js";
@@ -24,43 +21,59 @@ import {
 import {
   assertDatabasePortStartupAllowed,
   databasePortManifestPath,
-  type DatabasePortManifest,
 } from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { agentPortProvider } from "./agent-port.js";
-import { canonical, connection, files } from "./port-command.integration.test-support.js";
+import { getDatabaseEngineSelection } from "./context.js";
+import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import * as fixtures from "./port-command.integration.test-support.js";
+import reports from "./team-reports-port.generated.json" with { type: "json" };
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
-// Reuse one installation and server connection across both family and recovery directions.
-describe.skipIf(!connection)("family-scoped database port", () => {
+describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
   let state: OpenClawTestState;
   let client: Client;
   let workboard: string;
   let shared: string;
+  let agent: string;
   const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const config = () => JSON.parse(fs.readFileSync(state.configPath, "utf8")) as OpenClawConfig;
-  const port = (options: DatabasePortOptions) => doctorDatabasePort(options);
+  const interruptPublication = () => {
+    const write = configIo.writeConfigFile;
+    vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
+      await write(...args);
+      throw new Error("synthetic interruption after publication");
+    });
+  };
 
   beforeAll(async () => {
     state = await createOpenClawTestState({ scenario: "minimal", prefix: "mixed-port-" });
     await state.writeConfig({
-      database: {
-        engine: "sqlite",
-        postgres: { connection: connection! },
-      },
-      plugins: { entries: { workboard: { enabled: false } } },
+      database: { engine: "sqlite", postgres: { connection: fixtures.connection! } },
+      memory: { search: { enabled: false } },
+      plugins: { entries: { workboard: { enabled: false } }, slots: { memory: "memory-core" } },
     });
     workboard = state.statePath("plugins", "workboard", "workboard.sqlite");
     shared = state.statePath("state", "openclaw.sqlite");
+    agent = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(agent), { recursive: true });
+    const descriptor = await agentPortProvider.loadDescriptor();
+    fixtures.seedPortSqlite(
+      agent,
+      `${descriptor.sqlite};
+      PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1);
+      INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+      INSERT INTO cache_entries VALUES ('retained', 'sentinel', '"agent-data"', NULL, NULL, 1);`,
+    );
     fs.mkdirSync(path.dirname(workboard), { recursive: true });
-    {
-      using db = openNodeSqliteDatabase(workboard);
-      db.exec(metadata.sqlite);
-      db.exec(
-        "INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17); INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('mixed-board', 'retained board', 1, 2)",
-      );
-    }
-    client = new Client({ connectionString: connection });
+    fixtures.seedPortSqlite(
+      workboard,
+      `${metadata.sqlite};
+      INSERT INTO workboard_schema_migrations VALUES ('schema-${metadata.version}', 17);
+      INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('mixed-board', 'retained board', 1, 2)`,
+    );
+    client = new Client({ connectionString: fixtures.connection });
     await client.connect();
     openOpenClawStateDatabase({ env: state.env });
     await closeOpenClawStateDatabaseAsync();
@@ -69,59 +82,91 @@ describe.skipIf(!connection)("family-scoped database port", () => {
   afterEach(() => vi.restoreAllMocks());
   afterAll(async () => {
     if (state && client) {
-      const namespaces = new Set<string>();
       const directory = state.statePath("recovery", "database-port");
-      for (const file of await files(directory)) {
-        if (
-          path.basename(file) !== "manifest.json" ||
-          path.dirname(path.dirname(file)) !== directory
-        ) {
-          continue;
-        }
-        const saved = JSON.parse(fs.readFileSync(file, "utf8")) as DatabasePortManifest;
-        for (const target of saved.targets) {
-          for (const location of [target.original, target.intended]) {
-            if (location.engine === "postgres") {
-              namespaces.add(location.namespace);
-            }
-          }
-        }
-      }
-      for (const namespace of namespaces) {
-        assert.match(namespace, /^(port|restore)_[a-f0-9]+$/);
-        await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
-      }
+      await fixtures.dropPortSchemas(
+        client,
+        (await fixtures.files(directory)).filter(
+          (file) =>
+            path.basename(file) === "manifest.json" &&
+            path.dirname(path.dirname(file)) === directory,
+        ),
+      );
     }
     await client?.end();
     await state?.cleanup();
   });
 
-  describe.each(["state", "workboard"] as const)(
-    "%s with an unrelated PostgreSQL family",
-    (family) => {
-      const other = family === "state" ? "workboard" : "state";
-      let before: ReturnType<typeof canonical>;
-      let untouched: string;
+  it("persists published 2026.11.1 intent before a Workboard port round-trip", async () => {
+    const before = fixtures.canonical(workboard);
+    await port({ family: "workboard", to: "postgres" });
+    // Reproduce the released port's authored shape, bypassing current config writes.
+    fs.writeFileSync(
+      state.configPath,
+      JSON.stringify({
+        ...config(),
+        database: { engine: "postgres", postgres: { connection: fixtures.connection! } },
+      }),
+    );
+    const write = configIo.writeConfigFile;
+    vi.spyOn(configIo, "writeConfigFile").mockImplementation((candidate, options) =>
+      write(candidate, {
+        ...options,
+        beforeCommit: async () => {
+          if (options?.beforeCommit) {
+            expect(config().database?.engine).toBe("sqlite");
+            await options.beforeCommit();
+          }
+        },
+      }),
+    );
+    try {
+      await port({ family: "workboard", to: "sqlite" });
+      expect(config().database?.engine).toBe("sqlite");
+      expect(fixtures.canonical(workboard)).toEqual(before);
+      resetDatabaseEngineSelectionForTest();
+      expect((await readConfigSnapshotForEngineSelection(state.env)).valid).toBe(true);
+      expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+        state: "sqlite",
+        agent: "sqlite",
+        workboard: "sqlite",
+      });
+      await port({ family: "workboard", to: "postgres" });
+      resetDatabaseEngineSelectionForTest();
+      expect((await readConfigSnapshotForEngineSelection(state.env)).valid).toBe(true);
+      expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+        state: "sqlite",
+        agent: "sqlite",
+        workboard: "postgres",
+      });
+      const physical = readBackupEngine(workboard);
+      expect(physical.engine).toBe("postgres");
+      if (physical.engine === "postgres") {
+        expect(await fixtures.canonicalPostgres(client, physical.namespace)).toEqual(before);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      resetDatabaseEngineSelectionForTest();
+      await port({ family: "workboard", to: "sqlite" });
+    }
+  }, 120_000);
 
-      beforeAll(async () => {
-        before = canonical(workboard);
+  it.each(["state", "workboard", "agent"] as const)(
+    "round-trips %s with an unrelated PostgreSQL family",
+    async (family) => {
+      const other = family === "workboard" ? "state" : "workboard";
+      const before = fixtures.canonical(workboard);
+      const selectedPath = { state: shared, workboard, agent }[family];
+      const otherPath = { state: shared, workboard }[other];
+      try {
         await port({ family: other, to: "postgres" });
-        untouched = hash(family === "state" ? workboard : shared);
-      }, 120_000);
-
-      afterAll(async () => {
-        await port({ family: other, to: "sqlite" });
-        expect(config().database?.families).toBeUndefined();
-        expect(canonical(workboard)).toEqual(before);
-      }, 120_000);
-
-      it("round-trips the selected family", async () => {
-        const selectedPath = family === "state" ? shared : workboard;
-        const otherPath = family === "state" ? workboard : shared;
+        const untouched = hash(otherPath);
         await expect(port({ to: "postgres" })).rejects.toThrow("requires --family");
         const result = await port({ family, to: "postgres" });
         expect(result.stores).toEqual([selectedPath]);
         expect(hash(otherPath)).toBe(untouched);
+        if (family === "agent") {
+          expect(readBackupEngine(shared).engine).toBe("sqlite");
+        }
         expect(config().database).toMatchObject({
           engine: "sqlite",
           families: {
@@ -129,32 +174,34 @@ describe.skipIf(!connection)("family-scoped database port", () => {
             [other]: { engine: "postgres" },
           },
         });
-        await port({ family, to: "sqlite" });
+        const reversed = await port({ family, to: "sqlite" });
         expect(hash(otherPath)).toBe(untouched);
         expect(readBackupEngine(selectedPath).engine).toBe("sqlite");
         expect(config().database?.families).toEqual({ [other]: { engine: "postgres" } });
-      }, 120_000);
+        if (family === "agent") {
+          for (const completed of [result, reversed]) {
+            expect("memoryRebuilds" in completed && completed.memoryRebuilds).toEqual([
+              { agentId: "main", path: agent, status: "disabled" },
+            ]);
+          }
+          using db = openNodeSqliteDatabase(agent, { readOnly: true });
+          expect(
+            db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),
+          ).toEqual({ value_json: '"agent-data"' });
+          expect(readBackupEngine(shared).engine).toBe("sqlite");
+        }
+      } finally {
+        await port({ family: other, to: "sqlite" });
+        expect(config().database?.families).toBeUndefined();
+        expect(fixtures.canonical(workboard)).toEqual(before);
+      }
     },
+    120_000,
   );
 
   it("recovers and backs up scoped PostgreSQL agents with SQLite state", async () => {
-    const agent = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(agent), { recursive: true });
-    const descriptor = await agentPortProvider.loadDescriptor();
-    {
-      using db = openNodeSqliteDatabase(agent);
-      db.exec(descriptor.sqlite);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-        INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1);
-        INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
-        INSERT INTO cache_entries VALUES ('retained', 'sentinel', '"agent-data"', NULL, NULL, 1);`);
-    }
     const unrelated = hash(workboard);
-    const write = configIo.writeConfigFile;
-    vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
-      await write(...args);
-      throw new Error("synthetic interruption after agent publication");
-    });
+    interruptPublication();
     await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow();
     vi.restoreAllMocks();
     expect(readBackupEngine(agent).engine).toBe("postgres");
@@ -174,16 +221,56 @@ describe.skipIf(!connection)("family-scoped database port", () => {
       assertCurrent() {},
     });
     expect(backup.source.owner).toBe("agent");
+    // An update without an agent schema change leaves the previous release in schema_meta.
+    const anchor = readBackupEngine(agent);
+    if (anchor.engine !== "postgres") {
+      throw new Error("agent anchor must select PostgreSQL");
+    }
+    await client.query(
+      `UPDATE "${anchor.namespace}".schema_meta SET app_version = '2026.1.1' WHERE meta_key = 'primary'`,
+    );
     await port({ family: "agent", to: "sqlite" });
     expect(config().database?.families).toBeUndefined();
     expect(readBackupEngine(shared).engine).toBe("sqlite");
     expect(hash(workboard)).toBe(unrelated);
     using db = openNodeSqliteDatabase(agent, { readOnly: true });
-    expect(
-      db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),
-    ).toEqual({
-      value_json: '"agent-data"',
+    const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
+    expect(row).toEqual({ value_json: '"agent-data"' });
+    expect(db.prepare("SELECT app_version FROM schema_meta").get()).toEqual({
+      app_version: "2026.1.1",
     });
+  }, 120_000);
+
+  it("resumes and reverses Team Reports without renaming its quoted namespace", async () => {
+    const source = state.statePath("plugins", "team-reports", "team-reports.sqlite");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fixtures.seedPortSqlite(
+      source,
+      `${reports.sqlite};
+      PRAGMA user_version = ${reports.version};
+      INSERT INTO team_reports_schema_migrations VALUES ('schema-${reports.version}', 17);
+      INSERT INTO team_reports_runs VALUES
+        ('retained', 'daily', 9007199254740993, NULL, 'completed', '[]', NULL, NULL)`,
+    );
+    const untouched = hash(workboard);
+    const plan = await port({ family: "team-reports", to: "postgres", dryRun: true });
+    expect(plan.stores).toEqual([source]);
+    interruptPublication();
+    await expect(port({ family: "team-reports", to: "postgres" })).rejects.toThrow();
+    vi.restoreAllMocks();
+    const anchor = readBackupEngine(source);
+    expect(anchor).toMatchObject({
+      engine: "postgres",
+      namespace: expect.stringContaining("_team-reports_"),
+    });
+    await port({ resume: databasePortManifestPath(state.stateDir) });
+    expect(readBackupEngine(source)).toEqual(anchor);
+    await port({ family: "team-reports", to: "sqlite" });
+    using db = openNodeSqliteDatabase(source, { readOnly: true, readBigInts: true });
+    expect(db.prepare("SELECT id, started_at_ms FROM team_reports_runs").all()).toEqual([
+      { id: "retained", started_at_ms: 9007199254740993n },
+    ]);
+    expect(hash(workboard)).toBe(untouched);
   }, 120_000);
 
   describe("interrupted scoped publication", () => {
@@ -198,12 +285,8 @@ describe.skipIf(!connection)("family-scoped database port", () => {
       "blocks startup and supports %s",
       async (action) => {
         const other = hash(shared);
-        const before = canonical(workboard);
-        const write = configIo.writeConfigFile;
-        vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
-          await write(...args);
-          throw new Error("synthetic interruption after publication");
-        });
+        const before = fixtures.canonical(workboard);
+        interruptPublication();
         const failure = await port({ family: "workboard", to: "postgres" }).catch(
           (error: unknown) => error,
         );
@@ -212,20 +295,12 @@ describe.skipIf(!connection)("family-scoped database port", () => {
         expect(readBackupEngine(workboard).engine, String(failure)).toBe("postgres");
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
         const active = databasePortManifestPath(state.stateDir);
-        const saved = JSON.parse(fs.readFileSync(active, "utf8")) as DatabasePortManifest;
-        const inputsFile = saved.artifacts.find(
-          (file) => path.basename(file.path) === "inputs.json",
-        );
-        assert(inputsFile);
-        expect(JSON.parse(fs.readFileSync(inputsFile.path, "utf8"))).toMatchObject({
-          selection: {
-            path: ["database", "families", "workboard", "engine"],
-            originalValue: null,
-            effectiveSource: "sqlite",
-          },
-        });
         await port({ [action]: active });
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
+        expect(config().database?.families).toEqual({
+          state: { engine: "postgres" },
+          ...(action === "resume" ? { workboard: { engine: "postgres" } } : {}),
+        });
         expect(hash(shared)).toBe(other);
         expect(readBackupEngine(workboard).engine).toBe(
           action === "resume" ? "postgres" : "sqlite",
@@ -233,7 +308,7 @@ describe.skipIf(!connection)("family-scoped database port", () => {
         if (action === "resume") {
           await port({ family: "workboard", to: "sqlite" });
         }
-        expect(canonical(workboard)).toEqual(before);
+        expect(fixtures.canonical(workboard)).toEqual(before);
       },
       120_000,
     );

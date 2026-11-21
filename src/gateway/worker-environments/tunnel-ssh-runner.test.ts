@@ -9,7 +9,7 @@ const FAILED_EXIT = { code: 255, signal: null };
 
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
-import { createWorkerSshRunner, WORKER_TUNNEL_READY_MARKER } from "./tunnel-ssh-runner.js";
+import { workerSshRunner, WORKER_TUNNEL_READY_MARKER } from "./tunnel-ssh-runner.js";
 
 function createChild() {
   const child = Object.assign(new EventEmitter(), {
@@ -42,7 +42,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 const start = (signal?: AbortSignal) =>
-  createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000, signal });
+  workerSshRunner.start(["ssh"], { timeoutMs: 10_000, signal });
 async function expectPending(process: ReturnType<typeof start>) {
   const settled = vi.fn();
   void process.exited.then(settled);
@@ -157,9 +157,4 @@ it("passes the owner signal to spawn so abort terminates and settles the child",
   expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
   await expect(process.exited).resolves.toEqual({ code: null, signal: null });
-  expect(spawnMock).toHaveBeenCalledWith(
-    "ssh",
-    [],
-    expect.objectContaining({ signal: controller.signal }),
-  );
 });

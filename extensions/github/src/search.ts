@@ -1,10 +1,9 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ControlUiGitHubError,
-  fetchGitHubApi,
+  fetchGitHubJsonPage,
   GITHUB_API_ORIGIN,
   isRecord,
-  readGitHubJsonResponse,
   requiredString,
   withOptionalGitHubAuth,
 } from "./github-api.js";
@@ -58,23 +57,15 @@ async function searchWithIdentity(
     per_page: String(PAGE_SIZE),
     page: String(params.page),
   }).toString();
-  const value = await readGitHubJsonResponse(
-    await fetchGitHubApi(
-      url.href,
-      fetchImpl,
-      identity?.token,
-      async () => {
-        // A search redirect must not replace the fixed query or repository scope.
-        throw new ControlUiGitHubError(502, "GitHub search returned an unexpected redirect");
-      },
-      identity,
-      undefined,
-      undefined,
-      undefined,
-      GITHUB_API_ORIGIN,
-    ),
-    1024 * 1024,
-  );
+  const { value } = await fetchGitHubJsonPage(url.href, fetchImpl, identity?.token, {
+    beforeRedirect: async () => {
+      // A search redirect must not replace the fixed query or repository scope.
+      throw new ControlUiGitHubError(502, "GitHub search returned an unexpected redirect");
+    },
+    identity,
+    apiBaseUrl: GITHUB_API_ORIGIN,
+    maxBytes: 1024 * 1024,
+  });
   if (
     !isRecord(value) ||
     typeof value.total_count !== "number" ||

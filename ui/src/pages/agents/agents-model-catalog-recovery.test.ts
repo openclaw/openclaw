@@ -2,7 +2,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
@@ -21,23 +22,21 @@ import { createAgentViewTestProps as createProps } from "./agents-view.test-help
 import { Agents } from "./view.tsx";
 
 describe("agent model catalog recovery", () => {
-  it("shows a model-catalog failure without a manual retry button", () => {
+  it("shows a model-catalog failure without a manual retry button", async () => {
+    const read = Promise.reject(new Error("model catalog unavailable"));
+    void read.catch(() => undefined);
     const { container } = mountSolid(
       Agents,
       createProps({
-        overview: { ...createProps().overview },
+        overview: { ...createProps().overview, modelCatalogHasSnapshot: true },
         readData: () => ({
           ...createProps().readData(),
-          chatModelCatalogStatus: {
-            error: "model catalog unavailable",
-            hasLoaded: true,
-            stale: true,
-            awaitingGateway: false,
-          },
+          chatModelCatalogRead: read,
         }),
       }),
     );
 
+    await waitForFast(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("model catalog unavailable");
     expect(alert?.textContent).toContain(t("common.staleData"));
@@ -85,12 +84,10 @@ describe("agent model catalog recovery", () => {
       emitCatalogChanged(currentGateway);
       if (!lateFailure) {
         pending.reject(error);
-        await waitForFast(() =>
-          expect(page.read().readData().chatModelCatalogStatus).toMatchObject({
-            awaitingGateway: lifecycle,
-            error: lifecycle ? null : "Model catalog unavailable",
-            stale: true,
-          }),
+        await waitForFast(async () =>
+          expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
+            "Model catalog unavailable",
+          ),
         );
       }
       expect(page.read().overview.modelCatalog).toEqual(oldModels);
@@ -103,10 +100,7 @@ describe("agent model catalog recovery", () => {
         pending.reject(error);
       }
       await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
-      expect(page.read().readData().chatModelCatalogStatus).toMatchObject({
-        error: null,
-        awaitingGateway: false,
-      });
+      await expect(page.read().readData().chatModelCatalogRead).resolves.toBeUndefined();
       expect(request).toHaveBeenCalledTimes(3);
     },
   );

@@ -12,20 +12,22 @@ import type {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
+import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   connectPaneTestView,
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
   createRenderTestChatPane,
   createTestChatPane,
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import { currentSessionApprovalReplay } from "./session-approval-projection.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 
 describe("chat pane approval replay subscriptions", () => {
   it("preserves live approval transitions received while session replay is awaiting publication", async () => {
@@ -85,13 +87,10 @@ describe("chat pane approval replay subscriptions", () => {
     });
     await sync;
     expect(state.chatSessionApprovalQueue?.map((entry) => entry.id)).toEqual(["exec:new-live"]);
-    expect(currentSessionApprovalReplay(state, "main")?.complete).toBe(true);
-    state.connectionEpoch += 1;
-    expect(currentSessionApprovalReplay(state, "main")).toBeUndefined();
   });
 
   it.each([false, true])(
-    "uses the global pending queue only when the session replay is truncated (%s)",
+    "uses the global pending queue for truncated or retired session replays (%s)",
     async (truncated) => {
       const key = "agent:main:pending-replay";
       const client = createTestGatewayClient(async (method) =>
@@ -133,6 +132,9 @@ describe("chat pane approval replay subscriptions", () => {
         expect(await syncSelectedSessionMessageSubscription(state)).toBe(true);
         pane.render();
         expect(pane.chatProps?.inlineApproval).toBe(truncated ? approval : null);
+        state.connectionEpoch += 1;
+        pane.render();
+        expect(pane.chatProps?.inlineApproval).toBe(approval);
       } finally {
         if (state.chatSessionMessageSubscription) {
           await state.sessions.unsubscribeMessages(state.chatSessionMessageSubscription);
@@ -181,11 +183,21 @@ function observeRender<T>(pane: TestChatPane, read: () => T) {
 it("projects composer capability changes and catches up a parked pane on reveal", async () => {
   const fixture = createMountedPanes([{ key: "main", kind: "direct", updatedAt: 1 }]);
   const { pane } = fixture;
-  const capabilities = getPaneTestRuntime(pane).composerCapabilities;
-  const view = () => capabilities.dialogView(pane.context, pane.state, undefined);
-  const { render, expectUpdate } = observeRender(pane, () => view().open);
+  const runtime = getPaneTestRuntime(pane);
+  expect(runtime.composerCapabilities).toBeUndefined();
+  const { render, expectUpdate } = observeRender(
+    pane,
+    () =>
+      runtime.composerCapabilities?.dialogView(pane.context, pane.state, undefined).open ?? false,
+  );
   fixture.mount("main");
   await pane.updateComplete;
+  const create = vi.fn(() => new ChatComposerCapabilityHost());
+  const capabilities = runtime.ensureComposerCapabilities(create);
+  await pane.updateComplete;
+  expect(runtime.ensureComposerCapabilities(create)).toBe(capabilities);
+  expect(create).toHaveBeenCalledOnce();
+  const view = () => capabilities.dialogView(pane.context, pane.state, undefined);
 
   await expectUpdate(
     () => capabilities.props(pane.context, pane.state, undefined, "main").onAddServer?.(),

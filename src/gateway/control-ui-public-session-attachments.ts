@@ -22,6 +22,10 @@ export function buildPublicSessionMediaBaseUrl(basePath: string, token: string):
   return `${basePath}/share/session/media?token=${encodeURIComponent(token)}`;
 }
 
+export function buildPublicSessionWidgetUrl(basePath: string, widgetToken: string): string {
+  return `${basePath}/share/session/media?widget=${encodeURIComponent(widgetToken)}`;
+}
+
 export function buildPublicSessionMediaUrl(baseUrl: string, entryId: string, attachmentId: string) {
   return `${baseUrl}&entry=${encodeURIComponent(entryId)}&attachment=${encodeURIComponent(attachmentId)}`;
 }
@@ -128,7 +132,7 @@ export async function readPublicSessionAttachment(
     return null;
   }
   try {
-    const { buildInboundMediaUriFromPath } = await import("../media/media-reference.js");
+    const { buildInboundMediaUriFromPath } = await import("../media/inbound-media-path.js");
     const inbound = parseInboundMediaUri(
       buildInboundMediaUriFromPath(attachment.path ?? attachment.source) ?? attachment.source,
     );

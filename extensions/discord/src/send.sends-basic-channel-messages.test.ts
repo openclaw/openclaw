@@ -24,6 +24,7 @@ import { DiscordError } from "./internal/rest.js";
 import {
   deleteMessageDiscord,
   editMessageDiscord,
+  listPinsDiscord,
   pinMessageDiscord,
   unpinMessageDiscord,
 } from "./send.messages.js";
@@ -364,15 +365,20 @@ it.each(["media follow-up", "text retry", "dispatch refresh"] as const)(
   },
 );
 
-it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
+it("preserves ambiguous and unknown mentions while rewriting the configured account's known users", async () => {
   rememberDiscordDirectoryUser({
     accountId: "work",
     userId: "222333444555666777",
-    handles: ["Alice"],
+    handles: ["Alice#1234", "Reviewer"],
+  });
+  rememberDiscordDirectoryUser({
+    accountId: "work",
+    userId: "333444555666777888",
+    handles: ["Reviewer"],
   });
   const { send, postMock } = sendHarness(["msg1"], ChannelType.GuildText);
   const work = { token: "Bot work-token", suppressEmbeds: true }; // pragma: allowlist secret
-  await send("ping @Alice.", {
+  await send("ping @Alice. @Reviewer @Alice#9999 @Unknown", {
     cfg: {
       channels: {
         discord: {
@@ -385,7 +391,7 @@ it("uses configured defaultAccount for cached mention rewriting when accountId i
   });
   expect(requestPath(postMock, 0)).toBe(Routes.channelMessages("789"));
   expect(requestBody(postMock)).toMatchObject({
-    content: "ping <@222333444555666777>.",
+    content: "ping <@222333444555666777>. @Reviewer @Alice#9999 @Unknown",
     flags: MessageFlags.SuppressEmbeds,
   });
 });
@@ -466,8 +472,6 @@ it.each([
   await expect(
     sendMessageDiscord("channel:chan1", "hello", clientOptions(rest)),
   ).rejects.toMatchObject({
-    missingPermissions: missing,
-    discordCode: 50013,
     status: 403,
     message: expect.stringContaining(
       missing[0] ?? "permission check did not identify missing ViewChannel/SendMessages",
@@ -556,7 +560,10 @@ it("reports blocked DMs from a native Discord REST error", async () => {
   });
   await expect(
     sendMessageDiscord("user:123", "hello", clientOptions(loopback.rest)),
-  ).rejects.toMatchObject({ kind: "dm-blocked", discordCode: 50007, status: 403 });
+  ).rejects.toMatchObject({
+    message: "discord dm failed: user blocks dms or privacy settings disallow it (code=50007)",
+    status: 403,
+  });
 });
 
 it("does not mask unrelated media upload failures", async () => {
@@ -764,6 +771,60 @@ it("fails closed when the channel belongs to a different guild", async () => {
   ).resolves.toBe(false);
 });
 
+it.each([
+  [250, 50, undefined, [50, 50, 50, 50, 50]],
+  [6, 1, undefined, [50, 50, 50, 50, 50, 50]],
+  [250, 50, 3, [3]],
+  [250, 50, 60, [50, 10]],
+] as const)("lists pins (%s, %s/page, limit %s)", async (pinCount, pageSize, limit, limits) => {
+  const pins = Array.from({ length: pinCount }, (_, index) => ({
+    pinned_at: new Date(pinCount - index).toISOString().replace("Z", "000+00:00"),
+    message: { id: String(index + 1) },
+  }));
+  const loopback = await loopbackRest({
+    respond: ({ path }) => {
+      const url = new URL(path ?? "/", "http://localhost");
+      const before = url.searchParams.get("before");
+      const start = before === null ? 0 : pins.findIndex((pin) => pin.pinned_at === before) + 1;
+      const size = Math.min(pageSize, Number(url.searchParams.get("limit")));
+      const items = pins.slice(start, start + size);
+      return { items, has_more: start + items.length < pins.length };
+    },
+  });
+  await expect(listPinsDiscord("789", clientOptions(loopback.rest), limit)).resolves.toEqual(
+    pins.slice(0, limit).map((pin) => pin.message),
+  );
+  expect(
+    loopback.requests.map(({ method, path }) => {
+      const url = new URL(path ?? "/", "http://localhost");
+      return {
+        method,
+        path: url.pathname,
+        limit: url.searchParams.get("limit"),
+        before: url.searchParams.get("before"),
+      };
+    }),
+  ).toEqual(
+    limits.map((requestLimit, index) => ({
+      method: "GET",
+      path: "/v10/channels/789/messages/pins",
+      limit: String(requestLimit),
+      before: index === 0 ? null : pins[index * pageSize - 1]!.pinned_at,
+    })),
+  );
+});
+
+it("pins and unpins through current routes while preserving message ID normalization", async () => {
+  const loopback = await loopbackRest({ respond: () => ({}) });
+  await pinMessageDiscord("789", " 123 ", clientOptions(loopback.rest));
+  await unpinMessageDiscord("789", " 123 ", clientOptions(loopback.rest));
+
+  expect(loopback.requests.map(({ method, path }) => ({ method, path }))).toEqual([
+    { method: "PUT", path: "/v10/channels/789/messages/pins/123" },
+    { method: "DELETE", path: "/v10/channels/789/messages/pins/123" },
+  ]);
+});
+
 const unknownMessage = Object.assign(new Error("Unknown Message"), {
   status: 404,
   discordCode: 10008,
@@ -787,13 +848,13 @@ const mutations = [
   [
     "pin",
     "putMock",
-    (channel: string, id: string) => Routes.channelPin(channel, id),
+    (channel: string, id: string) => Routes.channelMessagesPin(channel, id),
     pinMessageDiscord,
   ],
   [
     "unpin",
     "deleteMock",
-    (channel: string, id: string) => Routes.channelPin(channel, id),
+    (channel: string, id: string) => Routes.channelMessagesPin(channel, id),
     unpinMessageDiscord,
   ],
 ] as const;

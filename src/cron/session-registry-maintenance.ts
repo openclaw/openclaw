@@ -1,4 +1,3 @@
-// Cron-owned session retention preserves transcripts owned by running jobs.
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -17,7 +16,7 @@ import {
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { loadCronJobsStore } from "./store.js";
+import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
@@ -52,7 +51,7 @@ type SessionRegistryMaintenanceSummary = {
   skippedStores: number;
   stores: SessionRegistryMaintenanceStoreSummary[];
   nextSweepAtMs: number | null;
-  /** Set when the sweep did not run; pruning without cron facts would archive live transcripts. */
+  /** Set when missing cron or child inventory facts prevent safe pruning. */
   skippedReason?: string;
 };
 
@@ -67,9 +66,9 @@ type RunningCronJobIds =
 
 async function readRunningCronJobIds(cronStorePath: string): Promise<RunningCronJobIds> {
   try {
-    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
-      (job) => typeof job.state?.runningAtMs === "number",
-    );
+    const runningJobs = (
+      await loadCronJobsStoreWithConfigJobsReadOnly(cronStorePath)
+    ).store.jobs.filter((job) => typeof job.state?.runningAtMs === "number");
     // A running detached job may have been retargeted after its session was created. Keep its
     // explicit session segment because the registry has no producer metadata for the transcript.
     const ids = new Set<string>();
@@ -145,10 +144,12 @@ export async function runSessionRegistryMaintenance(params: {
       const deletedAgents = new Map(
         snapshot?.deletedAgents.map(({ agentId, status }) => [agentId, status]),
       );
-      for (const target of await resolveAllAgentSessionStoreTargetsAsync(cfg, {
+      const targets = await resolveAllAgentSessionStoreTargetsAsync(cfg, {
         env,
         registeredDatabases,
-      })) {
+      });
+      const eligibleTargets: typeof targets = [];
+      for (const target of targets) {
         assertCurrent();
         const deletion = deletedAgents.get(target.agentId) ?? "absent";
         const databasePath =
@@ -180,11 +181,24 @@ export async function runSessionRegistryMaintenance(params: {
           stores.push({ ...target, skippedReason: "agent-store-held", warning });
           continue;
         }
+        eligibleTargets.push(target);
+      }
+      // Unavailable stores can still own live children of otherwise eligible parents.
+      const incompleteInventory = stores.some(
+        (store) =>
+          "skippedReason" in store &&
+          store.skippedReason !== "agent-deletion-pending" &&
+          store.skippedReason !== "agent-deletion-complete" &&
+          !deletedAgents.has(store.agentId),
+      );
+      for (const target of incompleteInventory ? [] : eligibleTargets) {
+        assertCurrent();
         const result = await runSessionRegistryMaintenanceForStore({
           ...target,
           apply: params.apply,
           retentionMs: SESSION_REGISTRY_RETENTION_MS,
           runningCronJobIds: runningCronJobs.ids,
+          childStores: eligibleTargets,
           assertCurrent,
         });
         assertCurrent();
@@ -201,13 +215,16 @@ export async function runSessionRegistryMaintenance(params: {
           ? store.nextSweepAtMs === null
             ? []
             : [store.nextSweepAtMs]
-          : store.skippedReason === "agent-deletion-pending" ||
-              store.skippedReason === "agent-store-held"
+          : store.skippedReason === "agent-deletion-pending"
             ? [Date.now() + 60_000]
             : [],
       );
+      if (incompleteInventory) {
+        deadlines.push(Date.now() + 60_000);
+      }
       return {
         nextSweepAtMs: deadlines.length > 0 ? Math.min(...deadlines) : null,
+        ...(incompleteInventory ? { skippedReason: "session child inventory incomplete" } : {}),
         retentionMs: SESSION_REGISTRY_RETENTION_MS,
         runningCronJobs: runningCronJobs.count,
         pruned: stores.reduce((total, store) => total + ("pruned" in store ? store.pruned : 0), 0),

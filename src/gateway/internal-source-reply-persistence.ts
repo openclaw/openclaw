@@ -63,11 +63,12 @@ async function completePersistedInternalSourceReply(params: {
     expectedSessionId: params.expectedSessionId,
     ...getOwnedSessionTranscriptWriterFence({ sessionKey: scope.sessionKey }),
   };
-  const found = await findTranscriptEvent(scope, {
-    kind: "idempotency",
-    key: params.idempotencyKey,
-    deliveryMirror: true,
-  });
+  const found = await findTranscriptEvent(
+    scope,
+    { kind: "idempotency", key: params.idempotencyKey, deliveryMirror: true },
+    undefined,
+    "internal-source-reply",
+  );
   if (!found) {
     return false;
   }
@@ -96,7 +97,7 @@ async function completePersistedInternalSourceReply(params: {
             entry.lifecycleRevision !== (expected.expectedLifecycleRevision ?? undefined)) ||
           (expected.expectedWriterRunId !== undefined &&
             entry.activeWriterRunId !== expected.expectedWriterRunId) ||
-          !["exact", "ancestor"].includes(facts.activePathRelation ?? "")
+          facts.onActivePath !== true
         ) {
           throw new Error("Internal source reply no longer owns the active transcript");
         }

@@ -127,7 +127,7 @@ export function convertToOllamaMessages(
       }),
       ...(images.length > 0 ? { images } : {}),
       ...(msg.toolCallId ? { tool_call_id: msg.toolCallId } : {}),
-      ...(msg.toolName ? { tool_name: msg.toolName } : {}),
+      ...(msg.toolName ? { tool_name: normalizeOllamaToolCallName(msg.toolName, options) } : {}),
     });
   }
 

@@ -61,7 +61,9 @@ describe("memory session publication", () => {
         ).toEqual({ source: undefined, chunks: [], search: [] });
       publicationSql = observeHostDataSql();
       embeddingReleased.resolve();
-      await expect(activeSync).rejects.toThrow("forgotten while memory indexing");
+      await expect(activeSync).rejects.toThrow(
+        force ? "retry the full reindex" : "forgotten while memory indexing",
+      );
       const tombstoneSql = publicationSql.queries.filter((sql) =>
         /\bfrom\s+["`]?memory_session_tombstones\b/i.test(sql),
       );

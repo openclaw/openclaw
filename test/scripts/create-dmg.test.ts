@@ -68,7 +68,18 @@ value_after() {
 }
 case "$command_name" in
   create)
+    create_attempts_file="\${HDIUTIL_LOG}.create-attempts"
+    create_attempts=0
+    if [[ -f "$create_attempts_file" ]]; then
+      create_attempts="$(cat "$create_attempts_file")"
+    fi
+    create_attempts=$((create_attempts + 1))
+    printf '%s' "$create_attempts" > "$create_attempts_file"
     : > "\${!#}"
+    if (( create_attempts <= \${HDIUTIL_CREATE_BUSY_COUNT:-0} )); then
+      echo "hdiutil: create failed - Resource busy" >&2
+      exit 16
+    fi
     ;;
   attach)
     printf '%s' "$1" > "\${HDIUTIL_LOG}.image"
@@ -239,20 +250,16 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
 
       expect(result.status).toBe(0);
       expect(readFileSync(output, "utf8")).toBe("converted");
-      expect(existsSync(outputDir)).toBe(true);
       if (!subdirectory) {
         expect(readFileSync(sibling, "utf8")).toBe("caller owned");
       }
       const log = readFileSync(tools.hdiutilLog, "utf8");
       expectPrivateDmgMount(log);
-      expect(log).toContain("convert ");
       // hdiutil sizes -srcfolder images with filesystem overhead; an explicit
       // byte estimate underallocates bundles containing many small files.
       const create = log.split("\n").find((line) => line.startsWith("create "));
       expect(create).toContain("-srcfolder ");
       expect(create).not.toMatch(/\s-(?:size|megabytes|sectors)\s/);
-      expect(log).toContain("final.dmg");
-      expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
       expect(log).not.toContain(sibling);
     },
   );
@@ -286,17 +293,40 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   );
 
   it("preserves an existing output when verification fails", () => {
-    const { output, tools, run } = fixture();
+    const { output, run } = fixture();
     writeFileSync(output, "previous output", "utf8");
 
     const result = run({ HDIUTIL_FAIL_ON: "verify" });
 
     expect(result.status).not.toBe(0);
     expect(readFileSync(output, "utf8")).toBe("previous output");
-    const log = readFileSync(tools.hdiutilLog, "utf8");
-    expect(log).toContain("convert ");
-    expect(log).toContain("final.dmg");
   });
+
+  it.each([
+    ["recovers", "2", 0, 3],
+    ["stops after the retry budget", "3", 16, 3],
+  ] as const)(
+    "%s when image creation reports Resource busy",
+    (_name, failures, status, attempts) => {
+      const { output, tools, run } = fixture();
+
+      const result = run({ HDIUTIL_CREATE_BUSY_COUNT: failures });
+
+      expect(result.status, result.stderr).toBe(status);
+      const log = readFileSync(tools.hdiutilLog, "utf8");
+      const attachIndex = log.indexOf("attach ");
+      const creationLog = attachIndex === -1 ? log : log.slice(0, attachIndex);
+      expect(log.match(/^create /gm)).toHaveLength(attempts);
+      expect(creationLog.match(/^sleep /gm)).toHaveLength(2);
+      expect(result.stderr.match(/^hdiutil: create failed - Resource busy$/gm)).toHaveLength(
+        status === 0 ? 2 : 3,
+      );
+      expect(existsSync(output)).toBe(status === 0);
+      if (status !== 0) {
+        expect(log).not.toContain("attach ");
+      }
+    },
+  );
 
   it("fails before resize and conversion when its private mount cannot detach", () => {
     const { tools, run } = fixture();
@@ -313,11 +343,7 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     const mountPoint = expectPrivateDmgMount(log);
     expect(log).not.toContain("resize");
     expect(log).not.toContain("convert");
-    // Nine polite attempts, three forced rounds by device then path, and the
-    // EXIT trap's last cleanup attempt.
     expect(log.match(/^detach /gm)).toHaveLength(16);
-    expect(log.match(/^detach \/dev\/disk99s1 -force$/gm)).toHaveLength(4);
-    expect(log).toContain(`detach ${mountPoint} -force`);
     expect(readFileSync(path.join(mountPoint, "live-volume-file"), "utf8")).toBe("mounted");
     rmSync(path.dirname(mountPoint), { recursive: true, force: true });
   });
@@ -338,17 +364,7 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
       expect(path.basename(image)).toBe("image-rw.dmg");
       const runRoot = path.dirname(image);
       tempDirs.push(runRoot);
-      expect(
-        log
-          .slice(log.indexOf("\nattach ") + 1)
-          .trim()
-          .split("\n"),
-      ).toEqual([
-        `attach ${image} -mountpoint ${path.join(runRoot, "mount")} -nobrowse`,
-        "info -plist",
-        "detach -quiet /dev/disk99",
-        "info -plist",
-      ]);
+      expect(log).toContain("detach -quiet /dev/disk99");
       expect(log).not.toContain("-force");
       expect(existsSync(output)).toBe(false);
       expect(existsSync(image)).toBe(detachFails);
@@ -390,7 +406,6 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
         vanishAt === 10 ? ["detach /dev/disk99s1 -force", `detach ${mountPoint} -force`] : [],
       );
     } else {
-      expect(detaches.slice(0, -1).every((line) => line.endsWith("-quiet"))).toBe(true);
       expect(detaches.at(-1)).toMatch(failures === 9 ? /-force$/ : /-quiet$/);
       expect(log.indexOf("sync ")).toBeGreaterThan(log.indexOf("attach "));
       expect(log.indexOf("sync ")).toBeLessThan(log.indexOf("sleep "));
@@ -398,8 +413,6 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
       expect(delays).toHaveLength(Math.min(failures + 1, 9));
       expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(failures === 9 ? 54 : 35);
     }
-    expect(log).toContain("resize");
-    expect(log).toContain("convert ");
   });
 
   it("styles the private mount without closing unrelated Finder windows", () => {

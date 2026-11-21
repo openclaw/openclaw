@@ -14,8 +14,11 @@ import {
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
   parseWikiMarkdown,
   renderWikiMarkdown,
+  escapeWikiTitle,
   slugifyWikiPageStem,
   slugifyWikiSegment,
   normalizeWikiClaims,
@@ -28,8 +31,6 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
 const GENERATED_END = "<!-- openclaw:wiki:generated:end -->";
-const HUMAN_START = "<!-- openclaw:human:start -->";
-const HUMAN_END = "<!-- openclaw:human:end -->";
 
 type MemoryWikiMutationMetadata = {
   sourceIds?: string[];
@@ -55,11 +56,16 @@ type UpdateMetadataMemoryWikiMutation = MemoryWikiMutationMetadata & {
 
 type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
+type MetadataListChanges = Partial<
+  Record<"sourceIds" | "claims" | "contradictions" | "questions", { before: number; after: number }>
+>;
+
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
   pagePath: string;
   pageId?: string;
+  metadataListChanges?: MetadataListChanges;
   compile: CompileMemoryWikiResult;
 };
 
@@ -148,12 +154,12 @@ function normalizeUniqueStrings(values: string[] | undefined): string[] | undefi
 }
 
 function ensureHumanNotesBlock(body: string): string {
-  if (body.includes(HUMAN_START) && body.includes(HUMAN_END)) {
+  if (body.includes(HUMAN_START_MARKER) && body.includes(HUMAN_END_MARKER)) {
     return body;
   }
   const trimmed = body.trimEnd();
   const prefix = trimmed.length > 0 ? `${trimmed}\n\n` : "";
-  return `${prefix}## Notes\n${HUMAN_START}\n${HUMAN_END}\n`;
+  return `${prefix}## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
 }
 
 function buildSynthesisBody(params: {
@@ -163,7 +169,7 @@ function buildSynthesisBody(params: {
 }): string {
   const base = params.originalBody?.trim().length
     ? params.originalBody
-    : `# ${params.title}\n\n## Notes\n${HUMAN_START}\n${HUMAN_END}\n`;
+    : `# ${escapeWikiTitle(params.title)}\n\n## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
   const withGenerated = replaceManagedMarkdownBlock({
     original: base,
     heading: "## Summary",
@@ -181,15 +187,16 @@ async function writeWikiPage(params: {
   body: string;
 }): Promise<boolean> {
   const root = await fsRoot(params.rootDir);
+  const existing = await readExistingWikiPage(
+    () => root.readText(params.relativePath),
+    isMissingWikiPageError,
+  );
   const rendered = withTrailingNewline(
     renderWikiMarkdown({
       frontmatter: params.frontmatter,
       body: params.body,
+      original: existing,
     }),
-  );
-  const existing = await readExistingWikiPage(
-    () => root.readText(params.relativePath),
-    isMissingWikiPageError,
   );
   if (existing === rendered) {
     return false;
@@ -231,7 +238,10 @@ async function applyCreateSynthesisMutation(params: {
       ...(params.mutation.confidence !== undefined
         ? { confidence: params.mutation.confidence }
         : {}),
-      status: params.mutation.status?.trim() || "active",
+      status:
+        params.mutation.status?.trim() ||
+        (typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()) ||
+        "active",
       updatedAt: new Date().toISOString(),
     },
     body: buildSynthesisBody({
@@ -282,7 +292,12 @@ async function applyUpdateMetadataMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: UpdateMetadataMemoryWikiMutation;
   signal?: AbortSignal;
-}): Promise<{ changed: boolean; pagePath: string; pageId?: string }> {
+}): Promise<{
+  changed: boolean;
+  pagePath: string;
+  pageId?: string;
+  metadataListChanges?: MetadataListChanges;
+}> {
   const page = await readMemoryWikiPageByLookup(
     params.config.vault.path,
     params.mutation.lookup,
@@ -292,19 +307,34 @@ async function applyUpdateMetadataMutation(params: {
     throw new Error(`Wiki page not found: ${params.mutation.lookup}`);
   }
   const parsed = page.parsed;
+  const frontmatter = buildUpdatedFrontmatter({
+    original: parsed.frontmatter,
+    mutation: params.mutation,
+  });
+  const metadataListChanges: MetadataListChanges = {};
+  for (const key of ["sourceIds", "claims", "contradictions", "questions"] as const) {
+    if (params.mutation[key] !== undefined) {
+      const count = (value: unknown) =>
+        key === "claims"
+          ? normalizeWikiClaims(value).length
+          : normalizeSingleOrTrimmedStringList(value).length;
+      metadataListChanges[key] = {
+        before: count(parsed.frontmatter[key]),
+        after: count(frontmatter[key]),
+      };
+    }
+  }
   const changed = await writeWikiPage({
     rootDir: params.config.vault.path,
     relativePath: page.relativePath,
-    frontmatter: buildUpdatedFrontmatter({
-      original: parsed.frontmatter,
-      mutation: params.mutation,
-    }),
+    frontmatter,
     body: parsed.body,
   });
   return {
     changed,
     pagePath: page.relativePath,
     ...(page.id ? { pageId: page.id } : {}),
+    ...(Object.keys(metadataListChanges).length > 0 ? { metadataListChanges } : {}),
   };
 }
 
@@ -336,10 +366,8 @@ export async function applyMemoryWikiMutation(params: {
       params.signal ? { signal: params.signal } : undefined,
     );
     return {
-      changed: result.changed,
+      ...result,
       operation: params.mutation.op,
-      pagePath: result.pagePath,
-      ...(result.pageId ? { pageId: result.pageId } : {}),
       compile,
     };
   });

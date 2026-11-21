@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,6 +49,7 @@ function verifyUploadedArtifact(
   params: {
     artifactDigest?: string;
     env?: NodeJS.ProcessEnv;
+    json?: boolean;
   } = {},
 ) {
   return spawnSync(
@@ -62,6 +63,7 @@ function verifyUploadedArtifact(
       params.artifactDigest ?? ARTIFACT_DIGEST,
       ARTIFACT_RUN_ID,
       ARTIFACT_RUN_ATTEMPT,
+      ...(params.json ? ["--json"] : []),
     ],
     {
       encoding: "utf8",
@@ -81,6 +83,27 @@ function verifyApiFailure(
   });
 }
 
+function expectApiResult(
+  result: ReturnType<typeof verifyUploadedArtifact>,
+  fixture: ReturnType<typeof createFixture>,
+  expected: {
+    success: boolean;
+    sleeps: string;
+    artifacts: number;
+    attempts: number;
+    messages: string[];
+  },
+) {
+  expect(result.status === 0, `${result.stdout}\n${result.stderr}`).toBe(expected.success);
+  expect(readFileSync(fixture.sleepLog, "utf8")).toBe(expected.sleeps);
+  const calls = readFileSync(fixture.ghLog, "utf8");
+  expect(calls.match(/actions\/artifacts/g) ?? []).toHaveLength(expected.artifacts);
+  expect(calls.match(/actions\/runs/g) ?? []).toHaveLength(expected.attempts);
+  for (const message of expected.messages) {
+    expect(result.stderr).toContain(message);
+  }
+}
+
 function expectRejectedUpload(
   fixture: ReturnType<typeof createFixture>,
   options: Parameters<typeof verifyUploadedArtifact>[1],
@@ -90,6 +113,7 @@ function expectRejectedUpload(
   writeFileSync(fixture.ghLog, "");
   const result = verifyUploadedArtifact(fixture, options);
   expect(result.status).not.toBe(0);
+  expect(result.stdout).toBe("");
   expect(result.stderr).toContain(message);
   expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(calls);
   expect(result.stderr).not.toContain("retrying");
@@ -145,7 +169,8 @@ if (tool === "docker") {
   }
 } else if (tool === "gh") {
   if (args.shift() !== "api") fail("unexpected gh invocation");
-  let method, endpoint;
+  let method = "GET";
+  let endpoint;
   while (args.length) {
     const arg = args.shift();
     if (arg === "--method") method = args.shift();
@@ -163,12 +188,12 @@ if (tool === "docker") {
   if (count <= Number(env["FAKE_GH_" + kind.toUpperCase() + "_FAILURES"] || 0)) {
     emit("partial " + kind + " response\\n");
     console.error(env["FAKE_GH_" + kind.toUpperCase() + "_ERROR"] || "gh: request failed");
-    process.exit(1);
+    process.exit(Number(env.FAKE_GH_EXIT_STATUS || 1));
   }
   const value = kind === "artifact" ? {
     id: Number(env.FAKE_ARTIFACT_ID), name: env.FAKE_ARTIFACT_NAME,
     expired: env.FAKE_ARTIFACT_EXPIRED === "true", digest: "sha256:" + env.FAKE_ARTIFACT_DIGEST,
-    workflow_run: { id: Number(env.FAKE_ARTIFACT_RUN_ID) },
+    workflow_run: { id: Number(env.FAKE_ARTIFACT_RUN_ID) }, expires_at: "2030-01-01T00:00:00Z",
   } : { id: Number(env.FAKE_ATTEMPT_RUN_ID), run_attempt: Number(env.FAKE_ARTIFACT_RUN_ATTEMPT) };
   emit((kind === "artifact" && env.FAKE_ARTIFACT_JSON || JSON.stringify(value)) + "\\n");
 }
@@ -239,92 +264,121 @@ function expectRejectedLoad(
 }
 
 describe("shared Docker image artifacts", () => {
-  it("binds uploaded artifacts to the exact service tuple and producer attempt", () => {
+  it.each(["2", "3"])("propagates expiry verification for producer attempt %s", (attempt) => {
     const fixture = createFixture();
-    const verified = verifyUploadedArtifact(fixture);
-    expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
-    expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-      `api --method GET repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
+    const harnessScripts = join(fixture.root, ".release-harness/scripts/docker");
+    mkdirSync(harnessScripts, { recursive: true });
+    copyFileSync(HELPER, join(harnessScripts, "shared-image-artifact.sh"));
+    const workflow = readFileSync(
+      resolve(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml"),
+      "utf8",
     );
-    expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-      `api --method GET repos/openclaw/openclaw/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}`,
+    const expiry = expectDefined(
+      workflow.match(/ {10}artifact_expiry\(\) \{[\s\S]*?\n {10}\}/)?.[0],
+      "release artifact expiry function",
     );
+    // The workflow captures this function's stdout; that disables Bash's implicit errexit.
+    const result = spawnSync(
+      "bash",
+      [
+        "-ec",
+        `${expiry}\nvalue="$(artifact_expiry "$@")"\nprintf '%s' "$value"`,
+        "expiry",
+        "Docker E2E image",
+        ARTIFACT_ID,
+        ARTIFACT_NAME,
+        ARTIFACT_DIGEST,
+        ARTIFACT_RUN_ID,
+        ARTIFACT_RUN_ATTEMPT,
+      ],
+      {
+        cwd: fixture.root,
+        encoding: "utf8",
+        env: { ...fixture.env, FAKE_ARTIFACT_RUN_ATTEMPT: attempt },
+      },
+    );
+    expect(result.status === 0, result.stderr).toBe(attempt === ARTIFACT_RUN_ATTEMPT);
+    expect(result.stdout).toBe(attempt === ARTIFACT_RUN_ATTEMPT ? "2030-01-01T00:00:00Z" : "");
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(2);
+  });
 
+  it.each([false, true])("binds uploaded artifacts before returning metadata (json=%s)", (json) => {
+    const fixture = createFixture();
+    const verified = verifyUploadedArtifact(fixture, { json });
+    expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+    expect(json ? JSON.parse(verified.stdout).expires_at : verified.stdout).toBe(
+      json ? "2030-01-01T00:00:00Z" : "",
+    );
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(2);
     const mismatch = "artifact identity does not match the immutable producer tuple";
-    expectRejectedUpload(fixture, { artifactDigest: "e".repeat(64) }, mismatch, 1);
-    expectRejectedUpload(fixture, { env: { FAKE_ARTIFACT_JSON: "not-json" } }, mismatch, 1);
+    expectRejectedUpload(fixture, { json, artifactDigest: "e".repeat(64) }, mismatch, 1);
+    expectRejectedUpload(fixture, { json, env: { FAKE_ARTIFACT_JSON: "not-json" } }, mismatch, 1);
     expectRejectedUpload(
       fixture,
-      { env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" } },
+      { json, env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" } },
       "producer run attempt does not match the immutable tuple",
       2,
     );
   });
 
-  it("retries a fresh artifact metadata 404 and then succeeds", () => {
-    const fixture = createFixture();
-    const verified = verifyApiFailure(fixture, "gh: Not Found (HTTP 404)", "1");
-    expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
-    expect(verified.stderr).toContain(
-      "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
-    );
-    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
-    const calls = readFileSync(fixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
-    expect(calls.match(/actions\/runs/g)).toHaveLength(1);
-  });
+  it.each([
+    ["gh: Not Found (HTTP 404)", "1", "ARTIFACT", true, "2\n", 2, 1],
+    ["gh: Not Found (HTTP 404)", "3", "ATTEMPT", false, "", 1, 1],
+    ["gh: upstream unavailable (HTTP 503)", "2", "ARTIFACT", true, "2\n4\n", 3, 1],
+    ["Get https://api.github.com: dial tcp: i/o timeout", "3", "ARTIFACT", false, "2\n4\n", 3, 0],
+    ["gh: API rate limit exceeded (HTTP 429)", "1", "ARTIFACT", true, "2\n", 2, 1],
+  ] as const)(
+    "handles %s after %s failures in %s",
+    (error, failures, target, success, sleeps, artifacts, attempts) => {
+      const fixture = createFixture();
+      const result = verifyApiFailure(fixture, error, failures, target);
+      const messages =
+        success && error.includes("404")
+          ? ["artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s"]
+          : success
+            ? []
+            : [`GitHub API GET failed after ${artifacts === 3 ? 3 : 1} attempt(s)`];
+      expectApiResult(result, fixture, { success, sleeps, artifacts, attempts, messages });
+      if (!sleeps) {
+        expect(result.stderr).not.toContain("retrying");
+      }
+      if (!attempts) {
+        expect(result.stdout).not.toContain("partial artifact response");
+        expect(result.stderr).toContain("i/o timeout");
+      }
+    },
+  );
 
-  it("fails immediately when producer run-attempt metadata returns 404", () => {
-    const fixture = createFixture();
-    const failed = verifyApiFailure(fixture, "gh: Not Found (HTTP 404)", "3", "ATTEMPT");
-    expect(failed.status).not.toBe(0);
-    expect(failed.stderr).toContain("GitHub API GET failed after 1 attempt(s)");
-    expect(failed.stderr).not.toContain("retrying");
-    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("");
-    const calls = readFileSync(fixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(1);
-    expect(calls.match(/actions\/runs/g)).toHaveLength(1);
-  });
+  it.each([
+    [124, "ARTIFACT", "1", true, 2, 1],
+    [137, "ATTEMPT", "1", true, 1, 2],
+    [124, "ARTIFACT", "3", false, 3, 0],
+    [137, "ATTEMPT", "3", false, 1, 3],
+  ] as const)(
+    "handles deadline exit %s for %s after %s failures",
+    (status, target, failures, success, artifacts, attempts) => {
+      const fixture = createFixture();
+      const result = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_EXIT_STATUS: String(status),
+          [`FAKE_GH_${target}_FAILURES`]: failures,
+        },
+      });
+      expectApiResult(result, fixture, {
+        success,
+        sleeps: success ? "2\n" : "2\n4\n",
+        artifacts,
+        attempts,
+        messages: ["GitHub API GET exceeded the 30s request deadline."],
+      });
+      expect(result.stdout).not.toContain("partial");
+      if (!success) {
+        expect(result.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
+      }
+    },
+  );
 
-  it("recovers on the third attempt and fails cleanly when all attempts are exhausted", () => {
-    const recoveredFixture = createFixture();
-    const recovered = verifyApiFailure(
-      recoveredFixture,
-      "gh: upstream unavailable (HTTP 503)",
-      "2",
-    );
-    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
-    expect(readFileSync(recoveredFixture.sleepLog, "utf8")).toBe("2\n4\n");
-    expect(readFileSync(recoveredFixture.ghLog, "utf8").match(/actions\/artifacts/g)).toHaveLength(
-      3,
-    );
-
-    const exhaustedFixture = createFixture();
-    const exhausted = verifyApiFailure(
-      exhaustedFixture,
-      "Get https://api.github.com: dial tcp: i/o timeout",
-      "3",
-    );
-    expect(exhausted.status).not.toBe(0);
-    expect(exhausted.stdout).not.toContain("partial artifact response");
-    expect(exhausted.stderr).toContain("i/o timeout");
-    expect(exhausted.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
-    expect(readFileSync(exhaustedFixture.sleepLog, "utf8")).toBe("2\n4\n");
-    const calls = readFileSync(exhaustedFixture.ghLog, "utf8");
-    expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
-    expect(calls).not.toContain("actions/runs");
-  });
-
-  it("retries explicit rate limiting but fails fast on permanent HTTP and credential errors", () => {
-    const rateLimitFixture = createFixture();
-    const rateLimited = verifyApiFailure(
-      rateLimitFixture,
-      "gh: API rate limit exceeded (HTTP 429)",
-      "1",
-    );
-    expect(rateLimited.status, `${rateLimited.stdout}\n${rateLimited.stderr}`).toBe(0);
-    expect(readFileSync(rateLimitFixture.sleepLog, "utf8")).toBe("2\n");
-
+  it("fails fast on permanent HTTP and credential errors", () => {
     for (const error of [
       "gh: Unauthorized (HTTP 401)",
       "gh: Forbidden (HTTP 403)",
@@ -346,29 +400,12 @@ describe("shared Docker image artifacts", () => {
   it("packs provenance-bound images and verifies them before loading", () => {
     const fixture = createPackedFixture();
 
-    const archive = readFileSync(join(fixture.artifactDir, "shared-images.tar.zst"));
     const manifest = JSON.parse(
       readFileSync(join(fixture.artifactDir, "shared-image-artifact.json"), "utf8"),
     );
-    expect(manifest).toEqual({
-      archive: {
-        filename: "shared-images.tar.zst",
-        format: "docker-tar+zstd",
-        sha256: createHash("sha256").update(archive).digest("hex"),
-        sizeBytes: archive.length,
-      },
-      conclusion: "success",
-      images: IMAGE_REFS.map((ref) => ({ id: imageId(ref), ref })),
-      kind: "docker-e2e",
-      packageSha256: PACKAGE_SHA256,
-      packageSourceSha: TARGET_SHA,
-      runAttempt: 2,
-      runId: 123456,
-      schema: "openclaw.shared-docker-image-artifact/v1",
-      schemaVersion: 1,
-      targetSha: TARGET_SHA,
-      workflowSha: WORKFLOW_SHA,
-    });
+    // Loading validates the full manifest, archive bytes, refs and config IDs.
+    // These producer values need an independent expectation, not manifest-derived input.
+    expect(manifest).toMatchObject({ runAttempt: 2, runId: 123456 });
 
     writeFileSync(fixture.dockerLog, "");
     const loaded = runHelper(fixture, "load", {
@@ -385,35 +422,16 @@ describe("shared Docker image artifacts", () => {
 
   it("fails before loading when provenance or archive bytes differ", () => {
     const fixture = createPackedFixture();
-
-    for (const variant of [
-      {
-        env: {
-          ...expectedArchiveEnv(fixture),
-          OPENCLAW_SHARED_IMAGE_RUN_ID: "654321",
-        },
-        imageRefs: IMAGE_REFS,
-        expected: "run ID",
-      },
-      {
-        env: expectedArchiveEnv(fixture),
-        imageRefs: [
-          expectDefined(IMAGE_REFS[0], "first shared Docker image reference"),
-          "openclaw-docker-e2e-functional:wrong",
-        ],
-        expected: "image ref 1",
-      },
-      {
-        env: {
-          ...expectedArchiveEnv(fixture),
-          OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256: "d".repeat(64),
-        },
-        imageRefs: IMAGE_REFS,
-        expected: "package SHA-256",
-      },
-    ]) {
-      expectRejectedLoad(fixture, variant.env, variant.expected, variant.imageRefs);
+    for (const [key, value, message] of [
+      ["OPENCLAW_SHARED_IMAGE_RUN_ID", "654321", "run ID"],
+      ["OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256", "d".repeat(64), "package SHA-256"],
+    ] as const) {
+      expectRejectedLoad(fixture, { ...expectedArchiveEnv(fixture), [key]: value }, message);
     }
+    expectRejectedLoad(fixture, expectedArchiveEnv(fixture), "image ref 1", [
+      expectDefined(IMAGE_REFS[0], "first shared Docker image reference"),
+      "openclaw-docker-e2e-functional:wrong",
+    ]);
 
     const archivePath = join(fixture.artifactDir, "shared-images.tar.zst");
     writeFileSync(archivePath, `${readFileSync(archivePath, "utf8")}tampered`);
@@ -447,23 +465,19 @@ describe("shared Docker image artifacts", () => {
     delete missingRunEnv.OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT;
     expectRejectedLoad(fixture, missingRunEnv, "OPENCLAW_SHARED_IMAGE_RUN_ID");
 
-    expectRejectedLoad(
-      fixture,
-      {
-        ...fixture.env,
-        OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: "2",
-        OPENCLAW_SHARED_IMAGE_RUN_ID: "123456",
-      },
-      "expected shared image archive SHA-256",
-    );
-
-    expectRejectedLoad(
-      fixture,
-      {
-        ...expectedArchiveEnv(fixture),
-        OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: "d".repeat(64),
-      },
-      "expected archive sha256",
-    );
+    const expectedEnv = expectedArchiveEnv(fixture);
+    for (const [digest, message] of [
+      [undefined, "expected shared image archive SHA-256"],
+      ["d".repeat(64), "expected archive sha256"],
+    ] as const) {
+      expectRejectedLoad(
+        fixture,
+        {
+          ...expectedEnv,
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: digest,
+        },
+        message,
+      );
+    }
   });
 });

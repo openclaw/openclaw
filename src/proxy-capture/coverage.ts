@@ -117,20 +117,17 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
 let warnedCoverageSessionKey: string | null = null;
 
 export function buildDebugProxyCoverageReport() {
-  // Return copies because callers may render/sort/filter entries for CLI output.
-  const entries: DebugProxyCoverageEntry[] = [];
   const counts = { captured: 0, "proxy-only": 0, uncovered: 0 };
   for (const entry of DEBUG_PROXY_COVERAGE_ENTRIES) {
-    entries.push({ ...entry, protocols: [...entry.protocols] });
     counts[entry.status] += 1;
   }
   const summary = {
-    total: entries.length,
+    total: DEBUG_PROXY_COVERAGE_ENTRIES.length,
     captured: counts.captured,
     proxyOnly: counts["proxy-only"],
     uncovered: counts.uncovered,
   };
-  return { summary, entries };
+  return { summary, entries: DEBUG_PROXY_COVERAGE_ENTRIES };
 }
 
 export function maybeWarnAboutDebugProxyCoverage(

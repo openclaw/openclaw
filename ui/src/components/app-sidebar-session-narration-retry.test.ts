@@ -89,7 +89,9 @@ it("paces failed acquisitions across render syncs and converges without another 
   );
   for (let index = 0; index < 100; index++) {
     await vi.advanceTimersByTimeAsync(0);
-    input.rows[0]!.updatedAt = index + 10;
+    input.rows = input.rows.map((row, rowIndex) =>
+      rowIndex === 0 ? { ...row, updatedAt: index + 10 } : row,
+    );
     narration.sync(input);
   }
   await vi.advanceTimersByTimeAsync(0);

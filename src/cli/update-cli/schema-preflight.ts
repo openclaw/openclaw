@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
+import { isConfigValidationFailedError } from "../../config/io.write-errors.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,9 +28,20 @@ type TargetDatabaseSchemaContext = {
 
 export type TargetDatabaseSchemaContextOptions = {
   legacyConfigPlan?: LegacyConfigUpdatePlan;
-  /** Candidate admission owns schema validation; the installed process still pins source bytes. */
-  configValidation?: "candidate";
-};
+} & (
+  | {
+      /** Read-only candidate validation; the result must never become a config write plan. */
+      validateConfigForAdmission: (
+        snapshot: ConfigFileSnapshot,
+      ) => Promise<OpenClawConfig | undefined>;
+      configValidation?: never;
+    }
+  | {
+      validateConfigForAdmission?: never;
+      /** Candidate admission owns schema validation; the installed process still pins source bytes. */
+      configValidation?: "candidate";
+    }
+);
 
 export function assertReadableGitMetadata(
   metadataUnreadable: string | undefined,
@@ -125,8 +137,29 @@ export async function captureTargetDatabaseSchemaContext(
       await import("../../commands/doctor/legacy-config-repair.js");
     legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
   }
+  const validateConfigForAdmission = options?.validateConfigForAdmission;
+  if (validateConfigForAdmission && !isArtifactPreservingStateRead()) {
+    throw new Error("Candidate config projection requires artifact-preserving admission.");
+  }
+  // Validate the freshly read source, never a projection captured before an awaited read.
+  let admissionConfig: OpenClawConfig | undefined;
+  try {
+    admissionConfig =
+      validateConfigForAdmission && !legacyConfigPlan
+        ? await validateConfigForAdmission(snapshot)
+        : undefined;
+  } catch (error) {
+    if (!isConfigValidationFailedError(error)) {
+      throw error;
+    }
+    // The source can contain repairable fields that hide the projected candidate's real error.
+    throw createUpdateConfigFailure({ ...snapshot, issues: error.issues });
+  }
   if (
-    (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
+    ((!snapshot.valid || validateConfigForAdmission) &&
+      !legacyConfigPlan &&
+      !admissionConfig &&
+      configValidation !== "candidate") ||
     snapshot.readError
   ) {
     throw createUpdateConfigFailure(snapshot);
@@ -136,10 +169,13 @@ export async function captureTargetDatabaseSchemaContext(
     config:
       configValidation === "candidate"
         ? snapshot.sourceConfig
-        : (legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config),
+        : (legacyConfigPlan?.config ?? admissionConfig ?? snapshot.sourceConfig ?? snapshot.config),
     configSnapshot: snapshot,
     readEnv,
     ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
+    ...(admissionConfig && !isDeepStrictEqual(admissionConfig, snapshot.sourceConfig)
+      ? { configProjectedForAdmission: true }
+      : {}),
     ...(configValidation ? { configValidation } : {}),
   };
 }

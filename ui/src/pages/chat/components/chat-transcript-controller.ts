@@ -18,25 +18,25 @@ export function createChatTranscript(
   let activeSessionKey: string | null = null;
   let sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   let connected = false;
-  let onChange: (() => void) | undefined;
-  const publish = () => onChange?.();
+  const listeners = new Set<() => void>();
+  const publish = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
 
   return {
     subscribe(listener: () => void) {
-      onChange = listener;
+      listeners.add(listener);
       return () => {
-        onChange = undefined;
+        listeners.delete(listener);
       };
     },
     get renderedSessionKey(): string | null {
       return activeSessionKey;
     },
     renderSession<T>(sessionKey: string, render: (transcript: ChatTranscriptSession) => T): T {
-      if (
-        !sessionVirtualizer ||
-        activeSessionKey === null ||
-        !areUiSessionKeysEquivalent(activeSessionKey, sessionKey)
-      ) {
+      if (!sessionVirtualizer || !areUiSessionKeysEquivalent(activeSessionKey, sessionKey)) {
         sessionVirtualizer?.dispose();
         // Presentation identities include the session; the cache is instead
         // bounded by physical panes, with a separate session LRU inside each pane.

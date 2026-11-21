@@ -1,5 +1,5 @@
 import path from "node:path";
-import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
+import { loadJsonFile, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { asNonArrayRecord, asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
@@ -46,7 +46,7 @@ export function usesOpenClawMockKeychain(userDataDir: string): boolean {
 /**
  * Prepare managed preferences before launch, preserving unrelated Chrome state.
  */
-export function prepareOpenClawProfile(
+export async function prepareOpenClawProfile(
   userDataDir: string,
   opts?: { name?: string; color?: string; downloadDir?: string; mockKeychain?: boolean },
 ) {
@@ -80,7 +80,7 @@ export function prepareOpenClawProfile(
     });
     ensureNestedRecord(prefs, "savefile").default_directory = opts.downloadDir;
   }
-  saveJsonFile(preferencesPath, prefs);
+  await writeJsonFileAtomically(preferencesPath, prefs);
 
   const localState = safeReadJson(localStatePath) ?? {};
   const profile = ensureNestedRecord(localState, "profile", "info_cache", "Default");
@@ -102,5 +102,5 @@ export function prepareOpenClawProfile(
       default_avatar_stroke_color: desiredColorInt,
     });
   }
-  saveJsonFile(localStatePath, localState);
+  await writeJsonFileAtomically(localStatePath, localState);
 }

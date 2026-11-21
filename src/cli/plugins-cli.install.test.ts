@@ -39,6 +39,7 @@ import {
   runtimeErrors,
   pluginsCliRuntimeLogs as logs,
   configWriteMock,
+  expectNoPluginCliCalls as expectNoCalls,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock as writeInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
@@ -245,12 +246,6 @@ function blockConfigMutation(...sections: Array<"plugins" | "hooks">) {
       includeFileTargetsForWrite: Object.fromEntries(paths.map(([, target]) => [target, target])),
     },
   });
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 async function expectBlockedInstall(

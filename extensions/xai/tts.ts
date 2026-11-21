@@ -11,7 +11,7 @@ import {
   normalizeXaiLanguageCode,
   normalizeXaiTtsBaseUrl,
   type XaiSpeechResponseFormat,
-} from "./speech-provider-metadata.js";
+} from "./speech-provider-metadata-factory.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 import { WebSocket } from "./ws-runtime.js";
 
@@ -96,30 +96,14 @@ type XaiTtsStreamServerEvent = {
   message?: string;
 };
 
-function toXaiTtsWsUrl(params: {
-  baseUrl: string;
-  voiceId: string;
-  language: string;
-  responseFormat: XaiSpeechResponseFormat;
-  speed?: number;
-}): string {
-  const url = resolveXaiNativeTtsStreamEndpoint(params.baseUrl);
-  url.protocol = "wss:";
-  const basePath = url.pathname.replace(/\/+$/, "");
-  url.pathname = `${basePath}/tts`;
-  url.searchParams.set("language", params.language);
-  url.searchParams.set("voice", params.voiceId);
-  url.searchParams.set("codec", params.responseFormat);
-  if (params.speed != null) {
-    url.searchParams.set("speed", String(params.speed));
-  }
-  return url.toString();
-}
-
-function resolveXaiNativeTtsStreamEndpoint(baseUrl: string): URL {
-  const url = URL.parse(normalizeXaiTtsBaseUrl(baseUrl));
+export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
+  audioStream: ReadableStream<Uint8Array>;
+  release: () => Promise<void>;
+}> {
+  const params = prepareXaiTtsRequest(request);
+  const url = URL.parse(normalizeXaiTtsBaseUrl(params.baseUrl));
   if (!url) {
-    throw new Error(`Invalid xAI TTS stream baseUrl: ${baseUrl}`);
+    throw new Error(`Invalid xAI TTS stream baseUrl: ${params.baseUrl}`);
   }
   if (url.protocol !== "https:") {
     throw new Error(
@@ -136,15 +120,16 @@ function resolveXaiNativeTtsStreamEndpoint(baseUrl: string): URL {
   if (url.username || url.password || url.port || pathname !== "/v1" || url.search || url.hash) {
     throw new Error(`xAI streaming TTS requires the supported ${XAI_BASE_URL} base URL`);
   }
-  return url;
-}
-
-export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
-  audioStream: ReadableStream<Uint8Array>;
-  release: () => Promise<void>;
-}> {
-  const params = prepareXaiTtsRequest(request);
-  const wsUrl = toXaiTtsWsUrl(params);
+  url.protocol = "wss:";
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}/tts`;
+  url.searchParams.set("language", params.language);
+  url.searchParams.set("voice", params.voiceId);
+  url.searchParams.set("codec", params.responseFormat);
+  if (params.speed != null) {
+    url.searchParams.set("speed", String(params.speed));
+  }
+  const wsUrl = url.toString();
   // Bound the encoded JSON frame before ws buffers it. Base64 expands audio by
   // roughly 4/3; the fixed allowance covers the event envelope and metadata.
   const maxPayload = Math.ceil(params.maxBytes / 3) * 4 + 1024;
@@ -195,7 +180,6 @@ export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
         return;
       }
       connectSettled = true;
-      clearTimers();
       void release();
       reject(error);
     };
@@ -326,8 +310,6 @@ export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
             return;
           }
           case "audio.done":
-            clearTimers();
-            closeStream?.();
             void release();
             return;
           case "error":

@@ -2,7 +2,6 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenClawConfig,
   ProviderAuthMethod,
-  ProviderCatalogContext,
   ProviderRuntimeModel,
   ProviderThinkingProfile,
   ProviderWrapStreamFnContext,
@@ -78,35 +77,6 @@ const XIAOMI_PROVIDER_HOOKS = {
   isModernModelRef: ({ modelId }: { modelId: string }) =>
     MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase()),
 };
-
-async function resolveXiaomiCatalog(params: {
-  ctx: ProviderCatalogContext;
-  providerId: string;
-  buildProvider: () => ReturnType<typeof buildXiaomiProvider>;
-  requiresRegion: boolean;
-}) {
-  const auth = params.ctx.resolveProviderApiKey(params.providerId);
-  if (!auth.apiKey) {
-    return null;
-  }
-  const explicitBaseUrl = normalizeOptionalString(
-    params.ctx.config.models?.providers?.[params.providerId]?.baseUrl,
-  );
-  if (params.requiresRegion && !explicitBaseUrl) {
-    return null;
-  }
-  return await buildOpenAICompatibleLiveProviderCatalog({
-    discoveryMode: "strict",
-    providerId: params.providerId,
-    providerConfig: {
-      ...params.buildProvider(),
-      ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-    },
-    apiKey: auth.apiKey,
-    discoveryApiKey: auth.discoveryApiKey,
-    profileId: auth.profileId,
-  });
-}
 
 function assertCompatibleXiaomiKey(actualKey: string, expectedKind: "payg" | "token-plan"): void {
   const normalized = actualKey.trim().toLowerCase();
@@ -221,13 +191,29 @@ export default definePluginEntry({
         auth: provider.auth(),
         catalog: {
           order: "simple",
-          run: async (ctx) =>
-            resolveXiaomiCatalog({
-              ctx,
+          run: async (ctx) => {
+            const auth = ctx.resolveProviderApiKey(provider.id);
+            if (!auth.apiKey) {
+              return null;
+            }
+            const explicitBaseUrl = normalizeOptionalString(
+              ctx.config.models?.providers?.[provider.id]?.baseUrl,
+            );
+            if (provider.requiresRegion && !explicitBaseUrl) {
+              return null;
+            }
+            return await buildOpenAICompatibleLiveProviderCatalog({
+              discoveryMode: "strict",
               providerId: provider.id,
-              buildProvider: provider.buildProvider,
-              requiresRegion: provider.requiresRegion,
-            }),
+              providerConfig: {
+                ...provider.buildProvider(),
+                ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+              },
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+              profileId: auth.profileId,
+            });
+          },
         },
         staticCatalog: {
           order: "simple",

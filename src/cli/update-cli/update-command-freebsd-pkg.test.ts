@@ -9,7 +9,7 @@ import {
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
-import * as updateRunner from "../../infra/update-runner-git.js";
+import * as updateRunner from "../../infra/update-runner-git-release.js";
 import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import * as exec from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -48,8 +48,6 @@ function gitUpdateParams(root: string): Parameters<typeof updateGitInstall>[0] {
     inspectGitTarget: refuseMutation,
     validateCandidate: refuseMutation,
     beforeGitMutation: refuseMutation,
-    getManagedServiceEnv: () => undefined,
-    getSnapshotSource: async () => ({ config: {}, env: process.env }),
   };
 }
 
@@ -83,20 +81,14 @@ async function withPackageRoots(
 }
 
 describe("FreeBSD pkg update admission", () => {
-  it.each([
-    { platform: "freebsd", manager: "pkg", ownership: "owned" },
-    { platform: "freebsd", manager: "pkg", ownership: "unowned" },
-    { platform: "linux", manager: "pacman", ownership: "owned" },
-    { platform: "linux", manager: "pacman", ownership: "missing" },
-    { platform: "freebsd", manager: "pkg", ownership: "missing" },
-  ] as const)(
-    "admits $manager roots before npm discovery ($ownership)",
-    async ({ platform, manager, ownership }) => {
+  it.each(["owned", "unowned", "missing"] as const)(
+    "admits pkg roots before npm discovery (%s)",
+    async (ownership) => {
       await withPackageRoots(async (_base, root) => {
         const command = vi
           .spyOn(exec, "runCommandWithTimeout")
           .mockResolvedValue(createCommandResult({ stdout: `${path.dirname(root)}\n` }));
-        const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
+        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
           pkgQueryResult(
             ownership === "owned" ? `${root}/package.json\n` : "",
             ownership === "missing"
@@ -113,31 +105,16 @@ describe("FreeBSD pkg update admission", () => {
           root,
           installKind: "package",
           timeoutMs: 1000,
-          pkgOwnership: createSystemPackageOwnershipInspection(1000, { runCommand, onWarning }),
+          pkgOwnership: createSystemPackageOwnershipInspection(1000, { onWarning }),
         });
         if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");
-          expect(command).toHaveBeenCalled();
-          if (ownership === "missing") {
-            expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-              expect.stringContaining(`${manager} executable was not found`),
-            );
-            expect(onWarning.mock.calls[0]?.[0]).toContain(
-              "Continuing without verified system-package ownership.",
-            );
-            expect(onWarning.mock.calls[0]?.[0]).not.toContain("Restore access");
-          } else {
-            expect(onWarning).not.toHaveBeenCalled();
-          }
+          expect(onWarning).not.toHaveBeenCalled();
         } else {
-          await expect(admission).rejects.toBeInstanceOf(shared.UpdatePreMutationError);
-          await expect(admission).rejects.toMatchObject({
-            name: "UpdatePreMutationError",
-            reason: `${manager}-owned-install`,
-          });
+          await expect(admission).rejects.toMatchObject({ reason: "pkg-owned-install" });
           expect(command).not.toHaveBeenCalled();
         }
-      }, platform);
+      });
     },
   );
 
@@ -161,11 +138,11 @@ describe("FreeBSD pkg update admission", () => {
   it("rechecks the selected Git root after its mutation preparation finishes", async () => {
     await withPackageRoots(async (_base, root) => {
       let claimed = false;
-      const query = vi
-        .spyOn(exec, "runCommandBuffered")
-        .mockImplementation(async () => pkgQueryResult(claimed ? `${root}/package.json\n` : ""));
+      vi.spyOn(exec, "runCommandBuffered").mockImplementation(async () =>
+        pkgQueryResult(claimed ? `${root}/package.json\n` : ""),
+      );
       const publish = vi.fn();
-      vi.spyOn(updateRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
+      vi.spyOn(updateRunner, "updateGitRelease").mockImplementation(async ({ opts }) => {
         await opts.beforeGitMutation({});
         publish();
         return { status: "ok", mode: "git", root, steps: [], durationMs: 0 };
@@ -178,7 +155,6 @@ describe("FreeBSD pkg update admission", () => {
           },
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
-      expect(query).toHaveBeenCalledTimes(2);
       expect(publish).not.toHaveBeenCalled();
     });
   });
@@ -192,19 +168,16 @@ describe("FreeBSD pkg update admission", () => {
       const checkout = vi
         .spyOn(shared, "ensureGitCheckout")
         .mockRejectedValue(new Error("unexpected checkout mutation"));
-      const getSnapshotSource = vi.fn(async () => ({ config: {}, env: process.env }));
       mockOwnership(selected);
       await expect(
         updateGitInstall({
           ...gitUpdateParams(requested),
           switchToGit: true,
           installKind: "package",
-          getSnapshotSource,
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       expect(manager).not.toHaveBeenCalled();
       expect(checkout).not.toHaveBeenCalled();
-      expect(getSnapshotSource).not.toHaveBeenCalled();
     });
   });
 

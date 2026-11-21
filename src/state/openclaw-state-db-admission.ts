@@ -1,4 +1,8 @@
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import type { DatabaseSync } from "node:sqlite";
+import {
+  requireNativeDatabaseFile,
+  getPostgresPhysicalFacts,
+} from "../infra/database-engine/physical-facts.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
@@ -14,11 +18,21 @@ import {
   getAdmittedSqliteSchemaFacts,
   isSqliteSchemaAdmissionCold,
 } from "../infra/sqlite-schema-facts.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 
 function getStateSchemaFacts(database: EngineConnection) {
   return isPostgresSqlConnection(database)
     ? getPostgresPhysicalFacts(database)
     : getAdmittedSqliteSchemaFacts(database);
+}
+
+/** PostgreSQL admits the current schema; SQLite may still expose a pre-feature version. */
+export function isStateSchemaVersionAtLeast(database: EngineConnection, version: number): boolean {
+  return (
+    isPostgresSqlConnection(database) ||
+    (getAdmittedSqliteSchemaFacts(database)?.userVersion ?? 0) >= version
+  );
 }
 
 export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
@@ -207,6 +221,28 @@ export function publishStateSchemaVersionAdmission(
   }
 }
 
+/**
+ * A peer process (the Gateway's update-run watcher) may publish the deferred
+ * 2026.9.2 schema version after this connection admitted its floor. Adopt it
+ * only when the header and metadata both read current inside this connection.
+ */
+export function adoptPeerPublishedStateSchemaVersion(
+  database: DatabaseSync,
+  metadata: { schema_version?: unknown } | undefined,
+): boolean {
+  if (
+    metadata?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
+    readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  publishStateSchemaVersionAdmission(database, {
+    userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  return true;
+}
+
 /** Runtime shape and integrity are physical-file facts, independent of live write authority. */
 export function getStateRuntimeSchemaAdmission(database: EngineConnection) {
   return runtimeAdmission.get(database);
@@ -217,4 +253,15 @@ export function publishStateRuntimeSchemaAdmission(
   startupReady: boolean,
 ): void {
   runtimeAdmission.publish(database, { startupReady });
+}
+
+export function readPublishedStateSchemaVersion(database: EngineConnection): number {
+  const admitted = getStateSchemaVersionAdmission(database);
+  if (admitted) {
+    return admitted.userVersion;
+  }
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
+  return readSqliteUserVersion(database);
 }

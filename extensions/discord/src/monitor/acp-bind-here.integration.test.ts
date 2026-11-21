@@ -1,8 +1,7 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 
 installDiscordIngressTestRuntime();
-// Discord tests cover acp bind here.integration plugin behavior.
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -30,44 +29,24 @@ import {
   createDiscordMessage,
   createDiscordPreflightArgs,
   type DiscordClient,
-  type DiscordConfig,
   type DiscordMessageEvent,
 } from "./message-handler.preflight.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const baseCfg = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-    threadBindings: {
-      enabled: true,
-    },
-  },
-  acp: {
-    enabled: true,
-    dispatch: {
-      enabled: true,
-    },
-    backend: "acpx",
-  },
+  session: { mainKey: "main", scope: "per-sender", threadBindings: { enabled: true } },
+  acp: { enabled: true, dispatch: { enabled: true }, backend: "acpx" },
 } satisfies OpenClawConfig;
 
 function createDmClient(channelId: string): DiscordClient {
   return {
-    fetchChannel: async (id: string) => {
-      if (id === channelId) {
-        return {
-          id: channelId,
-          type: ChannelType.DM,
-        };
-      }
-      return null;
-    },
+    fetchChannel: async (id: string) =>
+      id === channelId ? { id: channelId, type: ChannelType.DM } : null,
   } as unknown as DiscordClient;
 }
 
 function createInMemoryDiscordBindingAdapter() {
-  const bindings: SessionBindingRecord[] = [];
+  const bindings = new Map<string, SessionBindingRecord>();
 
   const bind = async (input: SessionBindingBindInput) => {
     const normalizedConversation = {
@@ -85,12 +64,7 @@ function createInMemoryDiscordBindingAdapter() {
       boundAt: 1,
       ...(input.metadata ? { metadata: input.metadata } : {}),
     } satisfies SessionBindingRecord;
-    const existingIndex = bindings.findIndex((entry) => entry.bindingId === record.bindingId);
-    if (existingIndex >= 0) {
-      bindings.splice(existingIndex, 1, record);
-    } else {
-      bindings.push(record);
-    }
+    bindings.set(record.bindingId, record);
     return record;
   };
 
@@ -104,92 +78,73 @@ function createInMemoryDiscordBindingAdapter() {
     },
     bind,
     listBySession: (targetSessionKey) =>
-      bindings.filter((entry) => entry.targetSessionKey === targetSessionKey),
+      [...bindings.values()].filter((entry) => entry.targetSessionKey === targetSessionKey),
     resolveByConversation: (ref) =>
-      bindings.find(
+      [...bindings.values()].find(
         (entry) =>
           entry.conversation.channel === ref.channel &&
           entry.conversation.accountId === ref.accountId &&
           entry.conversation.conversationId === ref.conversationId,
       ) ?? null,
     unbind: async ({ bindingId, targetSessionKey }) => {
-      const removed = bindings.filter(
+      const removed = [...bindings.values()].filter(
         (entry) =>
           (bindingId && entry.bindingId === bindingId) ||
           (targetSessionKey && entry.targetSessionKey === targetSessionKey),
       );
       for (const entry of removed) {
-        const index = bindings.findIndex((candidate) => candidate.bindingId === entry.bindingId);
-        if (index >= 0) {
-          bindings.splice(index, 1);
-        }
+        bindings.delete(entry.bindingId);
       }
       return removed;
     },
   });
-
-  return { bindings };
 }
 
-describe("Discord ACP bind here end-to-end flow", () => {
-  beforeEach(() => {
-    sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    loadConfigMock.mockReset().mockReturnValue(baseCfg);
+it("routes the next Discord DM turn to an existing ACP session binding", async () => {
+  const threadBindings = createNoopThreadBindingManager("default");
+  onTestFinished(() => threadBindings.stop());
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  loadConfigMock.mockReset().mockReturnValue(baseCfg);
+  createInMemoryDiscordBindingAdapter();
+  const binding = await getSessionBindingService().bind({
+    targetSessionKey: "agent:codex:acp:test-session",
+    targetKind: "session",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "user:user-1",
+      parentConversationId: "user:user-1",
+    },
+    placement: "current",
+    metadata: { boundBy: "user-1", agentId: "codex", label: "codex" },
   });
 
-  it("routes the next Discord DM turn to an existing ACP session binding", async () => {
-    const threadBindings = createNoopThreadBindingManager("default");
-    onTestFinished(() => threadBindings.stop());
-    createInMemoryDiscordBindingAdapter();
-    const binding = await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:test-session",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:user-1",
-        parentConversationId: "user:user-1",
-      },
-      placement: "current",
-      metadata: {
-        boundBy: "user-1",
-        agentId: "codex",
-        label: "codex",
-      },
-    });
-
-    const message = createDiscordMessage({
-      id: "m-followup-1",
-      channelId: "dm-1",
-      content: "follow up after bind",
-      author: {
-        id: "user-1",
-        bot: false,
-        username: "alice",
-      },
-    });
-
-    const preflight = await preflightDiscordMessage({
-      ...createDiscordPreflightArgs({
-        cfg: baseCfg,
-        discordConfig: {
-          dmPolicy: "open",
-        } as DiscordConfig,
-        data: {
-          channel_id: "dm-1",
-          author: message.author,
-          message,
-        } as DiscordMessageEvent,
-        client: createDmClient("dm-1"),
-        botUserId: "bot-1",
-        threadBindings,
-      }),
-      allowFrom: ["*"],
-    });
-
-    expect(preflight?.boundSessionKey).toBe(binding.targetSessionKey);
-    expect(preflight?.route.sessionKey).toBe(binding.targetSessionKey);
-    expect(preflight?.route.agentId).toBe("codex");
-    expect(preflight?.threadBinding).toEqual(binding);
+  const message = createDiscordMessage({
+    id: "m-followup-1",
+    channelId: "dm-1",
+    content: "follow up after bind",
+    author: { id: "user-1", bot: false, username: "alice" },
   });
+
+  const preflight = await preflightDiscordMessage({
+    ...createDiscordPreflightArgs({
+      cfg: baseCfg,
+      discordConfig: { dmPolicy: "open" },
+      data: {
+        channel_id: "dm-1",
+        author: message.author,
+        message,
+      } as DiscordMessageEvent,
+      client: createDmClient("dm-1"),
+      botUserId: "bot-1",
+      threadBindings,
+    }),
+    allowFrom: ["*"],
+  });
+
+  expect(preflight).toMatchObject({
+    boundSessionKey: binding.targetSessionKey,
+    route: { sessionKey: binding.targetSessionKey, agentId: "codex" },
+  });
+  expect(preflight?.threadBinding).toEqual(binding);
 });

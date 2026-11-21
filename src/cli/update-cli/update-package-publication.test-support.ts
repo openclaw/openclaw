@@ -5,10 +5,7 @@ import { expect, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { encodePackageActivationLauncher } from "../../infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../infra/package-update-activation-prepare.js";
-import {
-  readPackageActivationStatus,
-  runPackageActivationRecovery,
-} from "../../infra/package-update-activation.js";
+import { runPackageActivationRecovery } from "../../infra/package-update-activation.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { createPublicationOwner } from "../../infra/package-update-publication-owner.js";
 import {
@@ -16,6 +13,27 @@ import {
   withPublicationFence,
 } from "../../infra/package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+
+export async function preparePackagePublication(
+  f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
+  options: Parameters<typeof preparePackageActivationJournal>[0]["options"],
+) {
+  const reader = createPackageIntegrityReader();
+  return preparePackageActivationJournal({
+    options,
+    liveRoot: f.packageRoot,
+    stageRoot: f.params.stage.packageRoot,
+    launcherRoot: f.params.stage.layout.binDir,
+    binDir: path.dirname(f.launcher),
+    previous: await reader.tree(f.packageRoot),
+    launchers: [
+      {
+        name: "openclaw",
+        previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
+      },
+    ],
+  });
+}
 
 export async function createInterruptedPackagePublication(
   fixtureRoot: string,
@@ -46,22 +64,8 @@ export async function createInterruptedPackagePublication(
     write(`node_modules/${dependency}/package.json`, { type: "commonjs" });
   }
   await writePackageDistInventory(stageRoot);
-  const reader = createPackageIntegrityReader();
   const prepared = await withPublicationFence(f.packageRoot, async (fence) => {
-    const preparation = await preparePackageActivationJournal({
-      options: publicationActivation(fence),
-      liveRoot: f.packageRoot,
-      stageRoot,
-      launcherRoot: f.params.stage.layout.binDir,
-      binDir: path.dirname(f.launcher),
-      previous: await reader.tree(f.packageRoot),
-      launchers: [
-        {
-          name: "openclaw",
-          previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
-        },
-      ],
-    });
+    const preparation = await preparePackagePublication(f, publicationActivation(fence));
     const { anchor, journal, initial } = preparation;
     if (phase === "prepared") {
       // An external install selected the candidate without advancing the journal.
@@ -94,18 +98,16 @@ export async function createInterruptedPackagePublication(
     }
     return preparation;
   });
-  const { anchor, journal } = prepared;
-  const record = journal.read();
-  const operationId = record.descriptor.operationId;
+  const record = prepared.journal.read();
   expect(record.phase).toBe(phase);
   if (phase === "publishing") {
-    await expect(runPackageActivationRecovery(anchor, "repair", operationId)).rejects.toThrow(
-      "Package publication object changed",
-    );
-    await expect(runPackageActivationRecovery(anchor, "retire", operationId)).rejects.toThrow(
-      "Package evidence cannot be retired (publishing)",
-    );
+    const operationId = record.descriptor.operationId;
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "repair", operationId),
+    ).rejects.toThrow("Package publication object changed");
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "retire", operationId),
+    ).rejects.toThrow("Package evidence cannot be retired (publishing)");
   }
-  expect(await readPackageActivationStatus(anchor, operationId)).toMatchObject({ phase });
   return { ...f, ...prepared, record };
 }

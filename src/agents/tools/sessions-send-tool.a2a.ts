@@ -1,11 +1,11 @@
 import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -15,12 +15,17 @@ import {
   waitForAgentRunReply,
 } from "../run-wait.js";
 import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../subagents/completion/subagent-completion-instructions.js";
-import { runAgentStep, type AgentStepSession } from "./agent-step.js";
+import { runAgentStep } from "./agent-step.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
+import {
+  resolveSessionsSendReply,
+  SESSIONS_SEND_TRUNCATION_NOTE,
+} from "./sessions-send-helpers.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
@@ -37,7 +42,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSessionKey?: string;
   requesterAgentId?: string;
   requesterSession?: AgentStepSession;
-  requesterDeliveryGeneration?: SessionDeliveryGeneration;
+  requesterDeliveryGeneration?: ChatRef;
   requesterOrigin?: DeliveryContext;
   requester?: Parameters<typeof runAgentStep>[0]["requester"];
   requesterChannel?: string;
@@ -94,12 +99,16 @@ export async function runSessionsSendA2AFlow(params: {
       }
       return;
     }
-    const reply = wait.replyText;
-    if (
-      wait.terminalReply?.disposition !== "visible" ||
-      !reply?.trim() ||
-      reply.trim() === HEARTBEAT_TOKEN
-    ) {
+    if (wait.terminalReply?.disposition !== "visible") {
+      return;
+    }
+    const { replyText: reply, replyTruncated } = await resolveSessionsSendReply(wait, {
+      runId: params.runId,
+      sessionKey: params.targetSessionKey,
+      agentId: params.targetAgentId,
+      callGateway: gatewayCall,
+    });
+    if (!reply?.trim() || reply.trim() === HEARTBEAT_TOKEN) {
       return;
     }
 
@@ -195,7 +204,7 @@ export async function runSessionsSendA2AFlow(params: {
         ...requesterStepContext,
         sessionKey: params.requesterSessionKey,
         message: reply,
-        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.`,
+        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.${replyTruncated ? ` ${SESSIONS_SEND_TRUNCATION_NOTE}` : ""}`,
         sourceAgentId: params.targetAgentId,
       });
     }

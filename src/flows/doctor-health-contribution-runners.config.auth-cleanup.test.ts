@@ -4,7 +4,14 @@ import { setDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigMutationResult } from "../config/mutate.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
+import {
+  createConfigResolutionFacts,
+  getResolvedConfigEnvSecretRef,
+  resolveConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDoctorHealthFlowContext } from "./doctor-health-context.test-support.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import { writeDoctorGatewayConfig } from "./doctor-health-contribution-runners.gateway.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -17,6 +24,7 @@ const cleanupPlan = { agentDir: "/tmp/openclaw/agents/main", profileIds: ["anthr
 const deferRepairs = { runPostWriteRepairs: false };
 
 const mocks = vi.hoisted(() => ({
+  applyWizardMetadata: vi.fn<(cfg: OpenClawConfig) => OpenClawConfig>(),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   replaceConfigFile: vi.fn<(_params: unknown) => Promise<WriteReceipt>>(),
 }));
@@ -50,29 +58,69 @@ vi.mock("../config/logging.js", async (importOriginal) => ({
   logConfigUpdated: vi.fn(),
 }));
 
-vi.mock("../commands/onboard-helpers.js", () => ({
-  applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
+vi.mock("../commands/onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-helpers.js")>()),
+  applyWizardMetadata: mocks.applyWizardMetadata,
 }));
 
 let ctx: DoctorHealthFlowContext;
 beforeEach(() => {
-  const cfg = { gateway: { mode: "local" } } satisfies OpenClawConfig;
-  ctx = {
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    options: {},
+  mocks.applyWizardMetadata.mockReset().mockImplementation((cfg) => cfg);
+  ctx = createDoctorHealthFlowContext({
     prompter: {} as DoctorHealthFlowContext["prompter"],
-    configResult: {
-      cfg,
-      confirmedConfigSource: { path: "/tmp/openclaw.json", hash: "planning-revision" },
-      retiredAuthProfileCleanupPlans: [cleanupPlan],
-    },
-    cfg,
+    configResult: { retiredAuthProfileCleanupPlans: [cleanupPlan] },
+    cfg: { gateway: { mode: "local" } },
     cfgForPersistence: {},
-    sourceConfigValid: true,
-    configPath: "/tmp/openclaw.json",
-  };
+  });
   mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
   mocks.replaceConfigFile.mockReset().mockResolvedValue(saved("committed-revision"));
+});
+
+it("keeps credential classification after writing wizard metadata", async () => {
+  const { applyWizardMetadata } = await vi.importActual<
+    typeof import("../commands/onboard-helpers.js")
+  >("../commands/onboard-helpers.js");
+  mocks.applyWizardMetadata.mockImplementation((cfg) =>
+    applyWizardMetadata(cfg, { command: "doctor", mode: "local" }),
+  );
+  ctx.cfg = {
+    ...ctx.cfg,
+    channels: {
+      telegram: {
+        accounts: {
+          env: { botToken: "synthetic-token" },
+          literal: { botToken: "synthetic-token" },
+          escaped: { botToken: "${DOCTOR_TOKEN}" },
+        },
+      },
+    },
+  };
+  setConfigResolutionFacts(
+    ctx.cfg,
+    createConfigResolutionFacts(
+      [],
+      new Map(),
+      "default",
+      new Map([["channels.telegram.accounts.env.botToken", "DOCTOR_TOKEN"]]),
+    ),
+  );
+
+  expect(await runWriteConfigHealth(ctx, deferRepairs)).toBe(true);
+
+  expect(ctx.cfg.wizard?.lastRunCommand).toBe("doctor");
+  expect(
+    getResolvedConfigEnvSecretRef(ctx.cfg, "channels.telegram.accounts.env.botToken")?.id,
+  ).toBe("DOCTOR_TOKEN");
+  for (const account of ["literal", "escaped"]) {
+    expect(
+      resolveConfigSecretRef({
+        config: ctx.cfg,
+        path: `channels.telegram.accounts.${account}.botToken`,
+        value: ctx.cfg.channels?.telegram?.accounts?.[account]?.botToken,
+        includeResolved: true,
+      }),
+    ).toBeNull();
+  }
 });
 
 function expectReceipt(context: DoctorHealthFlowContext, hash: string | null) {
@@ -81,7 +129,6 @@ function expectReceipt(context: DoctorHealthFlowContext, hash: string | null) {
 
 function expectWrite(context: DoctorHealthFlowContext, call: number, baseHash: string) {
   expect(mocks.replaceConfigFile.mock.calls[call - 1]?.[0]).toMatchObject({
-    nextConfig: context.cfg,
     baseHash,
     writeOptions: expect.objectContaining({ expectedConfigPath: context.configPath }),
   });

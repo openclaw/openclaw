@@ -176,7 +176,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   const store = piSessionStore(env);
   const key = `${store.root}\0${store.flat}\0${piAcpSessionStoreRoot(env) ?? ""}`;
   const cached = piFileCandidateCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && cached.expiresAt > performance.now()) {
     piFileCandidateCache.delete(key);
     piFileCandidateCache.set(key, cached);
     return await cached.candidates;
@@ -185,7 +185,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
     piFileCandidateCache.delete(key);
   }
   const candidates = scanPiFileCandidates(env);
-  const entry = { expiresAt: Date.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
+  const entry = { expiresAt: performance.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
   piFileCandidateCache.set(key, entry);
   pruneMapToMaxSize(piFileCandidateCache, PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES);
   try {
@@ -365,9 +365,6 @@ async function readPiSessionSummary(
     // last good index instead of poisoning future append scans.
     return cached?.summary;
   }
-  if (cached?.summary?.threadId && cached.summary.threadId !== summary?.threadId) {
-    threadFileCache.delete(threadCacheKey(cached.storeRoot, cached.summary.threadId));
-  }
   cacheSummary(candidate.file, { ...candidate, summary, scanState });
   if (summary) {
     threadFileCache.set(threadCacheKey(candidate.storeRoot, summary.threadId), candidate.file);
@@ -380,7 +377,7 @@ function summaryMatches(summary: PiSessionSummary, needle?: string): boolean {
     return true;
   }
   return [summary.threadId, summary.name, summary.cwd].some((field) =>
-    field?.toLocaleLowerCase().includes(needle),
+    field?.toLocaleLowerCase().normalize("NFC").includes(needle),
   );
 }
 
@@ -414,7 +411,7 @@ export async function listPiSummaryPage(
   }
   const target = params.offset + params.limit + 1;
   const matches: PiSessionSummary[] = [];
-  const needle = params.searchTerm?.toLocaleLowerCase();
+  const needle = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
   for await (const summary of scanPiSummaries(candidates)) {
     if (summaryMatches(summary, needle)) {
       matches.push(summary);

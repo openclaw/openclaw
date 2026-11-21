@@ -9,6 +9,23 @@ beforeAll(async () => {
 afterAll(() => restoreMigrationRuntime?.());
 
 describe("legacy config migrate validation", () => {
+  it.each([undefined, "strict"] as const)(
+    "keeps ambiguous MCP transport under %s validation policy",
+    (semanticValidation) => {
+      const raw = {
+        session: { typingMode: "thinking" },
+        mcp: { servers: { fixture: { command: "never-run", url: "https://example.invalid/mcp" } } },
+      };
+      const result = migrateLegacyConfig(
+        raw,
+        { sourceConfigBeforeMigrations: raw },
+        semanticValidation,
+      );
+      expect(result.config?.agents?.defaults?.typingMode).toBe("thinking");
+      expect(result.partiallyValid).toBe(semanticValidation === "strict" ? true : undefined);
+    },
+  );
+
   it("leaves retired keys unresolved while migrating supported config", () => {
     const raw = {
       heartbeat: { every: "30m", showOk: true },
@@ -45,7 +62,7 @@ describe("legacy config migrate validation", () => {
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
     expect(result.partiallyValid).toBeUndefined();
     expect(result.config?.agents?.defaults?.systemAgent?.agentId).toBe("main");
-    expect(result.config?.agents?.defaults?.heartbeat?.agentId).toBe("main");
+    expect(result.config).not.toHaveProperty("agents.defaults.heartbeat");
   });
 
   it("validates resolved OTel values while retaining authored interpolation", () => {

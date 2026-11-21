@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,10 +8,9 @@ import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
-import { pluginInstanceInvocation } from "../../plugins/plugin-instance-invocation.js";
-import { getPluginInstanceOwner } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -20,6 +18,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-run
 import type { StreamFn } from "../runtime/index.js";
 import { completionModelDefinition } from "../simple-completion.test-support.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { runEmbeddedAgent } from "./run.js";
 import { clearEmbeddedSessionPromptStates } from "./session-prompt-state.js";
 
@@ -31,46 +30,29 @@ it("admits a second workspace turn through real prepared runtime after registrat
   await withOpenClawTestState({ label: "prepared-workspace-turns" }, async (state) => {
     const bundled = state.path("bundled");
     await fs.mkdir(bundled);
-    type Owner = NonNullable<ReturnType<typeof getPluginInstanceOwner>>;
-    const registrations: Array<{
-      owner: Owner;
-      instance: NonNullable<Owner["instance"]>;
-      disposals: number;
-      turn: number;
-    }> = [];
+    const registrations: string[] = [];
     let activeTurn = 0;
-    const requests: Array<Context["systemPrompt"]> = [];
+    const requests: Array<Pick<Context, "systemPrompt" | "messages">> = [];
     const stream: StreamFn = (model, context) => {
-      requests.push(context.systemPrompt);
+      requests.push({
+        systemPrompt: context.systemPrompt,
+        messages: structuredClone(context.messages),
+      });
       const message = makeAgentAssistantMessage({
         api: model.api,
         provider: model.provider,
         model: model.id,
         content: [{ type: "text", text: `SCRIPTED-${requests.length}` }],
       });
-      const events = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        events.push({ type: "done", reason: "stop", message });
-        events.end();
+      return createQueuedAssistantStream((push) => {
+        push({ type: "done", reason: "stop", message });
       });
-      return events;
     };
     const bridge = {
       stream,
-      capture: () => {
-        const instance = expectDefined(
-          pluginInstanceInvocation.getStore()?.instance,
-          "registering instance",
-        );
-        const owner = expectDefined(getPluginInstanceOwner(instance), "registration owner");
-        const registration = {
-          owner,
-          instance: expectDefined(owner.instance, "owned plugin instance"),
-          disposals: 0,
-          turn: activeTurn,
-        };
-        registrations.push(registration);
-        return registration;
+      capture: (pluginId: string) => {
+        registrations.push(`${pluginId}:${activeTurn}`);
+        return activeTurn;
       },
     };
     const bridgeKey = `__prepared_workspace_${path.basename(state.root)}`;
@@ -98,11 +80,11 @@ it("admits a second workspace turn through real prepared runtime after registrat
           `
 module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
   const bridge = globalThis[${JSON.stringify(bridgeKey)}];
-  const registration = bridge.capture();
-  api.lifecycle.registerRuntimeLifecycle({ id: "fixture", dispose() { registration.disposals++; } });
+  api.lifecycle.registerRuntimeLifecycle({ id: "fixture", dispose() {} });
+  const turn = bridge.capture(${JSON.stringify(pluginId)});
   ${
     pluginId === siblingPluginId
-      ? 'if (registration.turn === 1) throw new Error("Synthetic registration rollback");'
+      ? 'if (turn === 1) throw new Error("Synthetic registration rollback");'
       : 'api.registerProvider({ id: "anthropic", label: "Scripted Anthropic", auth: [], wrapStreamFn: () => (model, context, options) => bridge.stream(model, context, options) });'
   }
 } };
@@ -187,26 +169,28 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
               }
             }
             expect(network).not.toHaveBeenCalled();
-            const siblingRegistrations = registrations
-              .filter(({ owner }) => owner.record.id === siblingPluginId)
-              .map(({ owner, turn }) => ({ status: owner.record.status, turn }));
-            expect(siblingRegistrations).toContainEqual({ status: "loaded", turn: 0 });
-            expect(siblingRegistrations.map(({ status }) => status)).toContain("error");
-            expect(requests).toEqual([
-              expect.stringContaining("Original workspace instruction."),
-              expect.stringContaining("Updated workspace instruction."),
-            ]);
+            expect(registrations).toContain(`${siblingPluginId}:0`);
+            expect(registrations).toContain(`${siblingPluginId}:1`);
+            expect(requests).toHaveLength(2);
+            expect(requests[0]?.systemPrompt).toContain("Original workspace instruction.");
+            expect(requests[1]?.systemPrompt).toBe(requests[0]?.systemPrompt);
+            expect(requests[1]?.systemPrompt).not.toContain("Updated workspace instruction.");
+            expect(
+              requests.map(({ messages }) =>
+                messages
+                  .filter((message) =>
+                    extractTextFromChatContent(message.content)?.includes(
+                      "Updated workspace instruction.",
+                    ),
+                  )
+                  .map((message) => message.role),
+              ),
+            ).toEqual([[], ["user"]]);
           } finally {
             await resetPreparedModelRuntimeSnapshotsForTest();
             resetPluginLoaderTestStateForTest();
             cleanupPluginLoaderFixturesForTest();
             clearPluginMetadataLifecycleCaches();
-            for (const { owner, instance, disposals, turn } of registrations) {
-              expect(
-                { disposals, acceptingCalls: instance.acceptingCalls },
-                `${owner.record.id} turn ${turn}`,
-              ).toEqual({ disposals: 1, acceptingCalls: false });
-            }
           }
         },
       );

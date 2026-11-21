@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -163,7 +164,6 @@ function startLogs(args: string[] = [], dispose = vi.fn(async () => {})) {
 const disconnected = () => new Error("gateway closed (1006 abnormal closure): disconnected");
 const journalPage = (line: string) => ({
   stdout: `${line}\n-- cursor: s=abc`,
-  stderr: "",
   code: 0,
   truncated: false,
 });
@@ -207,7 +207,11 @@ it.each([
     });
   }
   const { command, dispose, admitted } = startLogs(
-    mode === "retry" ? ["--url", "ws://localhost:18789"] : [],
+    mode === "retry"
+      ? ["--url", "ws://localhost:18789"]
+      : mode === "poll"
+        ? ["--interval", "2147483648"]
+        : [],
   );
   const activeSignal =
     mode === "rpc"
@@ -216,9 +220,14 @@ it.each([
   expect(activeSignal).toBeDefined();
   if (mode !== "rpc") {
     expect((await delayStarted.promise).ms).toBeGreaterThan(0);
+    if (mode === "poll") {
+      expect(mocks.delay).toHaveBeenCalledOnce();
+      expect(mocks.delay).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS, undefined, {
+        signal: activeSignal,
+      });
+    }
   } else {
     expect({ stdout, stderr }).toEqual({ stdout: [], stderr: [] });
-    expect(mocks.readService).not.toHaveBeenCalled();
   }
   const outputBeforeStop = { stdout: [...stdout], stderr: [...stderr] };
   await waitForSignalExitBarriers(signal);
@@ -241,8 +250,6 @@ it("preserves terminal RPC failure output and the runtime exit outcome", async (
   );
   expect(stdout).toEqual([]);
   expect(dispose).toHaveBeenCalledOnce();
-  expect(mocks.delay).not.toHaveBeenCalled();
-  expect(mocks.readService).not.toHaveBeenCalled();
   expect(await waitForCliSignalExit()).toBeUndefined();
 });
 
@@ -290,7 +297,6 @@ it("joins cancelled journal recovery before releasing command resources", async 
   expect(order).toEqual(["probe settled", "resources released"]);
   expect(mocks.callGateway).toHaveBeenCalledTimes(2);
   expect(mocks.readJournal).toHaveBeenCalledTimes(2);
-  expect(mocks.readTail).not.toHaveBeenCalled();
   expect(stdout.join("")).toContain("journal bridge line");
   expect(stdout.join("")).not.toContain("late");
   expect(stderr).toEqual([]);

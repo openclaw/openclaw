@@ -1,11 +1,17 @@
 import type { RouteMatch } from "@openclaw/uirouter";
-import { For, Match, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
+import { bootComposerElement, retireBootComposer } from "../../app/boot-composer.ts";
+import { HomeSessionUnavailable } from "../../components/home-session-unavailable.tsx";
 import { PanelErrorState } from "../../components/solid/lazy-view-error.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { LoadingSkeleton } from "../../components/solid/loading-skeleton.tsx";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import "./chat-page.tsx";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type { ChatPageProps } from "./chat-page-types.ts";
-import "./chat-page.ts";
 import type { ChatRouteData } from "./route-loader.ts";
+
+registerEnglishCatalog(registerSessionNavigationEnglish);
 
 const CHAT_PAGE_OWNER_KEY = "chat-page";
 
@@ -29,11 +35,26 @@ export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
     const value = routeData();
     return value?.kind === "missing-session" ? value : undefined;
   };
+  const unavailableHome = () => {
+    const value = routeData();
+    return value?.kind === "unavailable-home" ? value : undefined;
+  };
   const session = () => {
     const value = routeData();
     return value?.kind === "session" ? value : undefined;
   };
-  return (
+  const terminalDraft = () => {
+    const textarea = routeData() && !session() ? bootComposerElement() : null;
+    if (textarea?.value) {
+      return textarea;
+    }
+    // A terminal route has no chat pane to take the early composer; empty, it has nothing to keep.
+    if (textarea) {
+      retireBootComposer();
+    }
+    return null;
+  };
+  const renderRoute = () => (
     <Switch>
       <Match when={ambiguous()}>
         {(data) => (
@@ -94,12 +115,32 @@ export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
           />
         )}
       </Match>
+      <Match when={unavailableHome()}>
+        {(data) => <HomeSessionUnavailable agentId={data().agentId} />}
+      </Match>
       <Match when={session()}>
         {(data) => (
           <openclaw-chat-page prop:data={data()} prop:presented={props.presented !== false} />
         )}
       </Match>
     </Switch>
+  );
+  return (
+    <Show when={terminalDraft()} fallback={renderRoute()}>
+      {/* A terminal route result has no chat pane to take the early input. */}
+      <div class="lazy-view-state lazy-view-state--loading lazy-view-state--route" data-chat="">
+        <LoadingSkeleton
+          composer
+          header={false}
+          renderContent={() => (
+            <>
+              {renderRoute()}
+              <p class="muted">{t("chat.sessionRoute.bootDraftRecovery")}</p>
+            </>
+          )}
+        />
+      </div>
+    </Show>
   );
 }
 

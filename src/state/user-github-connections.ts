@@ -18,7 +18,7 @@ import {
 import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectUserGitHubConnectionInDatabase,
-  parseUserGitHubConnection,
+  registerUserGitHubConnectionSecrets,
 } from "./user-github-connections.kernel.js";
 import {
   isUserGitHubConnectionCommit,
@@ -31,6 +31,7 @@ import type { UserGitHubConnectionWorkerOperations } from "./user-github-connect
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
 
 export { observeUserGitHubProfileRetirement } from "./user-github-connection-events.js";
+export { requirePendingUserGitHubConnection } from "./user-github-connections.types.js";
 export type {
   UserGitHubConnection,
   UserGitHubConnected,
@@ -142,7 +143,11 @@ export async function prepareUserGitHubConnection(
   };
   connectionReads.set(key, entry);
   entry.prepared = (async () => {
-    const authority = await captureUserProfileAuthorityRead(context.admission);
+    const authority = await captureUserProfileAuthorityRead(
+      context.admission,
+      undefined,
+      "identity",
+    );
     const result = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       { type: "userGitHubConnections.read", input: { owner } },
@@ -150,7 +155,7 @@ export async function prepareUserGitHubConnection(
     );
     const connection = result?.connection;
     const profileIsCurrent = authority.bind(owner);
-    const parsed = connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
+    const parsed = connection ? registerUserGitHubConnectionSecrets(connection) : undefined;
     const read = () => {
       context.admission.assertCurrent();
       if (!entry.valid || !profileIsCurrent?.()) {
@@ -179,7 +184,7 @@ export async function listUserGitHubConnectionsAsync(): Promise<UserGitHubConnec
   );
   return (result?.connections ?? []).map(({ owner, connection }) => ({
     owner,
-    connection: parseUserGitHubConnection(JSON.stringify(connection)),
+    connection: registerUserGitHubConnectionSecrets(connection),
   }));
 }
 
@@ -238,7 +243,7 @@ export async function mutateUserGitHubConnection(
     { owner, mutation },
     assertCurrent,
   );
-  return connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
+  return connection ? registerUserGitHubConnectionSecrets(connection) : undefined;
 }
 
 /** An exact remote rotation follows profile transfer; its receipt grants no external authority. */

@@ -72,11 +72,19 @@ export const hasSubagentControllerInput = (entry: SubagentRunRecord): boolean =>
 
 /** Claimed turns revalidate at execution; retire only this obligation's unclaimed inputs. */
 export function retireSubagentControllerInputs(entry: SubagentRunRecord): void {
-  for (const input of subagentControllerInputs(entry)) {
-    if (!input.claim) {
-      abortSessionControllerInput(input, new Error("Subagent obligation retired"));
+  captureSubagentControllerInputRetirement(entry)();
+}
+
+/** Capture before settlement removes the frozen membership used to identify its reservations. */
+export function captureSubagentControllerInputRetirement(entry: SubagentRunRecord): () => void {
+  const inputs = [...subagentControllerInputs(entry)];
+  return () => {
+    for (const input of inputs) {
+      if (!input.claim) {
+        abortSessionControllerInput(input, new Error("Subagent obligation retired"));
+      }
     }
-  }
+  };
 }
 
 /** A terminal individual delivery releases its reservation, not the requester's owed cohort. */

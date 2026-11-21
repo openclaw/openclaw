@@ -1,3 +1,5 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 export type ChannelJoinedRoomContext = {
   /** Human room name, e.g. "#deploys" or "Design Team". */
   title?: string;
@@ -38,7 +40,7 @@ function formatChannelJoinRoomSnapshot(params: {
     roomFacts.push("Earlier room messages cannot be read on this platform.");
   }
 
-  const metadata = roomFacts.join("\n").slice(0, CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
+  const metadata = truncateUtf16Safe(roomFacts.join("\n"), CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
   const messageHeader = "\nRecent room messages:\n";
   let remaining = CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS - metadata.length - messageHeader.length;
   const recentMessages = (context.recentMessages ?? []).flatMap((message) => {
@@ -52,7 +54,7 @@ function formatChannelJoinRoomSnapshot(params: {
     }
     if (line.length > remaining) {
       if (retained === 0) {
-        return `${metadata}${messageHeader}${line.slice(0, remaining)}`;
+        return `${metadata}${messageHeader}${truncateUtf16Safe(line, remaining)}`;
       }
       break;
     }

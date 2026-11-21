@@ -13,20 +13,16 @@ const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 export function readCodexRequirementsToml(params: {
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
-  requirementsPath?: string;
-  readRequirementsFile?: (path: string) => string | undefined;
   platform?: NodeJS.Platform;
 }): string | undefined {
   if (params.requirementsToml !== undefined) {
     return params.requirementsToml ?? undefined;
   }
-  const requirementsPath =
-    readNonEmptyString(params.requirementsPath) ??
-    resolveCodexRequirementsPath(params.env ?? process.env, params.platform ?? process.platform);
+  const requirementsPath = resolveCodexRequirementsPath(
+    params.env ?? process.env,
+    params.platform ?? process.platform,
+  );
   try {
-    if (params.readRequirementsFile) {
-      return params.readRequirementsFile(requirementsPath);
-    }
     return readFileSync(requirementsPath, "utf8");
   } catch {
     return undefined;

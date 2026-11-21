@@ -11,10 +11,31 @@ pub trait Inhibitor {
 }
 
 #[derive(Debug)]
+pub enum Error {
+    Preference(String),
+    Power(String),
+}
+
+impl Error {
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::Preference(_) => "Saved Gateways",
+            Self::Power(_) => "Keep computer awake",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Preference(message) | Self::Power(message) => message,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Status {
     pub enabled: bool,
     pub active: bool,
-    pub error: Option<String>,
+    pub error: Option<Error>,
 }
 
 pub struct KeepAwake {
@@ -35,14 +56,15 @@ impl KeepAwake {
         let stop = Arc::clone(&stopping);
         let worker = thread::Builder::new().name("keep-awake".into()).spawn(move || {
             let mut inhibitor = None;
-            let mut enabled = false;
-            let mut result = read().and_then(|saved| {
-                enabled = saved;
-                if enabled && !stop.load(Ordering::SeqCst) {
-                    inhibitor = Some(acquire()?);
-                }
+            // The preference shares Saved Gateways' registry. Its startup owner
+            // reports unreadable storage in the connection UI; don't turn that
+            // same failure into a power alert or overwrite the unread preference.
+            let mut enabled = read().unwrap_or(false);
+            let mut result = if enabled && !stop.load(Ordering::SeqCst) {
+                acquire().map(|guard| inhibitor = Some(guard)).map_err(Error::Power)
+            } else {
                 Ok(())
-            });
+            };
             loop {
                 if !stop.load(Ordering::SeqCst) {
                     publish(Status { enabled, active: inhibitor.is_some(), error: result.err() });
@@ -51,21 +73,21 @@ impl KeepAwake {
                 // Saved intent survives failed restoration. Toggle that intent,
                 // not the presence of a guard, so the user can still turn it off.
                 result = if enabled {
-                    let released = inhibitor.as_mut().map_or(Ok(()), Inhibitor::release);
+                    let released = inhibitor.as_mut().map_or(Ok(()), Inhibitor::release).map_err(Error::Power);
                     released.and_then(|()| {
                         inhibitor = None;
-                        write(false).map_err(|error| format!(
+                        write(false).map_err(|error| Error::Preference(format!(
                             "Idle sleep is allowed now, but the preference could not be saved. It may turn on again after restarting OpenClaw. {error}"
-                        ))?;
+                        )))?;
                         enabled = false;
                         Ok(())
                     })
                 } else {
-                    acquire().and_then(|guard| {
+                    acquire().map_err(Error::Power).and_then(|guard| {
                         if stop.load(Ordering::SeqCst) { return Ok(()); }
                         // Persist only after acquiring the OS request. A failed
                         // write drops the new guard and leaves the setting off.
-                        write(true)?;
+                        write(true).map_err(Error::Preference)?;
                         enabled = true;
                         inhibitor = Some(guard);
                         Ok(())

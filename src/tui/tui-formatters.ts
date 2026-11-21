@@ -146,12 +146,11 @@ export function formatTuiAbortDiagnostic(value: string | undefined): string | un
 
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
-  streamedText?: string | null;
   errorMessage?: string | null;
   message?: unknown;
 }) {
   const contentText =
-    [params.finalText, params.streamedText].find((text) => text?.trim()) ??
+    (params.finalText?.trim() && params.finalText) ||
     (params.errorMessage?.trim() ? formatRawAssistantErrorForUi(params.errorMessage) : "");
   return formatTuiAssistantContent(params.message, contentText) || "(no output)";
 }

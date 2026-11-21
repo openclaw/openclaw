@@ -9,7 +9,7 @@ import type {
 import type {
   OAuthProviderInterface,
   OAuthLoginCallbacks as ProviderOAuthLoginCallbacks,
-} from "../../plugin-sdk/provider-oauth-runtime.js";
+} from "../../llm/utils/oauth/types.js";
 import type { ProviderAuthMode } from "./model-registry-schema.js";
 
 /** Shared fields accepted by extension and registry provider registration. */
@@ -43,12 +43,14 @@ interface ProviderModelConfig
       | "input"
       | "maxTokens"
       | "parameterCount"
-      | "headers"
+      | "family"
       | "compat"
     >,
     Partial<Pick<Model, "api" | "baseUrl">> {
   /** Cost per token (for tracking, can be 0). */
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** Authored catalog headers remain strings; deletion sentinels are request-time only. */
+  headers?: Record<string, string>;
   /** Maximum context window size in tokens. */
   contextWindow: number;
 }

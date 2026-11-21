@@ -17,12 +17,11 @@ import {
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
+import { normalizeContentType, resolveMSTeamsMediaKind } from "./html.js";
 import {
   GRAPH_ROOT,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
-  normalizeContentType,
-  resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
 } from "./shared.js";
 import type {
@@ -138,8 +137,6 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   deadline?: MSTeamsRequestDeadline;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
   /** Optional logger used to surface Graph/SharePoint fetch errors. */
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsGraphMediaResult> {
@@ -318,7 +315,6 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       deadline: params.deadline,
-      preserveFilenames: params.preserveFilenames,
       logger: params.logger,
     });
   } catch (err) {

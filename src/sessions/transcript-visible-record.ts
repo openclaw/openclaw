@@ -1,30 +1,18 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIntermediateAssistantTranscriptMessage } from "../agents/embedded-agent-runner/message-visibility.js";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
 import type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
 import {
   isSilentAssistantTranscriptMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "../shared/chat-message-content.js";
+import { MODEL_FALLBACK_NOTICE_KIND } from "../shared/model-fallback-notice.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { readNestedToolActivity } from "./nested-tool-activity.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
-
-export function isVisibleTranscriptRecord(value: unknown): value is Record<string, unknown> {
-  const record = asOptionalRecord(value);
-  return (
-    Boolean(record?.message) ||
-    record?.type === "compaction" ||
-    record?.type === "reset" ||
-    (record?.type === "custom_message" &&
-      record.display === true &&
-      record.customType !== OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
-  );
-}
 
 export function isAssistantResultEventForRun(event: unknown, runId: string): boolean {
   if (
@@ -39,7 +27,11 @@ export function isAssistantResultEventForRun(event: unknown, runId: string): boo
     return false;
   }
   const mirror = event.message.openclawDeliveryMirror;
-  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
+  if (
+    isRecord(mirror) &&
+    (mirror.kind === MODEL_FALLBACK_NOTICE_KIND ||
+      (mirror.kind === "message-tool-source-reply" && mirror.final !== true))
+  ) {
     return false;
   }
   return true;
@@ -81,12 +73,34 @@ export function createVisibleAssistantResultEventMatcher(
 
 export type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
 
+/** Reads a successful inline widget result from either transcript tool representation. */
+export function readInlineWidgetReceipt(message: unknown): Record<string, unknown> | undefined {
+  const record = asOptionalRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  const activity = readNestedToolActivity(record);
+  const tool = activity?.details ?? (record.role === "toolResult" ? record : undefined);
+  const details = asOptionalRecord(activity ? activity.details.result.details : record.details);
+  return tool?.toolName === "show_widget" &&
+    tool.isError !== true &&
+    details?.kind === "canvas" &&
+    typeof asOptionalRecord(details.view)?.id === "string" &&
+    asOptionalRecord(details.presentation)?.target === "assistant_message"
+    ? details
+    : undefined;
+}
+
 /** Navigation only filters candidates; canonical content and active identity remain authoritative. */
 export function matchesTranscriptEvent(
   event: unknown,
   match: SessionTranscriptEventMatch,
   projection?: "navigation",
 ): boolean {
+  if (match.kind === "custom-entry") {
+    const record = asOptionalRecord(event);
+    return record?.type === "custom" && record.customType === match.customType;
+  }
   if (match.kind === "latest") {
     return true;
   }
@@ -101,16 +115,8 @@ export function matchesTranscriptEvent(
     if (projection === "navigation") {
       return message.role === "toolResult" || message.role === "custom";
     }
-    const activity = readNestedToolActivity(message);
-    const tool = activity?.details ?? (message.role === "toolResult" ? message : undefined);
-    const details = asOptionalRecord(activity ? activity.details.result.details : message.details);
-    return (
-      tool?.toolName === "show_widget" &&
-      tool.isError !== true &&
-      details?.kind === "canvas" &&
-      asOptionalRecord(details.view)?.id === match.docId &&
-      asOptionalRecord(details.presentation)?.target === "assistant_message"
-    );
+    const receipt = readInlineWidgetReceipt(message);
+    return Boolean(receipt && asOptionalRecord(receipt.view)?.id === match.docId);
   }
   if (match.kind === "idempotency") {
     return (

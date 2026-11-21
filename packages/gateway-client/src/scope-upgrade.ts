@@ -24,12 +24,6 @@ type UpgradeOperation = {
   requestId?: string;
 };
 
-type UpgradeRequester = (
-  method: string,
-  params?: unknown,
-  options?: GatewayProtocolRequestOptions,
-) => Promise<unknown>;
-
 function readRequestId(value: unknown): string {
   const requestId =
     value && typeof value === "object" && "requestId" in value
@@ -80,7 +74,11 @@ export class GatewayScopeUpgrade {
 
   constructor(
     private readonly deps: {
-      request: UpgradeRequester;
+      request: (
+        method: string,
+        params?: unknown,
+        options?: GatewayProtocolRequestOptions,
+      ) => Promise<unknown>;
       tokenStore: GatewayBrowserDeviceTokenStore;
       reconnect: () => void;
     },

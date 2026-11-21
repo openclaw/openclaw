@@ -1,6 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getRuntimeConfig } from "../config/io.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -9,10 +9,15 @@ import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { checkGatewayWsBrowserOrigin } from "./origin-check.js";
+import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
 
 const policies = new WeakMap<
   OpenClawConfig,
-  { global: string; identities: Map<string, GatewayAuthPolicy> }
+  {
+    global: string;
+    identities: Map<string, GatewayAuthPolicy>;
+    captured: WeakMap<object, GatewayAuthPolicy>;
+  }
 >();
 
 /** Capture the grant principal together with its generation; null means no identity-derived scopes. */
@@ -20,18 +25,25 @@ export function captureGatewayAuthPolicy(
   config: OpenClawConfig,
   principal: Pick<
     GatewayAuthPolicy,
-    "role" | "verifiedIdentity" | "authMethod" | "authModeOverride" | "browserOrigin"
+    "role" | "verifiedIdentity" | "authMethod" | "authModeOverride" | "browserOrigin" | "delegation"
   > | null,
 ): GatewayAuthPolicy {
+  let cached = policies.get(config);
+  // Only this config's issued, non-contextual policies can skip principal serialization.
+  const captured = principal && cached?.captured.get(principal);
+  if (captured) {
+    return captured;
+  }
   const verifiedIdentity = normalizeOptionalString(principal?.verifiedIdentity);
   const role = principal?.role;
   const authMethod = principal?.authMethod;
   const authModeOverride = principal?.authModeOverride;
   const browserOrigin = principal?.browserOrigin;
+  const delegation = principal?.delegation;
   // Contextual grants carry live service closures. Never retain them in config's
   // process-lived principal cache or share authority between matching audiences.
-  const contextualIngress = browserOrigin?.remoteControlUiIngress !== undefined;
-  let cached = policies.get(config);
+  const contextualIngress =
+    browserOrigin?.remoteControlUiIngress !== undefined || delegation !== undefined;
   if (!cached) {
     const gateway = config.gateway;
     const trustedProxy = gateway?.auth?.trustedProxy;
@@ -48,6 +60,7 @@ export function captureGatewayAuthPolicy(
         },
       }),
       identities: new Map(),
+      captured: new WeakMap(),
     };
     policies.set(config, cached);
   }
@@ -60,7 +73,11 @@ export function captureGatewayAuthPolicy(
       role === "operator" && verifiedIdentity
         ? [
             ...new Set(
-              resolveIdentityOperatorScopes(verifiedIdentity, config.gateway?.auth?.identityScopes),
+              delegation?.scopes ??
+                resolveIdentityOperatorScopes(
+                  verifiedIdentity,
+                  config.gateway?.auth?.identityScopes,
+                ),
             ),
           ].toSorted()
         : undefined;
@@ -82,7 +99,9 @@ export function captureGatewayAuthPolicy(
         methodEnabled = auth.mode === "trusted-proxy" && auth.trustedProxy !== undefined;
         const allowUsers = auth.trustedProxy?.allowUsers;
         proxyUserAllowed = Boolean(
-          verifiedIdentity && (!allowUsers?.length || allowUsers.includes(verifiedIdentity)),
+          delegation
+            ? isGatewayDelegationCurrent(delegation, config)
+            : verifiedIdentity && (!allowUsers?.length || allowUsers.includes(verifiedIdentity)),
         );
       } else if (authMethod === "tailscale") {
         methodEnabled =
@@ -110,10 +129,12 @@ export function captureGatewayAuthPolicy(
       authMethod,
       authModeOverride,
       verifiedIdentity,
+      delegation,
       browserOrigin: browserOrigin && Object.freeze({ ...browserOrigin }),
     });
     if (principalKey !== undefined) {
       cached.identities.set(principalKey, policy);
+      cached.captured.set(policy, policy);
     }
   }
   return policy;
@@ -171,7 +192,10 @@ export function isGatewayAuthPolicyCurrent(
     return true;
   }
   const current = config === undefined ? getRuntimeConfig() : config;
-  if (current === null) {
+  if (
+    current === null ||
+    (policy.delegation && !isGatewayDelegationCurrent(policy.delegation, current))
+  ) {
     return false;
   }
   const next = captureGatewayAuthPolicy(current, policy);
@@ -192,6 +216,7 @@ export function isGatewayAuthGrantCurrent(
   const current = config === undefined ? getRuntimeConfig() : config;
   return (
     current !== null &&
+    (!policy.delegation || isGatewayDelegationCurrent(policy.delegation, current)) &&
     areGatewayAuthGrantsEquivalent(
       policy.grantGeneration,
       captureGatewayAuthPolicy(current, policy).grantGeneration,

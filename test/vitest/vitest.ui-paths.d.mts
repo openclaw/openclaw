@@ -15,4 +15,5 @@ export function uiTypeScriptPathGlob(file: string): string;
 export function getRepositoryFileInventory(
   cwd?: string,
   files?: string[],
+  pathspecMode?: "literal" | "glob",
 ): ReadonlySet<string> | null;

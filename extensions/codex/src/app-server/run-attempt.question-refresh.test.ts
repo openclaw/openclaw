@@ -1,8 +1,10 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
@@ -46,12 +48,9 @@ it.each([
   async ({ isSecret, stagedSource }) => {
     activeRunRegistrationMocks.questionWaiters.clear();
     const turnStarted = createDeferred<void>();
-    const { request, notify, handleServerRequest } = createStartedThreadHarness(async (method) => {
-      if (method === "thread/unsubscribe") {
-        return { status: "unsubscribed" };
-      }
-      return undefined;
-    });
+    const { request, notify, handleServerRequest } = createStartedThreadHarness(async (method) =>
+      method === "thread/unsubscribe" ? { status: "unsubscribed" } : undefined,
+    );
 
     const params = createSteeringParams();
     let pendingRefresh = false;
@@ -124,9 +123,7 @@ it.each([
     const sourceSteer = request.mock.calls.findLast(([method]) => method === "turn/steer");
     const sourceMessageId = (sourceSteer?.[1] as { clientUserMessageId?: string } | undefined)
       ?.clientUserMessageId;
-    if (!sourceMessageId) {
-      throw new Error("source turn/steer clientUserMessageId missing");
-    }
+    assert(sourceMessageId, "source turn/steer clientUserMessageId missing");
     await notify(
       itemNotification("item/completed", {
         id: "source-message",
@@ -139,9 +136,10 @@ it.each([
     });
     expect(onRunProgress).not.toHaveBeenCalledWith(answered);
     if (stagedSource) {
-      if (!sourceRecorder.stageApproved || !params.runId) {
-        throw new Error("Expected the fixture's source recorder and run identity");
-      }
+      assert(
+        sourceRecorder.stageApproved && params.runId,
+        "Expected source recorder and run identity",
+      );
       expect(
         await sourceRecorder.stageApproved({ runId: params.runId, assertCurrent: () => {} }),
       ).toBe(true);
@@ -162,14 +160,7 @@ it.each([
     await handleServerRequest({
       id: "reload-after-question",
       method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "reload-after-question",
-        namespace: null,
-        tool: "reload_runtime",
-        arguments: {},
-      },
+      params: createDynamicToolCall("reload_runtime", {}, "reload-after-question"),
     });
     expect(pendingRefresh).toBe(true);
     const result = await run;
@@ -189,15 +180,10 @@ it.each([
       expect([questionCalls, questionResults]).toEqual([[], []]);
       expect(JSON.stringify(carried)).not.toContain(`${params.runId}:question-answer`);
     } else {
-      expect(questionCalls).toMatchObject([
-        {
-          name: "request_user_input",
-          arguments: {
-            questions: [
-              expect.objectContaining({ id: "mode", question: "Pick a mode", isSecret: false }),
-            ],
-          },
-        },
+      expect(questionCalls).toHaveLength(1);
+      expect(questionCalls[0]).toMatchObject({ name: "request_user_input" });
+      expect(questionCalls[0]).toHaveProperty("arguments.questions", [
+        expect.objectContaining({ id: "mode", question: "Pick a mode", isSecret: false }),
       ]);
       expect(questionResults).toMatchObject([{ toolName: "request_user_input", isError: false }]);
       expect(JSON.stringify(questionResults)).toContain("Deep");

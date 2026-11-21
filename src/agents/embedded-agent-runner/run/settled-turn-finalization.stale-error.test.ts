@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { useFinalizationAdmission } from "./settled-finalization-harness.test-support.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
@@ -130,6 +131,8 @@ describe("settled-turn finalization after an earlier tool failure", () => {
         skipPreparedUserTurnMessage: true,
         suppressNextUserMessagePersistence: true,
       });
+      // #178300: the unrecovered earlier failure must reach the summary's instruction.
+      expect(preparedAttempt.prompt).toContain(TOOL_FAILURE_INSTRUCTION);
       expect(settledAttempt).toBe(attempt);
       expect(result.finalizationOutcome).toBe(outcome);
       expect(mocks.append).not.toHaveBeenCalled();

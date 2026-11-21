@@ -80,11 +80,9 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("stops instead of buffering unbounded realtime audio", async () => {
-    const { pacer, sent, onBackpressure } = createPlaybackPacer({
-      maxQueuedAudioBytes: 320,
-    });
+    const { pacer, sent, onBackpressure } = createPlaybackPacer();
 
-    pacer.sendAudio(Buffer.alloc(480, 0x7f));
+    pacer.sendAudio(Buffer.alloc(960_160, 0x7f));
     pacer.sendMark("after-overflow");
     await vi.advanceTimersByTimeAsync(100);
 

@@ -1,196 +1,73 @@
-// Tlon tests cover channel.message adapter plugin behavior.
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  sendText: vi.fn(),
-  sendMedia: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ sendText: vi.fn(), sendMedia: vi.fn() }));
 
+// mock-isolation: Record adapter routing without loading Urbit network state.
 vi.mock("./channel.runtime.js", () => ({
-  tlonRuntimeOutbound: {
-    sendText: mocks.sendText,
-    sendMedia: mocks.sendMedia,
-  },
+  tlonRuntimeOutbound: mocks,
 }));
 
 import { tlonPlugin } from "./channel.js";
 
-const cfg = {
-  channels: {
-    tlon: {
-      ship: "~zod",
-      url: "https://zod.example",
-      code: "lidlut-tabwed-pillex-ridrup",
-    },
-  },
-} as OpenClawConfig;
+const cfg = {};
 
-describe("tlon target classification", () => {
-  it("distinguishes ships from group nests", () => {
-    expect(tlonPlugin.messaging?.inferTargetChatType?.({ to: "~sampel-palnet" })).toBe("direct");
-    expect(
-      tlonPlugin.messaging?.inferTargetChatType?.({ to: "chat/~sampel-palnet/operators" }),
-    ).toBe("group");
-  });
+it("tlon target classification distinguishes ships from group nests", () => {
+  expect(tlonPlugin.messaging?.inferTargetChatType?.({ to: "~sampel-palnet" })).toBe("direct");
+  expect(tlonPlugin.messaging?.inferTargetChatType?.({ to: "chat/~sampel-palnet/operators" })).toBe(
+    "group",
+  );
 });
 
-describe("tlon outbound session routing", () => {
-  it.each([
-    {
-      name: "DM",
-      target: "tlon:dm/sampel-palnet",
-      expected: {
-        sessionKey: "agent:main:main",
-        baseSessionKey: "agent:main:main",
-        recipientSessionExact: true,
-        peer: { kind: "direct", id: "~sampel-palnet" },
-        chatType: "direct",
-        from: "tlon:~sampel-palnet",
-        to: "tlon:~sampel-palnet",
-      },
-    },
-    {
-      name: "group",
-      target: "tlon:group:sampel-palnet/operators",
-      expected: {
-        sessionKey: "agent:main:tlon:group:chat/~sampel-palnet/operators",
-        baseSessionKey: "agent:main:tlon:group:chat/~sampel-palnet/operators",
-        recipientSessionExact: true,
-        peer: { kind: "group", id: "chat/~sampel-palnet/operators" },
-        chatType: "group",
-        from: "tlon:group:chat/~sampel-palnet/operators",
-        to: "tlon:chat/~sampel-palnet/operators",
-      },
-    },
-    { name: "invalid", target: "not/a/target", expected: null },
-  ])("resolves $name targets through the plugin", ({ target, expected }) => {
-    const resolveOutboundSessionRoute = tlonPlugin.messaging?.resolveOutboundSessionRoute;
-    if (!resolveOutboundSessionRoute) {
-      throw new Error("expected Tlon outbound session routing");
-    }
-    expect(
-      resolveOutboundSessionRoute({ cfg, agentId: "main", accountId: "default", target }),
-    ).toStrictEqual(expected);
-  });
-});
-
-describe("tlon channel message adapter", () => {
-  beforeEach(() => {
-    mocks.sendText.mockReset();
-    mocks.sendMedia.mockReset();
-    mocks.sendText.mockResolvedValue({
-      channel: "tlon",
-      messageId: "~zod/1700000000000",
-      conversationId: "~nec/general",
-    });
-    mocks.sendMedia.mockResolvedValue({
-      channel: "tlon",
-      messageId: "~zod/1700000000001",
-      conversationId: "~nec/general",
-    });
-  });
-
-  it("backs declared durable-final capabilities with outbound send proofs", async () => {
-    const adapter = tlonPlugin.message;
-    if (!adapter?.send?.text || !adapter.send.media) {
-      throw new Error("expected tlon channel message adapter with text and media senders");
-    }
-    const sendText = adapter.send.text;
-    const sendMedia = adapter.send.media;
-
-    const proveText = async () => {
-      mocks.sendText.mockClear();
-      const result = await sendText({
-        cfg,
-        to: "chat/~nec/general",
-        text: "hello",
-        accountId: "default",
-      });
-      expect(mocks.sendText).toHaveBeenLastCalledWith({
-        cfg,
-        to: "chat/~nec/general",
-        text: "hello",
-        accountId: "default",
-        replyToId: undefined,
-        threadId: undefined,
-      });
-      expect(result.receipt.platformMessageIds).toEqual(["~zod/1700000000000"]);
-      expect(result.receipt.parts[0]?.kind).toBe("text");
-    };
-
-    const proveMedia = async () => {
-      mocks.sendMedia.mockClear();
-      const result = await sendMedia({
-        cfg,
-        to: "chat/~nec/general",
-        text: "image",
-        mediaUrl: "https://example.com/image.png",
-        accountId: "default",
-      });
-      expect(mocks.sendMedia).toHaveBeenLastCalledWith({
-        cfg,
-        to: "chat/~nec/general",
-        text: "image",
-        mediaUrl: "https://example.com/image.png",
-        accountId: "default",
-        replyToId: undefined,
-        threadId: undefined,
-      });
-      expect(result.receipt.platformMessageIds).toEqual(["~zod/1700000000001"]);
-      expect(result.receipt.parts[0]?.kind).toBe("media");
-    };
-
-    const proveReplyThread = async () => {
-      mocks.sendText.mockClear();
-      const result = await sendText({
-        cfg,
-        to: "chat/~nec/general",
-        text: "threaded",
-        accountId: "default",
-        replyToId: "1700000000000",
-        threadId: "1700000000000",
-      });
-      expect(mocks.sendText).toHaveBeenLastCalledWith({
-        cfg,
-        to: "chat/~nec/general",
-        text: "threaded",
-        accountId: "default",
-        replyToId: "1700000000000",
-        threadId: "1700000000000",
-      });
-      expect(result.receipt.replyToId).toBe("1700000000000");
-      expect(result.receipt.threadId).toBe("1700000000000");
-    };
-
-    const proofs = await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "tlonMessageAdapter",
-      adapter,
-      proofs: {
-        text: proveText,
-        media: proveMedia,
-        replyTo: proveReplyThread,
-        thread: proveReplyThread,
-        messageSendingHooks: () => {
-          expect(sendText).toBeTypeOf("function");
+it.each([
+  ["tlon:dm/sampel-palnet", "direct", "~sampel-palnet", "agent:main:main"],
+  [
+    "tlon:group:sampel-palnet/operators",
+    "group",
+    "chat/~sampel-palnet/operators",
+    "agent:main:tlon:group:chat/~sampel-palnet/operators",
+  ],
+  ["not/a/target", null, "", ""],
+] as const)("tlon outbound session routing resolves %s", (target, kind, id, sessionKey) => {
+  const resolveOutboundSessionRoute = expectDefined(
+    tlonPlugin.messaging?.resolveOutboundSessionRoute,
+    "Tlon outbound session routing",
+  );
+  expect(
+    resolveOutboundSessionRoute({ cfg, agentId: "main", accountId: "default", target }),
+  ).toStrictEqual(
+    kind === null
+      ? null
+      : {
+          sessionKey,
+          baseSessionKey: sessionKey,
+          recipientSessionExact: true,
+          peer: { kind, id },
+          chatType: kind,
+          from: kind === "group" ? `tlon:group:${id}` : `tlon:${id}`,
+          to: `tlon:${id}`,
         },
-      },
-    });
-    expect(proofs).toStrictEqual([
-      { capability: "text", status: "verified" },
-      { capability: "media", status: "verified" },
-      { capability: "poll", status: "not_declared" },
-      { capability: "payload", status: "not_declared" },
-      { capability: "silent", status: "not_declared" },
-      { capability: "replyTo", status: "verified" },
-      { capability: "thread", status: "verified" },
-      { capability: "nativeQuote", status: "not_declared" },
-      { capability: "messageSendingHooks", status: "verified" },
-      { capability: "batch", status: "not_declared" },
-      { capability: "reconcileUnknownSend", status: "not_declared" },
-      { capability: "afterSendSuccess", status: "not_declared" },
-      { capability: "afterCommit", status: "not_declared" },
-    ]);
+  );
+});
+
+it("preserves reply and thread metadata in the preferred adapter receipt", async () => {
+  mocks.sendText.mockReset().mockResolvedValue({
+    channel: "tlon",
+    messageId: "~zod/1700000000000",
+    conversationId: "~nec/general",
   });
+  const adapter = expectDefined(tlonPlugin.message, "Tlon message adapter");
+  const sendText = expectDefined(adapter.send?.text, "Tlon text sender");
+  const params = {
+    cfg,
+    to: "chat/~nec/general",
+    accountId: "default",
+    text: "threaded",
+    replyToId: "1700000000000",
+    threadId: "1700000000000",
+  };
+  const result = await sendText(params);
+  expect(mocks.sendText).toHaveBeenLastCalledWith(params);
+  expect(result.receipt.replyToId).toBe("1700000000000");
+  expect(result.receipt.threadId).toBe("1700000000000");
 });

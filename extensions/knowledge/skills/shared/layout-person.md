@@ -1,0 +1,24 @@
+# Person page layout
+
+A person page answers: what is their role, what are they working on, what do
+they believe and prefer, how do they relate to the user, and what is open with
+them? Use these sections after State, in this order, and only those the
+evidence supports. Follow the general rules in [subject pages](profiles.md),
+including the default of no change.
+
+- `## What They're Building`: current projects and things shipped.
+- `## What They Believe`: opinions, beliefs and positions, attributed.
+- `## What Motivates Them`: ambition and career arc.
+- `## Hobby Horses`: topics they keep returning to.
+- `## Communication Style`: only what was observed directly or what they said
+  about themselves; label each line observed, self-described or inferred. One
+  data point is a source note, not a pattern.
+- `## Assessment`: the user's assessment. Never overwrite it.
+- `## Trajectory`: ascending, pivoting, plateauing.
+- `## Relationship`: how they relate to the user.
+- `## Network`: who they work with, amplify or argue with.
+- `## Contact`: how to reach them, without email addresses or phone numbers.
+- `## Open Threads`: commitments they made or are owed, with dates.
+
+A preference or decision a person states goes on their page; don't turn it into
+a project or company policy.

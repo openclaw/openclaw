@@ -17,13 +17,11 @@ import {
 } from "./mcp-client-temp-state.fixture.ts";
 
 const protocolModulePath = "../../../../dist/gateway/protocol/index.js" as string;
-const errorsModulePath = "../../../../dist/infra/errors.js" as string;
 const stringCoerceModulePath = "../../../../dist/normalization-core/string-coerce.js" as string;
-const [{ PROTOCOL_VERSION }, { formatErrorMessage }, { readStringValue }] = await Promise.all([
+const [{ PROTOCOL_VERSION }, { readStringValue }] = await Promise.all([
   import(protocolModulePath) as Promise<
     typeof import("../../../../packages/gateway-protocol/src/index.js")
   >,
-  import(errorsModulePath) as Promise<typeof import("../../../../src/infra/errors.js")>,
   import(stringCoerceModulePath) as Promise<
     typeof import("../../../../packages/normalization-core/src/string-coerce.js")
   >,
@@ -474,37 +472,4 @@ export async function connectMcpClient(params: {
     }
     throw error;
   }
-}
-
-export async function maybeApprovePendingBridgePairing(
-  gateway: GatewayRpcClient,
-): Promise<boolean> {
-  let pairingState:
-    | {
-        pending?: Array<{ requestId?: string; role?: string }>;
-      }
-    | undefined;
-  try {
-    pairingState = await gateway.request<{
-      pending?: Array<{ requestId?: string; role?: string }>;
-    }>("device.pair.list", {});
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    if (
-      message.includes("missing scope: operator.pairing") ||
-      message.includes("device.pair.list")
-    ) {
-      return false;
-    }
-    throw error;
-  }
-  if (!pairingState) {
-    return false;
-  }
-  const pendingRequest = pairingState.pending?.find((entry) => entry.role === "operator");
-  if (!pendingRequest?.requestId) {
-    return false;
-  }
-  await gateway.request("device.pair.approve", { requestId: pendingRequest.requestId });
-  return true;
 }

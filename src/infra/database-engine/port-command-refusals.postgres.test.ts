@@ -2,34 +2,31 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { runDatabasePortTask as runWorkboardPortTask } from "./port-command.worker.js";
+import { connection, seedPortSqlite } from "./port-command.integration.test-support.js";
+import { runDatabasePortTask, type DatabasePortTask } from "./port-command.worker.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
-const configured = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const scope = { assertCurrent() {} };
 const hash = async (file: string) =>
   createHash("sha256")
     .update(await fs.readFile(file))
     .digest("hex");
 
-describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () => {
-  it("probes real privileges, refuses occupied/wrong-owner/RLS sources, and resumes verified staging", async (context) => {
+it.skipIf(!connection)(
+  "refuses PostgreSQL privilege, ownership, RLS and catalog violations",
+  async (context) => {
     const client = new Client({ connectionString: connection });
     await client.connect();
-    const admin = (
-      await client.query(
-        "SELECT current_setting('is_superuser') AS superuser, current_database() AS database",
-      )
-    ).rows[0];
+    const {
+      rows: [admin],
+    } = await client.query(
+      "SELECT current_setting('is_superuser') AS superuser, current_database() AS database",
+    );
     if (admin.superuser !== "on") {
       await client.end();
       context.skip("Temporary role proof requires the conformance cluster superuser");
@@ -47,59 +44,45 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
     const config: OpenClawConfig = {
       database: { engine: "postgres", postgres: { connection: restricted.toString() } },
     };
-    {
-      using db = openNodeSqliteDatabase(sourcePath);
-      db.exec(metadata.sqlite);
-      db.exec(
-        "INSERT INTO workboard_schema_migrations VALUES ('schema-3', 1); INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', 'private-payload', 1, 1)",
-      );
-    }
+    const identity = { storeId, namespace, config };
+    const run = <T extends DatabasePortTask>(task: T) =>
+      runDatabasePortTask(task, { assertCurrent() {} });
+    const preflight = (probe: boolean) => run({ operation: "preflight", config, probe });
+    const inspect = () =>
+      run({ operation: "inspect", sourcePath: targetPath, config, to: "sqlite" });
+    seedPortSqlite(
+      sourcePath,
+      `${metadata.sqlite};
+      INSERT INTO workboard_schema_migrations VALUES ('schema-${metadata.version}', 1);
+      INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', 'private-payload', 1, 1)`,
+    );
     const original = await hash(sourcePath);
     await client.query(`CREATE ROLE "${role}" LOGIN PASSWORD 'synthetic-port-fixture'`);
     try {
-      expect(
-        await runWorkboardPortTask({ operation: "preflight", config, probe: false }, scope),
-      ).toMatchObject({ privilegesChecked: false });
-      await expect(
-        runWorkboardPortTask({ operation: "preflight", config, probe: true }, scope),
-      ).rejects.toThrow("namespace privilege probe");
+      await preflight(false);
+      await expect(preflight(true)).rejects.toThrow("namespace privilege probe");
       const stage = {
+        ...identity,
         operation: "stage" as const,
         sourcePath,
         targetPath,
-        storeId,
-        namespace,
-        config,
         to: "postgres" as const,
       };
-      await expect(runWorkboardPortTask(stage, scope)).rejects.toThrow("stage:");
+      const stageAt = (name: string, resume = false) =>
+        run({ ...stage, targetPath: path.join(directory, name), resume });
+      await expect(run(stage)).rejects.toThrow("stage:");
       await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
       await client.query(`GRANT CREATE ON DATABASE "${database}" TO "${role}"`);
-      const copied = await runWorkboardPortTask(stage, scope);
+      const copied = await run(stage);
       const anchor = await hash(targetPath);
-      await expect(
-        runWorkboardPortTask(
-          { ...stage, targetPath: path.join(directory, "occupied.sqlite") },
-          scope,
-        ),
-      ).rejects.toThrow("occupied target namespace");
+      await expect(stageAt("occupied.sqlite")).rejects.toThrow("occupied target namespace");
       await client.query(`ALTER SCHEMA "${namespace}" OWNER TO CURRENT_USER`);
-      await expect(
-        runWorkboardPortTask(
-          { operation: "inspect", sourcePath: targetPath, config, to: "sqlite" },
-          scope,
-        ),
-      ).rejects.toThrow("different owner");
+      await expect(inspect()).rejects.toThrow("different owner");
       await client.query(
         `ALTER SCHEMA "${namespace}" OWNER TO "${role}"; ALTER TABLE "${namespace}".workboard_boards ENABLE ROW LEVEL SECURITY; ALTER TABLE "${namespace}".workboard_boards FORCE ROW LEVEL SECURITY; CREATE POLICY deny_port ON "${namespace}".workboard_boards USING (false)`,
       );
-      const refused = await runWorkboardPortTask(
-        { operation: "inspect", sourcePath: targetPath, config, to: "sqlite" },
-        scope,
-      ).catch((error: unknown) => error);
-      if (!(refused instanceof Error)) {
-        throw new Error("Expected an RLS refusal");
-      }
+      const refused = await inspect().catch((error: unknown) => error);
+      assert(refused instanceof Error, "Expected an RLS refusal");
       expect(refused.message).toContain("database validation");
       expect(refused.message).not.toContain("private-payload");
       expect(refused.message).not.toContain(restricted.toString());
@@ -117,32 +100,29 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
         `DROP INDEX "${namespace}".workboard_cards_session_idx; CREATE INDEX workboard_cards_session_idx ON "${namespace}".workboard_cards (run_id, session_key)`,
       );
       await expect(
-        runWorkboardPortTask(
-          {
-            operation: "verify",
-            sourcePath: targetPath,
-            config,
-            engine: "postgres",
-            storeId,
-            namespace,
-            verification: copied.verification,
-          },
-          scope,
-        ),
+        run({
+          ...identity,
+          operation: "verify",
+          sourcePath: targetPath,
+          engine: "postgres",
+          verification: copied.verification,
+        }),
       ).rejects.toThrow("database validation");
       await client.query(`DROP INDEX "${namespace}".workboard_cards_session_idx`);
       await client.query(originalIndex);
-      const resumed = await runWorkboardPortTask(
-        { ...stage, targetPath: path.join(directory, "resumed.sqlite"), resume: true },
-        scope,
-      );
+      const resumed = await stageAt("resumed.sqlite", true);
       expect(resumed.verification).toEqual(copied.verification);
-      expect(await runWorkboardPortTask({ ...stage, resume: true }, scope)).toEqual(copied);
+      // Reusing a verified anchor performs no copy or statistics refresh on this attempt.
+      expect(await run({ ...stage, resume: true })).toEqual({
+        descriptorHash: copied.descriptorHash,
+        verification: copied.verification,
+      });
       expect(await hash(sourcePath)).toBe(original);
       expect(await hash(targetPath)).toBe(anchor);
     } finally {
       await client.query(`DROP OWNED BY "${role}" CASCADE; DROP ROLE "${role}"`);
       await client.end();
     }
-  }, 60_000);
-});
+  },
+  60_000,
+);

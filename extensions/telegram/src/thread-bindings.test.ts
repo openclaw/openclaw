@@ -1,3 +1,7 @@
+import {
+  IncognitoSessionEndedError,
+  rethrowIncognitoSessionError,
+} from "openclaw/plugin-sdk/acp-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -13,6 +17,7 @@ vi.mock("./send-runtime.js", () => ({
 }));
 
 import {
+  acpHost,
   TELEGRAM_THREAD_BINDINGS_TEST_CFG,
   useTelegramThreadBindingsFixture,
 } from "./thread-bindings.test-support.js";
@@ -63,6 +68,112 @@ describe("telegram thread bindings", () => {
   beforeEach(() => {
     createForumTopicMock.mockReset();
   });
+
+  it("approves, refreshes, reloads, and detaches an opaque plugin target without an agent owner", async () => {
+    const { createInteractiveConversationBindingHelpers } =
+      await import("openclaw/plugin-sdk/plugin-runtime");
+    const { resolvePluginConversationBindingApproval } =
+      await import("openclaw/plugin-sdk/conversation-runtime");
+    const cfg = { agents: { entries: { alpha: {}, beta: {} } } };
+    const accountId = "plugin-owner";
+    let manager = await createManager({ accountId, cfg });
+    const conversation = conversationFor(accountId, "-10042:topic:7");
+    const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
+    const helpers = createInteractiveConversationBindingHelpers({
+      registration: owner,
+      senderId: "user-1",
+      conversation,
+    });
+    const requested = await helpers.requestConversationBinding({ data: { externalThread: "17" } });
+    expect(requested.status).toBe("pending");
+    if (requested.status !== "pending") {
+      throw new Error("Expected plugin binding approval");
+    }
+    await expect(
+      resolvePluginConversationBindingApproval({
+        approvalId: requested.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({ status: "approved", binding: owner });
+    const record = await getSessionBindingService().resolveByConversationAsync(conversation);
+    expect(record?.targetSessionKey).toMatch(/^plugin-binding:fixture-runtime:/);
+    expect(record?.metadata?.agentId).toBeUndefined();
+    if (!record) {
+      throw new Error("Expected approved plugin binding");
+    }
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: record.targetSessionKey,
+        targetKind: "session",
+        metadata: { label: "updated" },
+      }),
+    ).resolves.toMatchObject({
+      metadata: { pluginBindingOwner: "plugin", ...owner, label: "updated" },
+    });
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: "plugin-binding:fixture-runtime:replacement",
+        targetKind: "session",
+        metadata: { label: "replacement" },
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+    expect(manager.listBindings()[0]?.targetKind).toBe("session");
+    await expect(helpers.requestConversationBinding()).resolves.toMatchObject({
+      status: "bound",
+      binding: owner,
+    });
+    await manager.stop();
+    manager = await createManager({ accountId, cfg });
+    await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject(owner);
+    expect(manager.listBindings()[0]?.agentId).toBeUndefined();
+    await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
+    expect(manager.listBindings()).toEqual([]);
+    const subagentKey = "agent:alpha:subagent:kind-change";
+    await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: subagentKey,
+      targetKind: "session",
+      metadata: { pluginBindingOwner: "plugin", ...owner },
+    });
+    const changedKind = await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: subagentKey,
+      targetKind: "subagent",
+      metadata: { label: "new kind" },
+    });
+    expect(changedKind.targetKind).toBe("subagent");
+    expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
+    await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
+    await getSessionBindingService().unbind({
+      bindingId: changedKind.bindingId,
+      scope: conversation,
+      reason: "manual",
+    });
+  });
+
+  it.each([
+    undefined,
+    { pluginBindingOwner: "plugin" },
+    { pluginBindingOwner: "plugin", pluginId: "fixture-runtime" },
+  ])(
+    "does not infer ownership from an opaque prefix or incomplete plugin metadata: %j",
+    async (metadata) => {
+      const manager = await createManager({
+        accountId: "unowned",
+        cfg: { agents: { entries: { alpha: {}, beta: {} } } },
+      });
+      await expect(
+        bind("unowned", "plugin-binding:fixture-runtime:unowned", {
+          targetKind: "session",
+          metadata,
+        }),
+      ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+      expect(manager.listBindings()).toEqual([]);
+    },
+  );
 
   it("joins concurrent startup across module instances before exposing hydrated bindings", async () => {
     const entered = createDeferred<void>();
@@ -341,41 +452,126 @@ describe("telegram thread bindings", () => {
     }
   });
 
+  it.each([
+    ["agent:main:fork:ordinary", "session"],
+    ["agent:main:telegram:group:acp:ordinary", "session"],
+    ["agent:codex:acp:binding:telegram:default:configured", "acp"],
+    ["global", "acp"],
+    ["agent:main:subagent:child", "subagent"],
+  ] as const)(
+    "preserves classified %s through topic creation and restart",
+    async (targetSessionKey, targetKind) => {
+      const options = { accountId: "default" };
+      const manager = await createManager(options);
+      acpHost.classify.mockResolvedValueOnce(targetKind);
+      createForumTopicMock.mockResolvedValueOnce({
+        chatId: "-100200300",
+        topicId: 88,
+        name: "Bound topic",
+      });
+      const binding = await bind(options.accountId, targetSessionKey, {
+        targetKind: targetKind === "subagent" ? "subagent" : "session",
+        conversation: conversationFor(options.accountId, "-100200300"),
+        placement: "child",
+      });
+      expect(acpHost.classify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+          targetSessionKey,
+          targetKind: targetKind === "subagent" ? "subagent" : "session",
+          metadata: {},
+          agentId: undefined,
+          channel: "Telegram",
+          assertCurrent: expect.any(Function),
+        }),
+      );
+      expect(manager.getByConversationId("-100200300:topic:88")?.targetKind).toBe(targetKind);
+      await manager.stop();
+      acpHost.read.mockClear().mockResolvedValue({ storeReadFailed: false });
+      const reloaded = await createManager(options);
+      if (targetKind === "acp" && targetSessionKey !== "global") {
+        expect(reloaded.listBindings()).toEqual([]);
+        expect(await storedBindings()).toEqual([]);
+      } else {
+        expect(reloaded.getByConversationId("-100200300:topic:88")?.targetKind).toBe(targetKind);
+        expect(
+          await getSessionBindingService().resolveByConversationAsync(binding.conversation),
+        ).toMatchObject({ targetSessionKey });
+        expect(acpHost.read).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("refreshes legacy ACP-coerced ordinary bindings without dropping target metadata", async () => {
+    const options = { accountId: "legacy" };
+    const manager = await createManager(options);
+    const targetSessionKey = "agent:main:fork:legacy";
+    await bind(options.accountId, targetSessionKey, {
+      targetKind: "session",
+      metadata: { label: "retained", opaque: "retained" },
+    });
+    await manager.stop();
+    for (const row of await fixture.store.entries()) {
+      await fixture.store.register(row.key, { ...row.value, targetKind: "acp" });
+    }
+    const reloaded = await createManager(options);
+    await bind(options.accountId, targetSessionKey, { targetKind: "session" });
+    expect(reloaded.getByConversationId("thread")).toMatchObject({
+      targetKind: "session",
+      label: "retained",
+      metadata: { opaque: "retained" },
+    });
+  });
+
+  it("forwards classification facts/current authority and refuses native creation on failure", async () => {
+    const manager = await createManager({ accountId: "uncertain" });
+    const assertCurrent = vi.fn();
+    let forwardedAuthorityCalls = 0;
+    const metadata = { agentId: "main", label: "classify this target" };
+    acpHost.classify.mockImplementationOnce(async (input) => {
+      const calls = assertCurrent.mock.calls.length;
+      input.assertCurrent();
+      forwardedAuthorityCalls = assertCurrent.mock.calls.length - calls;
+      throw new Error("Classification refused");
+    });
+    await expect(
+      bind(manager.accountId, "global", {
+        targetKind: "session",
+        conversation: conversationFor(manager.accountId, "-100200300"),
+        placement: "child",
+        metadata,
+        assertCurrent,
+      }),
+    ).rejects.toThrow("Classification refused");
+    expect(acpHost.classify).toHaveBeenCalledOnce();
+    expect(acpHost.classify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+        targetSessionKey: "global",
+        targetKind: "session",
+        metadata,
+        agentId: "main",
+        channel: "Telegram",
+      }),
+    );
+    expect(forwardedAuthorityCalls).toBe(1);
+    expect(createForumTopicMock).not.toHaveBeenCalled();
+    expect(manager.listBindings()).toEqual([]);
+  });
+
   it("drops stopped-manager bindings without clearing a replacement generation", async () => {
-    const stopped = await createManager({
-      accountId: "manager-lifecycle",
-      persist: false,
+    const options = { accountId: "manager-lifecycle", persist: false };
+    const stopped = await createManager(options);
+    await bind(options.accountId, "agent:main:subagent:stopped", {
+      conversation: conversationFor(options.accountId, "stopped-thread"),
     });
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:stopped",
-      targetKind: "subagent",
-      conversation: {
-        channel: "telegram",
-        accountId: "manager-lifecycle",
-        conversationId: "stopped-thread",
-      },
-    });
-
     await stopped.stop();
-
-    const replacement = await createManager({
-      accountId: "manager-lifecycle",
-      persist: false,
-    });
+    const replacement = await createManager(options);
     expect(replacement.getByConversationId("stopped-thread")).toBeUndefined();
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:replacement",
-      targetKind: "subagent",
-      conversation: {
-        channel: "telegram",
-        accountId: "manager-lifecycle",
-        conversationId: "replacement-thread",
-      },
+    await bind(options.accountId, "agent:main:subagent:replacement", {
+      conversation: conversationFor(options.accountId, "replacement-thread"),
     });
-
     await stopped.stop();
-
     expect(getTelegramThreadBindingManager("manager-lifecycle")).toBe(replacement);
     expect(replacement.getByConversationId("replacement-thread")?.targetSessionKey).toBe(
       "agent:main:subagent:replacement",
@@ -390,27 +586,20 @@ describe("telegram thread bindings", () => {
     const first = await bind(manager.accountId, "agent:main:subagent:first-row", {
       conversation: conversationFor(manager.accountId, "first-thread"),
     });
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(entries).not.toHaveBeenCalled();
-    register.mockClear();
     await bind(manager.accountId, "agent:main:subagent:second-row", {
       conversation: conversationFor(manager.accountId, "second-thread"),
     });
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(register.mock.calls[0]?.[1].conversationId).toBe("second-thread");
-    expect(entries).not.toHaveBeenCalled();
-    register.mockClear();
     await manager.touchConversation("first-thread");
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(register.mock.calls[0]?.[1].conversationId).toBe("first-thread");
-    expect(entries).not.toHaveBeenCalled();
-    register.mockClear();
     await getSessionBindingService().unbind({
       bindingId: first.bindingId,
       reason: "test-row-delete",
     });
     expect(remove).toHaveBeenCalledTimes(1);
-    expect(register).not.toHaveBeenCalled();
+    expect(register.mock.calls.map(([, row]) => row.conversationId)).toEqual([
+      "first-thread",
+      "second-thread",
+      "first-thread",
+    ]);
     expect(entries).not.toHaveBeenCalled();
     expect(manager.getByConversationId("second-thread")).toBeDefined();
     await manager.stop();
@@ -498,6 +687,89 @@ describe("telegram thread bindings", () => {
     } else {
       expect(reloaded.getByConversationId("thread")).toBeUndefined();
       expect(stored).toStrictEqual([]);
+    }
+  });
+
+  const options = { accountId: "default" };
+  const storeBinding = async (targetSessionKey: string, conversationId = "thread") => {
+    const manager = await createManager(options);
+    await bind(options.accountId, targetSessionKey, {
+      targetKind: "session",
+      conversation: conversationFor(options.accountId, conversationId),
+    });
+    await manager.stop();
+    acpHost.read.mockClear();
+  };
+  const expectStoredBinding = async (conversationId: string, targetSessionKey: string) => {
+    expect(await storedBindings()).toContainEqual(
+      expect.objectContaining({ conversationId, targetSessionKey }),
+    );
+  };
+
+  it.each([
+    { target: "agent:main:acp:stale", storeReadFailed: false, retained: false },
+    { target: "agent:main:acp:read-failed", storeReadFailed: true, retained: true },
+    { target: "plugin-binding:openclaw-codex-app-server:valid", retained: true },
+  ])("reconciles $target on restart", async ({ target, storeReadFailed, retained }) => {
+    await storeBinding(target);
+    if (storeReadFailed !== undefined) {
+      acpHost.read.mockResolvedValue({ storeReadFailed });
+    }
+    const reloaded = await createManager(options);
+    if (retained) {
+      expect(reloaded.getByConversationId("thread")?.targetSessionKey).toBe(target);
+    } else {
+      expect(reloaded.getByConversationId("thread")).toBeUndefined();
+      expect((await storedBindings()).map((binding) => binding.conversationId)).not.toContain(
+        "thread",
+      );
+    }
+    if (storeReadFailed === undefined) {
+      expect(acpHost.read).not.toHaveBeenCalled();
+    }
+  });
+
+  it("propagates a refused session join without deleting the stored binding", async () => {
+    const target = "agent:main:acp:refused";
+    await storeBinding(target, "refused");
+    const error = new IncognitoSessionEndedError();
+    acpHost.read.mockRejectedValue(error);
+
+    await expect(createManager(options)).rejects.toBe(error);
+    await expectStoredBinding("refused", target);
+  });
+
+  it("retains persisted incognito bindings when prepared cleanup loses authority", async () => {
+    const target = "agent:main:dashboard:incognito-prepared";
+    // Seed the ACP projection through the public classification operation; cleanup owns preparation.
+    acpHost.classify.mockResolvedValueOnce("acp");
+    await storeBinding(target, "prepared");
+    let current = true;
+    const error = new IncognitoSessionEndedError();
+    const remove = fixture.store.delete.bind(fixture.store);
+    const deletion = vi.spyOn(fixture.store, "delete").mockImplementation(async (...args) => {
+      current = false;
+      return remove(...args);
+    });
+    const release = vi.fn();
+    try {
+      const failure = await createManager({
+        ...options,
+        prepareAcpSession: async () => ({
+          session: { cfg: {}, storePath: "/fixture", sessionKey: target, storeSessionKey: target },
+          assertCurrent() {
+            if (!current) {
+              throw error;
+            }
+          },
+          release,
+        }),
+      }).catch((caught: unknown) => caught);
+      expect(() => rethrowIncognitoSessionError(failure)).toThrow();
+      await expectStoredBinding("prepared", target);
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      deletion.mockRestore();
     }
   });
 });

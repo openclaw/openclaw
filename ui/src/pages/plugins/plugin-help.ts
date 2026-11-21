@@ -12,7 +12,6 @@ import {
   createPluginHelpRequest,
   type PluginHelpReference,
 } from "../custodian/plugin-help.ts";
-import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginSettingsField } from "./settings-editor.tsx";
 
 /** The page publishes its loaded selection; the existing Ask store owns conversation state. */
@@ -38,7 +37,6 @@ export function createPluginHelp(context: ApplicationContext) {
         catalog?: PluginDiscoveryDetailResult;
       } | null;
       catalogDetail: { result: PluginDiscoveryDetailResult | null } | null;
-      installedDetailTab: InstalledPluginDetailTab;
     }): void {
       const installed = model.result?.plugins.find(
         (candidate) => candidate.installed && candidate.id === model.detail?.pluginId,
@@ -80,10 +78,7 @@ export function createPluginHelp(context: ApplicationContext) {
         return;
       }
       // Each release is tied to its publication; a retiring page cannot clear a newer page.
-      release = publishPluginHelpContext(context, help, plugin, {
-        installed: Boolean(installed),
-        overview: !installed || model.installedDetailTab !== "configuration",
-      });
+      release = publishPluginHelpContext(context, help, plugin, { installed: Boolean(installed) });
     },
 
     get ask(): (field?: PluginSettingsField) => Promise<void> {

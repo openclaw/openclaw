@@ -44,6 +44,7 @@ import {
 import { insertMeetingTranscriptSnapshots } from "./state-migrations.meeting-transcripts-insert.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 export { detectLegacyMeetingTranscripts } from "./state-migrations.meeting-transcripts-detection.js";
 
@@ -197,7 +198,7 @@ async function listCanonicalMeetingTranscriptExportDirs(params: {
   rootDir: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string[]> {
-  const state = readMeetingTranscriptMigrationDetectionState({ env: params.env });
+  const state = await readMeetingTranscriptMigrationDetectionState({ env: params.env });
   const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(params.rootDir);
   return relativeDirs.filter((relativeDir) => {
     const selector = relativeDir.split(path.sep).join("/");
@@ -422,7 +423,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(detected.sourceDir);
       const sessionRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(detected.sourceDir);
       const sessionRelativeDirSet = new Set(sessionRelativeDirs);
-      const detectionState = readMeetingTranscriptMigrationDetectionState({
+      const detectionState = await readMeetingTranscriptMigrationDetectionState({
         env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
       });
       const legacyRelativeDirs: string[] = [];
@@ -591,6 +592,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
     result = {
       changes: recoveryChanges,
       warnings: [`Failed migrating meeting transcripts: ${String(error)}`],
+      ...(error instanceof Utf8InputError ? { warningDisposition: "recoverable" as const } : {}),
     };
   }
   const warnings = [
@@ -616,7 +618,9 @@ export async function migrateLegacyMeetingTranscripts(params: {
     // durable, so Doctor reports them and keeps going instead of refusing over
     // scratch it can drop. A lock the migration could not hand back still refuses,
     // as state-migrations.lock.ts does for the same event.
-    ...(result.warnings.length === 0 && !releaseError && warnings.length > 0
+    ...((result.warnings.length === 0 || result.warningDisposition === "recoverable") &&
+    !releaseError &&
+    warnings.length > 0
       ? { warningDisposition: "recoverable" as const }
       : {}),
   };

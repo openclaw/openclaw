@@ -38,7 +38,12 @@ export function logCodeModeFailure(error: unknown, context: CodeModeFailureConte
     context.failureCode === "store_type"
       ? "warn"
       : "error";
-  failureLog[level]("Code Mode execution failed", {
+  // The guest can catch a bridge rejection and still finish the cell successfully.
+  const message =
+    context.failurePhase === "bridge"
+      ? "Code Mode bridge request failed"
+      : "Code Mode execution failed";
+  failureLog[level](message, {
     ...context,
     errorCode:
       extractErrorCode(cause) === "ERR_WORKER_OUT_OF_MEMORY"
@@ -49,11 +54,6 @@ export function logCodeModeFailure(error: unknown, context: CodeModeFailureConte
   });
 }
 
-type CodeModeDiagnosticFields = Record<
-  string,
-  boolean | number | string | readonly string[] | undefined
->;
-
 export function isCodeModeDiagnosticEnabled(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_DEBUG_CODE_MODE);
 }
@@ -61,7 +61,7 @@ export function isCodeModeDiagnosticEnabled(): boolean {
 export function logCodeModeDiagnostic(
   log: Pick<SubsystemLogger, "info">,
   boundary: string,
-  fields: CodeModeDiagnosticFields,
+  fields: Record<string, boolean | number | string | readonly string[] | undefined>,
 ): void {
   if (!isCodeModeDiagnosticEnabled()) {
     return;

@@ -1,11 +1,13 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { compareSessionRowsByUpdatedAt } from "../lib/sessions/navigation.ts";
 import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
 const homeKey = "agent:main:main";
 const conversationKey = "agent:main:dashboard:conversation";
@@ -17,6 +19,8 @@ function present(row: GatewaySessionRow, isChild = false): SidebarRecentSession 
     label: row.label ?? row.key,
     isChild,
     hasActiveRun: row.hasActiveRun === true,
+    backgroundProcessCount: row.backgroundProcessCount,
+    subagentRunState: row.subagentRunState,
     active: row.key === conversationKey,
     unread: row.unread === true,
     status: row.status,
@@ -27,12 +31,17 @@ function makeRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewayS
   return { key, kind: "direct", ...fields };
 }
 
-function project(roots: GatewaySessionRow[], rows = roots) {
+function project(
+  roots: GatewaySessionRow[],
+  rows = roots,
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
+) {
   return projectSessionTree({
     roots,
     rowsByKey: new Map(rows.map((row) => [row.key, row])),
     mainSessionKeys: new Set([homeKey]),
     loadingChildKeys: new Set<string>(),
+    compareSessions,
     resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
     toSidebarSession: present,
   });
@@ -101,6 +110,79 @@ it("reattaches a persistent session through hidden runs and reveals its visible 
   expect(project([run, child]).map((row) => row.key)).toEqual([conversationKey]);
 });
 
+it.each([
+  { state: "historical", active: false, folds: 0 },
+  { state: "paused", active: false, folds: 1 },
+  { state: "active", active: true, folds: 1 },
+] as const)(
+  "a $state child with leftover processes shows its parent working: $folds",
+  ({ state, active, folds }) => {
+    const rows = [
+      makeRow(homeKey),
+      makeRow(workerKey, {
+        spawnedBy: homeKey,
+        hasActiveRun: active,
+        subagentRunState: state,
+        backgroundProcessCount: 2,
+      }),
+    ];
+    expect(project(rows)[0]).toMatchObject({ runningChildCount: folds });
+    expect(summarizeTeamSessionSlots([present(rows[1]!)], true).active).toBe(folds);
+  },
+);
+
+it("counts background work once per descendant without marking its parent active", () => {
+  const rows = [
+    makeRow(homeKey),
+    makeRow(workerKey, {
+      spawnedBy: homeKey,
+      subagentRunState: "paused",
+      backgroundProcessCount: 2,
+    }),
+    makeRow(conversationKey, {
+      spawnedBy: workerKey,
+      hasActiveRun: true,
+      backgroundProcessCount: 1,
+    }),
+  ];
+  expect(project(rows)[0]).toMatchObject({
+    hasActiveRun: false,
+    runningChildCount: 2,
+    subagentSummary: { runningChildCount: 1 },
+  });
+});
+
+it.each([false, true])(
+  "folds hidden grandchild work through a persistent child (loaded: %s)",
+  (loaded) => {
+    const parent = makeRow(homeKey, {
+      hasActiveRun: true,
+      status: "queued",
+      childSessions: [conversationKey],
+    });
+    const child = makeRow(conversationKey, {
+      spawnedBy: homeKey,
+      backgroundProcessCount: 2,
+      hasActiveSubagentRun: true,
+      childSessions: [workerKey],
+    });
+    const worker = makeRow(workerKey, { spawnedBy: conversationKey, hasActiveRun: true });
+    const [tree] = project([parent], [parent, child, ...(loaded ? [worker] : [])]);
+    // The idle child's own processes stay on its row; only the hidden worker folds up.
+    expect(tree).toMatchObject({
+      hasActiveRun: true,
+      runningChildCount: 1,
+      subagentSummary: { runningChildCount: 1 },
+      children: [{ subagentSummary: { runningChildCount: 1 } }],
+    });
+    expect(project([parent], [parent, { ...child, hasActiveSubagentRun: false }])[0]).toMatchObject(
+      {
+        subagentSummary: { runningChildCount: 0 },
+      },
+    );
+  },
+);
+
 it("keeps independent conversations outside Home while a worker runs", () => {
   const home = makeRow(homeKey, { childSessions: [conversationKey, workerKey] });
   const conversation = makeRow(conversationKey, {
@@ -135,4 +217,20 @@ it("promotes a child without rewriting origin or moving its own descendants", ()
   expect(tree[0]?.childSessionKeys).toEqual([]);
   expect(tree[1]?.children.map((row) => row.key)).toEqual([grandchild.key]);
   expect(child).toMatchObject({ parentSessionKey: parent.key, spawnedBy: parent.key });
+});
+
+it("sorts each parent's children, including run-folded ones, with the root comparator", () => {
+  const rows = [
+    makeRow(homeKey),
+    makeRow(conversationKey, { spawnedBy: homeKey, updatedAt: 20 }),
+    makeRow(workerKey, { spawnedBy: homeKey }),
+    makeRow("folded", { spawnedBy: workerKey, updatedAt: 30 }),
+  ];
+  const childIds = (tree: SidebarRecentSession[]) => tree[0]?.children.map((row) => row.key);
+
+  expect(childIds(project([rows[0]!], rows))).toEqual([conversationKey, "folded"]);
+  expect(childIds(project([rows[0]!], rows, compareSessionRowsByUpdatedAt))).toEqual([
+    "folded",
+    conversationKey,
+  ]);
 });

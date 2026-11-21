@@ -14,6 +14,20 @@ describe("tryCronScheduleIdentity", () => {
     expect(tryCronScheduleIdentity(makeJob(" \t "))).toBeUndefined();
   });
 
+  it.each(["on-exit", "stream"] as const)(
+    "treats cwd whitespace changes as a schedule input change for %s jobs",
+    (kind) => {
+      const baseSchedule =
+        kind === "on-exit"
+          ? { kind, command: "./watch.sh", cwd: "/repo/job" }
+          : { kind, command: ["node", "events.mjs"], cwd: "/repo/job" };
+      const edited = { ...baseSchedule, cwd: "/repo/job " };
+      expect(cronSchedulingInputsEqual({ schedule: baseSchedule }, { schedule: edited })).toBe(
+        false,
+      );
+    },
+  );
+
   it("normalizes numeric schedule strings like execution does", () => {
     const numeric = {
       enabled: true,

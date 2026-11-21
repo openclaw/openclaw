@@ -90,11 +90,9 @@ describe("sendMessage", () => {
 
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    mocks.getChannelPlugin.mockClear();
-    mocks.resolveOutboundTarget.mockClear();
-    mocks.deliverOutboundPayloads.mockClear();
-    mocks.resolveOutboundDurableFinalDeliverySupport.mockClear();
-    mocks.resolveRuntimePluginRegistry.mockClear();
+    for (const mock of Object.values(mocks)) {
+      mock.mockClear();
+    }
 
     mocks.getChannelPlugin.mockReturnValue({
       id: "forum",
@@ -111,7 +109,6 @@ describe("sendMessage", () => {
       conversationType: "channel",
       requesterAccountId: "work",
       requesterSenderId: "attacker",
-      mirror: { sessionKey: "agent:main:forum:dm:123456" },
     });
 
     const deliveryParams = expectDeliveryCallFields();
@@ -122,10 +119,9 @@ describe("sendMessage", () => {
       requesterAccountId: "work",
       requesterSenderId: "attacker",
     });
-    expectFields(deliveryParams.mirror, { sessionKey: "agent:main:forum:dm:123456" });
   });
 
-  it("prepares safe mirror text without changing a location-only delivery payload", async () => {
+  it("keeps a location-only delivery payload unchanged", async () => {
     const location = {
       latitude: 48.858844,
       longitude: 2.294351,
@@ -134,12 +130,10 @@ describe("sendMessage", () => {
     await send({
       content: "",
       payloads: [{ location }],
-      mirror: { sessionKey: "agent:main:forum:dm:123456" },
     });
 
     const deliveryParams = expectDeliveryCallFields();
     expectFields(deliveryParams.payloads[0], { text: "", location });
-    expectFields(deliveryParams.mirror, { text: "📍 48.858844, 2.294351" });
   });
 
   it("forwards prepared payloads and required queue policy into outbound delivery", async () => {
@@ -174,31 +168,24 @@ describe("sendMessage", () => {
   it("can require queue persistence without provider unknown-send reconciliation", async () => {
     const onDeliveryIntent = vi.fn();
     const onDeliveryResult = vi.fn();
-
+    const delivery = {
+      queuePolicy: "required",
+      deliveryIntentId: "operation-1",
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "operation-1",
+      },
+      onDeliveryResult,
+    } as const;
     await send({
+      ...delivery,
       content: "conversation delivery",
-      queuePolicy: "required",
       requireUnknownSendReconciliation: false,
-      deliveryIntentId: "operation-1",
-      deliveryCompletion: {
-        kind: "conversation",
-        agentId: "main",
-        operationId: "operation-1",
-      },
       onDeliveryIntent,
-      onDeliveryResult,
     });
 
-    const deliveryParams = expectDeliveryCallFields({
-      queuePolicy: "required",
-      deliveryIntentId: "operation-1",
-      deliveryCompletion: {
-        kind: "conversation",
-        agentId: "main",
-        operationId: "operation-1",
-      },
-      onDeliveryResult,
-    });
+    const deliveryParams = expectDeliveryCallFields(delivery);
     deliveryParams.onDeliveryIntent?.({
       id: "queue-1",
       channel: "forum",
@@ -231,60 +218,32 @@ describe("sendMessage", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
-    const extracted = ["https://example.com/a.png", "https://example.com/b.png"];
-    const combined = [
-      "https://example.com/explicit.png",
-      "https://example.com/a.png",
-      "https://example.com/primary.png",
-      "https://example.com/b.png",
+  it("normalizes MEDIA and silent token variants before durable delivery", async () => {
+    const a = "https://example.com/a.png";
+    const b = "https://example.com/b.png";
+    const extracted = [a, b];
+    const directives = "Here\nMEDIA:https://example.com/a.png\nMEDIA:https://example.com/b.png";
+    const explicit = "https://example.com/explicit.png";
+    const primary = "https://example.com/primary.png";
+    const attachment = "https://example.com/c.png";
+    const combined = [explicit, a, primary, b];
+    type Params = Partial<Parameters<typeof sendMessage>[0]> & { content: string };
+    const matrix: [Params, string, string | null, string[]][] = [
+      [{ content: directives }, "Here", null, extracted],
+      [
+        { content: directives, mediaUrl: primary, mediaUrls: [explicit, a] },
+        "Here",
+        null,
+        combined,
+      ],
+      ...["NO_REPLY", '{\n  "action": "NO_REPLY"\n}', '"NO_REPLY"'].map(
+        (content): [Params, string, null, string[]] => [{ content }, content, null, []],
+      ),
+      [{ content: "NO_REPLY", mediaUrl: attachment }, "NO_REPLY", attachment, [attachment]],
     ];
-    const matrix = [
-      {
-        name: "MEDIA directives",
-        content: "Here\nMEDIA:https://example.com/a.png\nMEDIA:https://example.com/b.png",
-        expected: { text: "Here", mediaUrl: null, mediaUrls: extracted },
-      },
-      {
-        name: "explicit attachments and extracted MEDIA directives",
-        content: "Here\nMEDIA:https://example.com/a.png\nMEDIA:https://example.com/b.png",
-        mediaUrl: "https://example.com/primary.png",
-        mediaUrls: ["https://example.com/explicit.png", "https://example.com/a.png"],
-        expected: { text: "Here", mediaUrl: null, mediaUrls: combined },
-      },
-      ...(
-        [
-          ["prepared literal NO_REPLY", "NO_REPLY"],
-          ["JSON NO_REPLY", '{\n  "action": "NO_REPLY"\n}'],
-          ["quoted NO_REPLY", '"NO_REPLY"'],
-        ] as const
-      ).map(([name, content]) => ({
-        name,
-        content,
-        expected: { text: content, mediaUrl: null, mediaUrls: [] },
-      })),
-      {
-        name: "exact NO_REPLY with explicit media",
-        content: "NO_REPLY",
-        mediaUrl: "https://example.com/c.png",
-        expected: {
-          text: "NO_REPLY",
-          mediaUrl: "https://example.com/c.png",
-          mediaUrls: ["https://example.com/c.png"],
-        },
-      },
-    ];
-    for (const entry of matrix) {
+    for (const [params, text, mediaUrl, mediaUrls] of matrix) {
       mocks.deliverOutboundPayloads.mockClear();
-
-      await send({
-        content: entry.content,
-        ...("mediaUrl" in entry ? { mediaUrl: entry.mediaUrl } : {}),
-        ...("mediaUrls" in entry ? { mediaUrls: entry.mediaUrls } : {}),
-        mirror: {
-          sessionKey: "agent:main:forum:dm:123456",
-        },
-      });
+      await send(params);
 
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
       const deliveryCall = expectDeliveryCallFields();
@@ -293,12 +252,7 @@ describe("sendMessage", () => {
         mediaUrl: payload.mediaUrl ?? null,
         mediaUrls: payload.mediaUrls ?? [],
       }));
-      expect(payloadSummary, entry.name).toEqual([entry.expected]);
-      expectFields(deliveryCall.mirror, {
-        sessionKey: "agent:main:forum:dm:123456",
-        text: entry.expected.text,
-        mediaUrls: entry.expected.mediaUrls.length ? entry.expected.mediaUrls : undefined,
-      });
+      expect(payloadSummary, params.content).toEqual([{ text, mediaUrl, mediaUrls }]);
     }
   });
 

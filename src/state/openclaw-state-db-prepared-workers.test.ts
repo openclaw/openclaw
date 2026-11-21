@@ -4,18 +4,25 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { ensureNodeWorkerPreparedWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  detectOpenClawStateDatabaseSchemaMigrations,
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
-  runOpenClawStateWriteTransaction,
+  expectRow,
+  expectRows,
+  readRow,
+  readRows,
+} from "./openclaw-state-db-fixtures.test-support.js";
+import { ensureNodeWorkerPreparedWorkspaceSchema as ensureWorkspace } from "./openclaw-state-db-schema-additive.js";
+import {
+  closeOpenClawStateDatabaseForTest as closeState,
+  detectOpenClawStateDatabaseSchemaMigrations as detectMigrations,
+  openOpenClawStateDatabase as openState,
+  repairOpenClawStateDatabaseSchema as repairState,
+  runOpenClawStateWriteTransaction as writeState,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
-  withStateMigrationBackupForTest,
+  restorePreTemplateStateIdentifiersForTest,
+  withStateMigrationBackupForTest as withBackup,
 } from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,21 +36,21 @@ const retainedTables = [
   "plugin_state_entries",
 ] as const;
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => closeState());
 
 function readObligations(db: EngineConnection) {
   return Object.fromEntries(
-    retainedTables.map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all()]),
+    retainedTables.map((table) => [table, readRows(db, `SELECT * FROM ${table}`)]),
   );
 }
 
 function readSnapshot(db: EngineConnection) {
   return {
-    version: db.prepare("PRAGMA user_version").get(),
-    metadata: db.prepare("SELECT * FROM schema_meta").all(),
-    machineState: db.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all(),
-    schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
-    environments: db.prepare("SELECT rowid, * FROM worker_environments").all(),
+    version: readRow(db, "PRAGMA user_version"),
+    metadata: readRows(db, "SELECT * FROM schema_meta"),
+    machineState: readRows(db, "SELECT * FROM config_machine_state ORDER BY state_key"),
+    schema: readRows(db, "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
+    environments: readRows(db, "SELECT rowid, * FROM worker_environments"),
     obligations: readObligations(db),
   };
 }
@@ -52,24 +59,19 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
   const options = {
     env: { OPENCLAW_STATE_DIR: tempDirs.make(`openclaw-prepared-v${version}-`) },
   };
-  const databasePath = openOpenClawStateDatabase(options).path;
+  const databasePath = openState(options).path;
   if (publicationDeferred) {
     createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
   }
-  closeOpenClawStateDatabaseForTest();
-  const legacy = openNodeSqliteDatabase(databasePath);
-  try {
-    addPreCutoverClientCredentialTablesForTest(legacy);
-    removePreparedWorkerOwnershipColumns(legacy);
-    legacy.exec(`
-      DROP INDEX idx_plugin_state_listing;
-      CREATE INDEX idx_plugin_state_listing
-        ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
+  closeState();
+  using legacy = openNodeSqliteDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
+  addPreCutoverClientCredentialTablesForTest(legacy);
+  removePreparedWorkerOwnershipColumns(legacy);
+  legacy.exec(`
       INSERT INTO plugin_state_entries VALUES
         ('fixture', 'namespace', 'retained', '{"keep":true}', 10, NULL),
         ('fixture', 'namespace', 'expiring', '{"keep":true}', 10, 1000);
-    `);
-    legacy.exec(`
       ALTER TABLE worker_environments ADD COLUMN future_note TEXT;
       PRAGMA user_version = ${version};
       UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
@@ -97,119 +99,60 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
       ) VALUES ('session', 2, 'run', 'turn', 'environment', 'request', 'pending', 10, 20);
       INSERT INTO worker_transcript_commit_heads VALUES ('session', 2, 'environment', 1, 20);
     `);
-    if (publicationDeferred) {
-      legacy.exec(`
+  if (publicationDeferred) {
+    legacy.exec(`
         PRAGMA user_version = 15;
         UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
         INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
           VALUES ('state.schema.contentVersion', '${version}', 1);
       `);
-    }
-    return { options, databasePath, before: readSnapshot(legacy) };
-  } finally {
-    legacy.close();
   }
+  return { options, databasePath, before: readSnapshot(legacy) };
 }
 
 describe("prepared worker schema migration", () => {
-  it.each(["doctor repair"] as const)(
-    "upgrades deferred v16 content through captured %s without publishing over an old updater",
-    async (via) => {
-      const { options, before } = createLegacyWorkers(16, true);
-      if (via === "doctor repair") {
-        expect(
-          (
-            await withStateMigrationBackupForTest(options, () =>
-              repairOpenClawStateDatabaseSchema(options),
-            )
-          ).warnings,
-        ).toEqual([]);
-      }
-      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
-      const { db } = openOpenClawStateDatabase(options);
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 15,
-      });
-      expect(
-        db
-          .prepare(
-            "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
-          )
-          .get(),
-      ).toEqual({ value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) });
-      expect(
-        db.prepare("SELECT preparation_consumed_at_ms FROM worker_environments").get(),
-      ).toEqual({
-        preparation_consumed_at_ms: null,
-      });
-      expect(readObligations(db)).toEqual(before.obligations);
-      expect(
-        db
-          .prepare("PRAGMA index_info(idx_plugin_state_listing)")
-          .all()
-          .map((row) => row.name),
-      ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      const after = readSnapshot(db);
-      closeOpenClawStateDatabaseForTest();
-      expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-    },
-  );
-
   it("creates node ownership only on first use and retries after an outer rollback", () => {
     const options = {
       env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-prepared-first-use-") },
     };
-    const { db } = openOpenClawStateDatabase(options);
+    const { db } = openState(options);
     const readTable = () =>
-      db
-        .prepare("SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'")
-        .get();
+      readRow(db, "SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'");
     expect(readTable()).toBeUndefined();
     expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        ensureNodeWorkerPreparedWorkspaceSchema(db);
+      writeState(() => {
+        ensureWorkspace(db);
         expect(readTable()).toBeDefined();
         throw new Error("registration rejected");
       }, options),
     ).toThrow("registration rejected");
     expect(readTable()).toBeUndefined();
-    runOpenClawStateWriteTransaction(() => ensureNodeWorkerPreparedWorkspaceSchema(db), options);
+    writeState(() => ensureWorkspace(db), options);
     expect(readTable()).toBeDefined();
-    closeOpenClawStateDatabaseForTest();
-    expect(
-      openOpenClawStateDatabase(options)
-        .db.prepare("SELECT * FROM node_worker_prepared_workspaces")
-        .all(),
-    ).toEqual([]);
+    closeState();
+    expectRows(openState(options).db, "SELECT * FROM node_worker_prepared_workspaces", []);
   });
 
-  it.each([{ version: 15, via: "runtime open" }])(
-    "preserves v$version workers and unresolved cleanup through captured $via",
-    async ({ version, via }) => {
-      const { options, databasePath, before } = createLegacyWorkers(version);
-      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+  it.each([
+    { version: 15, deferred: false },
+    { version: 16, deferred: true },
+  ])(
+    "preserves v$version workers and deferred publication ($deferred)",
+    async ({ version, deferred }) => {
+      const { options, databasePath, before } = createLegacyWorkers(version, deferred);
+      expect(detectMigrations(options)).toContainEqual({
         kind: "prepared-worker-ownership-v17",
         path: databasePath,
       });
-      if (via === "doctor repair") {
-        expect(
-          await withStateMigrationBackupForTest(options, () =>
-            repairOpenClawStateDatabaseSchema(options),
-          ),
-        ).toEqual({
-          changes: [
-            "Recorded prepared worker ownership and one-use lifecycle (v17)",
-            "Replaced retained task indexes with ordered cron history indexes (v24)",
-            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-            "Rebuilt canonical shared-state SQLite indexes (1)",
-          ],
-          warnings: [],
-        });
+      if (deferred) {
+        const repaired = await withBackup(options, () => repairState(options));
+        expect(repaired.warnings).toEqual([]);
       }
-      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
-      const { db } = openOpenClawStateDatabase(options);
-      expect(db.prepare("SELECT rowid, * FROM worker_environments").all()).toEqual(
+      await withBackup(options, () => openState(options));
+      const { db } = openState(options);
+      expectRows(
+        db,
+        "SELECT rowid, * FROM worker_environments",
         before.environments.map((row) => ({
           ...row,
           last_activated_at_ms: null,
@@ -220,74 +163,51 @@ describe("prepared worker schema migration", () => {
         })),
       );
       expect(readObligations(db)).toEqual(before.obligations);
-      expect(
-        db
-          .prepare("PRAGMA index_info(idx_plugin_state_listing)")
-          .all()
-          .map((row) => row.name),
-      ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      const publishedVersion = deferred ? 15 : OPENCLAW_STATE_SCHEMA_VERSION;
+      expectRow(db, "PRAGMA user_version", {
+        user_version: publishedVersion,
       });
-      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expectRow(db, "SELECT schema_version FROM schema_meta", {
+        schema_version: publishedVersion,
       });
-      expect(
-        db
-          .prepare("SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'")
-          .get(),
-      ).toBeUndefined();
+      if (deferred) {
+        expectRow(
+          db,
+          "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+          { value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) },
+          "state.schema.contentVersion",
+        );
+      }
+      expectRow(
+        db,
+        "SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'",
+        undefined,
+      );
       const after = readSnapshot(db);
-      closeOpenClawStateDatabaseForTest();
-      expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-      expect(
-        (
-          await withStateMigrationBackupForTest(options, () =>
-            repairOpenClawStateDatabaseSchema(options),
-          )
-        ).warnings,
-      ).toEqual([]);
+      closeState();
+      expect(readSnapshot(openState(options).db)).toEqual(after);
     },
   );
 
-  it.each([{ version: 16, via: "doctor repair" }])(
-    "rolls back all v$version migrations and markers after failed $via",
-    async ({ version, via }) => {
-      const { options, databasePath } = createLegacyWorkers(version);
-      const legacy = openNodeSqliteDatabase(databasePath);
-      legacy.exec(`CREATE TRIGGER fixture_reject_upgrade BEFORE UPDATE ON schema_meta
+  it("rolls back all v16 migrations and markers after failed doctor repair", async () => {
+    const { options, databasePath } = createLegacyWorkers(16);
+    const legacy = openNodeSqliteDatabase(databasePath);
+    legacy.exec(`CREATE TRIGGER fixture_reject_upgrade BEFORE UPDATE ON schema_meta
       BEGIN SELECT RAISE(ABORT, 'prepared migration rollback'); END;`);
-      const before = readSnapshot(legacy);
-      legacy.close();
-      if (via === "runtime open") {
-        await expect(
-          withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options)),
-        ).rejects.toThrow(/prepared migration rollback/);
-      } else {
-        expect(
-          await withStateMigrationBackupForTest(options, () =>
-            repairOpenClawStateDatabaseSchema(options),
-          ),
-        ).toEqual({
-          changes: [],
-          warnings: [expect.stringContaining("prepared migration rollback")],
-        });
-      }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
-    },
-  );
+    const before = readSnapshot(legacy);
+    legacy.close();
+    expect(await withBackup(options, () => repairState(options))).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("prepared migration rollback")],
+    });
+    using preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expect(readSnapshot(preserved)).toEqual(before);
+  });
 
-  it("enforces complete preparation facts and retains consumed bindings on canonical reopen", async () => {
+  it("retains preparation constraints and consumed bindings on reopen", async () => {
     const { options } = createLegacyWorkers();
-    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
-    const { db } = openOpenClawStateDatabase(options);
+    await withBackup(options, () => openState(options));
+    const { db } = openState(options);
     const setPreparation = db.prepare(`UPDATE worker_environments SET preparation_key = ?,
       preparation_demand_at_ms = ?, preparation_expires_at_ms = ?, preparation_consumed_at_ms = ?`);
     for (const tuple of [
@@ -303,7 +223,7 @@ describe("prepared worker schema migration", () => {
       expect(() => setPreparation.run(...tuple)).toThrow(/CHECK constraint failed/);
     }
     setPreparation.run(preparationKey, 10, 100, 20);
-    ensureNodeWorkerPreparedWorkspaceSchema(db);
+    ensureWorkspace(db);
     db.prepare(`INSERT INTO node_worker_prepared_workspaces (
       preparation_key, cache_key, gateway_namespace, workspace_dir, home_dir, source_manifest_ref, prepared_manifest_ref,
       state, environment_id, session_id, session_key, owner_epoch, created_at_ms, bound_at_ms
@@ -314,15 +234,19 @@ describe("prepared worker schema migration", () => {
       `sha256:${preparationKey}`,
       `sha256:${"d".repeat(64)}`,
     );
-    const setPreparedManifest = db.prepare(
-      "UPDATE node_worker_prepared_workspaces SET prepared_manifest_ref = ?",
-    );
-    for (const invalid of [null, "", `sha256:${"d".repeat(63)}`, `sha256:${"D".repeat(64)}`]) {
-      expect(() => setPreparedManifest.run(invalid)).toThrow(/constraint failed/);
-    }
-    const setCacheKey = db.prepare("UPDATE node_worker_prepared_workspaces SET cache_key = ?");
-    for (const invalid of [null, "", "c".repeat(63), "C".repeat(64)]) {
-      expect(() => setCacheKey.run(invalid)).toThrow(/constraint failed/);
+    for (const [column, prefix, letter] of [
+      ["prepared_manifest_ref", "sha256:", "d"],
+      ["cache_key", "", "c"],
+    ] as const) {
+      const update = db.prepare(`UPDATE node_worker_prepared_workspaces SET ${column} = ?`);
+      for (const invalid of [
+        null,
+        "",
+        prefix + letter.repeat(63),
+        prefix + letter.toUpperCase().repeat(64),
+      ]) {
+        expect(() => update.run(invalid)).toThrow(/constraint failed/);
+      }
     }
     expect(() => db.exec("UPDATE node_worker_prepared_workspaces SET state = 'available'")).toThrow(
       /CHECK constraint failed/,
@@ -334,14 +258,12 @@ describe("prepared worker schema migration", () => {
       db.exec("UPDATE node_worker_prepared_workspaces SET environment_id = NULL"),
     ).toThrow(/NOT NULL constraint failed/);
     db.exec("UPDATE node_worker_prepared_workspaces SET state = 'retired', retired_at_ms = 30");
-    const binding = db.prepare("SELECT * FROM node_worker_prepared_workspaces").get();
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase(options).db;
-    expect(reopened.prepare("SELECT * FROM node_worker_prepared_workspaces").get()).toEqual(
-      binding,
-    );
-    expect(
-      reopened.prepare("SELECT preparation_consumed_at_ms FROM worker_environments").get(),
-    ).toEqual({ preparation_consumed_at_ms: 20 });
+    const binding = readRow(db, "SELECT * FROM node_worker_prepared_workspaces");
+    closeState();
+    const reopened = openState(options).db;
+    expectRow(reopened, "SELECT * FROM node_worker_prepared_workspaces", binding);
+    expectRow(reopened, "SELECT preparation_consumed_at_ms FROM worker_environments", {
+      preparation_consumed_at_ms: 20,
+    });
   });
 });

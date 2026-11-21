@@ -4,7 +4,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveManagedResourceStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
@@ -41,14 +41,14 @@ export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256 =
   "6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67";
 
 export function resolveLlamaCppDataDir(): string {
-  return path.join(resolveStateDir(), "tools", "llama.cpp");
+  return path.join(resolveManagedResourceStateDir(), "tools", "llama.cpp");
 }
 
 export function resolveLlamaCppModelCacheDir(provider?: ModelProviderConfig): string {
   const configured = provider?.params?.modelCacheDir;
   return typeof configured === "string" && configured.trim()
     ? resolveHomePath(configured.trim())
-    : path.join(resolveStateDir(), "models", "llama.cpp");
+    : path.join(resolveManagedResourceStateDir(), "models", "llama.cpp");
 }
 
 export function resolveLegacyLlamaCppModelCacheDir(): string {

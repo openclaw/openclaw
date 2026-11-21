@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const defaults = vi.hoisted(() => ({
   mode: "initializing",
   fault: "",
-  networkCommand: "slirp4netns",
+  networkCommand: "slirp4netns" as string | null | undefined,
 }));
 const fixture = vi.hoisted(() => ({ ...defaults, root: "", calls: [] as string[] }));
 const filesystems = (...entries: object[]) => ({ filesystems: entries });
@@ -24,14 +24,13 @@ vi.mock("node:fs", async (original) => {
     readFileSync: (file: string) => {
       if (fixture.mode === "ready") {
         const mount = path.join(fixture.root, "volume");
-        const configs: Record<string, string> = {
-          "storage.conf": `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`,
-          "containers.conf":
-            '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n',
-        };
-        const config = Object.keys(configs).find((suffix) => file.endsWith(suffix));
+        const config = file.endsWith("storage.conf")
+          ? `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`
+          : file.endsWith("containers.conf")
+            ? '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n'
+            : undefined;
         if (config) {
-          return configs[config];
+          return config;
         }
       }
       if (!file.endsWith("manifest.json")) {
@@ -64,26 +63,23 @@ vi.mock("node:child_process", async (original) => {
       const command = ["podman", "sudo", "git", "findmnt"].includes(name)
         ? `${name} ${operation}`
         : name;
-      const failures: Record<string, string> = {
-        fallocate: "Allocation failed: no space left",
-        "sudo mount": "Mount reached without backing reservation",
-        "podman create": "Candidate creation reached without verified storage",
-        ...(fixture.fault === "helperMissing"
-          ? { slirp4netns: "Required networking helper unavailable" }
-          : {}),
-        ...(fixture.fault === "unmountFails" ? { "sudo umount": "Mount has live holders" } : {}),
-      };
-      if (failures[command]) {
-        throw new Error(failures[command]);
-      }
-      if (command === "sudo umount") {
-        return "";
-      }
+      const backing =
+        fixture.fault === "wrongBacking"
+          ? "/unrelated.img"
+          : path.join(fixture.root, "storage.img");
       const responses: Record<string, unknown> = {
-        slirp4netns: "slirp4netns version 1.3.3",
+        fallocate: new Error("Allocation failed: no space left"),
+        "sudo mount": new Error("Mount reached without backing reservation"),
+        "podman create": new Error("Candidate creation reached without verified storage"),
+        slirp4netns:
+          fixture.fault === "helperMissing"
+            ? new Error("Required networking helper unavailable")
+            : "slirp4netns version 1.3.3",
+        "sudo umount": fixture.fault === "unmountFails" ? new Error("Mount has live holders") : "",
         "mkfs.ext4": "",
         "git diff": "",
         "podman rm": "",
+        "podman ps": "",
         "podman info": {
           host: {
             security: { rootless: true },
@@ -93,15 +89,7 @@ vi.mock("node:child_process", async (original) => {
           store: { graphRoot: `${mount}/graphroot`, runRoot: `${mount}/runroot` },
         },
         "sudo losetup": {
-          loopdevices: [
-            {
-              name: "/dev/loop7",
-              "back-file":
-                fixture.fault === "wrongBacking"
-                  ? "/unrelated.img"
-                  : path.join(fixture.root, "storage.img"),
-            },
-          ],
+          loopdevices: [{ name: "/dev/loop7", "back-file": backing }],
         },
         "findmnt --mountpoint": filesystems({
           target: mount,
@@ -118,6 +106,9 @@ vi.mock("node:child_process", async (original) => {
         throw new Error(`Unexpected cleanup command: ${name}`);
       }
       const response = responses[command];
+      if (response instanceof Error) {
+        throw response;
+      }
       return typeof response === "string" ? response : JSON.stringify(response);
     },
   };
@@ -137,6 +128,7 @@ beforeEach(() => {
     Object.defineProperty(process, name, { configurable: true, value: () => 1000 });
   }
   vi.stubEnv("MANTIS_PODMAN_ROOT", fixture.root);
+  vi.stubEnv("CONTAINERS_STORAGE_CONF", undefined);
 });
 afterEach(() => {
   process.argv = originalArgv;
@@ -168,8 +160,8 @@ describe("interrupted mounted storage initialization", () => {
     await expect(loadStorage()).rejects.toThrow(error);
     expectNoEffects(forbidden, "podman create ");
   });
-  it.each(["slirp4netns", "pasta"])(
-    "verifies the actual rootless networking helper (%s)",
+  it.each([undefined, "slirp4netns", "pasta", null])(
+    "validates the reported rootless networking helper (%s)",
     async (networkCommand) => {
       fixture.mode = "ready";
       fixture.networkCommand = networkCommand;
@@ -178,7 +170,7 @@ describe("interrupted mounted storage initialization", () => {
       for (const [key, value] of Object.entries(storage.proofStorageEnvironment())) {
         vi.stubEnv(key, value);
       }
-      if (networkCommand === "slirp4netns") {
+      if (networkCommand === undefined || networkCommand === "slirp4netns") {
         expect(() => storage.assertPodmanProofStorage()).not.toThrow();
       } else {
         expect(() => storage.assertPodmanProofStorage()).toThrow(
@@ -187,6 +179,37 @@ describe("interrupted mounted storage initialization", () => {
       }
     },
   );
+  it("rejects a container configuration override before inspecting Podman", async () => {
+    fixture.mode = "ready";
+    process.argv = [process.execPath, "fixture"];
+    const storage = await loadStorage();
+    for (const [key, value] of Object.entries(storage.proofStorageEnvironment())) {
+      vi.stubEnv(key, value);
+    }
+    vi.stubEnv("CONTAINERS_CONF_OVERRIDE", path.join(fixture.root, "other.conf"));
+    expect(() => storage.assertPodmanProofStorage()).toThrow(
+      "Podman storage environment is not bound",
+    );
+    expectNoEffects("podman info");
+  });
+  it.each(["", "/other/storage.conf"])(
+    "rejects the rootless storage override before inspecting Podman (%s)",
+    async (override) => {
+      fixture.mode = "ready";
+      process.argv = [process.execPath, "fixture"];
+      const storage = await loadStorage();
+      vi.stubEnv("CONTAINERS_STORAGE_CONF", override);
+      expect(() => storage.assertPodmanProofStorage()).toThrow("Unset CONTAINERS_STORAGE_CONF");
+      expectNoEffects("podman info");
+    },
+  );
+  it("cleans up ready storage when Podman omits the rootless network field", async () => {
+    fixture.mode = "ready";
+    fixture.networkCommand = undefined;
+    await loadStorage();
+    expect(fixture.calls).toContain("remove-storage");
+    expect(fixture.calls).toContain(`sudo umount ${path.join(fixture.root, "volume")}`);
+  });
   it("refuses Web candidate creation before bounded storage is ready", async () => {
     process.argv = [
       process.execPath,

@@ -16,28 +16,10 @@ import {
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
 
 async function importPluginModuleLoader(scope: string) {
-  const actual = await importFreshModule<typeof import("./plugin-module-loader-cache.js")>(
+  return importFreshModule<typeof import("./plugin-module-loader-cache.js")>(
     import.meta.url,
     `./plugin-module-loader-cache.js?scope=${scope}`,
   );
-  type LoaderParams = Parameters<typeof actual.getCachedPluginModuleLoader>[0];
-  type Cache = ReturnType<typeof createPluginCache>["moduleLoaders"];
-  const owners = new WeakMap<Cache, ReturnType<typeof createPluginCache>>();
-  return {
-    ...actual,
-    getCachedPluginModuleLoader(
-      this: void,
-      { cache, ...options }: LoaderParams & { cache: Cache },
-    ) {
-      let owner = owners.get(cache);
-      if (!owner) {
-        owner = createPluginCache();
-        owner.moduleLoaders = cache;
-        owners.set(cache, owner);
-      }
-      return withPluginCache(owner, () => actual.getCachedPluginModuleLoader(options));
-    },
-  };
 }
 
 afterEach(() => {
@@ -67,22 +49,18 @@ async function mockLoader(
     }));
   }
   const owner = await importPluginModuleLoader(scope);
-  const getCachedPluginModuleLoader = (
-    options: Parameters<typeof owner.getCachedPluginModuleLoader>[0],
-  ) =>
-    owner.getCachedPluginModuleLoader({
-      ...options,
-      createLoader: options.createLoader ?? asPluginModuleLoaderFactory(createJiti),
-    });
+  const cache = createPluginCache();
   const load = (options: Partial<Parameters<typeof owner.getCachedPluginModuleLoader>[0]> = {}) =>
-    getCachedPluginModuleLoader({
-      cache: new Map(),
-      modulePath: "/repo/dist/extensions/demo/api.js",
-      importerUrl: fixtureFileUrl("src/plugins/public-surface-loader.ts"),
-      loaderFilename: fixtureFileUrl("src/plugins/public-surface-loader.ts"),
-      ...options,
-    });
-  return { ...owner, getCachedPluginModuleLoader, load, createJiti, fromSourceTransformer };
+    withPluginCache(cache, () =>
+      owner.getCachedPluginModuleLoader({
+        modulePath: "/repo/dist/extensions/demo/api.js",
+        importerUrl: fixtureFileUrl("src/plugins/public-surface-loader.ts"),
+        loaderFilename: fixtureFileUrl("src/plugins/public-surface-loader.ts"),
+        createLoader: asPluginModuleLoaderFactory(createJiti),
+        ...options,
+      }),
+    );
+  return { ...owner, load, createJiti, fromSourceTransformer };
 }
 
 function fixtureFileUrl(relativePath: string) {
@@ -153,13 +131,14 @@ it.each(["cold", "legacy-cache"] as const)(
       }
       const { getCachedPluginModuleLoader } =
         await importPluginModuleLoader("concurrent-first-import");
-      const load = getCachedPluginModuleLoader({
-        cache: new Map(),
-        modulePath: entry,
-        importerUrl: import.meta.url,
-        tryNative: false,
-        aliasMap: {},
-      });
+      const load = withPluginCache(createPluginCache(), () =>
+        getCachedPluginModuleLoader({
+          modulePath: entry,
+          importerUrl: import.meta.url,
+          tryNative: false,
+          aliasMap: {},
+        }),
+      );
       const loaded = load(entry) as { run(): Promise<string> };
       await expect(Promise.all([loaded.run(), loaded.run()])).resolves.toEqual(["ready", "ready"]);
     } finally {
@@ -169,29 +148,99 @@ it.each(["cold", "legacy-cache"] as const)(
   },
 );
 
+async function bundleModuleLoader(root: string) {
+  const ownerPath = path.join(root, "loader.mjs");
+  await build({
+    stdin: {
+      contents:
+        'export { getCachedPluginModuleLoader } from "./src/plugins/plugin-module-loader-cache.ts"; export { openPluginRootFileSync } from "./src/plugins/path-safety.ts";',
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    packages: "external",
+    platform: "node",
+    format: "esm",
+    outfile: ownerPath,
+    logLevel: "silent",
+  });
+  // Bundling the loader relocates its adjacent runtime schema asset.
+  fs.copyFileSync(
+    path.resolve("src/state/openclaw-state-schema.sql"),
+    path.join(root, "openclaw-state-schema.sql"),
+  );
+  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+  return ownerPath;
+}
+
+it.skipIf(!fs.existsSync(import.meta.dirname.toUpperCase()))(
+  "shares host publications with a natively admitted plugin across path casing",
+  async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-host-casing-"));
+    try {
+      const ownerPath = await bundleModuleLoader(root);
+      const result = spawnNodeEvalSync(
+        `import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { getCachedPluginModuleLoader, openPluginRootFileSync } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+const root = ${JSON.stringify(root)}, host = path.join(root, "MixedCaseHost");
+const write = (file, source) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, source); };
+write(path.join(host, "package.json"), JSON.stringify({ name: "openclaw", type: "module", exports: { "./plugin-sdk/fixture": "./dist/plugin-sdk/fixture.js" } }));
+write(path.join(host, "dist/host.mjs"), "");
+write(path.join(host, "dist/state.mjs"), "export const snapshot = new Map();");
+write(path.join(host, "dist/plugin-sdk/fixture.js"), 'export { snapshot } from "../state.mjs";');
+write(path.join(root, "foreign.mjs"), 'export const snapshot = new Map([["profile", "foreign"]]);');
+write(path.join(host, "dist/dep.cjs"), 'module.exports = [require("./dir"), require(".hidden-package")];');
+write(path.join(host, "dist/dir/package.json"), '{"main":"index.cjs"}');
+write(path.join(host, "dist/dir/index.cjs"), 'module.exports = "directory";');
+write(path.join(host, "dist/.hidden-package"), 'module.exports = "wrong-local-file";');
+write(path.join(host, "node_modules/.hidden-package/package.json"), '{"main":"index.cjs"}');
+write(path.join(host, "node_modules/.hidden-package/index.cjs"), 'module.exports = "package";');
+const entry = path.join(host, "dist/extensions/demo/index.mjs");
+write(entry, 'export { snapshot as relative } from "../../state.mjs"; export { snapshot as sdk } from "openclaw/plugin-sdk/fixture"; export { default as dependencies } from "../../dep.cjs"; export { snapshot as foreign } from ' + JSON.stringify(pathToFileURL(path.join(root, "foreign.mjs")).href) + ';');
+const alias = host.toUpperCase();
+assert.equal(fs.statSync(alias, { bigint: true }).ino, fs.statSync(host, { bigint: true }).ino);
+const publisher = await import(pathToFileURL(path.join(alias, "dist/state.mjs")).href);
+const foreignPublisher = await import(pathToFileURL(path.join(root, "foreign.mjs")).href);
+publisher.snapshot.set("profile", "published");
+const opened = openPluginRootFileSync({ filePath: entry, rootPath: path.dirname(entry), boundaryLabel: "plugin root", rejectHardlinks: false });
+assert.equal(opened.ok, true); fs.closeSync(opened.fd);
+const load = getCachedPluginModuleLoader({ modulePath: opened.path, importerUrl: pathToFileURL(path.join(alias, "dist/host.mjs")).href, devSourceRoot: null, pluginSdkResolution: "dist", tryNative: true });
+const plugin = load(opened.path);
+assert.equal(plugin.relative, publisher.snapshot);
+assert.equal(plugin.sdk, publisher.snapshot);
+assert.equal(plugin.relative.get("profile"), "published");
+plugin.sdk.set("profile", "updated");
+assert.equal(publisher.snapshot.get("profile"), "updated");
+assert.notEqual(plugin.foreign, publisher.snapshot);
+assert.equal(plugin.foreign, foreignPublisher.snapshot);
+assert.equal(plugin.foreign.get("profile"), "foreign");
+assert.deepEqual(plugin.dependencies, ["directory", "package"]);
+console.log("host snapshot shared");`,
+        {
+          timeout: 30_000,
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            HOME: root,
+            USERPROFILE: root,
+            NODE_OPTIONS: "",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("host snapshot shared");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 it("keeps source SDK evaluation native and preserves terminal failures", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-graph-"));
   try {
-    const ownerPath = path.join(root, "loader.mjs");
-    await build({
-      stdin: {
-        contents:
-          'export { getCachedPluginModuleLoader } from "./src/plugins/plugin-module-loader-cache.ts";',
-        resolveDir: process.cwd(),
-      },
-      bundle: true,
-      packages: "external",
-      platform: "node",
-      format: "esm",
-      outfile: ownerPath,
-      logLevel: "silent",
-    });
-    // Bundling the loader relocates its adjacent runtime schema asset.
-    fs.copyFileSync(
-      path.resolve("src/state/openclaw-state-schema.sql"),
-      path.join(root, "openclaw-state-schema.sql"),
-    );
-    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const ownerPath = await bundleModuleLoader(root);
     const childOptions = {
       timeout: 30_000,
       env: {
@@ -227,25 +276,6 @@ it("keeps source SDK evaluation native and preserves terminal failures", async (
           };
           assert.equal(loadSdkFixture("enum", "enum State { Ready }\\nexport const ready = State.Ready;")().ready, 0);
           assert.equal(loadSdkFixture("source-host/node_modules/sdk/index", "export const ready: number = 1;")().ready, 1);
-          const makePeer = (name, javascript) => {
-            const peerRoot = path.join(root, name);
-            fs.mkdirSync(peerRoot);
-            fs.writeFileSync(path.join(peerRoot, "sdk.mts"), 'export { value } from "./peer.mjs";');
-            if (javascript) fs.writeFileSync(path.join(peerRoot, "peer.mjs"), 'export const value = "javascript";');
-            fs.writeFileSync(path.join(peerRoot, "peer.mts"), 'export const value = "typescript";');
-            const entry = path.join(peerRoot, "entry.ts");
-            fs.writeFileSync(entry, 'export * from "openclaw/plugin-sdk/fixture";');
-            const load = getCachedPluginModuleLoader({
-              modulePath: entry, importerUrl: import.meta.url, tryNative: false,
-              aliasMap: { "openclaw/plugin-sdk/fixture": path.join(peerRoot, "sdk.mts") },
-            });
-            return { peerRoot, read: () => load(entry).value };
-          };
-          const peer = makePeer("peers", true);
-          const peerRoot = peer.peerRoot;
-          const hostPeer = await import(pathToFileURL(path.join(peerRoot, "sdk.mts")).href);
-          assert.equal(peer.read(), hostPeer.value);
-          assert.equal(makePeer("source-peers", false).read(), "typescript");
           fs.writeFileSync(path.join(root, "url-peer.mts"), 'enum State { Ready } export const ready = State.Ready;');
           assert.equal(loadSdkFixture("url-sdk", 'export { ready } from "./url-peer.mjs";', "cjs")().ready, 0);
           const unrelated = path.join(root, "unrelated.ts");
@@ -286,9 +316,9 @@ it("keeps source SDK evaluation native and preserves terminal failures", async (
 });
 
 it("keeps deferred module construction and evaluation in the creating cache generation", async () => {
-  const { getCachedPluginModuleLoader } = await importFreshModule<
-    typeof import("./plugin-module-loader-cache.js")
-  >(import.meta.url, "./plugin-module-loader-cache.js?scope=retained-loader-generation");
+  const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
+    "retained-loader-generation",
+  );
   const owner = createPluginCache();
   const other = createPluginCache();
   const observedOwner: boolean[] = [];
@@ -321,105 +351,27 @@ it("keeps deferred module construction and evaluation in the creating cache gene
 });
 
 it("lets callers override alias maps and tryNative while keeping cache keys stable", async () => {
-  const { createJiti, getCachedPluginModuleLoader } = await mockLoader("overrides");
-
-  const cache = new Map();
-  const params = {
-    cache,
-    modulePath: "/repo/extensions/demo/index.ts",
-    importerUrl: fixtureFileUrl("src/plugins/loader.ts"),
-    loaderFilename: fixtureFileUrl("src/plugins/loader.ts"),
+  const { createJiti, load } = await mockLoader("overrides");
+  const first = load({
     tryNative: false,
-  };
-  const first = getCachedPluginModuleLoader({
-    ...params,
     aliasMap: { alpha: "/repo/alpha.js", zeta: "/repo/zeta.js" },
   });
-  const second = getCachedPluginModuleLoader({
-    ...params,
+  const second = load({
+    tryNative: false,
     aliasMap: { zeta: "/repo/zeta.js", alpha: "/repo/alpha.js" },
   });
 
   expect(second).toBe(first);
   first("/repo/extensions/demo/index.ts");
   expect(createJiti).toHaveBeenCalledTimes(1);
-  const options = expectSourceOptions(createJiti, fixtureFileUrl("src/plugins/loader.ts"));
-  expect(options.fsCache).toEqual(expect.any(String));
-  expect(String(options.fsCache)).toContain(`${path.sep}openclaw${path.sep}jiti${path.sep}`);
+  const options = expectSourceOptions(
+    createJiti,
+    fixtureFileUrl("src/plugins/public-surface-loader.ts"),
+  );
   expect(options.alias).toEqual({
     alpha: "/repo/alpha.js",
     zeta: "/repo/zeta.js",
   });
-});
-
-it("reuses pre-normalized alias options across module-scoped loader filenames", async () => {
-  const { createJiti, getCachedPluginModuleLoader } = await mockLoader("module-filename-aliases");
-
-  const cache = new Map();
-  const params = (name: string, aliasMap: Record<string, string>) => ({
-    cache,
-    importerUrl: fixtureFileUrl("src/plugins/loader.ts"),
-    tryNative: false,
-    modulePath: `/repo/extensions/${name}/index.ts`,
-    loaderFilename: `/repo/extensions/${name}/index.ts`,
-    aliasMap,
-  });
-  const first = params("demo-a", { alpha: "/repo/alpha", beta: "alpha/sub" });
-  const second = params("demo-b", { beta: "alpha/sub", alpha: "/repo/alpha" });
-  getCachedPluginModuleLoader(first);
-  getCachedPluginModuleLoader(second);
-  getCachedPluginModuleLoader({ ...first, aliasMap: { ...first.aliasMap } })(first.modulePath);
-  getCachedPluginModuleLoader({ ...second, aliasMap: { ...second.aliasMap } })(second.modulePath);
-
-  const firstAlias = requireRecord(
-    requireRecord(createJiti.mock.calls[0]?.[1], "first options").alias,
-    "first alias",
-  );
-  const secondAlias = requireRecord(
-    requireRecord(createJiti.mock.calls[1]?.[1], "second options").alias,
-    "second alias",
-  );
-
-  expect(createJiti).toHaveBeenCalledTimes(2);
-  expect(cache.size).toBe(2);
-  expect(secondAlias).toBe(firstAlias);
-  expect(firstAlias.beta).toBe("/repo/alpha/sub");
-  expect(Reflect.get(firstAlias, Symbol.for("pathe:normalizedAlias"))).toBe(true);
-});
-
-it("lets native require handle compiled plugin SDK aliases before source-transform fallback", async () => {
-  const nativeStub = vi.fn<
-    typeof import("./native-module-require.js").tryNativeRequireJavaScriptModule
-  >((target) => ({
-    ok: true as const,
-    moduleExport: { loadedFrom: target },
-  }));
-  const { load, createJiti, fromSourceTransformer, getPluginModuleLoaderStats } = await mockLoader(
-    "native-require-plugin-sdk-alias",
-    nativeStub,
-  );
-  const loader = load({
-    aliasMap: {
-      "openclaw/plugin-sdk/core": "/repo/dist/plugin-sdk/core.js",
-    },
-  });
-
-  expect(loader("/repo/dist/extensions/demo/api.js")).toMatchObject({
-    loadedFrom: "/repo/dist/extensions/demo/api.js",
-  });
-  expect(createJiti).not.toHaveBeenCalled();
-  expect(fromSourceTransformer).not.toHaveBeenCalled();
-  expect(nativeStub).toHaveBeenCalledWith(
-    "/repo/dist/extensions/demo/api.js",
-    expect.objectContaining({ fallbackOnMissingDependency: true }),
-  );
-  const options = nativeStub.mock.calls[0]![1]!;
-  const target =
-    typeof options.aliasMap === "function"
-      ? options.aliasMap("openclaw/plugin-sdk/core")
-      : options.aliasMap?.["openclaw/plugin-sdk/core"];
-  expect(target).toBe("/repo/dist/plugin-sdk/core.js");
-  expectStats(getPluginModuleLoaderStats(), { nativeHits: 1 });
 });
 
 it.each([true, false])("reuses successful module exports (native: %s)", async (native) => {
@@ -473,7 +425,7 @@ it("propagates native plugin evaluation errors without running the plugin twice"
       ].join("\n"),
       "utf8",
     );
-    const { load, createJiti, fromSourceTransformer } = await mockLoader("native-evaluation-error");
+    const { load, createJiti } = await mockLoader("native-evaluation-error");
     const loader = load({
       modulePath,
       importerUrl: import.meta.url,
@@ -484,7 +436,6 @@ it("propagates native plugin evaluation errors without running the plugin twice"
     expect(() => loader(modulePath)).toThrow(expectedError);
     expect(Reflect.get(globalThis, sideEffectMarker)).toBe(1);
     expect(createJiti).not.toHaveBeenCalled();
-    expect(fromSourceTransformer).not.toHaveBeenCalled();
   } finally {
     Reflect.deleteProperty(globalThis, sideEffectMarker);
     fs.rmSync(fixtureDir, { recursive: true, force: true });

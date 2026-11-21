@@ -1,23 +1,21 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { prepareModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import {
   rewriteNativeAssistantTranscriptMessageForRun,
   rewriteNativeTranscriptMessageAtAnchor,
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";

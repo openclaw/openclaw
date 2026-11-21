@@ -42,11 +42,9 @@ function cancellationFixture(
   const entry = child("releaseChecks", "303");
   const plan = executionPlanArtifact({ children: [entry] });
   if (options.borrowed) {
-    plan.evidenceReuse = { ...plan.evidenceReuse, requested: true };
     for (const planned of plan.children) {
       planned.source = "reused";
     }
-    plan.evidenceReuse.requested = false;
     plan.sha256 = releaseExecutionPlanSha256(plan);
   }
   const runs = new Map<string, Record<string, unknown>>([
@@ -131,6 +129,14 @@ describe("FRV cancellation tree", () => {
     return result;
   }
   const sentIds = () => fixture.sent.map(([id]) => id);
+
+  it("authenticates a plan sealed by a pre-seal recovery attempt", async () => {
+    fixture.retained.plan.sealParentRunAttempt = 2;
+    fixture.retained.plan.sha256 = releaseExecutionPlanSha256(fixture.retained.plan);
+    fixture.sealer.run_attempt = 2;
+    await cancel(true);
+    expect(sentIds()).toEqual(["303", "77"]);
+  });
 
   it("includes earlier Telegram descendants beside runnerless rerun copies", async () => {
     fixture = cancellationFixture({ nested: true });

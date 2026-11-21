@@ -1,7 +1,7 @@
 // Control UI tests cover the Models settings help affordances against a mocked Gateway.
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -43,7 +43,11 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const { wsEndpoint } = inject("controlUiE2eChromium");
+    if (!wsEndpoint) {
+      throw new Error("Control UI E2E requires its shared Chromium server");
+    }
+    browser = await chromium.connect(wsEndpoint);
   });
 
   afterAll(async () => {
@@ -85,7 +89,6 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           },
           "models.authStatus": { ts: NOW, providers: [] },
           "usage.status": { updatedAt: NOW, providers: [] },
-          "sessions.usage": { aggregates: { byProvider: [] } },
         },
       });
 
@@ -159,7 +162,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await helpButton.click();
         await expect.poll(tooltipIsOpen).toBe(true);
         await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
-        await expect.poll(() => tooltip.textContent()).toContain("primary model provider");
+        await expect
+          .poll(() => tooltip.textContent())
+          .toContain("provider’s recommended small model");
         if (recordVisuals) {
           const labelBox = await utilityLabel.boundingBox();
           const tooltipBox = await tooltipBody.boundingBox();
@@ -205,16 +210,15 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
 
         for (const help of [
           {
-            button: "About thinking defaults",
-            text: "other models map unsupported levels to their closest supported option",
-            defaultText:
-              "Uses the selected model's thinking policy instead of saving a global thinking override.",
+            button: "About effort defaults",
+            text: "other models use the closest supported level",
+            defaultText: "Default: use the model’s own effort setting.",
           },
           {
-            button: "About fast mode defaults",
-            text: "Auto starts fast and returns to standard after the model's configured interval",
+            button: "About speed defaults",
+            text: "Auto: fast, then standard.",
             defaultText:
-              "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+              "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.",
           },
         ]) {
           const behaviorRow = defaults

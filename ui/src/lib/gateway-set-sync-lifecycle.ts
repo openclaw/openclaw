@@ -58,9 +58,8 @@ export function createGatewaySetSyncLifecycle(
     get attached() {
       return attached;
     },
-    get retry() {
-      return retry;
-    },
+    resetRetry: retry.reset,
+    scheduleRetry: retry.schedule,
     sync,
     schedule,
     clearRequest,

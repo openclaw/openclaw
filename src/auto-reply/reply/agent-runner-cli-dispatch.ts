@@ -5,7 +5,6 @@ import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { cliAssistantItemId } from "../../agents/cli-runner/assistant-identity.js";
-import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
@@ -17,6 +16,7 @@ import {
   type FastModeAutoProgressState,
 } from "../../agents/fast-mode.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import { stripOpenClawMcpToolPrefix } from "../../agents/tool-display-call.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agents/tool-display.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
@@ -203,6 +203,8 @@ type RunCliAgentWithLifecycleParams = {
   runParams: RunCliAgentInternalParams;
   startedAt?: number;
   onAgentRunStart?: () => void;
+  /** Scheduled admission must precede lifecycle publication and native preparation. */
+  deferLifecycleStartUntilExecution?: true;
   suppressAssistantBridge?: boolean;
   /**
    * Stamped before every delivered CLI progress event (assistant, reasoning,
@@ -291,16 +293,26 @@ async function runCliAgentWithLifecycleInternal(
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  params.onAgentRunStart?.();
-  emitAgentEvent({
-    runId: params.runId,
-    ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-    ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-    ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    data: { phase: "start", startedAt },
-  });
+  let lifecycleStarted = false;
+  const startLifecycle = () => {
+    if (lifecycleStarted) {
+      return;
+    }
+    params.onAgentRunStart?.();
+    lifecycleStarted = true;
+    emitAgentEvent({
+      runId: params.runId,
+      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+      stream: "lifecycle",
+      data: { phase: "start", startedAt },
+    });
+  };
+  if (!params.deferLifecycleStartUntilExecution) {
+    startLifecycle();
+  }
   const progressStartOrder = createAgentEventDeliveryStartOrder({
     preserveCallbackStartOrder: params.preserveProgressCallbackStartOrder === true,
   });
@@ -459,6 +471,16 @@ async function runCliAgentWithLifecycleInternal(
     await params.runParams.awaitSessionDiffBaseline?.();
     const rawResult = await runCliAgent({
       ...params.runParams,
+      ...(params.deferLifecycleStartUntilExecution
+        ? {
+            onExecutionStarted: async () => {
+              await params.runParams.onExecutionStarted?.();
+              params.runParams.abortSignal?.throwIfAborted();
+              params.runParams.assertCurrent?.();
+              startLifecycle();
+            },
+          }
+        : {}),
       emitCommentaryText: params.runParams.emitCommentaryText ?? Boolean(params.onCommentaryText),
     });
     const restartAbortReason = params.runParams.abortSignal?.reason;

@@ -102,7 +102,6 @@ export function makeTerminalInput(input: TerminalInputOverrides = {}): TerminalI
       activateCompactionContinuation: vi.fn(),
       clearCompactionContinuation: vi.fn(),
     },
-    armPostCompactionGuard: vi.fn(),
     readTerminalToolPresentation: () => undefined,
     resolveReplayInvalid: () => false,
     setTerminalLifecycleMeta: vi.fn(),
@@ -153,6 +152,11 @@ export function makeTerminalInput(input: TerminalInputOverrides = {}): TerminalI
       ...base,
       ...overrides,
       ...overrides.prepared,
+      payloadsForVisibleCompletion:
+        overrides.prepared?.payloadsForVisibleCompletion ??
+        overrides.payloadsForVisibleCompletion ??
+        overrides.payloadsWithToolMedia ??
+        [],
       finalAssistantVisibleText:
         overrides.prepared?.finalAssistantVisibleText ?? overrides.finalAssistantVisibleText ?? "",
     },
@@ -170,4 +174,20 @@ export async function resolveTerminalText(overrides: TerminalInputOverrides) {
   const resolved = await resolveTerminal(overrides);
   expectComplete(resolved);
   return resolved.result.payloads?.[0]?.text;
+}
+
+export function compactionAssistantFixture(id: string) {
+  return buildEmbeddedRunnerAssistant({
+    stopReason: "length",
+    providerReplay: {
+      v: 1,
+      type: "openai-responses-compaction",
+      id,
+      data: "opaque-compaction",
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "base-url-hash",
+    },
+  });
 }

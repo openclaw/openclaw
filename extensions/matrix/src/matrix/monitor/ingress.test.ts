@@ -10,27 +10,35 @@ import { MatrixRecoveryKeyStore } from "../sdk/recovery-key-store.js";
 import { MatrixVerificationManager } from "../sdk/verification-manager.js";
 import { createMatrixIngressMonitor } from "./ingress.js";
 
+type IngressPayload = { version: 1; roomId: string; event: MatrixRawEvent };
+const roomId = "!room:example.org";
+const createClient = () => new MatrixClient("https://example.org", "synthetic-token");
+const encryptedEvent = (event_id: string, origin_server_ts: number) =>
+  ({
+    event_id,
+    origin_server_ts,
+    sender: "@alice:example.org",
+    type: "m.room.encrypted",
+    content: { algorithm: "m.megolm.v1.aes-sha2", ciphertext: "encrypted-fixture" },
+  }) satisfies MatrixRawEvent;
+
 describe("Matrix sync admission", () => {
   const storage = useSyncStoreFixture("openclaw-matrix-ingress-");
+  const createQueue = (now?: () => number) =>
+    createChannelIngressQueueForTests<IngressPayload>({
+      channelId: "matrix",
+      accountId: "default",
+      stateDir: storage.root,
+      ...(now ? { now } : {}),
+    });
 
   it("preserves raw replay and left-room events", async () => {
-    const queue = createChannelIngressQueueForTests<{
-      version: 1;
-      roomId: string;
-      event: MatrixRawEvent;
-    }>({ channelId: "matrix", accountId: "default", stateDir: storage.root });
-    const roomId = "!room:example.org";
-    const event = {
-      event_id: "$ciphertext",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      origin_server_ts: 1_000,
-      content: { algorithm: "m.megolm.v1.aes-sha2", ciphertext: "encrypted-fixture" },
-    } satisfies MatrixRawEvent;
+    const queue = createQueue();
+    const event = encryptedEvent("$ciphertext", 1_000);
     const sync = matrixSyncResponse("cursor", roomId, event, "previous");
     const monitor = createMatrixIngressMonitor({
       accountId: "default",
-      client: new MatrixClient("https://example.org", "synthetic-token"),
+      client: createClient(),
       startupMs: 2_000,
       queue,
       dispatch: async () => {
@@ -70,25 +78,13 @@ describe("Matrix sync admission", () => {
   it("retains failed decryption for a later successful retry and adopts only once", async () => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const queue = createChannelIngressQueueForTests<{
-      version: 1;
-      roomId: string;
-      event: MatrixRawEvent;
-    }>({ channelId: "matrix", accountId: "default", stateDir: storage.root });
-    const roomId = "!encrypted:example.org";
-    const event = {
-      event_id: "$retry-decryption",
-      sender: "@alice:example.org",
-      type: "m.room.encrypted",
-      origin_server_ts: now,
-      content: { algorithm: "m.megolm.v1.aes-sha2", ciphertext: "encrypted-fixture" },
-    } satisfies MatrixRawEvent;
-    const client = new MatrixClient("https://example.org", "synthetic-token");
+    const queue = createQueue();
+    const event = encryptedEvent("$retry-decryption", now);
+    const client = createClient();
     client.crypto = createMatrixCryptoFacade({
       client: { getCrypto: () => undefined, getUserId: () => null },
       verificationManager: new MatrixVerificationManager(),
       recoveryKeyStore: new MatrixRecoveryKeyStore(),
-      isRoomEncrypted: async () => true,
       downloadContent: async () => Buffer.alloc(0),
     });
     const failed = new MatrixEvent({
@@ -151,12 +147,7 @@ describe("Matrix sync admission", () => {
     async (headState) => {
       const now = Date.now();
       vi.spyOn(Date, "now").mockReturnValue(now);
-      const queue = createChannelIngressQueueForTests<{
-        version: 1;
-        roomId: string;
-        event: MatrixRawEvent;
-      }>({ channelId: "matrix", accountId: "default", stateDir: storage.root, now: () => now });
-      const roomId = "!ordered:example.org";
+      const queue = createQueue(() => now);
       const event = {
         event_id: "$z-first",
         origin_server_ts: now,
@@ -169,7 +160,7 @@ describe("Matrix sync admission", () => {
       const delivered: string[] = [];
       const params = {
         accountId: "default",
-        client: new MatrixClient("https://example.org", "synthetic-token"),
+        client: createClient(),
         startupMs: 0,
         queue,
         dispatch: async (

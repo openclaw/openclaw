@@ -13,8 +13,10 @@ import {
 import {
   assertMatrixQaCliBackupRestoreFailed,
   assertMatrixQaCliBackupRestoreSucceeded,
+  assertMatrixQaCliCorruptSnapshotRefused,
   createMatrixQaRecoveryCliRuntime,
   isMatrixQaDeletedDeviceStatus,
+  isMatrixQaRepairableBackupBootstrapError,
   isMatrixQaVerifyStatusHealthy,
   loginMatrixQaRecoveryDevice,
   requireMatrixQaGatewayConfigPath,
@@ -72,17 +74,14 @@ async function registerMatrixQaDestructiveOwner(
   });
 }
 
-async function ensureMatrixQaOwnerReady(params: {
-  client: MatrixQaE2eeScenarioClient;
-  label: string;
-}) {
-  let bootstrap = await params.client.bootstrapOwnDeviceVerification({
+async function ensureMatrixQaOwnerReady(client: MatrixQaE2eeScenarioClient) {
+  let bootstrap = await client.bootstrapOwnDeviceVerification({
     allowAutomaticCrossSigningReset: false,
   });
   if (!bootstrap.success && isMatrixQaRepairableBackupBootstrapError(bootstrap.error)) {
-    const reset = await params.client.resetRoomKeyBackup();
+    const reset = await client.resetRoomKeyBackup();
     if (reset.success) {
-      bootstrap = await params.client.bootstrapOwnDeviceVerification({
+      bootstrap = await client.bootstrapOwnDeviceVerification({
         allowAutomaticCrossSigningReset: false,
       });
     }
@@ -94,33 +93,21 @@ async function ensureMatrixQaOwnerReady(params: {
     !bootstrap.verification.backupVersion
   ) {
     throw new Error(
-      `${params.label} Matrix E2EE bootstrap did not leave identity trust and backup ready: ${
+      `destructive owner Matrix E2EE bootstrap did not leave identity trust and backup ready: ${
         bootstrap.error ?? "unknown error"
       }`,
     );
   }
-  const recoveryKey = await params.client.getRecoveryKey();
+  const recoveryKey = await client.getRecoveryKey();
   const encodedRecoveryKey = recoveryKey?.encodedPrivateKey?.trim();
   if (!encodedRecoveryKey) {
-    throw new Error(`${params.label} Matrix E2EE bootstrap did not expose a recovery key`);
+    throw new Error("destructive owner Matrix E2EE bootstrap did not expose a recovery key");
   }
   return {
     backupVersion: bootstrap.verification.backupVersion,
     encodedRecoveryKey,
     recoveryKeyId: recoveryKey?.keyId ?? null,
   };
-}
-
-function isMatrixQaRepairableBackupBootstrapError(error: string | undefined) {
-  const normalized = error?.toLowerCase() ?? "";
-  return (
-    normalized.includes("room key backup is not usable") ||
-    normalized.includes("room key backup is missing") ||
-    normalized.includes("no current key backup") ||
-    normalized.includes("m.megolm_backup.v1") ||
-    normalized.includes("backup decryption key could not be loaded") ||
-    normalized.includes("bad mac")
-  );
 }
 
 async function prepareMatrixQaDestructiveSetup(
@@ -150,7 +137,7 @@ async function prepareMatrixQaDestructiveSetup(
     userId: account.userId,
   });
   try {
-    const ready = await ensureMatrixQaOwnerReady({ client: owner, label: "destructive owner" });
+    const ready = await ensureMatrixQaOwnerReady(owner);
     const seededEventId = await owner.sendTextMessage({
       body: `E2EE destructive restore seed ${randomUUID().slice(0, 8)}`,
       roomId,
@@ -346,9 +333,8 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       });
       const initial = await restore("initial-restore-stores-key", setup.encodedRecoveryKey);
       assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "initial stored-key");
-      const mutation = await mutateMatrixQaCliStateLoss({
+      const accountRoot = await mutateMatrixQaCliStateLoss({
         deviceId: device.deviceId,
-        preserveRecoveryKey: true,
         runtime: cli,
         userId: device.userId,
       });
@@ -363,7 +349,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       return {
         details: [
           "Matrix crypto/runtime state was deleted while recovery-key.json survived",
-          `account root: ${mutation.accountRoot}`,
+          `account root: ${accountRoot}`,
           `restore imported/total: ${restored.payload.imported ?? 0}/${restored.payload.total ?? 0}`,
           "restore command supplied recovery key: no",
           `recovery key stored after restore: ${status.payload.recoveryKeyStored ? "yes" : "no"}`,
@@ -586,18 +572,20 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
       });
       const initial = await restore("initial-restore-before-corruption", setup.encodedRecoveryKey);
       assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "corrupt-idb initial restore");
-      const corruptedPath = await corruptMatrixQaCliIdbSnapshot({
+      const corrupted = await corruptMatrixQaCliIdbSnapshot({
         deviceId: device.deviceId,
         runtime: cli,
         userId: device.userId,
       });
-      const repaired = await restore("restore-after-idb-corruption", setup.encodedRecoveryKey);
-      assertMatrixQaCliBackupRestoreSucceeded(repaired.payload, "corrupt-idb recovery");
+      const refused = await restore("restore-after-idb-corruption", setup.encodedRecoveryKey, {
+        allowNonZero: true,
+      });
+      assertMatrixQaCliCorruptSnapshotRefused(refused, corrupted);
       return {
         details: [
-          "corrupted Matrix IDB snapshot state was repaired by explicit backup restore",
-          `corrupted state: ${corruptedPath}`,
-          `restore imported/total: ${repaired.payload.imported ?? 0}/${repaired.payload.total ?? 0}`,
+          "corrupted Matrix IDB snapshot failed closed and was preserved for inspection",
+          `corrupted state: ${corrupted.path}`,
+          `restore error: ${refused.payload.error}`,
         ].join("\n"),
       };
     },
@@ -809,9 +797,6 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
         waitAccountId: accountId,
       },
     );
-    await context.waitGatewayAccountReady(accountId, {
-      timeoutMs: context.timeoutMs,
-    });
     driver = await createMatrixQaE2eeActorClient(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",

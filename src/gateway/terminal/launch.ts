@@ -221,16 +221,12 @@ export function buildTerminalEnv(
 }
 
 /** Converts a policy-approved plan into the exact local PTY spawn. */
-export function resolveTerminalSpawnPlan(
-  plan: TerminalLaunchPlan,
-  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
-): TerminalSpawnPlan {
-  const env = options.env ?? process.env;
-  const cwd = existingDirOrHome(plan.cwdOverride ?? plan.cwd, env);
+export function resolveTerminalSpawnPlan(plan: TerminalLaunchPlan): TerminalSpawnPlan {
+  const cwd = existingDirOrHome(plan.cwdOverride ?? plan.cwd, process.env);
   const command = plan.initialCommand;
   let { shell, args } = plan;
   if (command?.length) {
-    if ((options.platform ?? process.platform) === "win32") {
+    if (process.platform === "win32") {
       shell = command[0] ?? shell;
       args = command.slice(1);
     } else {

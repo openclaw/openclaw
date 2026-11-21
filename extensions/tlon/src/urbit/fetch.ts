@@ -2,7 +2,7 @@ import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-ru
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
-type UrbitFetchOptions = {
+export async function urbitFetch(params: {
   baseUrl: string;
   path: string;
   init?: RequestInit;
@@ -12,9 +12,7 @@ type UrbitFetchOptions = {
   maxRedirects?: number;
   signal?: AbortSignal;
   auditContext?: string;
-};
-
-export async function urbitFetch(params: UrbitFetchOptions) {
+}) {
   const validated = validateUrbitBaseUrl(params.baseUrl);
   if (!validated.ok) {
     throw new UrbitUrlError(validated.error);

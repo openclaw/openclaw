@@ -10,7 +10,6 @@ import { chatCommentLineEnd, resolveChatCommentAnchor } from "./chat-comment-anc
 import { currentChatComments } from "./chat-comment-controller.ts";
 import { dispatchChatCommentAction } from "./chat-selection-annotations.tsx";
 import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
-import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
 

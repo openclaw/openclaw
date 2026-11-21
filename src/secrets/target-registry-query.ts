@@ -61,7 +61,6 @@ function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[])
   );
   return {
     authProfilesCompiledSecretTargets,
-    authProfilesTargetsById: indexSecretTargets(authProfilesCompiledSecretTargets, "id"),
     compiledSecretTargetRegistry,
     knownTargetIds: new Set(compiledSecretTargetRegistry.map((entry) => entry.id)),
     openClawCompiledSecretTargets,
@@ -533,18 +532,11 @@ export function discoverConfigSecretTargetsByIds(
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
-export function discoverAuthProfileSecretTargets(
-  store: unknown,
-  targetIds?: Iterable<string>,
-): DiscoveredConfigSecretTarget[] {
-  const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
-  const registryState = getCompiledCoreSecretTargetRegistryState();
-  const discoveryEntries = resolveDiscoveryEntries({
-    allowedTargetIds,
-    defaultEntries: registryState.authProfilesCompiledSecretTargets,
-    entriesById: registryState.authProfilesTargetsById,
-  });
-  return discoverSecretTargetsFromEntries(store, discoveryEntries);
+export function discoverAuthProfileSecretTargets(store: unknown): DiscoveredConfigSecretTarget[] {
+  return discoverSecretTargetsFromEntries(
+    store,
+    getCompiledCoreSecretTargetRegistryState().authProfilesCompiledSecretTargets,
+  );
 }
 
 export type { DiscoveredConfigSecretTarget, ResolvedPlanTarget } from "./target-registry-types.js";

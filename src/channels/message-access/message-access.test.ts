@@ -69,6 +69,31 @@ const policy: ChannelIngressPolicyInput = {
   groupPolicy: "allowlist",
 };
 
+it.each(["inbound", "origin-subject"] as const)(
+  "preserves static authentication for legacy %s adapters without matched pairs",
+  async (authMode) => {
+    const state = await resolveState({
+      adapter: lowerCaseAdapter,
+      subject: subject("SENDER"),
+      allowlists: { dm: ["sender"] },
+      event: {
+        kind: "message",
+        authMode,
+        mayPair: false,
+        originSubject: subject("sender"),
+      },
+    });
+    const allowlistPolicy = { ...policy, dmPolicy: "allowlist" as const };
+    expect(decideChannelIngress(state, allowlistPolicy).admission).toBe("dispatch");
+    expect(
+      decideChannelIngress(state, {
+        ...allowlistPolicy,
+        minIdentifierAuthentication: "verified",
+      }).admission,
+    ).toBe("drop");
+  },
+);
+
 it.each([
   {
     name: "keeps pairing-store entries DM-policy scoped",

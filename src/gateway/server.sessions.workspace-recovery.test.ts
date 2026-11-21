@@ -1,5 +1,4 @@
-import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -31,20 +30,20 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
 });
 
-type RecoveryScenario =
-  | "offline runner"
-  | "accepted result on offline runner"
-  | "available runner"
-  | "unknown runner"
-  | "stale pending generation"
-  | "stale pending environment"
-  | "stale pending epoch";
-
-async function seedPendingWorkspace(scenario: RecoveryScenario) {
-  const { dir } = await createSessionStoreDir();
+test.each([
+  ["sessions.delete", "offline runner"],
+  ["sessions.patch", "offline runner"],
+  ["sessions.patch", "accepted result on offline runner"],
+  ["sessions.delete", "available runner"],
+  ["sessions.delete", "unknown runner"],
+  ["sessions.delete", "stale pending generation"],
+  ["sessions.delete", "stale pending environment"],
+  ["sessions.delete", "stale pending epoch"],
+] as const)("%s: %s", async (method, scenario) => {
+  await createSessionStoreDir();
   const { sessionId, sessionKey, agentId } = REQUEST;
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
+  const database = openOpenClawStateDatabase();
   const placements = createWorkerSessionPlacementStore({ database });
   const { attached } = createDispatchEnvironmentFixtures();
   const environment = {
@@ -113,84 +112,41 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     | "workerPlacementRunnerAvailabilityReader"
     | "workerPlacementDispatchService"
   >;
-  const before = {
+  const readState = async () => ({
     entry: (await loadSessionEntryAsync(sessionKey)).entry,
     placement: placements.get(sessionId),
     pending: await placements.listPendingWorkspaceResultsAsync(),
-  };
+  });
+  const before = await readState();
   expect(before.entry?.sessionId).toBe(sessionId);
   expect(before.pending).toHaveLength(1);
-  return {
-    context,
-    source: {
-      generation: claim.placementGeneration,
-      environmentId: environment.environmentId,
-      ownerEpoch: environment.ownerEpoch,
+  const result = await directSessionReq(
+    method,
+    {
+      key: sessionKey,
+      expectedSessionId: sessionId,
+      ...(method === "sessions.patch" ? { archived: true } : {}),
     },
-    reclaim,
-    waitForTurnClaimRelease,
-    async expectPreserved() {
-      expect((await loadSessionEntryAsync(sessionKey)).entry).toEqual(before.entry);
-      expect(placements.get(sessionId)).toEqual(before.placement);
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(before.pending);
-    },
-  };
-}
-
-describe.each([
-  { action: "Delete", method: "sessions.delete", patch: {} },
-  { action: "Archive", method: "sessions.patch", patch: { archived: true } },
-] as const)("$action pending workspace results", ({ method, patch }) => {
-  test("offers recovery for an offline device without discarding its result", async () => {
-    const fixture = await seedPendingWorkspace("offline runner");
-    const result = await directSessionReq(
-      method,
-      { key: REQUEST.sessionKey, expectedSessionId: REQUEST.sessionId, ...patch },
-      { context: fixture.context },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        retryable: false,
-        details: {
-          code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
-          cause: "device_offline",
-          recoveryAction: "continue_on_gateway",
-          sessionId: REQUEST.sessionId,
-          source: fixture.source,
-        },
+    { context },
+  );
+  const recovery = scenario === "offline runner";
+  expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: !recovery } });
+  if (recovery) {
+    expect(result.error?.details).toMatchObject({
+      code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+      cause: "device_offline",
+      recoveryAction: "continue_on_gateway",
+      sessionId,
+      source: {
+        generation: claim.placementGeneration,
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
       },
     });
-    expect(fixture.waitForTurnClaimRelease).not.toHaveBeenCalled();
-    expect(fixture.reclaim).not.toHaveBeenCalled();
-    await fixture.expectPreserved();
-  });
-
-  // Both RPCs use the same drain owner; cover each ordinary-drain branch once.
-  const scenarios: RecoveryScenario[] =
-    method === "sessions.patch"
-      ? ["accepted result on offline runner"]
-      : [
-          "available runner",
-          "unknown runner",
-          "stale pending generation",
-          "stale pending environment",
-          "stale pending epoch",
-        ];
-  test.each(scenarios)("keeps the ordinary drain for %s", async (scenario) => {
-    const fixture = await seedPendingWorkspace(scenario);
-    const result = await directSessionReq(
-      method,
-      { key: REQUEST.sessionKey, expectedSessionId: REQUEST.sessionId, ...patch },
-      { context: fixture.context },
-    );
-
-    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: true } });
+  } else {
     expect(result.error?.details).toBeUndefined();
-    expect(fixture.waitForTurnClaimRelease).toHaveBeenCalledOnce();
-    expect(fixture.reclaim).not.toHaveBeenCalled();
-    await fixture.expectPreserved();
-  });
+  }
+  expect(waitForTurnClaimRelease).toHaveBeenCalledTimes(recovery ? 0 : 1);
+  expect(reclaim).not.toHaveBeenCalled();
+  expect(await readState()).toEqual(before);
 });

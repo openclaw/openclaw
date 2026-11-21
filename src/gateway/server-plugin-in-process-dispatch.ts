@@ -1,11 +1,14 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
-import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import { isGatewayWorkerApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
@@ -37,6 +40,7 @@ import type {
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
 import { mergePluginRuntimeClientInternal } from "./server-plugin-runtime-client.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { cancelSubagentCompletionToolHandoff } from "./subagent-completion-tool-handoff.js";
 
 export {
@@ -45,6 +49,7 @@ export {
   runWithOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-authority.js";
+export { captureOperatorToolGatewayRequestContinuationContext } from "./server-plugin-in-process-request-continuation.js";
 
 /** Authorizes a sessionless agent execution against its captured Gateway and caller. */
 export async function prepareInProcessAgentExecution(input: PrepareInProcessAgentExecutionOptions) {
@@ -141,15 +146,18 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   };
 }
 
-async function withInProcessGatewayDispatch<T>(
+export async function withInProcessGatewayDispatch<T>(
   method: string,
   params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,
   run: (resolved: ResolvedInProcessGatewayDispatch) => Promise<T>,
 ): Promise<T> {
-  const resolved = resolveInProcessGatewayDispatch(method, params, options);
   let releaseOperatorAuthority: (() => void) | undefined;
+  let delegatedToolPolicyHandoffId: ResolvedInProcessGatewayDispatch["delegatedToolPolicyHandoffId"];
+  let preparationComplete = false;
   try {
+    const resolved = resolveInProcessGatewayDispatch(method, params, options);
+    delegatedToolPolicyHandoffId = resolved.delegatedToolPolicyHandoffId;
     const captured = await captureGatewayOperatorRunAuthority({
       client: resolved.operatorSourceClient,
       context: resolved.context,
@@ -174,16 +182,27 @@ async function withInProcessGatewayDispatch<T>(
         );
       }
     }
+    // Only preparation refusals prove method work was never entered. Errors
+    // from the callback may follow effects and must retain their original form.
+    preparationComplete = true;
     // Autonomous turns establish their own transcript writer and must not retain
     // the caller's tool authority after that invocation closes.
     return method === "agent"
       ? await runWithoutOwnedSessionTranscriptWrites(() =>
-          runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+          runOutsideOperatorToolGatewayAuthority(() =>
+            withoutGatewayToolCallerIdentity(() => run(resolved)),
+          ),
         )
       : await run(resolved);
+  } catch (error) {
+    if (!preparationComplete && error instanceof SessionMutationAuthorizationChangedError) {
+      // Match the ordinary router's structured refusal before handler entry.
+      unwrapGatewayMethodDispatchResponse(method, { ok: false, error: error.error });
+    }
+    throw error;
   } finally {
     releaseOperatorAuthority?.();
-    cancelSubagentCompletionToolHandoff(resolved.delegatedToolPolicyHandoffId);
+    cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
   }
 }
 
@@ -263,8 +282,15 @@ export function withInProcessGatewayRead<T>(
 
 /** Local session input retains its operation's authorization and commit fences. */
 export async function runWithInProcessGatewaySessionMutation<T>(
-  params: { sessionKey: string; agentId?: string },
-  run: (assertCurrent: () => void) => Promise<T> | T,
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    resolveGatewayContext?: DispatchGatewayMethodInProcessOptions["resolveGatewayContext"];
+  },
+  run: (
+    assertCurrent: () => void,
+    context: ResolvedInProcessGatewayDispatch["context"],
+  ) => Promise<T> | T,
 ): Promise<T> {
   const method = "sessions.send";
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
@@ -272,7 +298,13 @@ export async function runWithInProcessGatewaySessionMutation<T>(
   return await withInProcessGatewayDispatch(
     method,
     requestParams,
-    { forceSyntheticClient: true, syntheticScopeMode: "minimum" },
+    {
+      forceSyntheticClient: true,
+      syntheticScopeMode: "minimum",
+      ...(params.resolveGatewayContext
+        ? { resolveGatewayContext: params.resolveGatewayContext }
+        : {}),
+    },
     async (resolved) => {
       const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
         await Promise.all([
@@ -312,7 +344,7 @@ export async function runWithInProcessGatewaySessionMutation<T>(
           authorization.sessionAccessAuthority?.assertCurrent();
         };
         assertCurrent();
-        return await run(assertCurrent);
+        return await run(assertCurrent, resolved.context);
       } finally {
         authorization.sessionMutationAuthorization?.release?.();
         authorization.sessionAccessAuthority?.release();
@@ -413,7 +445,7 @@ export async function dispatchGatewayMethodInProcess<T>(
       // create turns against its published runtime; a local import creates a second owner.
       const facade = await createAgentTurnFacade({
         assertContextCurrent:
-          method === "agent" ? resolved.assertSourceCurrent : resolved.assertContextCurrent,
+          method === "agent" ? resolved.assertGatewayCurrent : resolved.assertContextCurrent,
         client: resolved.client,
         isWebchatConnect: resolved.isWebchatConnect,
       });
@@ -422,12 +454,15 @@ export async function dispatchGatewayMethodInProcess<T>(
             controllerInput: options?.controllerInput,
             prepareDispatchCurrent: options?.prepareDispatchCurrent,
             assertAdmissionCurrent: composeSessionSourceAssertion([
+              // The caller authorizes admission; accepted execution retains its own authority.
+              resolved.assertSourceCurrent,
               resolved.assertInvocationCurrent,
               captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
             ]),
             privateCompletion: options?.privateCompletion,
             replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,
+            subagentCompletions: options?.subagentCompletions,
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,

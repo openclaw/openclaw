@@ -34,7 +34,10 @@ function writeToolPlugin(params: {
   failure?: "import" | "registration";
   workspaceAccess?: boolean | "execute";
   factoryReadsWorkspace?: boolean;
+  webSearchProviderId?: string;
 }): string {
+  const toolName = `${params.id}_tool`;
+  const { webSearchProviderId } = params;
   fs.mkdirSync(params.root, { recursive: true });
   const writeJson = (name: string, value: unknown) =>
     fs.writeFileSync(path.join(params.root, name), JSON.stringify(value));
@@ -46,8 +49,8 @@ function writeToolPlugin(params: {
   writeJson("openclaw.plugin.json", {
     id: params.id,
     contracts: {
-      tools: [`${params.id}_tool`],
-      ...(params.id === "shared" ? { webSearchProviders: ["inspection-search"] } : {}),
+      tools: [toolName],
+      ...(webSearchProviderId ? { webSearchProviders: [webSearchProviderId.trim()] } : {}),
     },
     configSchema: { type: "object", additionalProperties: false },
   });
@@ -61,9 +64,9 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   event("register", { mode: api.registrationMode });
   api.lifecycle.onDispose(() => event("dispose"));
   if (${params.failure === "registration"}) throw new Error("fixture admission failed");
-  if (${params.id === "shared"}) {
+  if (${webSearchProviderId !== undefined}) {
     api.registerWebSearchProvider({
-      id: "inspection-search", label: "Inspection search", hint: "Synthetic search",
+      id: ${JSON.stringify(webSearchProviderId)}, label: "Inspection search", hint: "Synthetic search",
       envVars: [], placeholder: "", signupUrl: "https://example.com", credentialPath: "",
       getCredentialValue() {}, setCredentialValue() {},
       createTool() { throw new Error("Inspection must not execute search providers"); }
@@ -74,11 +77,11 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
     event("factory", details);
     if (${params.factoryReadsWorkspace === true}) details.contents = fs.readFileSync(context.workspaceDir + "/input.txt", "utf8");
     return {
-      name: ${JSON.stringify(`${params.id}_tool`)}, label: "Inspection fixture", description: "Synthetic inspection fixture",
+      name: ${JSON.stringify(toolName)}, label: "Inspection fixture", description: "Synthetic inspection fixture",
       parameters: { type: "object", properties: {} },
       execute: async () => { event("execute"); return { content: [{ type: "text", text: JSON.stringify(details) }], details }; },
     };
-  }, { name: ${JSON.stringify(`${params.id}_tool`)}, ...${JSON.stringify(params.workspaceAccess === undefined ? {} : { workspaceAccess: params.workspaceAccess })} });
+  }, { name: ${JSON.stringify(toolName)}, ...${JSON.stringify(params.workspaceAccess === undefined ? {} : { workspaceAccess: params.workspaceAccess })} });
 } };
 `,
   );
@@ -101,17 +104,27 @@ function readEvents(file: string, kind?: string): ToolEvent[] {
 
 async function withInspectionState(run: (state: OpenClawTestState) => Promise<void>) {
   await withOpenClawTestState({ env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } }, async (state) => {
-    const cache = createPluginCache();
-    try {
-      await withPluginCache(cache, () => run(state));
-    } finally {
-      await cache[Symbol.asyncDispose]();
-    }
+    await using cache = createPluginCache();
+    await withPluginCache(cache, () => run(state));
   });
 }
 
 function pluginConfig(paths: string[], allow: string[]): OpenClawConfig["plugins"] {
   return { allow, load: { paths }, slots: { memory: "none" } };
+}
+
+function toolScope(
+  config: OpenClawConfig,
+  workspaceDir: string,
+  toolAllowlist: string[],
+  agentId?: string,
+) {
+  return { context: { config, workspaceDir, agentId }, toolAllowlist };
+}
+
+async function inspectionLease(params: Parameters<typeof acquirePluginToolInspectionRegistry>[0]) {
+  const inspection = await acquirePluginToolInspectionRegistry(params);
+  return { ...inspection, [Symbol.asyncDispose]: () => inspection.release() };
 }
 
 it.each(
@@ -151,14 +164,10 @@ it.each(
         ready.resolve();
       };
       const sessionKey = "agent:main:readiness";
-      const scope = {
-        context: { config, agentId: "main", workspaceDir: state.workspaceDir },
-        toolAllowlist: ["project_tool"],
-      };
       const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
-      const inspection = await acquirePluginToolInspectionRegistry({
+      await using inspection = await inspectionLease({
         loadContext,
-        scopes: [scope],
+        scopes: [toolScope(config, state.workspaceDir, ["project_tool"], "main")],
       });
       let host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>> | undefined;
       try {
@@ -228,7 +237,6 @@ it.each(
         ready.resolve();
         host?.closeHost();
         host?.closeAdmission();
-        await inspection.release();
       }
     });
   },
@@ -268,96 +276,60 @@ it("registers the selected fleet once, preserves agent factories, and settles fa
       toolAllowlist: ["shared_tool", "broken_tool", ...(agentId === "beta" ? ["worker_tool"] : [])],
     }));
     const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
-    const inspection = await acquirePluginToolInspectionRegistry({ loadContext, scopes });
-    try {
-      expect(inspection.registry?.diagnostics).toContainEqual(
-        expect.objectContaining({
-          pluginId: "broken",
-          level: "error",
-          message: expect.stringContaining("fixture admission failed"),
+    await using inspection = await inspectionLease({ loadContext, scopes });
+    expect(inspection.registry?.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "broken",
+        level: "error",
+        message: expect.stringContaining("fixture admission failed"),
+      }),
+    );
+    const resolve = (scope: (typeof scopes)[number]) =>
+      withPluginRuntimeRegistryScope(inspection.registry, () =>
+        resolveOpenClawPluginToolsForOptions({
+          options: {
+            config,
+            requesterAgentIdOverride: scope.context.agentId,
+            agentDir: scope.context.agentDir,
+            workspaceDir: scope.context.workspaceDir,
+            pluginToolAllowlist: scope.toolAllowlist,
+          },
+          resolvedConfig: config,
         }),
       );
-      const resolve = (scope: (typeof scopes)[number]) =>
-        withPluginRuntimeRegistryScope(inspection.registry, () =>
-          resolveOpenClawPluginToolsForOptions({
-            options: {
-              config,
-              requesterAgentIdOverride: scope.context.agentId,
-              agentDir: scope.context.agentDir,
-              workspaceDir: scope.context.workspaceDir,
-              pluginToolAllowlist: scope.toolAllowlist,
-            },
-            resolvedConfig: config,
-          }),
-        );
-      const alphaTools = resolve(scopes[0]!);
-      const betaTools = resolve(scopes[1]!);
-      const registry = inspection.registry;
-      assert(registry, "Expected the selected inspection registry");
-      const resolveProviders = () =>
-        resolveRuntimeWebSearchProviders({
-          config,
-          onlyPluginIds: ["shared"],
-          manifestRecords: loadContext.manifestRegistry?.plugins,
-        });
-      const resolveSearch = (generation: boolean) =>
-        withPluginRuntimeRegistryScope(inspection.registry, () =>
-          generation
-            ? withPluginRuntimeGenerationRegistryScope(registry, resolveProviders)
-            : resolveProviders(),
-        );
-      for (const generation of [false, true]) {
-        expect(resolveSearch(generation).map((provider) => provider.id)).toEqual([
-          "inspection-search",
-        ]);
-      }
-      expect(alphaTools.map((tool) => tool.name)).toEqual(["shared_tool"]);
-      expect(betaTools.map((tool) => tool.name).toSorted()).toEqual(["shared_tool", "worker_tool"]);
-      for (const [scope, tools] of [
-        [scopes[0]!, alphaTools],
-        [scopes[1]!, betaTools],
-      ] as const) {
-        const shared = tools.find((tool) => tool.name === "shared_tool")!;
-        expect((await shared.execute("inspection", {})).details).toEqual({
+    const alphaTools = resolve(scopes[0]!);
+    const betaTools = resolve(scopes[1]!);
+    expect(alphaTools.map((tool) => tool.name)).toEqual(["shared_tool"]);
+    expect(betaTools.map((tool) => tool.name).toSorted()).toEqual(["shared_tool", "worker_tool"]);
+    for (const [scope, tools] of [
+      [scopes[0]!, alphaTools],
+      [scopes[1]!, betaTools],
+    ] as const) {
+      for (const tool of tools) {
+        expect((await tool.execute("inspection", {})).details).toEqual({
           agentId: scope.context.agentId,
           workspaceDir: scope.context.workspaceDir,
         });
       }
-      expect(
-        readEvents(events, "register").toSorted((a, b) => a.plugin.localeCompare(b.plugin)),
-      ).toEqual(
-        ["broken", "shared", "worker"].map((plugin) => ({
-          plugin,
-          kind: "register",
-          mode: "tool-discovery",
-        })),
-      );
-      expect(readEvents(events).some((event) => event.plugin === "excluded")).toBe(false);
-      const factoryEvent = (plugin: string, agentId: string) => ({
-        plugin,
-        kind: "factory",
-        agentId,
-        workspaceDir: state.path(agentId),
-      });
-      expect(readEvents(events, "factory")).toEqual([
-        factoryEvent("shared", "alpha"),
-        factoryEvent("shared", "beta"),
-        factoryEvent("worker", "beta"),
-      ]);
-      await inspection.release();
-      await inspection.release();
-      expect(
-        readEvents(events, "dispose")
-          .map((event) => event.plugin)
-          .toSorted(),
-      ).toEqual(["broken", "shared", "worker"]);
-      expect(() => resolve(scopes[0]!)).toThrow("Plugin tool inspection has been released");
-      for (const generation of [false, true]) {
-        expect(() => resolveSearch(generation)).toThrow("Plugin tool inspection has been released");
-      }
-    } finally {
-      await inspection.release();
     }
+    expect(
+      readEvents(events, "register").toSorted((a, b) => a.plugin.localeCompare(b.plugin)),
+    ).toEqual(
+      ["broken", "shared", "worker"].map((plugin) => ({
+        plugin,
+        kind: "register",
+        mode: "tool-discovery",
+      })),
+    );
+    expect(readEvents(events).some((event) => event.plugin === "excluded")).toBe(false);
+    await inspection.release();
+    await inspection.release();
+    expect(
+      readEvents(events, "dispose")
+        .map((event) => event.plugin)
+        .toSorted(),
+    ).toEqual(["broken", "shared", "worker"]);
+    expect(() => resolve(scopes[0]!)).toThrow("Plugin tool inspection has been released");
   });
 });
 
@@ -382,3 +354,61 @@ it("refuses a selected workspace source outside the prepared inspection inventor
     expect(readEvents(events)).toEqual([]);
   });
 });
+
+it.each(["a-first", "z-second"])(
+  "deduplicates identical provider ids across inspected and supplemental owners (%s inspected)",
+  async (selected) => {
+    await withInspectionState(async (state) => {
+      const events = state.path("duplicate-provider-events.jsonl");
+      const ids = ["a-first", "z-second"];
+      const providerId = " inspection-search ";
+      const paths = ids.map((id) =>
+        writeToolPlugin({
+          root: state.path("plugins", id),
+          id,
+          events,
+          webSearchProviderId: providerId,
+        }),
+      );
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        plugins: pluginConfig(paths, ids),
+      };
+      const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
+      expect(loadContext.manifestRegistry?.plugins.map((record) => record.id)).toEqual(ids);
+      await using inspection = await inspectionLease({
+        loadContext,
+        scopes: [toolScope(config, state.workspaceDir, [`${selected}_tool`], "main")],
+      });
+      const registry = inspection.registry;
+      assert(registry, "Expected the selected inspection registry");
+      expect(registry.webSearchProviders.map(({ provider }) => provider.id)).toEqual([providerId]);
+      const resolveProviders = () =>
+        resolveRuntimeWebSearchProviders({
+          config,
+          onlyPluginIds: ids,
+          manifestRecords: loadContext.manifestRegistry?.plugins,
+        });
+      const resolve = (generation: boolean) =>
+        withPluginRuntimeRegistryScope(registry, () =>
+          generation
+            ? withPluginRuntimeGenerationRegistryScope(registry, resolveProviders)
+            : resolveProviders(),
+        );
+      for (const generation of [false, true]) {
+        expect(resolve(generation).map(({ pluginId, id }) => ({ pluginId, id }))).toEqual([
+          { pluginId: "a-first", id: providerId },
+        ]);
+      }
+      expect(
+        readEvents(events, "register")
+          .map(({ plugin }) => plugin)
+          .toSorted(),
+      ).toEqual(ids);
+      await inspection.release();
+      for (const generation of [false, true]) {
+        expect(() => resolve(generation)).toThrow("Plugin tool inspection has been released");
+      }
+    });
+  },
+);

@@ -4,9 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 export type MemoryShadowConnection = {
   fileIdentity: { device: string; inode: string };
   extensionPath?: string;
-  // The opener owns connection policy; publication only restores temporary transaction settings.
+  // Schema admission temporarily disables foreign keys and restores the opener's policy.
   pragmas: {
-    busy_timeout: number;
     foreign_keys: number;
   };
 };
@@ -37,16 +36,9 @@ export function assertMemoryShadowIdentity(
 }
 
 export function readMemoryConnectionPragmas(db: DatabaseSync, errorMessage: string) {
-  const read = (name: keyof MemoryShadowConnection["pragmas"]): number => {
-    const row = db.prepare(`PRAGMA ${name}`).get();
-    const value = row?.[name] ?? row?.timeout;
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-      throw new Error(errorMessage);
-    }
-    return value;
-  };
-  return {
-    busy_timeout: read("busy_timeout"),
-    foreign_keys: read("foreign_keys"),
-  };
+  const value = db.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(errorMessage);
+  }
+  return { foreign_keys: value };
 }

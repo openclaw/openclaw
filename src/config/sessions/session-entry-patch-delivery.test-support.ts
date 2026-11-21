@@ -16,46 +16,26 @@ const delivery = vi.hoisted(() => ({
 }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
-  const withDelivery = (
-    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
-  ): typeof owner => {
-    return {
-      ...owner,
-      get fileIdentity() {
-        return owner.fileIdentity;
-      },
-      runExisting: (source, operation, options) =>
-        owner.runExisting(
-          source,
-          (worker) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                delivery.commands.push(command.type);
-                if (command.type === "session.entry.patch.commit") {
-                  delivery.beforeCommit?.();
-                }
-                const result = await worker.execute(command, commandOptions);
-                if (command.type === "session.entry.patch.prepare") {
-                  delivery.afterPrepare?.();
-                }
-                if (command.type === "session.entry.patch.commit") {
-                  delivery.afterCommit?.();
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-    };
-  };
+  const { decorateSessionExecutionCaptures } =
+    await import("./session-execution-delivery.test-support.js");
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
-    captureOpenClawAgentDatabasePreparationExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
+    ...decorateSessionExecutionCaptures(actual, (worker) => ({
+      execute: async (command, commandOptions) => {
+        delivery.commands.push(command.type);
+        if (command.type === "session.entry.patch.commit") {
+          delivery.beforeCommit?.();
+        }
+        const result = await worker.execute(command, commandOptions);
+        if (command.type === "session.entry.patch.prepare") {
+          delivery.afterPrepare?.();
+        }
+        if (command.type === "session.entry.patch.commit") {
+          delivery.afterCommit?.();
+        }
+        return result;
+      },
+    })),
   };
 });
 

@@ -5,27 +5,25 @@ export type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
   permissionRequired: boolean;
   selectedDeviceId: string;
-  loading: boolean;
-  error: string | null;
+  discovery: Promise<string | null> | null;
+  selection: Promise<void> | null;
 };
 
 export type ConfigFormMode = "form" | "raw";
 
 export type ConfigDiffPath = string[];
 export type ConfigDiffEntry = { path: ConfigDiffPath; from: unknown; to: unknown };
-type RawDiffCache = {
-  original: string;
-  current: string;
-  diff: ConfigDiffEntry[];
-};
-
 export type ConfigViewState = {
   rawRevealed: boolean;
   rawDiffOpen: boolean;
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
-  rawDiffCache?: RawDiffCache;
+  rawDiffCache?: {
+    original: string;
+    current: string;
+    diff: ConfigDiffEntry[];
+  };
   lastConfigContextKey: string | null;
   lastFormModeForScroll: ConfigFormMode | null;
 };
@@ -33,12 +31,14 @@ export type ConfigViewState = {
 export function createMediaDeviceState(): Omit<SettingsMediaDeviceState, "selectedDeviceId"> & {
   loaded: boolean;
   requestsPermission: boolean;
+  activeDiscovery: Promise<string | null> | null;
 } {
   return {
     devices: [],
     permissionRequired: true,
-    loading: false,
-    error: null,
+    discovery: null,
+    activeDiscovery: null,
+    selection: null,
     loaded: false,
     requestsPermission: false,
   };

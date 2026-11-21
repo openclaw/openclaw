@@ -1,6 +1,8 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { retryAfterPluginReplacement } from "../../../plugins/plugin-replacement-retry.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
@@ -34,6 +36,9 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
+
+type ContextCleanupPhase = "registry" | "resolve" | "authority" | "notify" | "dispose";
 
 export function createSubagentRegistryContextCleanup(config: {
   isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
@@ -41,30 +46,51 @@ export function createSubagentRegistryContextCleanup(config: {
   const endedHookInFlightOwners = new Set<object>();
   const endedHookEmittedOwners = new WeakSet<object>();
 
-  async function runContextEngineSubagentEnded(
+  /** Delivers once, again after a plugin reload that refused it, from the current registry. */
+  function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+    onPhase?: (phase: ContextCleanupPhase) => void,
   ): Promise<void> {
+    return retryAfterPluginReplacement(() =>
+      deliverContextEngineSubagentEnded(params, options, onPhase),
+    );
+  }
+
+  async function deliverContextEngineSubagentEnded(
+    params: ContextEngineSubagentEndedParams,
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+    onPhase?: (phase: ContextCleanupPhase) => void,
+  ): Promise<void> {
+    onPhase?.("registry");
     const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
+      agentId: parseAgentSessionKey(params.childSessionKey)?.agentId,
+      agentDir: params.agentDir,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       allowGatewaySubagentBinding: true,
     });
     await withPluginRuntimeRegistryScope(registry, async () => {
+      onPhase?.("resolve");
       const engine = await resolveSubagentRegistryContextEngine(cfg, {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
       });
       let failure: { error: unknown } | undefined;
       try {
+        onPhase?.("authority");
         if ((await options?.prepareCurrent?.()) !== false && options?.isCurrent?.() !== false) {
+          onPhase?.("notify");
           await engine.onSubagentEnded?.(params);
         }
       } catch (error) {
         failure = { error };
       }
       try {
+        if (!failure) {
+          onPhase?.("dispose");
+        }
         await engine.dispose?.();
       } catch (error) {
         failure ??= { error };
@@ -80,12 +106,16 @@ export function createSubagentRegistryContextCleanup(config: {
     warning: string,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<boolean> {
+    let phase: ContextCleanupPhase = "registry";
     try {
-      await runContextEngineSubagentEnded(params, options);
+      await runContextEngineSubagentEnded(params, options, (current) => {
+        phase = current;
+      });
       return true;
     } catch (err) {
       log.warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
+        phase,
         childSessionKey: params.childSessionKey,
         reason: params.reason,
       });
@@ -137,22 +167,24 @@ export function createSubagentRegistryContextCleanup(config: {
     if (!isCurrent()) {
       return false;
     }
-    const contextEnded = contextAlreadyEnded
-      ? true
-      : await tryContextEngineSubagentEnded(
-          {
-            childSessionKey: entry.childSessionKey,
-            reason: "deleted",
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspaceDir,
-          },
-          "context-engine collector cleanup failed",
-          { isCurrent },
-        );
-    if (!contextAlreadyEnded && contextEnded && isCurrent()) {
+    const isContextCurrent = () => isCurrent() && !shouldSuppressSubagentSessionEffects(entry);
+    const contextEnded =
+      contextAlreadyEnded || !isContextCurrent()
+        ? true
+        : await tryContextEngineSubagentEnded(
+            {
+              childSessionKey: entry.childSessionKey,
+              reason: "deleted",
+              agentDir: entry.agentDir,
+              workspaceDir: entry.workspaceDir,
+            },
+            "context-engine collector cleanup failed",
+            { isCurrent: isContextCurrent },
+          );
+    if (!contextAlreadyEnded && contextEnded && isContextCurrent()) {
       const runId = entry.runId;
       const assertCurrent = () => {
-        if (!isCurrent() || entry.runId !== runId) {
+        if (!isContextCurrent() || entry.runId !== runId) {
           throw new SubagentRegistryMutationRejectedError(
             "Collector cleanup address changed before persistence.",
           );
@@ -222,6 +254,8 @@ export function createSubagentRegistryContextCleanup(config: {
       const cfg = getRuntimeConfig();
       const registry = await loadSubagentRegistryPluginRuntimeHandle({
         config: cfg,
+        agentId: parseAgentSessionKey(entry.childSessionKey)?.agentId,
+        agentDir: entry.agentDir,
         ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
         allowGatewaySubagentBinding: true,
       });
@@ -308,8 +342,5 @@ export function createSubagentRegistryContextCleanup(config: {
       reason: SubagentLifecycleEndedReason;
     }) => params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session",
     emitSubagentEndedHookForRun,
-    reset: () => {
-      endedHookInFlightOwners.clear();
-    },
   };
 }

@@ -93,7 +93,7 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Session progress        | Update the parent session's durable progress card; unavailable to sub-agents                 | `progress_card`                                                                                                     | [Progress card](/tools/progress-card)                                                                                         |
 | Messaging and channels  | Send replies or channel actions                                                              | `message`                                                                                                           | [Agent send](/tools/agent-send)                                                                                               |
 | Sessions and agents     | Inspect sessions, delegate work, orchestrate collectors, steer another run, or report status | `sessions_*`, `agents_wait`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Swarm](/tools/swarm), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)            |
-| Automation              | Schedule work or respond to background events                                                | `cron`, `heartbeat_respond`                                                                                         | [Automation](/automation)                                                                                                     |
+| Automation              | Schedule work or respond to background events                                                | `automations` (`cron` alias)                                                                                        | [Automation](/automation)                                                                                                     |
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                              |
 | Plugin lifecycle        | Inspect, install, enable, disable, remove, or reload plugins                                 | `plugins`                                                                                                           | [Agent plugin management](/plugins/manage-plugins#manage-plugins-from-an-agent-conversation)                                  |
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                       |
@@ -139,8 +139,7 @@ Common plugin-provided tools include:
   output
 - [Tool Search](/tools/tool-search) for discovering and calling large tool
   catalogs without putting every schema in the prompt
-- [Canvas](/plugins/reference/canvas) for the macOS widget-panel presenter and
-  A2UI dashboard content
+- [Canvas](/plugins/reference/canvas) for the macOS widget-panel presenter
 
 ## Configure access and approvals
 
@@ -168,6 +167,15 @@ The action stays `send`; channel, account, destination, and thread stay locked t
 the current conversation. `replyTo` may name the current message or thread, but
 cannot select another reply target. Inline reply and `audio_as_voice` directives
 remain unavailable on this restricted grant.
+
+In Control UI/Webchat, publish a local HTML report to the current conversation
+with `message(action=send, media=<path>)`, omitting the target. OpenClaw checks the
+current file-read and delivery permissions, validates the HTML, and saves an
+attachment snapshot. A parent agent can publish its final revision of a child
+agent's report using its own read permission. Use self-contained HTML; relative
+assets are not bundled. This explicit send does not grant generated-file
+provenance: automatic `MEDIA:` replies retain their existing HTML restrictions,
+and the preview keeps its existing sandbox and script controls.
 
 OpenClaw exposes one semantic image inspection capability named `view_image`.
 When the active harness supplies its own loader, OpenClaw suppresses its

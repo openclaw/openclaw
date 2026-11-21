@@ -32,26 +32,16 @@ it.skipIf(!output)(
     };
     let phase: keyof typeof phases = "cold";
     const sqlByStatement = new WeakMap<StatementSync, string>();
-    const diagnostics: Array<{
-      source: string;
-      phase: string;
-      engine: unknown;
-      threadId: unknown;
-    }> = [];
+    const diagnostics: { source: string; phase: string; engine: unknown; threadId: unknown }[] = [];
     const observations = channel("openclaw.database.statement");
-    const nativeObservations = channel("sqlite.db.query");
     const observe = (message: unknown) => {
       if (message && typeof message === "object" && "engine" in message && "threadId" in message) {
-        diagnostics.push({
-          source: "engine",
-          phase,
-          engine: message.engine,
-          threadId: message.threadId,
-        });
+        const { engine, threadId: observedThread } = message;
+        diagnostics.push({ source: "engine", phase, engine, threadId: observedThread });
       }
     };
-    const observeNative = () =>
-      diagnostics.push({ source: "native", phase, engine: "sqlite", threadId });
+    const observeStatement = () =>
+      diagnostics.push({ source: "capture", phase, engine: "sqlite", threadId });
     const root = path.join(path.dirname(output), "sqlite-statement-fixture");
     fs.mkdirSync(path.dirname(output), { recursive: true });
     // The path is task-owned and reused so interpolated SQL paths cannot differ between runs.
@@ -72,6 +62,7 @@ it.skipIf(!output)(
     });
     vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
       phases[phase].push({ method: "exec", sql });
+      observeStatement();
       return nativeExec.call(this, sql);
     });
     for (const method of ["run", "get", "all", "iterate"] as const) {
@@ -85,26 +76,24 @@ it.skipIf(!output)(
           throw new Error("Native execution escaped SQL capture");
         }
         phases[phase].push({ method, sql });
+        observeStatement();
         return Reflect.apply(native, this, bindings);
       });
     }
     vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     observations.subscribe(observe);
-    nativeObservations.subscribe(observeNative);
     try {
       const first = openOpenClawStateDatabase(options);
-      expect(first.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
+      expect(first.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(first.db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
-      const firstNative = first.db;
-      const pathname = first.path;
       phase = "restart";
       await closeOpenClawStateDatabaseAsync();
-      revokeSqliteDatabaseAdmissionsForPath(pathname);
+      revokeSqliteDatabaseAdmissionsForPath(first.path);
       const reopened = openOpenClawStateDatabase(options);
-      expect(reopened.db === firstNative).toBe(false);
+      expect(reopened.db === first.db).toBe(false);
       phase = "write";
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare(
@@ -137,7 +126,6 @@ it.skipIf(!output)(
     } finally {
       await closeOpenClawStateDatabaseAsync();
       observations.unsubscribe(observe);
-      nativeObservations.unsubscribe(observeNative);
       vi.restoreAllMocks();
       fs.rmSync(root, { recursive: true, force: true });
     }

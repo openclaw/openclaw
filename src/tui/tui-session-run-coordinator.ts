@@ -1,3 +1,4 @@
+import { rememberBoundedKey } from "../infra/dedupe.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import { getPendingSubmitAcceptedRunId, hasPendingSubmit } from "./tui-submit-state.js";
@@ -16,10 +17,7 @@ export function createTuiRunIdTracker() {
   return {
     note: (runId: string) => {
       if (runId) {
-        runIds.add(runId);
-      }
-      if (runIds.size > MAX_TRACKED_RUNS) {
-        runIds.delete(runIds.values().next().value as string);
+        rememberBoundedKey(runIds, runId, MAX_TRACKED_RUNS);
       }
     },
     forget: (runId: string) => void runIds.delete(runId),

@@ -61,6 +61,7 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
     }),
   );
   const prelude = String.raw`
+    Date.now = () => ${Date.now() + 60_000};
     let active = 0;
     audit.maximum = 0;
     const snapshot = () => ({ active });

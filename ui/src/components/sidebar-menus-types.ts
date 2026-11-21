@@ -1,5 +1,9 @@
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import type {
+  NavigationRouteId,
+  ShellNavigationIntent,
+  SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -22,6 +26,7 @@ export interface SidebarRouteView {
   readonly onNavigate?: (
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
+    intent?: ShellNavigationIntent,
   ) => void;
   readonly sessionDataContext: ApplicationContext | undefined;
   getRouteSessionKey(): string;
@@ -42,9 +47,8 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly gatewayVersion: string | null;
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
-  readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   sidebarAgentsMode: "chip" | "roster";
-  navigationView: "pages" | "sessions" | "online";
+  navigationView: SidebarNavigationView;
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionDataOwner;
@@ -74,6 +78,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly themeMode: ThemeMode;
   activeChipAgent(): {
     activeId: string;
+    pending?: boolean;
     agent: GatewayAgentRow | undefined;
     agents: readonly GatewayAgentRow[];
     identity: AgentIdentityResult | null;
@@ -81,9 +86,11 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   };
   agentUnreadCount(agentId: string): number;
   ensureAgentIdentities(agentIds: readonly string[]): void;
-  askAgentCapabilities(agentId: string): void;
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];
-  switchChipAgent(agentId: string): void;
+  switchChipAgent(
+    agentId: string,
+    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
+  ): void;
 }

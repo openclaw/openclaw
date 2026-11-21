@@ -33,13 +33,13 @@ import {
 } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   VITEST_INFRASTRUCTURE_EXIT_CODE,
   vitestInfrastructureExitCode,
 } from "./lib/vitest-outcome.mts";
 import {
   resolveVitestProcessEnv,
-  resolveVitestNodeArgs,
   resolveRunVitestSpawnEnv,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestNoOutputHeartbeatMs,
@@ -55,6 +55,9 @@ import {
 import {
   resolveVitestRuntimeCliSelections,
   shouldPrepareVitestCoreWorkers,
+  selectVitestWorkerPreset,
+  shouldUseRuntimeOnlyVitestWorkers,
+  shouldUseToolingOnlyVitestWorkers,
 } from "./lib/vitest-runtime-selection.mts";
 import {
   resolveNativeBunTestCommand,
@@ -885,6 +888,9 @@ export function spawnWatchedVitestProcess({
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
       workerRun.descriptor.directory,
+      ...(workerRun.descriptor.preset && workerRun.descriptor.preset !== "full"
+        ? [`--worker-preset=${workerRun.descriptor.preset}`]
+        : []),
     );
   }
   const childSpawnParams: PnpmRunnerParams = workerRun
@@ -1032,7 +1038,7 @@ export async function runVitest(
     }
     return;
   }
-  if (argv.some((arg) => arg === "--isolated-image" || arg.startsWith("--isolated-image="))) {
+  if (argv.some((arg) => /^--isolated-(?:image|runtime)(?:=|$)/u.test(arg))) {
     const { parseIsolatedVitestArgs, runIsolatedVitest } =
       await import("./lib/vitest-isolated.mts");
     const isolated = parseIsolatedVitestArgs(argv);
@@ -1042,6 +1048,7 @@ export async function runVitest(
         isolated.image,
         isolated.args,
         env,
+        isolated.runtime,
       );
       return;
     }
@@ -1099,14 +1106,14 @@ export async function runVitest(
     : config === null && !sourceMode && process.cwd() === repoRoot
       ? "vitest.config.ts"
       : "";
-  // Canonical configs have known project scopes. Custom roots/projects keep
-  // their own setup; never infer their runtime selection from a config name.
-  const canonicalSelection =
+  // Custom roots/projects keep their own runtime preparation. Prebuilt UI
+  // projects below only partition the known real-Gateway fixture scope.
+  const canonicalRootRun =
     execution &&
     !hasAlternateVitestRootArg(vitestArgs) &&
-    !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
     !hasExplicitDisabledRunFlag(vitestArgs);
+  const canonicalSelection = canonicalRootRun && !hasExplicitVitestProjectArg(vitestArgs);
   // E2E global setup must precede shared asset preparation, including a single
   // invocation; otherwise it can replace dist after UI readiness was checked.
   const invocationEnv =
@@ -1127,7 +1134,34 @@ export async function runVitest(
   }
   const workers = sourceMode
     ? undefined
-    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv), getVitestWorkerDescriptor());
+    : createVitestWorkerRun(
+        resolveVitestProcessEnv(invocationEnv),
+        getVitestWorkerDescriptor(),
+        selectVitestWorkerPreset(
+          Boolean(
+            (canonicalSelection &&
+              (relativeConfig === "test/vitest/vitest.ui-e2e.config.ts" ||
+                relativeConfig === "test/vitest/vitest.extension-browser.config.ts" ||
+                shouldUseRuntimeOnlyVitestWorkers(
+                  relativeConfig,
+                  vitestArgs,
+                  invocationEnv,
+                  execution?.options.testNamePattern,
+                ))) ||
+            (canonicalRootRun && relativeConfig === "test/vitest/vitest.ui-e2e-prebuilt.config.ts"),
+          ),
+          Boolean(
+            canonicalSelection &&
+            shouldUseToolingOnlyVitestWorkers(
+              relativeConfig,
+              vitestArgs,
+              invocationEnv,
+              execution?.options.testNamePattern,
+            ),
+          ),
+          getVitestWorkerDescriptor()?.preset,
+        ),
+      );
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
   let preparingWorkers = false;

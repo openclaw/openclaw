@@ -9,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
   return discordWebMediaMockFactory();
 });
 
-import { discordOutbound } from "./outbound-adapter.js";
+import { discordOutbound } from "./outbound-payload.js";
 import * as send from "./send.js";
 const cfg = { channels: { discord: { accounts: { default: {} } } } };
 const retry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
@@ -241,6 +241,11 @@ it("lists active threads by guild", async () => {
   const { rest, getMock } = makeDiscordRest();
   await send.listThreadsDiscord({ guildId: "g1" }, clientOpts(rest));
   expect(getMock).toHaveBeenCalledWith(Routes.guildActiveThreads("g1"));
+});
+it("sends applied tags when editing a channel", async () => {
+  const { rest, patchMock } = makeDiscordRest();
+  await send.editChannelDiscord({ channelId: "c1", appliedTags: [] }, clientOpts(rest));
+  expect(requests(patchMock)).toEqual([[Routes.channel("c1"), { applied_tags: [] }]]);
 });
 it("times out a member", async () => {
   const { rest, patchMock } = makeDiscordRest();

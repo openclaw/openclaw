@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { parentPort, threadId, workerData } from "node:worker_threads";
-import { Client } from "pg";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -18,6 +17,7 @@ import {
 } from "../sqlite-database-admission.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
+import { withPostgresConnection } from "./postgres-store-metadata.js";
 import type { DatabaseEngineSelection } from "./types.js";
 
 export type MixedModeWorkerInput = {
@@ -25,17 +25,9 @@ export type MixedModeWorkerInput = {
   selection: DatabaseEngineSelection;
   admissions: SqliteDatabaseAdmissions;
 };
-export type MixedModeWorkerResult = {
-  stateEngine: string;
-  agentEngine: string;
-  workboardEngine: string;
-  stateValue: unknown;
-  statementEngines: string[];
-  statementThreadIds: number[];
-  statementCount: number;
-};
+export type MixedModeWorkerResult = Awaited<ReturnType<typeof inspectOwners>>;
 
-async function inspectOwners(input: MixedModeWorkerInput): Promise<MixedModeWorkerResult> {
+async function inspectOwners(input: MixedModeWorkerInput) {
   assert.notEqual(threadId, 0);
   installDatabaseEngineSelection(input.selection);
   installSqliteDatabaseAdmissions(input.admissions);
@@ -107,15 +99,11 @@ async function inspectOwners(input: MixedModeWorkerInput): Promise<MixedModeWork
     closeOpenClawStateDatabase();
     channel("openclaw.database.statement").unsubscribe(observer);
     if (input.selection.postgres && namespaces.size) {
-      const client = new Client({ connectionString: input.selection.postgres.connection });
-      await client.connect();
-      try {
+      await withPostgresConnection(input.selection.postgres, async (client) => {
         for (const namespace of namespaces) {
           await client.query(`DROP SCHEMA IF EXISTS "${namespace.replaceAll('"', '""')}" CASCADE`);
         }
-      } finally {
-        await client.end();
-      }
+      });
     }
   }
 }

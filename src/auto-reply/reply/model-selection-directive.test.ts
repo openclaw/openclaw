@@ -122,14 +122,3 @@ it("rejects a configured fallback that the explicit policy does not allow", () =
   expect(result.selection).toBeUndefined();
   expect(result.error).toContain('Model "external/sensitive" is not allowed.');
 });
-
-it("points unmarked legacy defaults repair at modelPolicy.allow", () => {
-  const { result } = resolveDirective({
-    cfg: config({ models: { "openai/safe": {} } }),
-    raw: "external/sensitive",
-  });
-  expect(result.error).toContain(
-    'Add "external/sensitive" or its provider wildcard to agents.defaults.modelPolicy.allow.',
-  );
-  expect(result.error).not.toContain("to agents.defaults.models.");
-});

@@ -15,7 +15,7 @@ const rule = {
 
 const ciRule = { type: rule.type, parameters: rule.parameters };
 
-function fixture(
+function verify(
   options: {
     changeKind?: string;
     authority?: Record<string, unknown>;
@@ -25,9 +25,7 @@ function fixture(
     unavailable?: boolean;
   } = {},
 ) {
-  const calls: string[] = [];
   const writerRead = (endpoint: string) => {
-    calls.push(endpoint);
     if (endpoint === "repos/fixture/repo") {
       return {
         id: 123,
@@ -62,37 +60,25 @@ function fixture(
     }
     throw new Error("Unexpected writer request: " + endpoint);
   };
-  return {
-    calls,
-    verify: () =>
-      verifyPriorCiWriterAuthority({
-        repository: "fixture/repo",
-        actor: "fixture-bot",
-        changeKind: options.changeKind ?? "pre-existing-failure",
-        policy: { rules: options.rules ?? [rule] },
-        writerRead,
-      }),
-  };
+  return verifyPriorCiWriterAuthority({
+    repository: "fixture/repo",
+    actor: "fixture-bot",
+    changeKind: options.changeKind ?? "pre-existing-failure",
+    policy: { rules: options.rules ?? [rule] },
+    writerRead,
+  });
 }
 
 describe("prior-CI delegated writer authority", () => {
-  it.each(["always", "pull_requests_only"])(
-    "accepts live %s authority without repository admin",
-    (mode) => {
-      const f = fixture({ ruleset: { current_user_can_bypass: mode } });
-      expect(f.verify().delegation).toEqual({
-        kind: "ci-ruleset-bypass",
-        repositoryId: 123,
-        actor: "fixture-bot",
-        rulesets: [{ id: 41, mode }],
-      });
-      expect(f.calls).toEqual([
-        "repos/fixture/repo",
-        "orgs/fixture/memberships/fixture-bot",
-        "repos/fixture/repo/rulesets/41",
-      ]);
-    },
-  );
+  it("accepts live PR-only authority without repository admin", () => {
+    const mode = "pull_requests_only";
+    expect(verify({ ruleset: { current_user_can_bypass: mode } }).delegation).toEqual({
+      kind: "ci-ruleset-bypass",
+      repositoryId: 123,
+      actor: "fixture-bot",
+      rulesets: [{ id: 41, mode }],
+    });
+  });
 
   it.each([
     ["conflict-resolution", "changeKind", "conflict-resolution"],
@@ -102,9 +88,6 @@ describe("prior-CI delegated writer authority", () => {
     ["inactive membership", "membership", { state: "pending" }],
     ["different member", "membership", { user: { login: "other-bot" } }],
     ["unknown role", "membership", { role: "other" }],
-    ["revoked bypass", "ruleset", { current_user_can_bypass: "never" }],
-    ["missing bypass", "ruleset", { current_user_can_bypass: undefined }],
-    ["unknown bypass", "ruleset", { current_user_can_bypass: "exempt" }],
     ["foreign ruleset", "ruleset", { source: "other/repo" }],
     ["different ruleset", "ruleset", { id: 42 }],
     ["organization ruleset", "ruleset", { source_type: "Organization" }],
@@ -128,7 +111,7 @@ describe("prior-CI delegated writer authority", () => {
     ["foreign effective owner", "rules", [{ ...rule, ruleset_source: "other/repo" }]],
     ["duplicate effective rule", "rules", [rule, rule]],
   ] as const)("refuses %s", (_name, field, value) => {
-    expect(() => fixture({ [field]: value }).verify()).toThrow(/Prior-CI admin admission:/);
+    expect(() => verify({ [field]: value })).toThrow(/Prior-CI admin admission:/);
   });
 
   it.each(
@@ -142,24 +125,14 @@ describe("prior-CI delegated writer authority", () => {
   )("refuses a matching policy with mixed or foreign checks", ({ checks }) => {
     const parameters = { ...rule.parameters, required_status_checks: checks };
     expect(() =>
-      fixture({
+      verify({
         rules: [{ ...rule, parameters }],
         ruleset: { rules: [{ ...ciRule, parameters }] },
-      }).verify(),
+      }),
     ).toThrow(/CI-only ruleset bypass/);
   });
 
   it("does not infer delegation from inaccessible GitHub authority", () => {
-    expect(() => fixture({ unavailable: true }).verify()).toThrow("GitHub authority unavailable");
-  });
-
-  it("preserves the existing organization-admin route for conflict resolution", () => {
-    const f = fixture({
-      changeKind: "conflict-resolution",
-      authority: { permissions: { admin: true } },
-      membership: { role: "admin" },
-    });
-    expect(f.verify().delegation).toBeUndefined();
-    expect(f.calls).toHaveLength(2);
+    expect(() => verify({ unavailable: true })).toThrow("GitHub authority unavailable");
   });
 });

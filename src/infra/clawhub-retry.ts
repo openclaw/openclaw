@@ -4,17 +4,11 @@ import { isTransientNetworkError } from "../../packages/ai/src/utils/retryable-n
 import { parseRetryAfterHeaderSeconds } from "./retry-after.js";
 import { retryAsync } from "./retry.js";
 
-const CLAWHUB_RETRY_DELAYS_MS = [1_000, 3_000, 10_000] as const;
+const CLAWHUB_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000] as const;
 const CLAWHUB_MAX_RETRY_AFTER_MS = 60_000;
 
 type ClawHubResponseHandle = {
   response: Response;
-};
-
-type ClawHubRetryOptions<T extends ClawHubResponseHandle> = {
-  disposeRetry: (result: T) => Promise<void>;
-  retryRateLimit?: boolean;
-  sleep?: (ms: number) => Promise<void>;
 };
 
 class RetryableClawHubResponse<T extends ClawHubResponseHandle> extends Error {
@@ -42,7 +36,11 @@ function parseRetryAfterMs(headers: Headers): number | undefined {
  */
 export async function retryClawHubRead<T extends ClawHubResponseHandle>(
   request: () => Promise<T>,
-  options: ClawHubRetryOptions<T>,
+  options: {
+    disposeRetry: (result: T) => Promise<void>;
+    retryRateLimit?: boolean;
+    sleep?: (ms: number) => Promise<void>;
+  },
 ): Promise<T> {
   try {
     return await retryAsync(

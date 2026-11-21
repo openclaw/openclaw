@@ -6,7 +6,10 @@ import { emitMatrixLog, setMatrixLogServiceQuiet } from "../sdk/logger.js";
 
 let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
-let matrixJsSdkRootLoggerSnapshot: MatrixJsSdkRootLoggerSnapshot | null = null;
+let matrixJsSdkRootLoggerSnapshot: {
+  level?: number | string;
+  methodFactory: MatrixJsSdkLogMethodFactory;
+} | null = null;
 
 type MatrixJsSdkLogMethod = (this: unknown, ...args: unknown[]) => void;
 type MatrixJsSdkLogMethodFactory = (
@@ -15,18 +18,6 @@ type MatrixJsSdkLogMethodFactory = (
   level: number,
   loggerName: string | symbol,
 ) => MatrixJsSdkLogMethod;
-
-type MatrixJsSdkLoglevelLogger = {
-  getLevel?: () => number | string;
-  methodFactory: MatrixJsSdkLogMethodFactory;
-  rebuild?: () => void;
-  setLevel?: (level: number | string, persist?: boolean) => void;
-};
-
-type MatrixJsSdkRootLoggerSnapshot = {
-  level?: number | string;
-  methodFactory: MatrixJsSdkLogMethodFactory;
-};
 
 function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unknown[]): boolean {
   if (!module.includes("MatrixHttpClient")) {
@@ -59,7 +50,12 @@ function applyMatrixSdkLogger(): void {
 }
 
 function configureMatrixJsSdkRootLogger(): void {
-  const logger = matrixJsSdkRootLogger as unknown as MatrixJsSdkLoglevelLogger;
+  const logger = matrixJsSdkRootLogger as unknown as {
+    getLevel?: () => number | string;
+    methodFactory: MatrixJsSdkLogMethodFactory;
+    rebuild?: () => void;
+    setLevel?: (level: number | string, persist?: boolean) => void;
+  };
   if (!matrixJsSdkRootLoggerSnapshot) {
     const methodFactory = logger.methodFactory;
     matrixJsSdkRootLoggerSnapshot = {

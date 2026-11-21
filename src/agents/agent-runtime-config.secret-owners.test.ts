@@ -251,22 +251,15 @@ describe("agent execution respects prepared secret owners", () => {
     },
   );
 
-  it("reuses a cloned prepared runtime config without re-resolution", async () => {
-    const snapshot = await activateProviderConfig();
-    const input = clonePreparedConfig(snapshot.config);
-    const config = await resolveReplyConfig(input);
-    expect(config).toEqual(snapshot.config);
-    expect(callGatewayMock).not.toHaveBeenCalled();
-    await expectUnavailable(providerAuth(config));
-  });
-
   it("requires the same authored-ref facts token with a healthy ref key", async () => {
     const source = providerConfig();
     setConfigFacts(source, resolutionFacts([]));
     const snapshot = await activateProviderConfig(source);
     const input = clonePreparedConfig(snapshot.config);
-    await expect(resolveReplyConfig(input)).resolves.toEqual(snapshot.config);
+    const resolved = await resolveReplyConfig(input);
+    expect(resolved).toEqual(snapshot.config);
     expect(callGatewayMock).not.toHaveBeenCalled();
+    await expectUnavailable(providerAuth(resolved));
     setConfigFacts(
       input,
       resolutionFacts(

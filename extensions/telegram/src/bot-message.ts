@@ -18,6 +18,7 @@ import {
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import {
@@ -37,6 +38,7 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import type { TelegramTransport } from "./fetch.js";
+import { isTelegramForumTopicTitleUpdate } from "./forum-service-message.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { resolveTelegramRichMessages } from "./rich-messages-config.js";
@@ -155,6 +157,7 @@ export const createTelegramMessageProcessor = (
     replyMedia,
     replyChain,
     promptContext,
+    resolveSenderMedia,
   }) => {
     const turnCfg = turnContext.cfg;
     const turnTelegramCfg = turnContext.telegramCfg;
@@ -174,6 +177,7 @@ export const createTelegramMessageProcessor = (
       replyMedia,
       replyChain,
       promptContext,
+      resolveSenderMedia,
       storeAllowFrom,
       options,
       cfg: turnCfg,
@@ -185,6 +189,39 @@ export const createTelegramMessageProcessor = (
     });
     if (!context) {
       return { kind: "skipped" };
+    }
+    if (
+      isTelegramForumTopicTitleUpdate(context.primaryCtx.message) &&
+      !context.isGroup &&
+      context.threadSpec.scope === "dm"
+    ) {
+      if (context.threadSpec.id == null) {
+        // A malformed or incomplete title event has no safe session target.
+        return { kind: "completed" };
+      }
+      let metadataTask: Promise<unknown> | undefined;
+      let metadataError: unknown;
+      await context.turn.recordInboundSession({
+        storePath: context.turn.storePath,
+        sessionKey: context.ctxPayload.SessionKey,
+        ctx: context.ctxPayload,
+        createIfMissing: false,
+        onRecordError: (err) => {
+          metadataError = err;
+        },
+        trackSessionMetaTask: (task) => {
+          metadataTask = task;
+        },
+      });
+      await metadataTask;
+      if (metadataError !== undefined) {
+        throw metadataError instanceof Error
+          ? metadataError
+          : new Error("Telegram topic metadata update failed", { cause: metadataError });
+      }
+      // Topic create/edit service messages update an existing title; they are
+      // metadata events, not user turns that should invoke an agent response.
+      return { kind: "completed" };
     }
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
@@ -345,6 +382,18 @@ export const createTelegramMessageProcessor = (
             // owner-local resource teardown gated on core claim release.
             void drainLifecycle?.onAbandoned();
           },
+          onDropped: async (reason) => {
+            if (adopted) {
+              return;
+            }
+            const dropped = await settle({ kind: "dropped", reason }, "terminal");
+            if (dropped.kind !== "dropped") {
+              throw dropped.kind === "failed-retryable"
+                ? dropped.error
+                : new Error("telegram spooled queue drop was not completed");
+            }
+            await drainLifecycle?.onDropped?.(reason);
+          },
         });
         if (adopted) {
           return { kind: "completed" } satisfies TelegramMessageProcessingResult;
@@ -414,9 +463,10 @@ export const createTelegramMessageProcessor = (
         }
         return await settle(result, "terminal");
       };
-      // The participant is the ingress ownership boundary. Direct and buffered
-      // callers both return when it is durably adopted or terminally rejected.
-      void run();
+      // Ingress returns at adoption; dispatch still owns draft cleanup and fallback delivery.
+      void runDetachedWebhookWork(run).catch((error: unknown) =>
+        settle({ kind: "failed-retryable", error }, "terminal"),
+      );
       return await participant.task;
     }
 

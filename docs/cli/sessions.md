@@ -36,6 +36,9 @@ names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
 session keys.
 
+Relative ages round each displayed unit directly from elapsed milliseconds:
+89.5 seconds displays as `1m ago`, and 2.49 days displays as `2d ago`.
+
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
@@ -63,6 +66,8 @@ and suffixless custom selectors. OpenClaw resolves that selector to its physical
 SQLite target, verifies the target exists and is usable, and reports the physical
 path it actually read. Combine it with `--agent <id>` when you must select the
 configured agent that owns the store.
+
+Human-readable store headers escape terminal controls in paths. JSON output keeps the original path.
 
 `--agent` and `--store` require non-blank values. Selection errors exit non-zero
 and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
@@ -331,6 +336,7 @@ openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:12
 This is the command path used by the `/export-trajectory` slash command after
 the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
+Nonblank `--output` names preserve leading and trailing whitespace.
 The file list in text and JSON output reports only artifacts written to the bundle.
 
 For stored keys without an agent prefix, such as `global`, export uses the
@@ -387,7 +393,7 @@ openclaw sessions cleanup --json
   for active work to finish, or explicitly delete sessions you no longer want
   to retain.
 
-Optional cold transcript extraction has its own background worker and
+Cold transcript extraction is enabled by default after 30 inactive days, with its own background worker and
 **Run now** action in
 [Settings → Agent Defaults → Session](/gateway/config-agents/sessions#cold-storage).
 It uses `session.maintenance.coldStorage.afterDays` and preserves inactive

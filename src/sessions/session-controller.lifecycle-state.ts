@@ -15,7 +15,9 @@ import {
   pruneSessionControllerEntry,
   type SessionControllerEntry,
 } from "./session-controller.state.js";
+import { backendRunIdsByOperation, rpcSourcesByRunId } from "./session-controller.storage.js";
 import type { SessionTarget } from "./session-controller.target.js";
+import { emitSessionLifecycleEvent } from "./session-lifecycle-events.js";
 
 export function lifecycle(entry: SessionControllerEntry): SessionControllerLifecycle {
   return (entry.lifecycle ??= {
@@ -123,6 +125,20 @@ export function releaseSessionControllerOperation(operation: ReplyOperation): vo
       refreshSessionControllerEntryAliases(entry);
       notify(entry);
     }
+  }
+  if (
+    backendRunIdsByOperation.has(operation) &&
+    getSessionControllerEntryForOperation(operation).attachment?.projectSessionActive !== false &&
+    ![...rpcSourcesByRunId.values()].some((sources) =>
+      [...sources].some((source) => source.input.claim?.operation === operation),
+    )
+  ) {
+    emitSessionLifecycleEvent({
+      sessionKey: operation.key,
+      agentId: operation.agentId,
+      reason: "agent.input.settled",
+      scope: "runtime",
+    });
   }
 }
 export function bindSessionControllerTarget(

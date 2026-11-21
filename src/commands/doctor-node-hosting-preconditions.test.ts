@@ -63,106 +63,73 @@ describe("node-hosting preconditions", () => {
     agents: { defaults: runtimeAgent("openclaw", "anthropic/claude-sonnet-4-6") },
   } satisfies OpenClawConfig;
 
-  it.each([
-    ["fresh defaults", {}],
-    [
-      "a local-only loopback Gateway",
-      { gateway: { mode: "local", bind: "loopback", tailscale: { mode: "off" } } },
-    ],
-    ["an automatic local bind", { gateway: { bind: "auto" } }],
-    [
-      "disabled pairing and restrictive node policies",
-      {
-        plugins: { entries: { "device-pair": { enabled: false } } },
-        ...nodePolicy({
-          browser: { mode: "off", node: "unused-node" },
-          pairing: { autoApproveLocal: false, autoApproveCidrs: [], sshVerify: false },
-          commands: { allow: [], deny: ["system.run"] },
-        }),
-      },
-    ],
-    [
-      "default node capabilities without a target",
-      nodePolicy({
-        browser: { mode: "auto" },
-        pairing: { autoApproveLocal: true },
-        pluginTools: { enabled: true },
-        allowSkills: true,
+  it.each<OpenClawConfig>([
+    {},
+    { gateway: { mode: "local", bind: "loopback", tailscale: { mode: "off" } } },
+    { gateway: { bind: "auto" } },
+    {
+      plugins: { entries: { "device-pair": { enabled: false } } },
+      ...nodePolicy({
+        browser: { mode: "off", node: "unused-node" },
+        pairing: { autoApproveLocal: false, autoApproveCidrs: [], sshVerify: false },
+        commands: { allow: [], deny: ["system.run"] },
       }),
-    ],
-    [
-      "a node pin with execution forced to the Gateway",
-      { tools: { exec: { host: "gateway", node: "unused-node" } } },
-    ],
-    ["a remote-client profile", { gateway: { mode: "remote" }, tools: { exec: { host: "node" } } }],
-  ] satisfies Array<[string, OpenClawConfig]>)("does not warn for %s", async (_name, cfg) => {
+    },
+    nodePolicy({
+      browser: { mode: "auto" },
+      pairing: { autoApproveLocal: true },
+      pluginTools: { enabled: true },
+      allowSkills: true,
+    }),
+    { tools: { exec: { host: "gateway", node: "unused-node" } } },
+    { gateway: { mode: "remote" }, tools: { exec: { host: "node" } } },
+  ])("ignores configurations without local node hosting: %j", async (cfg) => {
     expect(await findingsFor(cfg)).toEqual([]);
   });
 
-  it.each([
-    ["node execution", { tools: { exec: { host: "node" } } }],
-    ["an explicit node binding", { tools: { exec: { node: "worker" } } }],
-    [
-      "per-agent node execution",
-      { agents: { entries: { worker: { tools: { exec: { host: "node" } } } } } },
-    ],
-    ["a browser node target", nodePolicy({ browser: { mode: "manual", node: "browser-host" } })],
-    ["remote pairing CIDRs", nodePolicy({ pairing: { autoApproveCidrs: ["192.0.2.0/24"] } })],
-    ["explicit SSH pairing", nodePolicy({ pairing: { sshVerify: true } })],
-    ["custom SSH pairing", nodePolicy({ pairing: { sshVerify: { user: "node-user" } } })],
-    ["allowed node commands", nodePolicy({ commands: { allow: ["system.run"] } })],
-    [
-      "explicit device-pair enablement",
-      { plugins: { entries: { "device-pair": { enabled: true } } } },
-    ],
-  ] satisfies Array<[string, OpenClawConfig]>)(
-    "keeps the loopback warning for %s",
-    async (_name, cfg) => {
-      const findings = await findingsFor({
+  it.each<OpenClawConfig>([
+    { tools: { exec: { host: "node" } } },
+    { tools: { exec: { node: "worker" } } },
+    { agents: { entries: { worker: { tools: { exec: { host: "node" } } } } } },
+    nodePolicy({ browser: { mode: "manual", node: "browser-host" } }),
+    nodePolicy({ pairing: { autoApproveCidrs: ["192.0.2.0/24"] } }),
+    nodePolicy({ pairing: { sshVerify: { user: "node-user" } } }),
+    nodePolicy({ commands: { allow: ["system.run"] } }),
+    { plugins: { entries: { "device-pair": { enabled: true } } } },
+  ])("warns about loopback onboarding for configured hosting: %j", async (cfg) => {
+    expect(
+      await findingsFor({
         ...healthyBase,
         tools: undefined,
         ...cfg,
         gateway: { ...healthyBase.gateway, bind: "loopback", ...cfg.gateway },
-      });
-      expect(findings).toEqual([
-        expect.objectContaining({ requirement: "node-onboarding-url", severity: "warning" }),
-      ]);
-    },
-  );
+      }),
+    ).toEqual([
+      expect.objectContaining({ requirement: "node-onboarding-url", severity: "warning" }),
+    ]);
+  });
 
-  it.each([
+  it.each<[NonNullable<OpenClawConfig["gateway"]>, string[]]>([
+    [{ auth: { mode: "trusted-proxy" } }, ["machine-client-auth", "node-onboarding-url"]],
     [
-      "both unavailable",
-      { auth: { mode: "trusted-proxy" } },
-      ["machine-client-auth", "node-onboarding-url"],
-    ],
-    [
-      "Tailscale identity without a shared secret",
-      {
-        tailscale: { mode: "serve" },
-        auth: { mode: "token", allowTailscale: true },
-      },
+      { tailscale: { mode: "serve" }, auth: { mode: "token", allowTailscale: true } },
       ["machine-client-auth"],
     ],
-  ] satisfies Array<[string, OpenClawConfig["gateway"], string[]]>)(
-    "warns when %s",
-    async (_name, gateway, requirements) => {
-      const cfg: OpenClawConfig = { ...healthyBase, gateway: { bind: "loopback", ...gateway } };
-      expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toEqual(requirements);
-    },
-  );
+  ])("warns about unavailable machine auth: %j", async (gateway, requirements) => {
+    expect(
+      (
+        await findingsFor({
+          ...healthyBase,
+          gateway: { bind: "loopback", ...gateway },
+        })
+      ).map((finding) => finding.requirement),
+    ).toEqual(requirements);
+  });
 
-  it.each([
-    {
-      name: "device-pair is explicitly disabled",
-      cfg: {
-        plugins: { entries: { "device-pair": { enabled: false } } },
-      },
-      requirement: "node-onboarding-plugin",
-    },
-    {
-      name: "every configured agent resolves to an incompatible runtime",
-      cfg: {
+  it.each<[OpenClawConfig, string]>([
+    [{ plugins: { entries: { "device-pair": { enabled: false } } } }, "node-onboarding-plugin"],
+    [
+      {
         agents: {
           ownership: "explicit",
           entries: {
@@ -171,16 +138,13 @@ describe("node-hosting preconditions", () => {
           },
         },
       },
-      requirement: "device-session-runtime",
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; requirement: string }>)(
-    "warns when $name",
-    async ({ cfg, requirement }) => {
-      expect(
-        (await findingsFor({ ...healthyBase, ...cfg })).map((finding) => finding.requirement),
-      ).toContain(requirement);
-    },
-  );
+      "device-session-runtime",
+    ],
+  ])("warns about missing node capability: %j", async (cfg, requirement) => {
+    expect(
+      (await findingsFor({ ...healthyBase, ...cfg })).map((finding) => finding.requirement),
+    ).toContain(requirement);
+  });
 
   it("does not activate plugins or reject a cold codex runtime", async () => {
     resetPluginRuntimeStateForTest();

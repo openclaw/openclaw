@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
@@ -24,22 +23,6 @@ function assertNativeAgentDatabase(
   if (isPostgresSqlConnection(database.db)) {
     throw new Error("Native validation fixture requires SQLite");
   }
-}
-
-export function observeValidationPragmas(db: DatabaseSync) {
-  return trackSqliteStatementExecutions(
-    db,
-    ["data_version", "schema_version", "user_version"],
-    (sql) => {
-      if (/FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)) {
-        return "data_version";
-      }
-      const name = /^PRAGMA (data_version|schema_version|user_version);?$/iu.exec(sql)?.[1];
-      return name === "data_version" || name === "schema_version" || name === "user_version"
-        ? name
-        : null;
-    },
-  );
 }
 
 export async function withReceiptFixture(

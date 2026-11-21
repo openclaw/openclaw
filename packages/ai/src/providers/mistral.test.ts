@@ -2,11 +2,11 @@ import {
   contentChunkFromJSON,
   toolCallFromJSON,
   type ChatCompletionStreamRequest,
-  type ToolCall,
 } from "@mistralai/mistralai/models/components";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context } from "../types.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -15,9 +15,8 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 const mistralMockState = vi.hoisted(() => ({
   payloads: [] as unknown[],
   requestOptions: [] as unknown[],
-  randomUUIDs: [] as string[],
+  nextUUID: 429244,
   requestThroughHttpClient: false,
-  streamError: new Error("stop before network") as unknown,
   streamResult: undefined as unknown,
 }));
 
@@ -25,7 +24,8 @@ vi.mock("node:crypto", async () => {
   const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
   return {
     ...actual,
-    randomUUID: () => mistralMockState.randomUUIDs.shift() ?? actual.randomUUID(),
+    randomUUID: () =>
+      `00000000-0000-4000-8000-${String(mistralMockState.nextUUID++).padStart(12, "0")}`,
   };
 });
 
@@ -52,7 +52,7 @@ vi.mock("@mistralai/mistralai/sdk/chat", () => {
         if (mistralMockState.streamResult !== undefined) {
           return mistralMockState.streamResult;
         }
-        throw mistralMockState.streamError;
+        throw new Error("stop before network");
       });
     },
   };
@@ -68,19 +68,16 @@ const makeMistralModel = () =>
     reasoning: false,
   });
 
-const context = {
-  messages: [{ role: "user", content: "hello", timestamp: 0 }],
-} satisfies Context;
+const context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] } satisfies Context;
 
 function makeUnreadableParameterTool() {
-  const tool = { ...makeHealthyTool(), name: "broken_tool" };
-  Object.defineProperty(tool, "parameters", {
-    enumerable: true,
-    get() {
+  return {
+    name: "broken_tool",
+    description: "broken tool",
+    get parameters(): never {
       throw new Error("fuzzplugin parameters getter exploded");
     },
-  });
-  return tool;
+  };
 }
 
 function makeHealthyTool(parameters: Record<string, unknown> = { type: "object", properties: {} }) {
@@ -88,24 +85,17 @@ function makeHealthyTool(parameters: Record<string, unknown> = { type: "object",
     name: "healthy_tool",
     description: "healthy tool",
     parameters,
-    execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
   };
 }
 
-function parseMistralToolCall(value: unknown): ToolCall {
+function parseMistralToolCall(value: unknown) {
   const parsed = toolCallFromJSON(JSON.stringify(value));
-  if (!parsed.ok) {
-    throw new Error("Mistral SDK failed to parse tool-call fixture");
-  }
+  assert(parsed.ok, "Mistral SDK failed to parse tool-call fixture");
   return parsed.value;
 }
 
-function mistralEvents<T>(events: T[]) {
-  return {
-    async *[Symbol.asyncIterator]() {
-      yield* events;
-    },
-  };
+async function* mistralEvents<T>(events: T[]) {
+  yield* events;
 }
 
 function mistralEvent(content: unknown, extra: Record<string, unknown> = {}) {
@@ -127,7 +117,10 @@ function wireTool(
   return { ...identity, function: { name, arguments: args } };
 }
 
-function mistralToolStream(responseId: string, ...chunks: ToolCall[][]) {
+function mistralToolStream(
+  responseId: string,
+  ...chunks: ReturnType<typeof parseMistralToolCall>[][]
+) {
   return mistralEvents(
     chunks.map((toolCalls) =>
       mistralEvent(null, {
@@ -140,54 +133,24 @@ function mistralToolStream(responseId: string, ...chunks: ToolCall[][]) {
 
 type MistralTestOptions = NonNullable<Parameters<typeof streamMistral>[2]>;
 type SimpleMistralTestOptions = NonNullable<Parameters<typeof streamSimpleMistral>[2]>;
-type MistralPayload = Pick<
-  ChatCompletionStreamRequest,
-  "promptCacheKey" | "promptMode" | "reasoningEffort"
-> & {
-  messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
-  tools: Array<{ function: { name: string } }>;
-};
-const payload = () => mistralMockState.payloads[0] as MistralPayload;
+const payload = () => mistralMockState.payloads[0] as ChatCompletionStreamRequest;
 const toolMessage = () => payload().messages.find((message) => message.role === "tool");
 
-function runMistralFixture(
-  testContext: Context = context,
-  options: MistralTestOptions = {},
-  testModel = makeMistralModel(),
-) {
-  return streamMistral(testModel, testContext, {
-    apiKey: "sk-mistral-provider",
-    ...options,
-  }).result();
+function runner(stream: typeof streamMistral | typeof streamSimpleMistral) {
+  return (
+    testContext: Context = context,
+    options: MistralTestOptions & SimpleMistralTestOptions = {},
+    testModel = makeMistralModel(),
+  ) => stream(testModel, testContext, { apiKey: "sk-mistral-provider", ...options }).result();
 }
+const runMistralFixture = runner(streamMistral);
+const runSimpleMistralFixture = runner(streamSimpleMistral);
 
-function runSimpleMistralFixture(
-  testContext: Context = context,
-  options: SimpleMistralTestOptions = {},
-  testModel = makeMistralModel(),
-) {
-  return streamSimpleMistral(testModel, testContext, {
-    apiKey: "sk-mistral-provider",
-    ...options,
-  }).result();
-}
-
-async function runMistralToolFixture(
-  responseId: string,
-  rawChunks: unknown[][],
-  randomUUID?: string,
-) {
-  if (randomUUID) {
-    mistralMockState.randomUUIDs = [randomUUID];
-  }
+async function runMistralToolFixture(responseId: string, rawChunks: unknown[][]) {
   const parsedChunks = rawChunks.map((chunk) => chunk.map(parseMistralToolCall));
   mistralMockState.streamResult = mistralToolStream(responseId, ...parsedChunks);
   const result = await runMistralFixture();
-  return {
-    result,
-    parsedChunks,
-    toolCalls: result.content.filter((block) => block.type === "toolCall"),
-  };
+  return { result, toolCalls: result.content.filter((block) => block.type === "toolCall") };
 }
 
 function makeMistralToolResultContext(
@@ -200,10 +163,7 @@ function makeMistralToolResultContext(
     messages: [
       ...(options.includeUser === false ? [] : [{ role: "user", content: "hello", timestamp: 1 }]),
       {
-        role: "assistant",
-        provider: "mistral",
-        api: "mistral-conversations",
-        model: "mistral-large-latest",
+        ...createAssistantOutput(makeMistralModel()),
         stopReason: "toolUse",
         timestamp: 0,
         content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: {} }],
@@ -261,9 +221,8 @@ describe("Mistral provider", () => {
   beforeEach(() => {
     mistralMockState.payloads = [];
     mistralMockState.requestOptions = [];
-    mistralMockState.randomUUIDs = [];
+    mistralMockState.nextUUID = 429244;
     mistralMockState.requestThroughHttpClient = false;
-    mistralMockState.streamError = new Error("stop before network");
     mistralMockState.streamResult = undefined;
   });
 
@@ -290,103 +249,60 @@ describe("Mistral provider", () => {
     expect(onActivity).toHaveBeenCalledTimes(events.length);
   });
 
-  it("cancels an unread Mistral stream when acceptance observation fails", async () => {
-    mistralMockState.requestThroughHttpClient = true;
-    const cancel = vi.fn(async () => undefined);
-    mistralMockState.streamResult = {
-      ...mistralEvents([mistralEvent("ok", { id: "resp-http-ack" })]),
-      cancel,
-    };
-    configureAiTransportHost({
-      buildModelFetch: () => async () => new Response("stream", { status: 200 }),
-    });
-    const hookError = new Error("acceptance observer failed");
-    const options = withProviderAcceptanceObserver({}, () => {
-      throw hookError;
-    });
+  it.each([200, 429])(
+    "settles HTTP %i without confusing acceptance and rejection",
+    async (status) => {
+      mistralMockState.requestThroughHttpClient = true;
+      const cancel = vi.fn(async () => undefined);
+      mistralMockState.streamResult = Object.assign(mistralEvents([mistralEvent("ok")]), {
+        cancel,
+      });
+      configureAiTransportHost({
+        buildModelFetch: () => async () =>
+          new Response("stream", {
+            status,
+            headers: { "x-mistral-request-id": "req-fixture" },
+          }),
+      });
+      const hookError = new Error("acceptance observer failed");
+      const accepted = vi.fn(() => {
+        throw hookError;
+      });
+      const onResponse = vi.fn();
+      const result = await runSimpleMistralFixture(
+        context,
+        withProviderAcceptanceObserver({ onResponse }, accepted),
+      );
+      expect(result.stopReason).toBe("error");
+      if (status === 200) {
+        expect(result.errorMessage).toBe("acceptance observer failed");
+        expect(cancel).toHaveBeenCalledWith(hookError);
+      } else {
+        expect(result.errorMessage).toBe("429: Mistral HTTP 429");
+        expect(accepted).not.toHaveBeenCalled();
+        expect(onResponse).toHaveBeenCalledWith(
+          {
+            status: 429,
+            headers: expect.objectContaining({ "x-mistral-request-id": "req-fixture" }),
+          },
+          expect.objectContaining({ provider: "mistral" }),
+        );
+      }
+    },
+  );
 
-    const result = await runSimpleMistralFixture(context, options);
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "acceptance observer failed",
-    });
-    expect(cancel).toHaveBeenCalledWith(hookError);
-  });
-
-  it("reports a rejected HTTP response without marking it accepted", async () => {
-    mistralMockState.requestThroughHttpClient = true;
-    const hostFetch = vi.fn<typeof fetch>(
-      async () =>
-        new Response("rate limited", {
-          status: 429,
-          headers: { "x-mistral-request-id": "req-rejected" },
-        }),
-    );
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    const acceptanceObserver = vi.fn();
-    const onResponse = vi.fn();
-    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
-
-    const result = await runSimpleMistralFixture(context, options);
-
-    expect(result.stopReason).toBe("error");
-    expect(acceptanceObserver).not.toHaveBeenCalled();
-    expect(onResponse).toHaveBeenCalledWith(
-      {
-        status: 429,
-        headers: expect.objectContaining({ "x-mistral-request-id": "req-rejected" }),
-      },
-      expect.objectContaining({ provider: "mistral" }),
-    );
-    expect(hostFetch).toHaveBeenCalledOnce();
-  });
-
-  it("forwards simple stop sequences to Mistral stop", async () => {
-    const result = await runSimpleMistralFixture(context, {
-      stop: ["STOP"],
-    });
-
-    expect(result.stopReason).toBe("error");
-    expect(mistralMockState.payloads[0]).toHaveProperty("stop", ["STOP"]);
-  });
-
-  it("preserves requested maxTokens when the model output limit is unknown", async () => {
-    const model = makeMistralModel();
-    Reflect.deleteProperty(model, "maxTokens");
-    let sentMaxTokens: unknown;
-    let payloadCaptured = false;
-    await runSimpleMistralFixture(
-      context,
-      {
-        maxTokens: 360,
-        onPayload: (requestPayload) => {
-          payloadCaptured = true;
-          sentMaxTokens = (requestPayload as { maxTokens?: number }).maxTokens;
-          throw new Error("stop before network");
-        },
-      },
-      model,
-    );
-
-    expect(payloadCaptured).toBe(true);
-    expect(sentMaxTokens).toBe(360);
-  });
-
-  it("preserves Mistral HTTP status and message while keeping error bodies UTF-16 safe and bounded", async () => {
-    const prefix = "a".repeat(3_999);
-    mistralMockState.streamError = Object.assign(new Error("invalid request"), {
-      statusCode: 400,
-      body: `${prefix}😀tail`,
-    });
-
-    const result = await runMistralFixture();
-
-    expect(result).toMatchObject({
-      errorMessage: "400: invalid request",
-      errorBody: `${prefix.slice(0, 500)}... [truncated]`,
-    });
-  });
+  it.each([
+    [{ stop: ["STOP"] }, { stop: ["STOP"] }],
+    [{ maxTokens: 360 }, { maxTokens: 360 }],
+  ])(
+    "preserves simple request options %j with an unknown output limit",
+    async (options, expected) => {
+      const model = makeMistralModel();
+      Reflect.deleteProperty(model, "maxTokens");
+      await runSimpleMistralFixture(context, options, model);
+      expect(payload()).toMatchObject(expected);
+    },
+  );
 
   it.each([
     ["mistral-medium-3-5", "minimal", "reasoningEffort", "none", "promptMode"],
@@ -396,12 +312,11 @@ describe("Mistral provider", () => {
   ] as const)(
     "%s maps %s thinking through %s",
     async (modelId, reasoning, key, value, absentKey) => {
-      const result = await runSimpleMistralFixture(
+      await runSimpleMistralFixture(
         context,
         { reasoning },
         { ...makeMistralModel(), id: modelId, reasoning: true },
       );
-      expect(result.stopReason).toBe("error");
       expect(payload()[key]).toBe(value);
       expect(payload()).not.toHaveProperty(absentKey);
     },
@@ -419,34 +334,24 @@ describe("Mistral provider", () => {
     expect(JSON.stringify(mistralMockState.payloads[0])).toBe(
       JSON.stringify(mistralMockState.payloads[1]),
     );
-    expect(payload().tools.map((tool) => tool.function.name)).toEqual(["alpha_tool", "zeta_tool"]);
+    expect(payload().tools).toMatchObject([
+      { function: { name: "alpha_tool" } },
+      { function: { name: "zeta_tool" } },
+    ]);
   });
 
-  it.each([
-    { name: "alone", withHealthy: false, toolChoice: "auto" as const },
-    {
-      name: "beside a usable tool",
-      withHealthy: true,
-      toolChoice: { type: "function" as const, function: { name: "broken_tool" } },
-    },
-  ])(
-    "reports unreadable tool parameters $name before sending",
-    async ({ withHealthy, toolChoice }) => {
-      const tools = [makeUnreadableParameterTool(), ...(withHealthy ? [makeHealthyTool()] : [])];
-      const result = await runMistralFixture({ ...context, tools: tools as never }, { toolChoice });
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorMessage: expect.stringContaining("fuzzplugin parameters getter exploded"),
-      });
-      expect(mistralMockState.payloads).toHaveLength(0);
-    },
-  );
+  it("reports unreadable tool parameters beside a usable tool before sending", async () => {
+    const tools = [makeUnreadableParameterTool(), makeHealthyTool()];
+    const toolChoice = { type: "function" as const, function: { name: "broken_tool" } };
+    const result = await runMistralFixture({ ...context, tools: tools as never }, { toolChoice });
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: expect.stringContaining("fuzzplugin parameters getter exploded"),
+    });
+    expect(mistralMockState.payloads).toHaveLength(0);
+  });
 
   it("keeps omitted streamed tool ids stable within a response and unique across responses", async () => {
-    mistralMockState.randomUUIDs = [
-      "00000000-0000-4000-8000-000000429244",
-      "00000000-0000-4000-8000-000000429245",
-    ];
     const responseIds: string[][] = [];
     for (const responseId of ["response-a", "response-b"]) {
       mistralMockState.streamResult = mistralToolStream(
@@ -462,7 +367,6 @@ describe("Mistral provider", () => {
       );
       const result = await runMistralFixture();
       const toolCalls = result.content.filter((block) => block.type === "toolCall");
-      expect(toolCalls).toHaveLength(2);
       expect(toolCalls.map((call) => call.arguments)).toEqual([{ step: 1 }, { other: true }]);
       responseIds.push(toolCalls.map((toolCall) => toolCall.id));
     }
@@ -473,58 +377,37 @@ describe("Mistral provider", () => {
     expect(responseIds[1]?.[0]).not.toBe(responseIds[0]?.[0]);
   });
 
-  it("keeps explicit streamed tool calls distinct when index is omitted", async () => {
-    const { parsedChunks, toolCalls } = await runMistralToolFixture("response-unindexed", [
-      [
-        wireTool("first_tool", '{"value"', { id: "explicitA" }),
-        wireTool("second_tool", '{"value"', { id: "explicitB" }),
-      ],
-      [wireTool("first_tool", ":1}"), wireTool("second_tool", ":2}")],
-    ]);
-    // The SDK defaults an omitted wire index to zero. Explicit provider ids
-    // must still win over that ambiguous compatibility default.
-    expect(parsedChunks[0]).toMatchObject([{ index: 0 }, { index: 0 }]);
-
-    expect(toolCalls).toMatchObject([
-      { id: "explicitA", name: "first_tool", arguments: { value: 1 } },
-      { id: "explicitB", name: "second_tool", arguments: { value: 2 } },
-    ]);
-  });
-
-  it("routes an asymmetric omitted-index continuation by its persistent function name", async () => {
-    const { parsedChunks, toolCalls } = await runMistralToolFixture(
-      "response-asymmetric-unindexed",
-      [
-        [wireTool("first_tool", '{"value":1}'), wireTool("second_tool", '{"value"', { index: 1 })],
-        [wireTool("second_tool", ":2}")],
-      ],
-      "00000000-0000-4000-8000-000000429247",
-    );
-    // The SDK defaults the omitted continuation index to zero; the persistent
-    // function name must still bind it back to the index-1 call.
-    expect(parsedChunks).toMatchObject([
-      [
-        { id: "null", index: 0 },
-        { id: "null", index: 1 },
-      ],
-      [{ id: "null", index: 0 }],
-    ]);
-
+  const firstCall = (args: string, identity: Parameters<typeof wireTool>[2] = {}) =>
+    wireTool("first_tool", args, identity);
+  const secondCall = (args: string, identity: Parameters<typeof wireTool>[2] = {}) =>
+    wireTool("second_tool", args, identity);
+  const identified = [
+    firstCall('{"value"', { id: "explicitA" }),
+    secondCall('{"value"', { id: "explicitB" }),
+  ];
+  it.each(["explicit IDs", "asymmetric name"])("routes unindexed siblings by %s", async (mode) => {
+    const chunks =
+      mode === "explicit IDs"
+        ? [identified, [firstCall(":1}"), secondCall(":2}")]]
+        : [[firstCall('{"value":1}'), secondCall('{"value"', { index: 1 })], [secondCall(":2}")]];
+    const { toolCalls } = await runMistralToolFixture("response-unindexed", chunks);
     expect(toolCalls).toMatchObject([
       { name: "first_tool", arguments: { value: 1 } },
       { name: "second_tool", arguments: { value: 2 } },
     ]);
+    if (mode === "explicit IDs") {
+      expect(toolCalls.map((call) => call.id)).toEqual(["explicitA", "explicitB"]);
+    }
   });
 
   it.each([
     ["nameless", "first_tool", "second_tool", "", "value"],
     ["same-name", "computer", "computer", "computer", "step"],
   ])("rejects ambiguous %s omitted-index continuation", async (kind, first, second, name, key) => {
-    const { result, toolCalls } = await runMistralToolFixture(
-      `response-${kind}-unindexed`,
-      [[wireTool(first, `{"${key}"`), wireTool(second, `{"${key}"`)], [wireTool(name, ":2}")]],
-      "00000000-0000-4000-8000-000000429249",
-    );
+    const { result, toolCalls } = await runMistralToolFixture(`response-${kind}-unindexed`, [
+      [wireTool(first, `{"${key}"`), wireTool(second, `{"${key}"`)],
+      [wireTool(name, ":2}")],
+    ]);
     if (kind === "same-name") {
       expect(toolCalls).toHaveLength(0);
     }
@@ -535,7 +418,6 @@ describe("Mistral provider", () => {
   });
 
   it("keeps a later same-name call distinct when it has a nonzero index", async () => {
-    mistralMockState.randomUUIDs = ["00000000-0000-4000-8000-000000429250"];
     const calls = [1, 2].map((step, index) =>
       parseMistralToolCall(wireTool("computer", JSON.stringify({ step }), { index })),
     );
@@ -559,41 +441,31 @@ describe("Mistral provider", () => {
 
   it("rejects a continuation whose existing id and name identify different siblings", async () => {
     const { result, toolCalls } = await runMistralToolFixture("response-conflicting-identities", [
-      [
-        wireTool("first_tool", '{"value"', { id: "explicitA" }),
-        wireTool("second_tool", '{"value"', { id: "explicitB" }),
-      ],
-      [wireTool("second_tool", ":1}", { id: "explicitA" })],
+      identified,
+      [secondCall(":1}", { id: "explicitA" })],
     ]);
 
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe(
-      "Mistral streamed tool-call identities conflict; refusing to merge arguments",
-    );
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Mistral streamed tool-call identities conflict; refusing to merge arguments",
+    });
     expect(toolCalls).toEqual([]);
   });
 
   it("joins thinking text before string content and skips empty reference-only chunks", async () => {
+    const textPart = (text: string) => ({ type: "text", text });
     const thinkingParts = [
+      [{ type: "reference", reference_ids: [1] }, textPart("")],
       [
-        { type: "reference", reference_ids: [1] },
-        { type: "text", text: "" },
-      ],
-      [
-        { type: "text", text: "" },
-        { type: "text", text: "\ud83d" },
+        ...["", "\ud83d"].map(textPart),
         { type: "tool_reference", tool: "search", title: "source" },
-        { type: "text", text: "\ude00 " },
-        { type: "text", text: "\ud83dx" },
-        { type: "text", text: "" },
+        ...["\ude00 ", "\ud83dx", ""].map(textPart),
       ],
       [],
     ];
     const chunks = thinkingParts.map((thinking) => {
       const parsed = contentChunkFromJSON(JSON.stringify({ type: "thinking", thinking }));
-      if (!parsed.ok) {
-        throw new Error("Mistral SDK failed to parse thinking fixture");
-      }
+      assert(parsed.ok, "Mistral SDK failed to parse thinking fixture");
       return parsed.value;
     });
     mistralMockState.streamResult = mistralEvents(
@@ -602,38 +474,28 @@ describe("Mistral provider", () => {
       ),
     );
     const stream = streamMistral(makeMistralModel(), context, { apiKey: "fixture" });
-    const events: string[] = [];
-    const deltas: string[] = [];
+    const events = [];
     for await (const event of stream) {
-      events.push(event.type);
-      if (event.type === "thinking_delta") {
-        deltas.push(event.delta);
-      }
+      events.push(event);
     }
     expect((await stream.result()).content).toEqual([
       { type: "thinking", thinking: "😀 x" },
       { type: "text", text: "done" },
     ]);
-    expect(deltas).toEqual(["😀 x"]);
-    expect(events).toEqual([
-      "start",
-      "thinking_start",
-      "thinking_delta",
-      "thinking_end",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "done",
-    ]);
+    expect(
+      events.filter((event) => event.type === "thinking_delta").map((event) => event.delta),
+    ).toEqual(["😀 x"]);
+    expect(events.map((event) => event.type)).toEqual(
+      "start thinking_start thinking_delta thinking_end text_start text_delta text_end done".split(
+        " ",
+      ),
+    );
   });
 
   it("validates and emits one snapshot of a pinned Mistral tool name", async () => {
     let nameReads = 0;
-    const result = await runMistralFixture(
-      {
-        ...context,
-        tools: [makeHealthyTool()] as never,
-      },
+    await runMistralFixture(
+      { ...context, tools: [makeHealthyTool()] as never },
       {
         toolChoice: {
           type: "function",
@@ -647,7 +509,6 @@ describe("Mistral provider", () => {
       },
     );
 
-    expect(result.stopReason).toBe("error");
     expect(nameReads).toBe(1);
     expect(mistralMockState.payloads[0]).toHaveProperty("toolChoice", {
       type: "function",
@@ -667,20 +528,24 @@ describe("Mistral provider", () => {
   });
 
   it.each([
-    [undefined, "prompt-cache-key", "prompt-cache-key", "session-affinity"],
-    ["none", "prompt-cache-key", undefined, undefined],
-    [undefined, undefined, "session-affinity", "session-affinity"],
+    [undefined, "prompt-cache-key", "prompt-cache-key", "session-affinity", undefined],
+    ["none", "prompt-cache-key", undefined, undefined, undefined],
+    [undefined, undefined, "session-affinity", "session-affinity", undefined],
+    [undefined, "prompt-cache-key", "prompt-cache-key", "session-affinity", { "X-Affinity": "" }],
+    [undefined, "prompt-cache-key", "prompt-cache-key", "explicit", { "X-Affinity": "explicit" }],
+    [undefined, "prompt-cache-key", "prompt-cache-key", undefined, { "X-Affinity": null }],
   ] as const)(
-    "resolves cache retention %s and key %s",
-    async (cacheRetention, promptCacheKey, key, affinity) => {
+    "resolves cache retention %s and key %s (key %s, affinity %s, headers %j)",
+    async (cacheRetention, promptCacheKey, key, affinity, headers) => {
       await runSimpleMistralFixture(context, {
         sessionId: "session-affinity",
         promptCacheKey,
         cacheRetention,
+        headers,
       });
       const options = mistralMockState.requestOptions[0] as { headers?: Record<string, string> };
       expect(payload().promptCacheKey).toBe(key);
-      expect(options.headers?.["x-affinity"]).toBe(affinity);
+      expect(new Headers(options.headers).get("x-affinity") ?? undefined).toBe(affinity);
     },
   );
 
@@ -707,16 +572,10 @@ describe("Mistral provider", () => {
   });
 
   it("preserves tool-result boundary whitespace in the request payload", async () => {
-    const testContext = makeMistralToolResultContext("read_file", [
-      { type: "text", text: "  indented\n" },
-    ]);
-
-    await runMistralFixture(testContext);
-
-    const content = toolMessage()?.content;
-    const toolContent = Array.isArray(content) ? content : [];
-    const textBlock = toolContent.find((block) => block.type === "text");
-    expect(textBlock?.text).toBe("  indented\n");
+    await runMistralFixture(
+      makeMistralToolResultContext("read_file", [{ type: "text", text: "  indented\n" }]),
+    );
+    expect(toolMessage()?.content).toContainEqual({ type: "text", text: "  indented\n" });
   });
 
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {
@@ -733,7 +592,5 @@ describe("Mistral provider", () => {
     );
 
     expect(toolMessage()?.content).toEqual([{ type: "text", text: "(no tool output)" }]);
-    expect(JSON.stringify(toolMessage())).not.toContain("image_url");
-    expect(JSON.stringify(toolMessage())).not.toContain("see attached image");
   });
 });

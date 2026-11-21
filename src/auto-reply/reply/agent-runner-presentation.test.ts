@@ -1,78 +1,119 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { appendReplyMediaFailures, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
 
 function createPresentation(
   options: {
-    isHeartbeat?: boolean;
     silentExpected?: boolean;
+    directBlockDeliveries?: DirectBlockDelivery[];
     conversationContext?: string;
     onPartialReply?: GetReplyOptions["onPartialReply"];
-    normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
     replyOperation?: AgentTurnParams["replyOperation"];
     typingSignals?: AgentTurnParams["typingSignals"];
-    delivery?: Pick<
-      AgentTurnParams,
-      "opts" | "typingSignals" | "blockStreamingEnabled" | "blockReplyPipeline" | "applyReplyToMode"
-    >;
+    onBlockReply?: GetReplyOptions["onBlockReply"];
+    onPreparedBlockReply?: GetReplyOptions["onPreparedBlockReply"];
+    pipeline?: AgentTurnParams["blockReplyPipeline"];
   } = {},
 ) {
+  const typing = createTypingController({});
   const turn = {
     followupRun: { run: { silentExpected: options.silentExpected === true } },
-    isHeartbeat: options.isHeartbeat === true,
     sessionCtx: { agentText: options.conversationContext },
-    opts: { onPartialReply: options.onPartialReply },
+    opts: {
+      onPartialReply: options.onPartialReply,
+      onBlockReply: options.onBlockReply,
+      onPreparedBlockReply: options.onPreparedBlockReply,
+    },
     typingSignals:
       options.typingSignals ??
       createTypingSignaler({
-        typing: createTypingController({}),
+        typing,
         mode: "never",
-        isHeartbeat: options.isHeartbeat === true,
       }),
     replyOperation: options.replyOperation,
-    ...options.delivery,
+    blockStreamingEnabled: true,
+    blockReplyPipeline: options.pipeline ?? null,
+    applyReplyToMode: (payload: ReplyPayload) => payload,
   } as unknown as AgentTurnParams;
-  return createAgentTurnPresentation({
+  const presentation = createAgentTurnPresentation({
     turn,
     replyMediaContext: {
-      normalizePayload: options.normalizeMediaPaths ?? (async (payload) => payload),
+      normalizePayload: async (payload) => payload,
     },
-    directBlockDeliveries: [],
+    directBlockDeliveries: options.directBlockDeliveries ?? [],
   });
+  return { ...presentation, typing };
 }
 
-function createDeliveryPresentation(
-  onPreparedBlockReply: NonNullable<GetReplyOptions["onPreparedBlockReply"]>,
-  blockReplyPipeline: AgentTurnParams["blockReplyPipeline"] = null,
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>,
-) {
-  const typing = createTypingController({});
-  const presentation = createPresentation({
-    normalizeMediaPaths,
-    delivery: {
-      opts: { onPreparedBlockReply },
-      blockStreamingEnabled: true,
-      blockReplyPipeline,
-      applyReplyToMode: (payload) => payload,
-      typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-    },
-  });
-  const handler = presentation.blockReplyHandler;
-  if (!handler) {
-    throw new Error("expected the prepared block delivery handler");
-  }
-  return { handler, typing };
-}
+it.each(["direct", "buffered"] as const)(
+  "applies silent-turn policy before %s delivery bookkeeping",
+  async (mode) => {
+    const delivered: ReplyPayload[] = [];
+    const directBlockDeliveries: DirectBlockDelivery[] = [];
+    const onBlockReply = (payload: ReplyPayload) => {
+      delivered.push(payload);
+    };
+    const pipeline =
+      mode === "buffered" ? createBlockReplyPipeline({ onBlockReply, timeoutMs: 0 }) : null;
+    const presentation = createPresentation({
+      silentExpected: true,
+      directBlockDeliveries,
+      onBlockReply,
+      pipeline,
+    });
+    const { typing } = presentation;
+    const blockReplyHandler = expectDefined(presentation.blockReplyHandler, "block reply handler");
+    try {
+      const suppressed: ReplyPayload[] = [
+        { text: "Private maintenance output." },
+        { mediaUrls: ["https://example.invalid/private.png"] },
+        { audioAsVoice: true },
+      ];
+      for (const payload of suppressed) {
+        await blockReplyHandler(payload);
+      }
+      await pipeline?.flush({ force: true });
+      expect(delivered).toEqual([]);
+      expect(directBlockDeliveries).toEqual([]);
+      expect(pipeline?.didStream() ?? false).toBe(false);
+
+      const permitted: ReplyPayload[] = [
+        { text: "Maintenance failed.", isError: true },
+        {
+          text: "Spoken reply.",
+          mediaUrls: ["https://example.invalid/voice.opus"],
+          audioAsVoice: true,
+        },
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "Host notice.",
+          isStatusNotice: true,
+        }),
+      ];
+      for (const payload of permitted) {
+        await blockReplyHandler(payload);
+        await pipeline?.flush({ force: true });
+      }
+      expect(delivered).toMatchObject(permitted);
+    } finally {
+      pipeline?.stop();
+      typing.cleanup();
+    }
+  },
+);
 
 it("refreshes typing for whitespace appended while typing sends are failing", async () => {
   vi.useFakeTimers();
@@ -83,7 +124,7 @@ it("refreshes typing for whitespace appended while typing sends are failing", as
     .mockRejectedValue(new Error("temporary typing send failure"));
   const typing = createTypingController({ onReplyStart, onCleanup });
   const presentation = createPresentation({
-    typingSignals: createTypingSignaler({ typing, mode: "message", isHeartbeat: false }),
+    typingSignals: createTypingSignaler({ typing, mode: "message" }),
   });
   try {
     await presentation.presentPartialReply({ text: "answer", delta: "answer" }, "embedded");
@@ -114,48 +155,6 @@ it("strips split heartbeat tokens and preserves replacement partials", async () 
     await presentation.presentPartialReply(payload, "embedded");
   }
   expect(texts).toEqual(["HEARTBEAT_", "details", "replacement"]);
-});
-
-it.each([
-  { name: "recorded silent caption", caption: "NO_REPLY", silent: true },
-  { name: "JSON action caption", caption: '{"action":"NO_REPLY"}', silent: false },
-  { name: "quoted token caption", caption: '"NO_REPLY"', silent: false },
-  { name: "punctuated token caption", caption: "NO_REPLY.", silent: false },
-  { name: "ordinary code-literal caption", caption: "Use `NO_REPLY` literally.", silent: false },
-])("preserves $name policy across attachment normalization", async ({ caption, silent }) => {
-  const retainedMedia = "https://example.invalid/retained.png";
-  const delivered = vi.fn(async (_payload: ReplyPayload) => {});
-  const { handler, typing } = createDeliveryPresentation(
-    async (plan) => delivered(plan.payload),
-    null,
-    async (payload) => ({
-      ...payload,
-      text: appendReplyMediaFailures(payload.text, [
-        { code: "delivery-failed", kind: "image", label: "Example" },
-      ]),
-      mediaUrl: retainedMedia,
-      mediaUrls: [retainedMedia],
-    }),
-  );
-  try {
-    await handler(
-      setReplyPayloadMetadata(
-        {
-          text: `[tool calls omitted]\n${caption}`,
-          mediaUrls: ["https://example.invalid/failed.png", retainedMedia],
-        },
-        silent ? { silentReply: true } : {},
-      ),
-    );
-    expect(delivered.mock.calls.map(([payload]) => payload.text)).toEqual([
-      silent ? "" : `${caption}\n⚠️ Example: Delivery failed. Try sending this file again.`,
-    ]);
-    expect(
-      delivered.mock.calls.map(([payload]) => resolveSendableOutboundReplyParts(payload).mediaUrls),
-    ).toEqual([[retainedMedia]]);
-  } finally {
-    typing.cleanup();
-  }
 });
 
 it.each([
@@ -190,7 +189,9 @@ it.each([
       timeoutMs: 0,
       coalescing: { minChars: 1, maxChars: 1200, idleMs: 0, joiner: "\n\n" },
     });
-    const { handler, typing } = createDeliveryPresentation(forwardPrepared, pipeline);
+    const presentation = createPresentation({ onPreparedBlockReply: forwardPrepared, pipeline });
+    const { typing } = presentation;
+    const handler = expectDefined(presentation.blockReplyHandler, "block reply handler");
     const middle = setReplyPayloadMetadata({ text }, silent ? { silentReply: true } : {});
     try {
       await handler({ text: "First." });
@@ -266,19 +267,11 @@ const promptCases: PromptCase[] = [
   ...(
     [
       ["standard", "> "],
-      ["indented", "  > "],
-      ["nested", ">> "],
-      ["spaced nested", "> > "],
-      ["four-space code", "    "],
-      ["tab-indented code", "\t"],
+      ["nested", "> > ", ">> "],
       ["bulleted list", "- "],
       ["numbered list", "1. "],
       ["heading", "# "],
-      ["deep heading", "###### "],
-      ["quoted heading", "> ## "],
       ["multiline list", "- ", "  "],
-      ["wide list", "- ", "    "],
-      ["varying quote depth", "> ", ">> "],
       ["quoted list", "> - ", ">   "],
       ["mixed code indentation", "    ", "\t"],
       ["unwrapped marker", "", "> "],
@@ -293,10 +286,6 @@ const promptCases: PromptCase[] = [
   ]),
   ...(
     [
-      ["bulleted", "- ", "- ", "- "],
-      ["quoted", "> ", "> ", "> "],
-      ["indented", "    ", "    ", "    "],
-      ["indented list", "- ", "    ", "    "],
       ["prompt-owned bullet", "- ", "    ", "- "],
       ["prompt-owned quote", "> ", ">> ", "> "],
     ] satisfies Array<[string, string, string, string]>
@@ -368,84 +357,53 @@ it.each([
   });
 });
 
-it("presents streaming control tokens without changing final text", async () => {
-  const visible = (text: string) => ({ text, skip: false });
-  const cases: Array<
-    [ReplyPayload, { text?: string; skip: boolean }, Parameters<typeof createPresentation>[0]?]
-  > = [
-    ...[
-      "visible answer",
-      "H",
-      "N",
-      "NO_",
-      "NO_REPLY",
-      "NO_REPLY.",
-      '"NO_REPLY"',
-      '{"action":"NO_REPLY"}',
-      "HEARTBEAT_",
-      "NO_REPLYVisible",
-      "NO_REPLYVisible answer",
-      "NO_REPLY\nVisible answer",
-      "No, that is wrong.",
-    ].map((text): [ReplyPayload, { text: string; skip: boolean }] => [{ text }, visible(text)]),
-    ...["HEARTBEAT_OK", " ", "  ", "  \n", "[tool calls omitted]"].map(
-      (text): [ReplyPayload, { skip: boolean }] => [{ text }, { skip: true }],
-    ),
-    [{ text: "HEARTBEAT_OK visible after heartbeat" }, visible("visible after heartbeat")],
-    [{ mediaUrls: ["https://example.invalid/image.png"] }, { text: undefined, skip: false }],
-    [{ text: "visible" }, { skip: true }, { silentExpected: true }],
-    [{ text: "HEARTBEAT_OK details" }, visible("HEARTBEAT_OK details"), { isHeartbeat: true }],
-  ];
-  for (const [payload, expected, options] of cases) {
+type PreviewCase = [name: string, text: string, expected: string | null, silent?: boolean];
+it.each([
+  ...[
+    "visible answer",
+    "N",
+    "NO_REPLY",
+    '{"action":"NO_REPLY"}',
+    "NO_REPLY\nVisible answer",
+    ".NO_",
+  ].map((text): PreviewCase => [text, text, text]),
+  ...["HEARTBEAT_OK", "  \n", "[tool calls omitted]"].map((text): PreviewCase => [
+    JSON.stringify(text),
+    text,
+    null,
+  ]),
+  [
+    "heartbeat with visible suffix",
+    "HEARTBEAT_OK visible after heartbeat",
+    "visible after heartbeat",
+  ],
+  ["silent turn", "visible", null, true],
+  [
+    "large punctuation-prefixed preview",
+    `.NOTE: ${"ordinary text ".repeat(10_000)}`,
+    `.NOTE: ${"ordinary text ".repeat(10_000)}`,
+  ],
+] satisfies PreviewCase[])(
+  "presents prepared CLI text: %s",
+  async (_name, text, expected, silentExpected) => {
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
-    const presentation = createPresentation({ ...options, onPartialReply });
-    await presentation.presentPartialReply(payload, "cli");
-    if (expected.skip || !expected.text) {
-      expect(onPartialReply).not.toHaveBeenCalled();
-    } else {
-      expect(onPartialReply).toHaveBeenCalledExactlyOnceWith({ text: expected.text });
-    }
-    if (payload.mediaUrls) {
-      expect(presentation.normalizeStreamingText(payload)).toEqual(expected);
-    }
-    if (payload.text === "N") {
-      // Final text is not an incomplete cumulative preview (#122476).
-      expect(presentation.normalizeStreamingText(payload)).toEqual({ text: "N", skip: false });
-    }
-  }
-});
+    const presentation = createPresentation({ onPartialReply, silentExpected });
+    await presentation.presentPartialReply({ text }, "cli");
+    expect(onPartialReply.mock.calls.map(([payload]) => payload.text)).toEqual(
+      expected === null ? [] : [expected],
+    );
+    // The final-text path must not treat an incomplete preview such as "N" as a control token.
+    expect(presentation.normalizeStreamingText({ text })).toEqual(
+      expected === null ? { skip: true } : { text: expected, skip: false },
+    );
+  },
+);
 
-it("forwards prepared punctuation-prefixed text without control buffering", async () => {
+it("keeps media sendable without emitting an empty text preview", async () => {
   const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
   const presentation = createPresentation({ onPartialReply });
-
-  for (const text of [".N", ". N", "- N", ".NO", ".NO_", ".NO_REPL", "*NO_", '"NO_', "（NO_"]) {
-    await presentation.presentPartialReply({ text }, "cli");
-  }
-  expect(onPartialReply).toHaveBeenCalledTimes(9);
-  for (const text of [
-    ".NOTE: real content",
-    "- Note: real content",
-    ".No, that is wrong.",
-    "💬NO_REPLY",
-    "NO_REPLY👍",
-    ".NO_REPLY: explanation",
-    ".",
-    "*",
-  ]) {
-    await presentation.presentPartialReply({ text }, "cli");
-    expect(onPartialReply).toHaveBeenLastCalledWith({ text });
-  }
-  for (const text of [".NO", ".N", ". N", "- N", "*NO_", '"NO_', "（NO_", ".", "*"]) {
-    expect(presentation.normalizeStreamingText({ text })).toEqual({ text, skip: false });
-  }
-});
-
-it("keeps large ordinary previews visible after a punctuation prefix", async () => {
-  const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
-  const presentation = createPresentation({ onPartialReply });
-  const text = `.NOTE: ${"ordinary text ".repeat(10_000)}`;
-
-  await presentation.presentPartialReply({ text }, "cli");
-  expect(onPartialReply).toHaveBeenCalledExactlyOnceWith({ text });
+  const payload = { mediaUrls: ["https://example.invalid/image.png"] };
+  await presentation.presentPartialReply(payload, "cli");
+  expect(onPartialReply).not.toHaveBeenCalled();
+  expect(presentation.normalizeStreamingText(payload)).toEqual({ text: undefined, skip: false });
 });

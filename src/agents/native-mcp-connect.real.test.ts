@@ -47,9 +47,9 @@ transport.onmessage = (message) => {
         const transport = new OpenClawStdioClientTransport({
           command: process.execPath,
           args: [serverPath],
-          stderr: "ignore",
           ...(mode === "oversize" ? { decoder: new McpStdioFrameDecoder(128, "transport") } : {}),
         });
+        transport.stderr.resume();
         return { client, transport, transportType: "stdio" as const };
       };
       const session = createSession();

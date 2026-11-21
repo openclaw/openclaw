@@ -40,14 +40,6 @@ function captureFetch(body: unknown, responseFor?: (url: string, init?: RequestI
 }
 
 describe("browser client", () => {
-  function requireSnapshotCall(calls: FetchCall[]): string {
-    const call = calls.find(({ url }) => url.includes("/snapshot?"));
-    if (!call) {
-      throw new Error("expected browser snapshot request");
-    }
-    return call.url;
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -87,13 +79,21 @@ describe("browser client", () => {
     ],
     ["ARIA refs", { format: "ai", refs: "aria" }, { refs: "aria" }],
     ["server capability defaults", { profile: "chrome" }, { profile: "chrome" }],
+    ["explicit timeout", { format: "ai", timeoutMs: 4321 }, { timeoutMs: "4321" }],
+    [
+      "clamped timeout",
+      { format: "ai", timeoutMs: Number.MAX_SAFE_INTEGER },
+      { timeoutMs: String(MAX_TIMER_TIMEOUT_MS) },
+    ],
+    ["default timeout", { format: "ai" }, { timeoutMs: "20000" }],
   ])("encodes snapshot %s", async (_name, options, query) => {
     const calls = captureFetch({ ok: true, format: "ai" });
     await expect(browserSnapshot(baseUrl, options)).resolves.toMatchObject({
       ok: true,
       format: "ai",
     });
-    const parsed = new URL(requireSnapshotCall(calls));
+    const parsed = new URL(calls[0]!.url);
+    expect(parsed.pathname).toBe("/snapshot");
     expect(Object.fromEntries(parsed.searchParams)).toMatchObject(query);
     expect(parsed.searchParams.has("format")).toBe(options.format !== undefined);
   });
@@ -115,32 +115,17 @@ describe("browser client", () => {
     });
     await browserErrors(baseUrl, { targetId: "tab & one", clear: false, profile });
     expect(calls).toHaveLength(4);
-    const errorsUrl = new URL(calls[3]!.url);
-    expect(errorsUrl.pathname).toBe("/errors");
-    expect(Object.fromEntries(errorsUrl.searchParams)).toEqual({
-      targetId: "tab & one",
-      clear: "false",
-      profile,
-    });
-    const requestUrl = new URL(calls[0]!.url);
-    expect(requestUrl.pathname).toBe("/requests");
-    expect(Object.fromEntries(requestUrl.searchParams)).toEqual({
-      targetId: "t1",
-      filter: "/api?q=a&b",
-      clear: "false",
-      profile,
-    });
-    const textUrl = new URL(calls[1]!.url);
-    expect(textUrl.pathname).toBe("/text");
-    expect(Object.fromEntries(textUrl.searchParams)).toEqual({
-      targetId: "t1",
-      selector: "article > p",
-      maxChars: "123",
-      profile,
-    });
-    const deviceUrl = new URL(calls[2]!.url);
-    expect(deviceUrl.pathname).toBe("/set/device");
-    expect(deviceUrl.searchParams.get("profile")).toBe(profile);
+    expect(
+      calls.map(({ url }) => {
+        const parsed = new URL(url);
+        return [parsed.pathname, Object.fromEntries(parsed.searchParams)];
+      }),
+    ).toEqual([
+      ["/requests", { targetId: "t1", filter: "/api?q=a&b", clear: "false", profile }],
+      ["/text", { targetId: "t1", selector: "article > p", maxChars: "123", profile }],
+      ["/set/device", { profile }],
+      ["/errors", { targetId: "tab & one", clear: "false", profile }],
+    ]);
     expect(calls[2]!.init?.method).toBe("POST");
     const deviceBody = calls[2]!.init?.body;
     if (typeof deviceBody !== "string") {
@@ -149,38 +134,6 @@ describe("browser client", () => {
     expect(JSON.parse(deviceBody)).toEqual({ targetId: "t1", name: "iPhone 15" });
   });
 
-  it("forwards an explicit snapshot timeoutMs into the query string", async () => {
-    const calls = captureFetch({ ok: true, format: "ai" });
-
-    await browserSnapshot("http://127.0.0.1:18791", {
-      format: "ai",
-      timeoutMs: 4321,
-    });
-
-    const parsed = new URL(requireSnapshotCall(calls));
-    expect(parsed.searchParams.get("timeoutMs")).toBe("4321");
-  });
-
-  it("clamps oversized snapshot timeoutMs before forwarding", async () => {
-    const calls = captureFetch({ ok: true, format: "ai" });
-
-    await browserSnapshot("http://127.0.0.1:18791", {
-      format: "ai",
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    const parsed = new URL(requireSnapshotCall(calls));
-    expect(parsed.searchParams.get("timeoutMs")).toBe(String(MAX_TIMER_TIMEOUT_MS));
-  });
-
-  it("falls back to the default snapshot timeout when none is supplied", async () => {
-    const calls = captureFetch({ ok: true, format: "ai" });
-
-    await browserSnapshot("http://127.0.0.1:18791", { format: "ai" });
-
-    const parsed = new URL(requireSnapshotCall(calls));
-    expect(parsed.searchParams.get("timeoutMs")).toBe("20000");
-  });
   it("uses the expected endpoints + methods for common calls", async () => {
     const download = {
       url: "https://y/report.csv",
@@ -194,7 +147,7 @@ describe("browser client", () => {
         path: "/tmp/openclaw/downloads/report.pdf",
       },
     ];
-    const responses: Record<string, unknown> = {
+    const responses: Record<string, object> = {
       "/tabs": { running: true, tabs: [{ targetId: "t1", title: "T", url: "https://x" }] },
       "/tabs/open": { targetId: "t2" },
       "/navigate": { ok: true, targetId: "t1", download },
@@ -218,68 +171,29 @@ describe("browser client", () => {
       return responses[pathname === "/tabs" && init?.method !== undefined ? "/" : pathname];
     });
 
-    const statusResult = await browserStatus(baseUrl);
-    expect(statusResult).toMatchObject({ running: true, cdpPort: 18792 });
-
-    const doctorResult = await browserDoctor(baseUrl);
-    expect(doctorResult).toMatchObject({ ok: true, profile: "openclaw" });
-
-    const deepDoctorResult = await browserDoctor(baseUrl, {
-      profile: "openclaw",
-      deep: true,
-    });
-    expect(deepDoctorResult).toMatchObject({ ok: true, profile: "openclaw" });
-
+    const check = async (path: string, request: Promise<unknown>) => {
+      await expect(request).resolves.toEqual(expect.objectContaining(responses[path]!));
+    };
+    await check("/", browserStatus(baseUrl));
+    await check("/doctor", browserDoctor(baseUrl));
+    await check("/doctor", browserDoctor(baseUrl, { profile: "openclaw", deep: true }));
     await expect(browserTabs(baseUrl)).resolves.toEqual({
       running: true,
       tabs: [expect.objectContaining({ targetId: "t1" })],
     });
-    const openedTab = await browserOpenTab(baseUrl, "https://example.com");
-    expect(openedTab.targetId).toBe("t2");
-
-    const snapshot = await browserSnapshot(baseUrl, {
-      format: "aria",
-      limit: 1,
-    });
-    expect(snapshot).toMatchObject({ ok: true, format: "aria" });
-
-    const navigation = await browserNavigate(baseUrl, {
-      url: "https://example.com",
-    });
-    expect(navigation).toMatchObject({ ok: true, targetId: "t1" });
-    expect(navigation.download).toEqual(download);
-
-    const act = await browserAct(baseUrl, { kind: "click", ref: "1" });
-    expect(act).toMatchObject({ ok: true, targetId: "t1" });
-    expect(act.results).toEqual([{ ok: true }]);
-    expect(act.downloads).toEqual(downloads);
-
-    const fileChooser = await browserArmFileChooser(baseUrl, {
-      paths: ["/tmp/a.txt"],
-    });
-    expect(fileChooser.ok).toBe(true);
-
-    const dialog = await browserArmDialog(baseUrl, { accept: true });
-    expect(dialog.ok).toBe(true);
-
-    const consoleMessages = await browserConsoleMessages(baseUrl, {
-      level: "error",
-    });
-    expect(consoleMessages).toMatchObject({ ok: true, targetId: "t1" });
-
-    const pdf = await browserPdfSave(baseUrl);
-    expect(pdf).toMatchObject({ ok: true, path: "/tmp/a.pdf" });
-
-    const screenshotResult = await browserScreenshotAction(baseUrl, {
-      fullPage: true,
-      timeoutMs: 12_345,
-    });
-    expect(screenshotResult).toMatchObject({ ok: true, path: "/tmp/a.png" });
-
-    const defaultScreenshotResult = await browserScreenshotAction(baseUrl, {
-      targetId: "t-default",
-    });
-    expect(defaultScreenshotResult).toMatchObject({ ok: true, path: "/tmp/a.png" });
+    await check("/tabs/open", browserOpenTab(baseUrl, "https://example.com"));
+    await check("/snapshot", browserSnapshot(baseUrl, { format: "aria", limit: 1 }));
+    await check("/navigate", browserNavigate(baseUrl, { url: "https://example.com" }));
+    await check("/act", browserAct(baseUrl, { kind: "click", ref: "1" }));
+    await check("/hooks/file-chooser", browserArmFileChooser(baseUrl, { paths: ["/tmp/a.txt"] }));
+    await check("/hooks/dialog", browserArmDialog(baseUrl, { accept: true }));
+    await check("/console", browserConsoleMessages(baseUrl, { level: "error" }));
+    await check("/pdf", browserPdfSave(baseUrl));
+    await check(
+      "/screenshot",
+      browserScreenshotAction(baseUrl, { fullPage: true, timeoutMs: 12_345 }),
+    );
+    await check("/screenshot", browserScreenshotAction(baseUrl, { targetId: "t-default" }));
 
     const urls = calls.map((call) => call.url);
     expect(urls.some((url) => url.endsWith("/tabs"))).toBe(true);
@@ -380,11 +294,12 @@ describe("browser client", () => {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    const actCalls = calls.filter((call) => call.url.endsWith("/act"));
-    expect(actCalls[0]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(actCalls[1]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    const screenshot = calls.find((call) => call.url.endsWith("/screenshot"));
-    expect(screenshot?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(calls.map(({ url, init }) => [new URL(url).pathname, init?.timeoutMs])).toEqual([
+      ["/act", MAX_TIMER_TIMEOUT_MS],
+      ["/act", MAX_TIMER_TIMEOUT_MS],
+      ["/screenshot", MAX_TIMER_TIMEOUT_MS],
+    ]);
+    const screenshot = calls[2];
     const screenshotBody = JSON.parse(
       typeof screenshot?.init?.body === "string" ? screenshot.init.body : "{}",
     ) as { timeoutMs?: unknown };

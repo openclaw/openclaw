@@ -233,6 +233,7 @@ export async function offerLiveModelVerification(params: {
             config,
             agentId,
             runtime: params.runtime,
+            candidateSetup: true,
             ...(savedProfile?.credential.setup?.replacement
               ? {
                   onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {
@@ -258,8 +259,11 @@ export async function offerLiveModelVerification(params: {
       progress.stop();
     }
     if (result.ok) {
+      const success = t("wizard.setup.testAiSuccess", {
+        seconds: (result.latencyMs / 1000).toFixed(1),
+      });
       await params.prompter.note(
-        t("wizard.setup.testAiSuccess", { seconds: (result.latencyMs / 1000).toFixed(1) }),
+        result.warning ? `${success}\n\n${result.warning}` : success,
         t("wizard.setup.testAiTitle"),
       );
     } else {

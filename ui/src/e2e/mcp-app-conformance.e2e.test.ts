@@ -3,7 +3,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
-import { createRequire } from "node:module";
 import path from "node:path";
 import type { Frame, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -35,6 +34,7 @@ import {
   findAppFrame,
   mountControlUiHost,
   requestStandaloneUrl,
+  readMcpAppModule,
   waitForText,
   waitForTextContaining,
   writeFixtureServer,
@@ -46,7 +46,6 @@ import {
   waitForMcpAppTimingEvents,
 } from "./mcp-app-timing.test-support.ts";
 
-const require = createRequire(import.meta.url);
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -204,8 +203,7 @@ const suite = createControlUiE2eSuite({
       await fs.mkdir(bundledPluginsDir, { recursive: true });
       // The state owner already captured this key; its value needs the allocated root.
       state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-      const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
-      const appModuleSource = await fs.readFile(appEntryPath, "utf8");
+      const appModuleSource = await readMcpAppModule();
       portClaims.appAsset = await acquireGatewayE2ePortBlock();
       const appAssetPort = portClaims.appAsset.port;
       signal.throwIfAborted();
@@ -549,7 +547,7 @@ suite.define(() => {
             const requests = observeMcpAppRequests(standalonePage);
             await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
             let app = await findAppFrame(standalonePage);
-            // Each RPC stays below 10s; their composition must cross the former 15s HTTP cutoff.
+            // A ready connection calls known tools while its eight-second refresh is pending.
             const timingSpec = { scenario: "list8-call8", callDelayMs: 8000 };
             await fixture.configure(timingSpec);
             await app.locator("#arm-refresh").click();

@@ -78,9 +78,7 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("serves only the exclusive config, ignoring user and plugin servers", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-exclusive-",
-    );
+    const workspaceDir = cliBundleMcpHarness.bundleProbeWorkspaceDir;
     const userConfig = path.join(workspaceDir, "user-mcp.json");
     await writeServers(userConfig, { user: nodeServer("user.mjs") });
 
@@ -91,9 +89,7 @@ describe("prepareCliBundleMcpConfig", () => {
       },
       workspaceDir,
       config: { plugins: { enabled: false } },
-      exclusiveConfig: {
-        mcpServers: { openclaw: nodeServer("openclaw.mjs") },
-      },
+      exclusiveConfig: { mcpServers: { openclaw: nodeServer("openclaw.mjs") } },
     });
 
     expect(prepared.backend.args).toContain("--strict-mcp-config");
@@ -120,19 +116,13 @@ describe("prepareCliBundleMcpConfig", () => {
         },
       }),
     });
-    const agentDataDir = path.join(
-      cliBundleMcpHarness.bundleProbeHomeDir,
-      ".openclaw/plugin-data",
-      pluginId,
-    );
-    const userDataPath = path.join(
-      cliBundleMcpHarness.bundleProbeHomeDir,
-      "user-data-must-not-exist",
-    );
+    const home = cliBundleMcpHarness.bundleProbeHomeDir;
+    const agentDataDir = path.join(home, ".openclaw/plugin-data", pluginId);
+    const userDataPath = path.join(home, "user-data-must-not-exist");
     clearPluginMetadataLifecycleCaches();
 
     const prepared = await withEnvAsync(
-      { HOME: cliBundleMcpHarness.bundleProbeHomeDir },
+      { HOME: home },
       async () =>
         await prepareCliBundleMcpConfig({
           mode: "gemini-system-settings",
@@ -153,13 +143,9 @@ describe("prepareCliBundleMcpConfig", () => {
     expect((await fs.stat(agentDataDir)).isDirectory()).toBe(true);
     await expect(fs.stat(userDataPath)).rejects.toMatchObject({ code: "ENOENT" });
     const raw = await readConfig(prepared, true);
-    expect(raw.mcpServers?.remote).toMatchObject({
-      type: "http",
-      url: "https://example.test/mcp",
-    });
-    expect(raw.mcpServers?.legacy).toMatchObject({
-      type: "sse",
-      url: "https://example.test/sse",
+    expect(raw.mcpServers).toMatchObject({
+      remote: { type: "http", url: "https://example.test/mcp" },
+      legacy: { type: "sse", url: "https://example.test/sse" },
     });
     expect(raw.mcpServers?.remote?.transport).toBeUndefined();
     expect(raw.mcpServers?.legacy?.transport).toBeUndefined();
@@ -168,15 +154,11 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("projects normalized session MCP denials alongside existing Claude denials", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-deny-",
-    );
     const prepared = await prepareClaudeConfig({
       backend: {
         command: "claude",
         args: ["--disallowedTools=Bash(rm *)"],
       },
-      workspaceDir,
       config: userMcpConfig({ "docs.prod": nodeServer("docs.mjs") }),
       toolOverrides: {
         mcpToolsDeny: { "docs.prod": ["read.value", "read:value"] },
@@ -197,9 +179,7 @@ describe("prepareCliBundleMcpConfig", () => {
   it("projects durable policy into the first Claude process config and argv", async () => {
     const prepared = await preparePolicy("claude-policy", {
       tools: { allow: ["docs__*"], deny: ["docs__delete_docs"] },
-      additionalConfig: {
-        mcpServers: { openclaw: { url: "http://127.0.0.1:31783/mcp" } },
-      },
+      additionalConfig: loopbackConfig(),
       toolOverrides: { mcpToolsDeny: { openclaw: ["message"] } },
     });
 
@@ -245,9 +225,7 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("strips variadic Claude --mcp-config values and merges every listed config", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-variadic-",
-    );
+    const workspaceDir = cliBundleMcpHarness.bundleProbeWorkspaceDir;
     await writeServers(path.join(workspaceDir, "first-mcp.json"), {
       first: nodeServer("first.mjs"),
       shared: nodeServer("old.mjs"),
@@ -325,10 +303,7 @@ describe("prepareCliBundleMcpConfig", () => {
   it("leaves args untouched when bundle MCP is disabled", async () => {
     const prepared = await prepareCliBundleMcpConfig({
       enabled: false,
-      backend: {
-        command: "node",
-        args: ["./fake-cli.mjs"],
-      },
+      backend: { command: "node", args: ["./fake-cli.mjs"] },
       workspaceDir: "/tmp/openclaw-bundle-mcp-disabled",
     });
 

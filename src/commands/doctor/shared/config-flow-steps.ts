@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { note } from "../../../../packages/terminal-core/src/note.js";
 import {
   getDeferredPluginMigrationConfigFacts,
   setDeferredPluginMigrationConfigFacts,
@@ -15,13 +16,19 @@ import { resolvePluginDoctorProviderRenames } from "../../../plugins/doctor-cont
 import { migratePluginConfigId } from "../../../plugins/update-config.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
-import type { DoctorConfigMutationState } from "./config-mutation-state.js";
+import {
+  applyDoctorConfigMutation,
+  type DoctorConfigMutationState,
+} from "./config-mutation-state.js";
 import {
   classifyOtelGrpcMigrationOwnership,
   containsAuthoredInclude,
 } from "./include-migration-ownership.js";
 import type { InstalledPluginIdRecovery } from "./installed-plugin-id-recovery.js";
-import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
+import {
+  applyLegacyDoctorMigrations,
+  type LegacyDoctorMigrationOptions,
+} from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { applyProviderRenames, planProviderRenames } from "./provider-rename.js";
 
@@ -113,40 +120,75 @@ export function applyLegacyCompatibilityStep(params: {
   };
 }
 
-/** Strip unknown config keys while preserving active auth profile settings. */
-export function applyUnknownConfigKeyStep(params: {
+/** Retire heartbeat data before removing unknown configuration keys. */
+export async function applyRetiredConfigStep(params: {
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
   doctorFixCommand: string;
-  preservedPaths?: readonly (readonly string[])[];
-}): {
-  state: DoctorConfigMutationState;
-  removed: string[];
-  repairs: string[];
-  warnings: string[];
-} {
-  const unknown = stripUnknownConfigKeys(params.state.candidate, params.preservedPaths);
+  sourceConfig: OpenClawConfig;
+  emitChanges: (changeLines: readonly string[]) => void;
+  preflight?: {
+    heartbeatMigrationDeferred?: true;
+    cronStoreSelectionUnresolved?: true;
+  };
+}): Promise<DoctorConfigMutationState> {
+  let state = params.state;
+  if (params.preflight?.heartbeatMigrationDeferred) {
+    return state;
+  }
+  if (params.shouldRepair && !params.preflight?.cronStoreSelectionUnresolved) {
+    const { tryProjectRetiredHeartbeatConfig } = await import("../../doctor-heartbeat-legacy.js");
+    const { retireHeartbeatWithDoctor } = await import("../../doctor-heartbeat-retirement.js");
+    const retiredConfig = tryProjectRetiredHeartbeatConfig(state.candidate)
+      ? await retireHeartbeatWithDoctor(state.candidate)
+      : undefined;
+    if (retiredConfig && JSON.stringify(retiredConfig) !== JSON.stringify(state.candidate)) {
+      const mutation = {
+        config: retiredConfig,
+        changes: ["Retired heartbeat configuration after ordinary automation data was verified."],
+      };
+      params.emitChanges(mutation.changes);
+      state = applyDoctorConfigMutation({
+        state,
+        mutation,
+        shouldRepair: params.shouldRepair,
+        fixHint: `Run "${params.doctorFixCommand}" to finish the heartbeat migration.`,
+      });
+    }
+  }
+
+  const unknown = stripUnknownConfigKeys(
+    state.candidate,
+    getDeferredPluginMigrationConfigFacts(params.sourceConfig)?.flatMap((pending) =>
+      (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
+    ),
+  );
   if (unknown.removed.length === 0) {
-    return { state: params.state, removed: [], repairs: [], warnings: [] };
+    return state;
   }
   const protectedAuth = protectActiveAuthProfileConfig({
-    before: params.state.candidate,
+    before: state.candidate,
     after: unknown.config,
   });
-
-  return {
-    state: {
-      cfg: params.shouldRepair ? protectedAuth.config : params.state.cfg,
-      candidate: protectedAuth.config,
-      pendingChanges: true,
-      fixHints: params.shouldRepair
-        ? params.state.fixHints
-        : [...params.state.fixHints, `Run "${params.doctorFixCommand}" to remove these keys.`],
-    },
-    removed: unknown.removed,
-    repairs: protectedAuth.repairs,
-    warnings: protectedAuth.warnings,
-  };
+  state = applyDoctorConfigMutation({
+    state,
+    mutation: { config: protectedAuth.config, changes: unknown.removed },
+    shouldRepair: params.shouldRepair,
+    fixHint: `Run "${params.doctorFixCommand}" to remove these keys.`,
+  });
+  const lines = [
+    ...unknown.removed.map((pathLocal) => `- ${pathLocal}`),
+    ...protectedAuth.repairs.map((change) => `- ${change}`),
+  ];
+  if (params.shouldRepair) {
+    params.emitChanges(lines);
+  } else {
+    note(lines.join("\n"), "Unknown config keys");
+  }
+  if (protectedAuth.warnings.length > 0) {
+    note(protectedAuth.warnings.join("\n"), "Doctor warnings");
+  }
+  return state;
 }
 
 export type DoctorConfigReferenceSource = {
@@ -228,6 +270,7 @@ export function restoreDoctorConfigEnvRefs(
   explicitSetPaths?: readonly (readonly string[])[],
   migrationOptions: {
     appliedPluginIdMigrations?: Readonly<Record<string, string>>;
+    pluginCompatibility?: LegacyDoctorMigrationOptions["pluginCompatibility"];
   } = {},
 ): OpenClawConfig {
   if (!source) {
@@ -250,6 +293,7 @@ export function restoreDoctorConfigEnvRefs(
   const options = {
     sourceConfigBeforeMigrations: source.resolved,
     context: { authoredRaw: source.parsed, resolvedRaw: source.resolved },
+    pluginCompatibility: migrationOptions.pluginCompatibility,
   };
   // Replay the resolved routing decision on authored templates before plugin cleanup.
   const providerRenames = planProviderRenames(

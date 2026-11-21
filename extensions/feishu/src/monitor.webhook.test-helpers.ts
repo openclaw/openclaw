@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { createConnection, type AddressInfo } from "node:net";
 import { text } from "node:stream/consumers";
 import { promisify } from "node:util";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -12,7 +13,7 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { canonicalizeWebhookRouteKey } from "openclaw/plugin-sdk/webhook-ingress";
-import { afterAll, onTestFinished, vi } from "vitest";
+import { afterAll, expect, onTestFinished, vi } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { FeishuStatusSink, monitorFeishuProvider } from "./monitor.js";
@@ -95,7 +96,7 @@ export function waitForWebhookRoute(url: string): Promise<void> {
 
 export function createFeishuWebhookTestAccount(
   accountId: string,
-  webhookPath: string,
+  webhookPath = `/hook-${accountId}`,
 ): ResolvedFeishuAccount {
   return {
     accountId,
@@ -109,6 +110,28 @@ export function createFeishuWebhookTestAccount(
       ...webhookAuth,
     }),
   };
+}
+
+export function createHeldWebhookDispatch<T>(value: T) {
+  const started = createDeferred<void>();
+  const release = createDeferred<void>();
+  const handler = vi.fn(async () => {
+    started.resolve();
+    await release.promise;
+    return value;
+  });
+  return { started: started.promise, release: release.resolve, handler };
+}
+
+export async function expectWebhookJson(response: Response, value: unknown) {
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(value);
+}
+
+export function waitForWebhookResponseClose(): Promise<void> {
+  return new Promise((resolve) => {
+    gatewayServer.once("request", (_req, res) => res.once("close", resolve));
+  });
 }
 
 export function signFeishuPayload(params: {

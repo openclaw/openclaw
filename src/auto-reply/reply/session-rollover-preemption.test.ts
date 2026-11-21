@@ -4,8 +4,9 @@ import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { disposeAllSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
@@ -71,7 +72,7 @@ function resetSession(storePath: string, sessionKey: string, from: string) {
       Provider: "telegram",
       Surface: "telegram",
     },
-    cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+    cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 999 } } },
   });
 }
 
@@ -91,14 +92,15 @@ it("preempts a running turn and cancels two queued follow-ups before /new resets
   );
   await runStarted.promise;
   for (const prompt of ["first waiting follow-up", "second waiting follow-up"]) {
-    const queued = createQueueTestRun({ prompt });
-    queued.run = {
-      ...queued.run,
-      sessionKey,
-      sessionId,
-      agentId: "main",
-      config: { session: { store: storePath } } as OpenClawConfig,
-    };
+    const queued = createQueueTestRun(
+      { prompt },
+      {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        config: { session: { store: storePath } },
+      },
+    );
     expect(
       enqueueFollowupRun(
         sessionKey,
@@ -155,5 +157,45 @@ it("preserves the rollover timeout error when /new preemption does not settle", 
   } finally {
     operation.complete();
     await initialization.catch(() => undefined);
+  }
+});
+
+it("rejects /new before interrupting a session whose saved Access is forbidden", async () => {
+  const { storePath, sessionKey, sessionId, target } = await rolloverFixture("access-denied");
+  await writeSessionStoreFast(storePath, {
+    [sessionKey]: { sessionId, updatedAt: Date.now(), cyberAccessProgram: "daybreak_red" },
+  });
+  const operation = createReplyOperation({ sessionKey, sessionId, target, resetTriggered: false });
+  bindSessionControllerTarget(operation, target);
+  const abort = vi.spyOn(operation, "abort");
+  const cfg = { session: { store: storePath }, agents: { defaults: { model: "openai/fixture" } } };
+  const operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "limited-operator",
+    scopes: ["operator.write"],
+    assertCurrent() {},
+    rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
+    modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { allow: ["openai/fixture"] } }),
+  });
+  try {
+    await expect(
+      initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          From: "access-user",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        operatorAuthority,
+      }),
+    ).rejects.toThrow("operator role cannot use this Access level");
+    expect(abort).not.toHaveBeenCalled();
+  } finally {
+    operation.complete();
   }
 });

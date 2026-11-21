@@ -8,6 +8,7 @@ import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
+import { createComposerTasks } from "../lib/chat/composer-tasks.runtime.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
   createGatewayHarness,
@@ -15,18 +16,21 @@ import {
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../test-helpers/solid-application-context.tsx";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { PluginManager } from "./control-ui-manager.solid.tsx";
-import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
+import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions"];
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
-it("renders customization inline and retains pending reload state", async () => {
+it("renders customization inline and recovers reload controls after failure or success", async () => {
   const listeners = new Set<() => void>();
   const replacement = {
     key: "fixture/composer",
@@ -35,10 +39,11 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   let selected: typeof replacement | undefined;
   const pendingReload = createDeferred();
+  const retryReload = createDeferred();
   const diagnostics: PluginControlUiDiagnostic[] = [
     {
       pluginId: "custom-review",
-      message: "Disabled by Labs",
+      message: "Disabled by Gateway configuration",
       code: "custom-plugin-ui-disabled",
     },
   ];
@@ -63,6 +68,7 @@ it("renders customization inline and retains pending reload state", async () => 
   // SAFETY: this fixture supplies the application services consumed by the manager.
   const provider = createSolidApplicationContextProvider({
     plugins,
+    gateway: createApplicationGateway().gateway,
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);
@@ -81,10 +87,11 @@ it("renders customization inline and retains pending reload state", async () => 
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
     expect(manager.querySelector('[role="alert"]')).toBeNull();
     expect(manager.querySelector('[role="status"]')?.textContent).toContain("custom-review");
-    const labs = manager.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
-    expect(labs?.textContent?.trim()).toBe("Open Labs");
-    labs?.click();
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
+    expect(manager.querySelector('a[href="/console/settings/labs"]')).toBeNull();
+    expect(manager.querySelector('[role="status"]')?.textContent).toContain(
+      "Disabled by the Gateway configuration",
+    );
+    expect(navigate).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
 
     const select = manager.querySelector<HTMLSelectElement>("select");
@@ -129,11 +136,22 @@ it("renders customization inline and retains pending reload state", async () => 
       ),
     );
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
+    expect(manager.querySelector("select")).toBe(select);
+
+    plugins.reload.mockReturnValueOnce(retryReload.promise);
+    button(t("pluginUi.reload")).click();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+    retryReload.resolve();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(false));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+
     button(t("common.retry")).click();
     expect(plugins.refresh).toHaveBeenCalledOnce();
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
   } finally {
     pendingReload.resolve();
+    retryReload.resolve();
   }
 });
 
@@ -149,6 +167,8 @@ async function mountActions(
     placement?: "header" | "composer";
     session?: GatewaySessionRow;
     agentId?: string;
+    icon?: string;
+    composerToolbar?: boolean;
   } = {},
 ) {
   const request = vi.fn().mockResolvedValue({ ok: true });
@@ -185,12 +205,13 @@ async function mountActions(
     id: "review",
     label: "Review session",
     placement: options.placement ?? "header",
+    ...(options.icon ? { icon: options.icon } : {}),
     resolve,
     run,
   };
   const plugins = {
-    registrations: () =>
-      registered
+    registrations: (kind: string) =>
+      registered && kind === "actions"
         ? [
             {
               key: "fixture/review",
@@ -227,6 +248,7 @@ async function mountActions(
   const provider = createApplicationContextProvider(context);
   const element = document.createElement("openclaw-plugin-contributions") as ContributionsElement;
   element.kind = options.placement ?? "header";
+  element.composerToolbar = options.composerToolbar ?? true;
   element.sessionKey = session.key;
   element.agentId = options.agentId;
   cleanups.push(() => {
@@ -256,6 +278,61 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it("shows a concurrent action failure after a later invocation succeeds", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const succeeded = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise).mockReturnValueOnce(succeeded.promise);
+      button.click();
+      button.click();
+      succeeded.resolve();
+      await succeeded.promise;
+      failed.reject(new Error("Synthetic concurrent action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic concurrent action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      succeeded.resolve();
+    }
+  });
+
+  it("clears action failures on retry without replacing its controls", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise);
+      button.click();
+      failed.reject(new Error("Synthetic action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+
+      run.mockReturnValueOnce(retry.promise);
+      button.click();
+      await vi.waitFor(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+      expect(element.querySelector("button")).toBe(button);
+      retry.resolve();
+      await retry.promise;
+      await element.updateComplete;
+      expect(element.querySelector('[role="alert"]')).toBeNull();
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      retry.resolve();
+    }
+  });
+
   it("replaces placement subscriptions and resumes current session presentation", async () => {
     const { element, sessions } = await mountActions();
     expect(element.querySelector("button")?.textContent).toBe("Review Ready");
@@ -332,6 +409,44 @@ describe("native plugin session actions", () => {
     await element.updateComplete;
   });
 
+  it("binds composer actions to the invoking pane's live draft until the pane retires", async () => {
+    const { element, run } = await mountActions({ placement: "composer" });
+    let draft = "fix the bug";
+    const setDraft = vi.fn((text: string) => {
+      draft = text;
+    });
+    const tasks = createComposerTasks({
+      taskPresenters: 1,
+      composerComposing: false,
+      composerTextarea: null,
+      sendDraft: null,
+    });
+    element.composer = {
+      draft: "stale render",
+      getDraft: () => draft,
+      onDraftChange: setDraft,
+      tasks: () => tasks,
+      loadTasks: async () => tasks,
+    };
+    element.querySelector<HTMLButtonElement>("button")?.click();
+    await vi.waitFor(() => expect(run).toHaveBeenCalled());
+    const composer = run.mock.calls[0]?.[0].composer;
+    if (!composer) {
+      throw new Error("Expected the composer action to receive its pane draft");
+    }
+    draft = "fix the login bug";
+    expect(composer.draft).toBe("fix the login bug");
+    composer.setDraft(composer.draft.toUpperCase());
+    expect(draft).toBe("FIX THE LOGIN BUG");
+
+    element.sessionKey = "agent:main:other";
+    expect(() => composer.draft).toThrow("view has ended");
+    expect(() => composer.setDraft("stale")).toThrow("view has ended");
+    expect(setDraft).toHaveBeenCalledOnce();
+    expect(draft).toBe("FIX THE LOGIN BUG");
+    await element.updateComplete;
+  });
+
   it("retires a hidden header action across a same-turn hide/show and admits a fresh action", async () => {
     const { element, run, navigate, setSessionKey } = await mountActions({ placement: "header" });
     const destination = { sessionKey: "agent:writer:resumed", agentId: "writer" };
@@ -400,6 +515,19 @@ describe("native plugin session actions", () => {
     expect(run.mock.calls.length).toBe(0);
     await element.updateComplete;
     expect(element.querySelector("button")).toBeNull();
+  });
+
+  it("keeps icon composer actions above the composer only when no toolbar shows them", async () => {
+    const withToolbar = await mountActions({ placement: "composer", icon: "pencilSparkles" });
+    // The built-in composer's toolbar renders it; this region would duplicate it.
+    expect(withToolbar.element.querySelector("button")).toBeNull();
+    withToolbar.element.remove();
+    const replacement = await mountActions({
+      placement: "composer",
+      icon: "pencilSparkles",
+      composerToolbar: false,
+    });
+    expect(replacement.element.querySelector("button")?.textContent?.trim()).toBe("Review Ready");
   });
 
   it("updates composer action presentation and retires hidden invocations", async () => {

@@ -1,7 +1,10 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProvider } from "../plugins/capability-provider-runtime.js";
-import { listImageCapableConfiguredProviders } from "./config-provider-models.js";
+import {
+  listImageCapableConfiguredProviders,
+  resolveConfiguredMediaProviderCapabilities,
+} from "./config-provider-models.js";
 import { resolveConfiguredMediaEntryCapabilities } from "./entry-capabilities.js";
 import type { MediaUnderstandingCapabilityRegistry } from "./types.js";
 
@@ -31,7 +34,10 @@ export function buildMediaUnderstandingCapabilityRegistry(
     });
     if (provider) {
       // Keep canonical keys: runtime aliases do not independently opt entries into inference.
-      registry.set(normalizeMediaProviderId(provider.id), { capabilities: provider.capabilities });
+      registry.set(normalizeMediaProviderId(provider.id), {
+        capabilities: resolveConfiguredMediaProviderCapabilities(provider, cfg),
+        sharedEntryCapabilities: provider.sharedEntryCapabilities,
+      });
     }
   }
   for (const configuredId of listImageCapableConfiguredProviders(cfg)) {

@@ -9,6 +9,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import type { ChannelPlugin, OpenClawConfig, PluginRuntime, ReplyPayload } from "../api.js";
 import { linePlugin } from "../channel-plugin-api.js";
 import lineEntry from "../index.js";
@@ -17,26 +18,13 @@ import { getLineRuntime, setLineRuntime } from "./runtime.js";
 
 const mediaPreparation = vi.hoisted(() => vi.fn<() => void | Promise<void>>());
 
-const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const prepare = effectGate.prepare;
-      return prepare
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await prepare();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
-  };
-});
+const effectGate = await vi.hoisted(async () =>
+  (
+    await import("../../test-support/effect-preparation.test-support.js")
+  ).createEffectPreparationGate(),
+);
+// mock-isolation: Share the export-preserving factory, but keep the preparation gate suite-local.
+vi.mock("openclaw/plugin-sdk/fetch-runtime", effectGate.mockRuntime);
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -236,15 +224,7 @@ it.each([false, true])(
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
-        preparing.promise,
-        dispatched.promise.then(() => {
-          throw new Error("dispatched before preparation");
-        }),
-        sending.then(() => {
-          throw new Error("settled before preparation");
-        }),
-      ]);
+      await waitForEffectPreparation(preparing.promise, dispatched.promise, sending);
       expect(startedWhileActive).toEqual([]);
       if (retired) {
         retire();

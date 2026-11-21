@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type {
@@ -8,12 +8,12 @@ import type {
 
 type DetailScope = { sessions: Pick<SessionCapability, "observeRow" | "describe"> };
 type DetailRow = Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId">;
-type DetailRequestState = { loading: boolean; error: string | null };
 type DetailBinding = {
   matches: () => boolean;
   dispose: () => void;
   row: () => GatewaySessionRow | null;
 };
+type DetailRead = { binding: DetailBinding; result: Promise<string | undefined> };
 
 /** The expanded view holds a descriptor; the session capability owns its row facts. */
 export function createSessionDetails<Scope extends DetailScope>(options: {
@@ -22,7 +22,18 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
   row: () => DetailRow | undefined;
   agentId: (row: DetailRow, scope: Scope) => string;
 }) {
-  const [state, setState] = createSignal<DetailRequestState>({ loading: false, error: null });
+  const [receipt, setReceipt] = createSignal<DetailRead | null>(null);
+  const readKey: () => DetailBinding | null = createMemo(() => receipt()?.binding ?? null);
+  const read: () => void = createMemo(() => {
+    const admitted = receipt();
+    return admitted
+      ? admitted.result.then((error) => {
+          if (error) {
+            throw new Error(error);
+          }
+        })
+      : Promise.resolve();
+  });
   const [rowRevision, setRowRevision] = createSignal(0);
   const rowChanged = () => setRowRevision((value) => value + 1);
   let loading = false;
@@ -34,10 +45,14 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
     loading = false;
   };
   const reset = () => {
+    const hadBinding = activeBinding !== undefined;
     release();
-    setState({ loading: false, error: null });
-    rowChanged();
+    setReceipt(null);
+    if (hadBinding) {
+      rowChanged();
+    }
   };
+  // This primitive releases its observation synchronously, including during held reads.
   onCleanup(release);
 
   function synchronize() {
@@ -52,6 +67,7 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
     }
     const { key, sessionId } = row;
     const agentId = options.agentId(row, scope);
+    const retired = Promise.withResolvers<undefined>();
     // Registration may notify before the observation handle is returned.
     let observation: SessionRowObservation | null = null;
     const binding = {
@@ -64,33 +80,41 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
           selected.sessionId === sessionId
         );
       },
-      dispose: () => observation?.dispose(),
+      dispose: () => {
+        retired.resolve(undefined);
+        observation?.dispose();
+      },
       row: () =>
         observation?.row && observation.row.sessionId === sessionId ? observation.row : null,
     };
     const current = () => activeBinding === binding && binding.matches();
-    const refresh = async () => {
+    const refresh = () => {
       if (loading || !current()) {
         return;
       }
       loading = true;
-      setState({ loading: true, error: null });
-      let error: string | null = null;
-      try {
-        if (observation?.isCurrent()) {
-          const reconcile = observation.captureReconcile();
-          const { session } = await scope.sessions.describe({ key, agentId });
+      const request = async () => {
+        try {
+          if (observation?.isCurrent()) {
+            const reconcile = observation.captureReconcile();
+            const { session } = await scope.sessions.describe({ key, agentId });
+            if (current()) {
+              reconcile(session ?? undefined);
+            }
+          }
+        } catch (failure) {
           if (current()) {
-            reconcile(session ?? undefined);
+            return formatUiError(failure);
+          }
+        } finally {
+          if (current()) {
+            loading = false;
           }
         }
-      } catch (failure) {
-        error = formatUiError(failure);
-      }
-      if (current()) {
-        loading = false;
-        setState({ loading: false, error });
-      }
+        return undefined;
+      };
+      // The owner admits once; the presentation observes it and consumes late failures.
+      setReceipt({ binding, result: Promise.race([request(), retired.promise]) });
     };
     activeBinding = binding;
     observation = scope.sessions.observeRow(
@@ -100,19 +124,23 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
           rowChanged();
         }
       },
-      { onInvalidate: () => void refresh() },
+      { onInvalidate: refresh },
     );
     rowChanged();
     if (row.rowMode) {
-      void refresh();
+      refresh();
     }
   }
   return {
-    error: () => state().error,
-    loading: () => state().loading,
+    read,
+    readKey,
     reset,
+    retry(this: void) {
+      reset();
+      synchronize();
+    },
     synchronize,
-    row() {
+    row(this: void) {
       rowRevision();
       return activeBinding?.matches() ? activeBinding.row() : null;
     },

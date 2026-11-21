@@ -4,6 +4,8 @@ import {
   type Transferable,
   type Worker,
 } from "node:worker_threads";
+import { postgresPoolTransferList } from "../infra/postgres-sync/pool.js";
+import { receiveWorkerMemoryPort } from "../infra/worker-cpu.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -20,6 +22,7 @@ type Member = {
   message?: (reply: CarrierReply) => void;
   failure?: (error: unknown, exitCode?: number, registrationClosed?: boolean) => void;
   stopping: boolean;
+  stopListening(): void;
 };
 type Carrier = {
   worker: Worker;
@@ -53,20 +56,26 @@ export function acquireLeaseHeartbeatCarrier(params: {
     const owned = carrier;
     void owned.online.promise.catch(() => {});
     carriers.set(params.key, owned);
-    worker.once("online", () => owned.online.resolve());
-    worker.once("error", (error) => {
+    const onOnline = () => owned.online.resolve();
+    const onError = (error: unknown) => {
       owned.online.reject(error);
       for (const member of owned.members) {
         member.failure?.(error);
       }
-    });
+    };
+    worker.once("online", onOnline);
+    worker.once("error", onError);
     worker.once("exit", (code) => {
+      // Retained Worker objects must not keep completed lease caller contexts.
+      worker.off("online", onOnline);
+      worker.off("error", onError);
       owned.exitCode = code;
       owned.online.reject(new Error("State lease heartbeat carrier exited before startup"));
       if (carriers.get(params.key) === owned) {
         carriers.delete(params.key);
       }
       for (const member of owned.members) {
+        member.stopListening();
         member.failure?.(
           new Error(`State lease heartbeat carrier exited (exitCode=${code})`),
           code,
@@ -84,6 +93,10 @@ export function acquireLeaseHeartbeatCarrier(params: {
     channel: ports?.port1 ?? owned.worker,
     closed: createDeferredCore<number>(),
     stopping: false,
+    stopListening() {
+      member.channel.off("message", receive);
+      ports?.port1.off("close", closed);
+    },
   };
   owned.members.add(member);
   const stopCarrier = () => {
@@ -112,7 +125,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
     if (!owned.members.delete(member)) {
       return;
     }
-    member.channel.off("message", receive);
+    member.stopListening();
     if (!member.stopping) {
       member.failure?.(new Error("State lease heartbeat registration closed"), undefined, true);
     }
@@ -123,6 +136,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   };
   const receive = (reply: CarrierReply) => {
+    if (primary && receiveWorkerMemoryPort(owned.worker, reply)) {
+      return;
+    }
     if (ports) {
       recordWorkerMessage("lifecycle", "from_worker");
     }
@@ -142,10 +158,13 @@ export function acquireLeaseHeartbeatCarrier(params: {
     try {
       owned.worker.postMessage({ registration: params.data, port: ports.port2 }, [
         params.data.databaseAdmissionPort,
+        params.data.lossPort,
+        ...postgresPoolTransferList(params.data.postgresPool),
         ports.port2,
       ]);
     } catch (error) {
       owned.members.delete(member);
+      member.stopListening();
       ports.port1.close();
       ports.port2.close();
       throw error;

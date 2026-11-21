@@ -4,7 +4,7 @@ import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.def
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
   projectSessionSharingEntry,
-  retainPreparedSessionSharingFacts,
+  retainPreparedSessionGenerationFacts,
 } from "../../../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { captureSessionActorStorageOwner } from "../../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
@@ -26,13 +26,6 @@ import { resolveActiveSessionRunId } from "../../../sessions/session-controller.
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-export { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
-export { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
-export { resolveBoundDeliveryDestination } from "../../../infra/outbound/bound-delivery-router.js";
-export { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
-export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-export { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";
-export { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbound/message.js";
 
 type RequesterSessionEntryResult = {
   cfg: ReturnType<typeof getRuntimeConfig>;
@@ -148,12 +141,12 @@ export async function loadRequesterSessionEntry(
   );
 }
 
-/** Prepare once; effect guards consume the session writer's published facts. */
+/** Retain requester identity; run metadata writes do not replace its lifecycle. */
 export async function captureRequesterSessionEntryCurrent(
   requesterSessionKey: string,
   explicitAgentId?: string,
 ): Promise<{
-  readCurrent: () => SessionEntryCurrentFacts | undefined;
+  readCurrent: () => Pick<SessionEntryCurrentFacts, "sessionId" | "lifecycleRevision"> | undefined;
   release: () => void;
 }> {
   const source = captureSessionActorStorageOwner(
@@ -190,17 +183,16 @@ export async function captureRequesterSessionEntryCurrent(
     async ({ result }) => {
       const entry = result.entries[0]?.entry;
       const databaseIdentity = result.databaseIdentity?.identity;
-      if (!databaseIdentity) {
+      if (!entry || !databaseIdentity) {
         return { readCurrent: () => undefined, release() {} };
       }
-      const retained = retainPreparedSessionSharingFacts({
+      const retained = retainPreparedSessionGenerationFacts({
         databaseIdentity: `file:${databaseIdentity}`,
         sessionKey: storageKey,
-        entry: entry ? projectSessionSharingEntry(entry) : undefined,
-        membership: new Set(),
+        entry: projectSessionSharingEntry(entry),
       });
       return {
-        readCurrent: () => retained.readCurrent()?.entry,
+        readCurrent: () => retained.readCurrent() ?? undefined,
         release: retained.release,
       };
     },

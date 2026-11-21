@@ -96,8 +96,12 @@ export function resolveSourceReplyDeliveryMode(params: {
 export function resolveSourceReplyExpectation(params: {
   ctx: SourceReplyDeliveryModeContext;
   cfg: OpenClawConfig;
-  isHeartbeat?: boolean;
+  scheduledAutomation?: boolean;
 }): ReplyExpectation {
+  // Scheduling permits silence even when the saved session has an internal source.
+  if (params.scheduledAutomation) {
+    return "optional";
+  }
   const commandExpectation = resolveCommandReplyExpectation({
     cfg: params.cfg,
     sessionKey: params.ctx.SessionKey,
@@ -110,7 +114,6 @@ export function resolveSourceReplyExpectation(params: {
   if (
     isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
     })
   ) {
     return "optional";
@@ -153,6 +156,7 @@ export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenCl
         InputProvenance: queued.run.inputProvenance,
       },
       cfg,
+      scheduledAutomation: queued.run.scheduledAutomation !== undefined,
     })
   );
 }
@@ -160,6 +164,7 @@ export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenCl
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
+  scheduledAutomation?: boolean;
   requested?: SourceReplyDeliveryMode;
   strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
@@ -175,15 +180,17 @@ export function resolveSourceReplyVisibilityPolicy(params: {
    */
   sessionStableMessageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
-  isHeartbeat?: boolean;
 }) {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode(params);
   const hasStableTurnOverride =
     !isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
+      scheduledAutomation: params.scheduledAutomation,
     }) &&
-    (params.requested !== undefined || isExplicitCommandTurnContext(params.ctx, params.cfg));
+    // Channel room-event requests force tool-only delivery for that turn, but
+    // must not split the session-stable CLI policy hash against mentioned turns.
+    (isExplicitCommandTurnContext(params.ctx, params.cfg) ||
+      (params.requested !== undefined && params.ctx.InboundEventKind !== "room_event"));
   const sessionStableSourceReplyDeliveryMode = hasStableTurnOverride
     ? sourceReplyDeliveryMode
     : resolveSourceReplyDeliveryMode({

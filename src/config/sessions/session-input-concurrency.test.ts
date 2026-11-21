@@ -12,11 +12,13 @@ import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { listSessionPendingInputs } from "./session-accessor.pending-inputs.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import * as actorScope from "./session-actor-scope.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 
 it("acquires a captured input actor outside unrelated writer work and checks authority before writing", async ({
   signal,
@@ -132,6 +134,50 @@ it("accepts input through a captured path alias using the native owner's canonic
   });
 });
 
+it("stages input from published entry facts without fetching a full actor snapshot", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = createSessionCompoundWorkerFixture();
+    const authority = { assertCurrent() {}, authorize() {} };
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        { ...f.scope, target: f.target },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "admitted session actor",
+    );
+    const entry = { sessionId: f.scope.sessionId, updatedAt: 2, label: "published creation" };
+    await replaceSessionEntry(f.scope, entry);
+    expect(input.actor.snapshot(authority)).toBeUndefined();
+    const target = input.actor.target;
+    if (target.database.kind !== "file") {
+      throw new Error("Expected a durable input actor");
+    }
+    expect(
+      readSessionActorEntryFacts({ ...target, database: target.database })?.entry,
+    ).toMatchObject(entry);
+    const read = vi.spyOn(input.actor, "read");
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "Keep this input in durable custody", idempotencyKey: "entry-only-input" },
+      target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: entry },
+      updateMode: "none",
+    });
+    bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+    try {
+      await expect(
+        recorder.stageApproved?.({ runId: "entry-only-run", assertCurrent() {} }),
+      ).resolves.toBe(true);
+      expect((await listSessionPendingInputs(f.scope)).total).toBe(1);
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+      recorder.finishPendingInput?.("interrupted", "failed");
+      await recorder.waitForPendingInputSettlement?.();
+      await input.actor.release();
+    }
+  });
+});
+
 it.each(["before", "after"] as const)(
   "checks input staging lifecycle changes %s writer admission",
   async (timing) => {
@@ -152,7 +198,7 @@ it.each(["before", "after"] as const)(
       });
       bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
       const completePrevious = () =>
-        patchSessionEntryCore(f.scope, () => ({ restartRecoveryTerminalRunIds: ["previous-run"] }));
+        patchSessionEntryCore(f.scope, () => ({ status: "done", abortedLastRun: false }));
       const run = actorScope.runSessionActorCommand;
       const accept = input.actor.acceptInput;
       const competingWrite =
@@ -175,9 +221,7 @@ it.each(["before", "after"] as const)(
               })
           : vi.spyOn(input.actor, "acceptInput").mockImplementationOnce(async (...args) => {
               await completePrevious();
-              const outcome = await accept(...args);
-              expect(outcome.kind).toBe("stale-version");
-              return outcome;
+              return accept(...args);
             });
       try {
         const staged = recorder.stageApproved?.({ runId: "next-run", assertCurrent() {} });
@@ -199,7 +243,7 @@ it.each(["before", "after"] as const)(
         expect(await listSessionPendingInputs(f.scope)).toEqual({ items: [], total: 0 });
       } finally {
         competingWrite.mockRestore();
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
         await recorder.waitForPendingInputSettlement?.();
         await input.actor.release();
       }
@@ -293,7 +337,7 @@ it.each(["stage", "acceptInput", "adoptRun"] as const)(
           } finally {
             try {
               await participantSettlement;
-              recorder.finishPendingInput?.("interrupted");
+              recorder.finishPendingInput?.("interrupted", "failed");
               await recorder.waitForPendingInputSettlement?.();
             } finally {
               await input.actor.release();
@@ -334,9 +378,13 @@ it.each([
         ),
         "admitted session actor",
       );
+      const entry = expectDefined(f.read(), "initial session entry");
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "Keep the original admission", idempotencyKey: "fenced-input" },
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        ...(change === "lifecycle"
+          ? { expectedSessionState: buildSessionTranscriptTurnExpectedState(entry) }
+          : {}),
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: entry },
         updateMode: "none",
       });
       await input.actor.read({ assertCurrent, authorize: assertCurrent });

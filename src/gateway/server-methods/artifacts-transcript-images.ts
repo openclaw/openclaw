@@ -1,6 +1,6 @@
 import type { ArtifactsGetParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ArtifactLookup } from "../artifacts-content.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
-import type { ArtifactLookup } from "./artifacts-content.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
 import type { ArtifactSessionAccess } from "./artifacts-session-resolution.js";
 

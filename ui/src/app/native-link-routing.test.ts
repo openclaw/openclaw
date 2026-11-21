@@ -7,7 +7,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
@@ -194,29 +194,22 @@ it("does not install native behavior without the WebKit bridge", async () => {
   expect(document.querySelector(menuTag)).toBeNull();
 });
 
-it.each([false, true])(
-  "routes an active hovercard after duplicate bootstrap: %s",
-  async (duplicate) => {
-    // Reevaluate only bootstrap; the scheduler and custom-element registry remain shared.
-    if (duplicate) {
-      const module = "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
-      await import(module);
-    }
-    const bridge = installBridge();
-    const anchor = await focusGitHubLink();
-    if (duplicate) {
-      const registered = customElements.get("openclaw-link-reader-hovercard-provider");
-      expect(registered).toBeDefined();
-      expect(anchor.parentElement?.constructor).toBe(registered);
-      expect(document.querySelectorAll(hovercardSelector)).toHaveLength(1);
-      expect(document.querySelector(hovercardSelector)?.textContent).toContain(previewTitle);
-    }
-    click(anchor);
-    expect(document.querySelector(hovercardSelector)).toBeNull();
-    expect(anchor.hasAttribute("aria-describedby")).toBe(false);
-    expect([bridge.messages, bridge.browserRequests]).toEqual([[], [panelRequest(githubUrl)]]);
-  },
-);
+it("routes an active hovercard after duplicate bootstrap", async () => {
+  // Reevaluate only bootstrap; the scheduler and custom-element registry remain shared.
+  const module = "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
+  await import(module);
+  const bridge = installBridge();
+  const anchor = await focusGitHubLink();
+  const registered = customElements.get("openclaw-link-reader-hovercard-provider");
+  expect(registered).toBeDefined();
+  expect(anchor.parentElement?.constructor).toBe(registered);
+  expect(document.querySelectorAll(hovercardSelector)).toHaveLength(1);
+  expect(document.querySelector(hovercardSelector)?.textContent).toContain(previewTitle);
+  click(anchor);
+  expect(document.querySelector(hovercardSelector)).toBeNull();
+  expect(anchor.hasAttribute("aria-describedby")).toBe(false);
+  expect([bridge.messages, bridge.browserRequests]).toEqual([[], [panelRequest(githubUrl)]]);
+});
 
 it("preserves modified, local, file, download, and untrusted app-link clicks", async () => {
   const bridge = installBridge();
@@ -245,20 +238,20 @@ it("offers inline, external, and copy actions for an external link", async () =>
 
   const firstMenu = await openMenu(anchor);
   expect([...firstMenu.querySelectorAll('[role="menuitem"]')].map(itemLabel)).toEqual([
-    "Open in Browser Panel",
-    "Open in Default Browser",
-    "Copy Link",
+    "Open in browser panel",
+    "Open in default browser",
+    "Copy link",
   ]);
-  await selectMenuItem("Open in Default Browser");
+  await selectMenuItem("Open in default browser");
   expect(bridge.messages.at(-1)).toEqual(externalRequest(url));
 
   await openMenu(anchor);
-  await selectMenuItem("Open in Browser Panel");
+  await selectMenuItem("Open in browser panel");
   expect(bridge.browserRequests).toEqual([panelRequest(url)]);
   expect(bridge.messages).toHaveLength(1);
 
   await openMenu(anchor);
-  await selectMenuItem("Copy Link");
+  await selectMenuItem("Copy link");
   await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(url));
 });
 
@@ -270,7 +263,7 @@ it("opens the panel menu action externally during Settings takeover and restores
   for (const available of [false, true]) {
     canPresentBrowserPanel = available;
     await openMenu(anchor);
-    await selectMenuItem("Open in Browser Panel");
+    await selectMenuItem("Open in browser panel");
     expect(bridge.messages).toEqual([externalRequest(reportUrl)]);
     expect(bridge.browserRequests).toEqual(available ? [panelRequest(reportUrl)] : []);
   }
@@ -305,5 +298,5 @@ it.each(["dialog", "modal"] as const)("mounts the menu in the active %s overlay"
     expect(container?.closest("dialog")?.open).toBe(true);
     expect(menu.getRootNode()).toBe(document);
   }
-  expect(menuItem("Open in Browser Panel")).not.toBeNull();
+  expect(menuItem("Open in browser panel")).not.toBeNull();
 });

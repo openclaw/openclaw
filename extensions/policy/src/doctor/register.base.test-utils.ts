@@ -8,21 +8,23 @@ import {
 } from "openclaw/plugin-sdk/health";
 import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  collectPolicyEvidence,
-  createPolicyAttestation,
-  policyDocumentHash,
-} from "../policy-state.js";
+import { collectPolicyEvidence, policyDocumentHash } from "../policy-state.js";
 import { evaluatePolicy } from "./evaluation.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
   workspaceDir,
   cfgWithPolicy,
+  cfgWithWorkspaceRepairs,
+  policyForAgents,
+  createDeniedTelegramPolicy,
+  createGatewayHttpInput,
+  cfgWithPolicyOverrides,
+  collectChannelOnlyPolicyEvidence,
+  createAcceptedPolicyAttestationHash,
   ctx,
   repairCtx,
   runPolicyChecks,
   runPolicyChecksFixture,
-  runDeniedChannelRepair,
   runPolicyRepairCheck,
   setupPolicyDoctorTest,
   teardownPolicyDoctorTest,
@@ -30,6 +32,7 @@ import {
 } from "./register.test-harness.js";
 
 describe("registerPolicyDoctorChecks", () => {
+  const deniedChannelCheckId = "policy/channels-denied-provider";
   beforeEach(setupPolicyDoctorTest);
 
   afterEach(teardownPolicyDoctorTest);
@@ -833,11 +836,7 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy({ expectedHash: "sha256:not-the-policy", workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      channels: {
-        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-      },
-    });
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy());
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -897,11 +896,7 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy({ expectedAttestationHash: "sha256:not-current", workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      channels: {
-        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-      },
-    });
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy());
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -917,26 +912,10 @@ describe("registerPolicyDoctorChecks", () => {
   it("accepts a policy check that matches the configured expectedAttestationHash", async () => {
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
-    const acceptedAttestationHash = createPolicyAttestation({
-      ok: true,
-      checkedAt: "2026-05-10T20:00:00.000Z",
-      policyPath: "policy.jsonc",
+    const acceptedAttestationHash = createAcceptedPolicyAttestationHash(
       policyHash,
-      evidence: collectPolicyEvidence(
-        {},
-        {
-          includeIngress: false,
-          includeGatewayExposure: false,
-          includeAgentWorkspace: false,
-          includeDataHandling: false,
-          includeToolPosture: false,
-          includeSandboxPosture: false,
-          includeSecrets: false,
-          includeAuthProfiles: false,
-        },
-      ),
-      findings: [],
-    }).attestationHash;
+      collectChannelOnlyPolicyEvidence({}),
+    );
     const configPath = await writePolicyFixture(policy);
 
     const result = await runPolicyChecks(
@@ -949,26 +928,10 @@ describe("registerPolicyDoctorChecks", () => {
   it("does not include unrelated AGENTS.md tool evidence in channel-only attestations", async () => {
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
-    const acceptedAttestationHash = createPolicyAttestation({
-      ok: true,
-      checkedAt: "2026-05-10T20:00:00.000Z",
-      policyPath: "policy.jsonc",
+    const acceptedAttestationHash = createAcceptedPolicyAttestationHash(
       policyHash,
-      evidence: collectPolicyEvidence(
-        {},
-        {
-          includeIngress: false,
-          includeGatewayExposure: false,
-          includeAgentWorkspace: false,
-          includeDataHandling: false,
-          includeToolPosture: false,
-          includeSandboxPosture: false,
-          includeSecrets: false,
-          includeAuthProfiles: false,
-        },
-      ),
-      findings: [],
-    }).attestationHash;
+      collectChannelOnlyPolicyEvidence({}),
+    );
     const configPath = await writePolicyFixture(policy);
     await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
@@ -982,37 +945,21 @@ describe("registerPolicyDoctorChecks", () => {
   it("does not include unrelated secret or auth evidence in channel-only attestations", async () => {
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
-    const acceptedAttestationHash = createPolicyAttestation({
-      ok: true,
-      checkedAt: "2026-05-10T20:00:00.000Z",
-      policyPath: "policy.jsonc",
+    const acceptedAttestationHash = createAcceptedPolicyAttestationHash(
       policyHash,
-      evidence: collectPolicyEvidence(
-        {
-          secrets: {
-            providers: {
-              vault: { source: "env" },
-            },
-          },
-          auth: {
-            profiles: {
-              github: { provider: "github", mode: "token" },
-            },
+      collectChannelOnlyPolicyEvidence({
+        secrets: {
+          providers: {
+            vault: { source: "env" },
           },
         },
-        {
-          includeIngress: false,
-          includeGatewayExposure: false,
-          includeAgentWorkspace: false,
-          includeDataHandling: false,
-          includeToolPosture: false,
-          includeSandboxPosture: false,
-          includeSecrets: false,
-          includeAuthProfiles: false,
+        auth: {
+          profiles: {
+            github: { provider: "github", mode: "token" },
+          },
         },
-      ),
-      findings: [],
-    }).attestationHash;
+      }),
+    );
     const cfg = {
       ...cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash }),
       secrets: {
@@ -1031,16 +978,7 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
-    const evidence = collectPolicyEvidence(cfg, {
-      includeIngress: false,
-      includeGatewayExposure: false,
-      includeAgentWorkspace: false,
-      includeDataHandling: false,
-      includeToolPosture: false,
-      includeSandboxPosture: false,
-      includeSecrets: false,
-      includeAuthProfiles: false,
-    });
+    const evidence = collectChannelOnlyPolicyEvidence(cfg);
     expect(evidence).not.toHaveProperty("ingress");
     expect(evidence).not.toHaveProperty("gatewayExposure");
     expect(evidence).not.toHaveProperty("agentWorkspace");
@@ -1062,14 +1000,10 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     };
-    const acceptedAttestationHash = createPolicyAttestation({
-      ok: true,
-      checkedAt: "2026-05-10T20:00:00.000Z",
-      policyPath: "policy.jsonc",
-      policyHash: policyDocumentHash(policy),
-      evidence: collectPolicyEvidence(baselineConfig),
-      findings: [],
-    }).attestationHash;
+    const acceptedAttestationHash = createAcceptedPolicyAttestationHash(
+      policyDocumentHash(policy),
+      collectPolicyEvidence(baselineConfig),
+    );
     const cfg = {
       ...cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash }),
       tools: { profile: "messaging", alsoAllow: ["exec"] },
@@ -1112,22 +1046,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports configured channels denied by policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       channels: { telegram: { enabled: true } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(
-      {
-        channels: {
-          denyRules: [
-            {
-              id: "no-telegram",
-              when: { provider: "telegram" },
-              reason: "Telegram is not approved for this workspace.",
-            },
-          ],
-        },
-      },
+      createDeniedTelegramPolicy("Telegram is not approved for this workspace."),
       null,
       2,
     );
@@ -1152,21 +1075,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs denied enabled channels by disabling them when workspace repairs are enabled", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       channels: { telegram: { enabled: true } },
-    } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture(
-      {
-        channels: {
-          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-        },
-      },
-      null,
-      2,
-    );
+    }) satisfies OpenClawConfig;
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy(), null, 2);
 
-    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
+    const result = await runPolicyRepairCheck(deniedChannelCheckId, repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual(["Disabled channels.telegram.enabled for policy conformance."]);
     expect(result.remainingFindings).toEqual([]);
@@ -1178,17 +1092,9 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy({ workspaceRepairs: false }),
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture(
-      {
-        channels: {
-          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-        },
-      },
-      null,
-      2,
-    );
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy(), null, 2);
 
-    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
+    const result = await runPolicyRepairCheck(deniedChannelCheckId, repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
@@ -1198,10 +1104,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not let policy.jsonc enable workspace repairs", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       channels: { telegram: { enabled: true } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(
       {
         workspaceRepairs: true,
@@ -1213,7 +1118,7 @@ describe("registerPolicyDoctorChecks", () => {
       2,
     );
 
-    const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
+    const result = await runPolicyRepairCheck(deniedChannelCheckId, repairCtx(configPath, cfg));
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toContain(
@@ -1223,10 +1128,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("dry-runs automatic policy narrowing repairs without mutating config", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       tools: { elevated: { enabled: true } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({ tools: { elevated: { allow: false } } });
 
     const result = await runPolicyRepairCheck("policy/tools-elevated-enabled", {
@@ -1241,10 +1145,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not repair automatic policy narrowing config without workspace repair opt-in", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: { elevated: { enabled: true } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({ tools: { elevated: { allow: false } } });
 
     const result = await runPolicyRepairCheck(
@@ -1262,8 +1165,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not over-apply scoped elevated policy findings globally", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       agents: {
         entries: {
           reviewer: {
@@ -1271,15 +1173,10 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          tools: { elevated: { allow: false } },
-        },
-      },
-    });
+    }) satisfies OpenClawConfig;
+    const configPath = await writePolicyFixture(
+      policyForAgents("reviewer", ["reviewer"], { tools: { elevated: { allow: false } } }),
+    );
 
     const result = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1295,21 +1192,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("skips scoped elevated repairs that inherit shared global tools config", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       tools: { elevated: { enabled: true } },
       agents: {
         entries: { reviewer: {} },
       },
-    } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          tools: { elevated: { allow: false } },
-        },
-      },
-    });
+    }) satisfies OpenClawConfig;
+    const configPath = await writePolicyFixture(
+      policyForAgents("reviewer", ["reviewer"], { tools: { elevated: { allow: false } } }),
+    );
 
     const result = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1326,8 +1217,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs automatic policy narrowing config findings", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       tools: { elevated: { enabled: true } },
       gateway: {
         mode: "remote",
@@ -1337,7 +1227,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
       diagnostics: { otel: { enabled: true, captureContent: true } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       tools: { elevated: { allow: false } },
       gateway: {
@@ -1392,24 +1282,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs denied gateway HTTP endpoint findings", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       gateway: {
-        http: {
-          endpoints: {
-            chatCompletions: {
-              enabled: true,
-              images: { allowUrl: true },
-            },
-            responses: {
-              enabled: true,
-              files: { allowUrl: true },
-              images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
-            },
-          },
-        },
+        http: createGatewayHttpInput(),
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       gateway: {
         http: {
@@ -1444,10 +1321,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("previews review-required gateway bind repair without mutating config", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       gateway: { bind: "lan" },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       gateway: { exposure: { allowNonLoopbackBind: false } },
     });
@@ -1478,10 +1354,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("previews review-required custom gateway bind repair without mutating config", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       gateway: { bind: "custom", customBindHost: "10.0.0.4" },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       gateway: { exposure: { allowNonLoopbackBind: false } },
     });
@@ -1519,10 +1394,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("previews review-required gateway node command repairs without mutating config", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       gateway: { nodes: { commands: { deny: ["mcp.help"] } } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       gateway: { nodes: { denyCommands: ["mcp.help", "system.run"] } },
     });
@@ -1553,22 +1427,20 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs automatic channel ingress narrowing findings", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          requireMention: false,
-          groups: {
-            ops: {
-              topics: {
-                incidents: { requireMention: false },
-              },
+    const channels: Record<string, unknown> = {
+      telegram: {
+        groupPolicy: "open",
+        requireMention: false,
+        groups: {
+          ops: {
+            topics: {
+              incidents: { requireMention: false },
             },
           },
         },
       },
     };
+    const cfg: Record<string, unknown> = cfgWithWorkspaceRepairs({ channels });
     const configPath = await writePolicyFixture({
       ingress: {
         channels: {
@@ -1611,14 +1483,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs quoted channel ingress paths without splitting slash segments", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       channels: {
         "team/sebby": {
           requireMention: false,
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       ingress: {
         channels: {
@@ -1647,13 +1518,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("skips scoped channel ingress repairs that would mutate inherited defaults", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       channels: {
         defaults: { groupPolicy: "open" },
         telegram: {},
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       scopes: {
         telegram: {
@@ -1690,10 +1560,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not repair channel ingress config without workspace repair opt-in", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       channels: { telegram: { groupPolicy: "open" } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
       ingress: {
         channels: {
@@ -1717,10 +1586,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("dry-runs required tool deny repairs without mutating config", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       tools: { deny: ["read"] },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({ tools: { denyTools: ["exec", "write"] } });
 
     const result = await runPolicyRepairCheck("policy/tools-required-deny-missing", {

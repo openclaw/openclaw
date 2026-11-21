@@ -97,6 +97,9 @@ async function copyPostinstallFixture(packageRoot: string) {
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+    "runtime-process-bootstrap.generated.mjs",
     "scripts/windows-cmd-helpers.mjs",
   ]) {
     const destination = path.join(packageRoot, relativePath);

@@ -44,3 +44,39 @@ it("commits controlled values without untracked reads and preserves input select
     warnings.mockRestore();
   }
 });
+
+it.each(["late-value", "late-ref"] as const)(
+  "applies a prepared value when a conditional input first appears (%s)",
+  (mode) => {
+    const [entry, setEntry] = createSignal<{ value: string } | undefined>(
+      mode === "late-value" ? undefined : { value: "initial" },
+    );
+    const [shown, setShown] = createSignal(mode !== "late-ref");
+    const view = mountSolid(() => {
+      if (mode === "late-ref") {
+        const bind = liveValue(() => entry()!.value);
+        return <Show when={shown()}>{(_shown) => <input ref={bind} />}</Show>;
+      }
+      return (
+        <Show when={entry()}>{(current) => <input ref={liveValue(() => current().value)} />}</Show>
+      );
+    });
+    expect(view.container.querySelector("input")).toBeNull();
+    setEntry({ value: "ready" });
+    flush();
+    setShown(true);
+    flush();
+    const input = view.container.querySelector("input")!;
+    expect(input.value).toBe("ready");
+    input.focus();
+    input.setSelectionRange(2, 2);
+    setEntry({ value: "ready" });
+    flush();
+    expect(view.container.querySelector("input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(2);
+    setEntry({ value: "" });
+    flush();
+    expect(input.value).toBe("");
+  },
+);

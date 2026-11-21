@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import * as setup from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
@@ -27,7 +28,7 @@ suite.define(() => {
           models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
           featureMethods: [rpc.detect, rpc.activate, rpc.auth, rpc.next],
           methodResponses: {
-            "config.get": setup.configSnapshot(
+            "config.get": sourceConfigSnapshot(
               { agents: { defaults: { model: modelRef } } },
               "saved-replacement",
             ),

@@ -1,5 +1,4 @@
 // OpenClaw probe tests cover timeout handling and probe result formatting.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { probeGatewayUrl, probeLocalCommand } from "./probes.js";
 
@@ -12,12 +11,12 @@ describe("openclaw probes", () => {
   it("bounds noisy local command probe output", async () => {
     const result = await probeLocalCommand(
       process.execPath,
-      ["-e", "process.stdout.write('x'.repeat(4096));"],
-      { outputLimit: 64, timeoutMs: 1_000 },
+      ["-e", "process.stdout.write('x'.repeat(32768));"],
+      { timeoutMs: 1_000 },
     );
 
     expect(result.found).toBe(true);
-    expect(result.version).toHaveLength(64);
+    expect(result.version).toHaveLength(16 * 1024);
   });
 
   it("distinguishes a missing command from an unsuccessful version probe", async () => {
@@ -51,7 +50,7 @@ describe("openclaw probes", () => {
     },
   );
 
-  it("caps oversized gateway probe timeouts before scheduling", async () => {
+  it("bounds gateway health probes with a 900ms timeout", async () => {
     const timeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
@@ -61,11 +60,11 @@ describe("openclaw probes", () => {
       vi.fn(async () => new Response("ok", { status: 200 })),
     );
 
-    await expect(
-      probeGatewayUrl("ws://127.0.0.1:1234", { timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000 }),
-    ).resolves.toMatchObject({ reachable: true });
+    await expect(probeGatewayUrl("ws://127.0.0.1:1234")).resolves.toMatchObject({
+      reachable: true,
+    });
 
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 900);
   });
 
   it("cancels gateway health response bodies", async () => {

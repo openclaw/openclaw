@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -78,18 +79,49 @@ export type SystemPackageOwnershipInspection = ReturnType<
   typeof createSystemPackageOwnershipInspection
 >;
 
-async function readPackageFiles(
+const ownershipRuns = new AsyncLocalStorage<{
+  packageQueries: Map<string, Promise<string[] | null>>;
+  warnedQueries: WeakSet<Promise<string[] | null>>;
+}>();
+
+/** Share unavailable backends only until this update operation settles. */
+export function withSystemPackageOwnershipRun<T>(run: () => Promise<T>): Promise<T> {
+  return ownershipRuns.run({ packageQueries: new Map(), warnedQueries: new WeakSet() }, run);
+}
+
+function readPackageFiles(
   owner: NonNullable<ReturnType<typeof packageOwner>>,
   timeoutMs: number,
-  runCommand: typeof runCommandBuffered,
-): Promise<string[]> {
+  run: ReturnType<typeof ownershipRuns.getStore>,
+): Promise<string[] | null> {
+  if (!run) {
+    return queryPackageFiles(owner, timeoutMs);
+  }
+  const { packageQueries } = run;
+  const key = JSON.stringify([owner.manager, process.env.PATH]);
+  return getOrCreatePromise(packageQueries, key, async () => {
+    const files = await queryPackageFiles(owner, timeoutMs);
+    if (files !== null) {
+      packageQueries.delete(key);
+    }
+    return files;
+  });
+}
+
+async function queryPackageFiles(
+  owner: NonNullable<ReturnType<typeof packageOwner>>,
+  timeoutMs: number,
+): Promise<string[] | null> {
   // -N prevents the base-system pkg launcher from bootstrapping. Pin the builtin
   // query: pkg expands aliases once, and plugin initialization precedes dispatch.
-  const result = await runCommand([...owner.command], {
+  const result = await runCommandBuffered([...owner.command], {
     timeoutMs,
     env: owner.env,
     maxOutputBytes: { stdout: 16 * 1024 * 1024, stderr: 64 * 1024 },
   });
+  if (result.termination === "error" && extractErrorCode(result.error) === "ENOENT") {
+    return null;
+  }
   // pkg may emit a config error with exit 0; only complete, silent output is authoritative.
   const output = result.stdout.toString("utf8");
   const files = output === "" ? [] : output.slice(0, -1).split("\n");
@@ -112,18 +144,18 @@ async function readPackageFiles(
   return files;
 }
 
-/** One planning snapshot; create a fresh inspection before installation effects. */
 const log = createSubsystemLogger("update");
 
+/** One planning snapshot; create a fresh inspection before installation effects. */
 export function createSystemPackageOwnershipInspection(
   timeoutMs = PKG_INSPECTION_TIMEOUT_MS,
   options: {
-    runCommand?: typeof runCommandBuffered;
     onWarning?: (message: string) => void;
   } = {},
 ) {
+  const run = ownershipRuns.getStore();
   const owner = packageOwner();
-  let files: Promise<string[]> | undefined;
+  let files: Promise<string[] | null> | undefined;
   let unavailable = false;
   const directories = new Map<string, Promise<string>>();
   const assertions = new Map<string, Promise<void>>();
@@ -190,8 +222,11 @@ export function createSystemPackageOwnershipInspection(
     const inventory = await read(
       "database",
       `${owner.manager} query`,
-      () => (files ??= readPackageFiles(owner, budget, options.runCommand ?? runCommandBuffered)),
+      () => (files ??= readPackageFiles(owner, budget, run)),
     );
+    if (inventory === null) {
+      return;
+    }
     const matches = (candidate: string, file: string) =>
       entryOnly ? candidate === file : isPathInside(candidate, file);
     // A recorded lexical owner is authoritative even when another package's
@@ -232,6 +267,12 @@ export function createSystemPackageOwnershipInspection(
         return;
       }
       unavailable = true;
+      if (files && run?.warnedQueries.has(files)) {
+        return;
+      }
+      if (files) {
+        run?.warnedQueries.add(files);
+      }
       const warn = options.onWarning ?? ((message: string) => log.warn(message));
       warn(`${error.message} Continuing without verified system-package ownership.`);
     });

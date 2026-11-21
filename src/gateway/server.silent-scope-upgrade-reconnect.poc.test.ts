@@ -169,12 +169,12 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const cli = { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.CLI };
     const health = await callLocal("health", cli);
     expect(health.ok).toBe(true);
-    const admin = await callLocal("set-heartbeats", {
+    const admin = await callLocal("exec.approvals.get", {
       ...cli,
-      params: { enabled: false },
+      params: {},
       scopes: ["operator.admin"],
     });
-    expect(admin.ok).toBe(true);
+    expect(admin).toMatchObject({ file: { version: 1 } });
     const pending = await devicePairingModule.listDevicePairing();
     expect(pending.pending).toHaveLength(0);
     await expectReadScopedPairing(identity.deviceId);
@@ -207,22 +207,13 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const loaded = loadDeviceIdentity("silent-reconnect-race");
     const approveOriginal = devicePairingApprovalModule.approveDevicePairing;
     let simulatedRace = false;
-    const forwardApprove = async (requestId: string, optionsOrBaseDir?: unknown) => {
-      if (optionsOrBaseDir && typeof optionsOrBaseDir === "object") {
-        return await approveOriginal(
-          requestId,
-          optionsOrBaseDir as { callerScopes?: readonly string[] },
-        );
-      }
-      return await approveOriginal(requestId);
-    };
     vi.spyOn(devicePairingApprovalModule, "approveDevicePairing").mockImplementation(
-      async (requestId: string, optionsOrBaseDir?: unknown) => {
+      async (...args: Parameters<typeof approveOriginal>) => {
         if (simulatedRace) {
-          return await forwardApprove(requestId, optionsOrBaseDir);
+          return await approveOriginal(...args);
         }
         simulatedRace = true;
-        await forwardApprove(requestId, optionsOrBaseDir);
+        await approveOriginal(...args);
         return null;
       },
     );

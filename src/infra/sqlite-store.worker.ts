@@ -10,8 +10,12 @@ import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import {
+  getDatabaseEngineSelection,
+  installDatabaseEngineSelection,
+} from "./database-engine/context.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
+import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool-state.js";
 import {
   installSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
@@ -54,16 +58,25 @@ import {
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
+import { assertSqliteWorkerDatabaseIdentity } from "./sqlite-writer-admission-client.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 if (!parentPort) {
   throw new Error("SQLite store worker requires its host port");
 }
 const port = parentPort;
+serveWorkerMemorySamples(port);
 // Results use the host port; diagnostics must preserve the caller's structured stdout.
 routeLogsToStderr();
-const actors = new Map<number, SqliteWorkerPreparedBackend<SqliteWorkerOperations>>();
+type PreparedPostgresBridge = ReturnType<
+  typeof import("./database-engine/bridge-prestart.js").prepareAdmittedPostgresBridge
+>;
+const actors = new Map<
+  number,
+  { backend: SqliteWorkerPreparedBackend<SqliteWorkerOperations>; bridge: PreparedPostgresBridge }
+>();
 const transfers = createSqliteWorkerTransferOwner();
 let pendingResult:
   | { requestId: number; actor: number; transferId: number; timing: SqliteWorkerRequest["timing"] }
@@ -74,6 +87,7 @@ type StagedInput = {
   receiver: ReturnType<typeof createSqliteWorkerTransferReceiver>;
   command: unknown;
   timing: SqliteWorkerRequest["timing"];
+  transferredInput?: SqliteWorkerRequest["transferredInput"];
 };
 let pendingInput: StagedInput | undefined;
 const stateContexts = new Map<number, SqliteWorkerStateContext>();
@@ -96,7 +110,9 @@ async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): P
 
 function runWithActorFacts<T>(actor: number, operation: () => T): T {
   const context = stateContexts.get(actor);
-  return context ? runWithSqliteWorkerStateContext(context, operation) : operation();
+  const run = () => (context ? runWithSqliteWorkerStateContext(context, operation) : operation());
+  const bridge = actors.get(actor)?.bridge;
+  return bridge ? bridge.run(run) : run();
 }
 
 function runInActorContext<T>(actor: number, operation: () => T): T {
@@ -127,11 +143,17 @@ async function closeInActorContext(
   try {
     await runWithActorFacts(actor, () =>
       admission
-        ? withSqliteDatabaseAdmissionExchange((facts, location, create) => {
+        ? withSqliteDatabaseAdmissionExchange((facts, location, create, observedLocation) => {
             if (!active) {
               throw new SqliteWorkerError("SQLite close facts outlived native cleanup", "closed");
             }
-            return exchangeSqliteDatabaseAdmissions(admission.port, facts, location, create);
+            return exchangeSqliteDatabaseAdmissions(
+              admission.port,
+              facts,
+              location,
+              create,
+              observedLocation,
+            );
           }, close)
         : close(),
     );
@@ -178,6 +200,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   let openNotEntered = false;
   let commandAdmissionRefused = false;
   try {
+    if (request.postgresPool) {
+      bindPostgresPool(request.postgresPool);
+    }
     if (request.databaseAdmissions) {
       installSqliteDatabaseAdmissions(request.databaseAdmissions);
     }
@@ -196,6 +221,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             attachment: request.operationAttachment,
             requestCustody: request.requestCustody,
             executionAuthority: request.executionAuthority,
+            databaseIdentity: request.databaseIdentity,
           },
         };
       }
@@ -216,16 +242,26 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         stateContexts.set(request.actor, request.stateContext);
       }
     }
-    const executeCommand = async (command: unknown) => {
+    const executeCommand = async (
+      command: unknown,
+      transferredInput = request.transferredInput,
+    ) => {
       if (timing) {
         timing.inputReady = performance.now();
       }
-      const backend = actors.get(request.actor);
-      if (!backend) {
+      const actor = actors.get(request.actor);
+      if (!actor) {
         throw new Error("SQLite worker actor is closed");
       }
+      const { backend } = actor;
       // SAFETY: The broker serialized a command from this actor's typed store contract.
       const typedCommand = command as SqliteWorkerCommand<SqliteWorkerOperations>;
+      if (transferredInput) {
+        if (!isRecord(typedCommand.input)) {
+          throw new Error("Transferred SQLite input requires an object command input");
+        }
+        Object.assign(typedCommand.input, transferredInput);
+      }
       return withSqliteReaderOwner(
         { operation: typedCommand.type, ownerKind: "worker", actorId: request.actor },
         async () => {
@@ -297,6 +333,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
               await preparation;
             }
             if (backend[SQLITE_WORKER_PREPARE_ADMITTED]) {
+              if (operationAdmission) {
+                assertSqliteWorkerDatabaseIdentity(operationAdmission.context);
+              }
               // Only the synchronous prefix inherits authority; deferred preparation does not.
               const admitted = runInActorContext(request.actor, () => ({
                 preparation: backend[SQLITE_WORKER_PREPARE_ADMITTED]?.(typedCommand),
@@ -306,6 +345,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
               }
             }
             const execute = () => {
+              // Fence preparation may yield; no-grant cleanup still checks its original database.
+              if (operationAdmission) {
+                assertSqliteWorkerDatabaseIdentity(operationAdmission.context);
+              }
               if (timing) {
                 timing.executeStarted = performance.now();
               }
@@ -382,6 +425,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         actor: request.actor,
         timing,
         command: undefined,
+        transferredInput: request.transferredInput,
         receiver: createSqliteWorkerTransferReceiver(request.transfer, (record) => {
           input.command = record.value;
         }),
@@ -404,7 +448,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         pendingInput = undefined;
         retire = false;
-        await executeCommand(input.command);
+        await executeCommand(input.command, input.transferredInput);
       } else {
         inputNext = true;
         retire = false;
@@ -419,72 +463,115 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (request.existingIdentity) {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
-      const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
-      loadedModules = true;
-      const factoryName = request.existingIdentity
-        ? "openExistingSqliteWorkerBackend"
-        : "createSqliteWorkerBackend";
-      if (!isRecord(module) || typeof module[factoryName] !== "function") {
-        throw new Error(`SQLite worker module must export ${factoryName}`);
-      }
-      const factory = module[factoryName];
-      // Module loading can yield before the factory opens native state.
-      if (request.existingIdentity) {
-        assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
-      }
-      const backend: unknown = await runInActorContextAsync(request.actor, () => {
-        const input = deserialize(request.input);
-        if (request.openAdmission) {
-          try {
-            requestSqliteWorkerOperationAdmission({
-              stage: "open",
-              facts: request.openAdmission === "input" ? input : undefined,
-            });
-          } catch (error) {
-            openNotEntered = true;
-            throw error;
-          }
+      const selection = getDatabaseEngineSelection();
+      const bridge = selection?.postgres
+        ? (await import("./database-engine/bridge-prestart.js")).prepareAdmittedPostgresBridge(
+            request.databasePath,
+            selection,
+          )
+        : undefined;
+      let retained = false;
+      try {
+        if (timing) {
+          timing.backendLoadStarted = performance.now();
         }
-        return factory(input, {
-          databasePath: request.databasePath,
-          ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
-          ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
+        const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
+        if (timing) {
+          timing.backendLoadFinished = performance.now();
+        }
+        loadedModules = true;
+        const factoryName = request.existingIdentity
+          ? "openExistingSqliteWorkerBackend"
+          : "createSqliteWorkerBackend";
+        if (!isRecord(module) || typeof module[factoryName] !== "function") {
+          throw new Error(`SQLite worker module must export ${factoryName}`);
+        }
+        const factory = module[factoryName];
+        // Module loading can yield before the factory opens native state.
+        if (request.existingIdentity) {
+          assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
+        }
+        const backend: unknown = await runInActorContextAsync(request.actor, () => {
+          const input = deserialize(request.input);
+          if (request.openAdmission) {
+            try {
+              if (timing) {
+                timing.openGrantStarted = performance.now();
+              }
+              requestSqliteWorkerOperationAdmission({
+                stage: "open",
+                facts: request.openAdmission === "input" ? input : undefined,
+              });
+              if (timing) {
+                timing.openGrantFinished = performance.now();
+              }
+            } catch (error) {
+              openNotEntered = true;
+              throw error;
+            }
+          }
+          const open = () => {
+            if (operationAdmission) {
+              assertSqliteWorkerDatabaseIdentity(operationAdmission.context);
+            }
+            if (timing) {
+              timing.factoryStarted = performance.now();
+            }
+            return factory(input, {
+              databasePath: request.databasePath,
+              ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
+              ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
+            });
+          };
+          return bridge ? bridge.run(open) : open();
         });
-      });
-      if (
-        !isRecord(backend) ||
-        typeof backend.execute !== "function" ||
-        typeof backend.close !== "function" ||
-        (SQLITE_WORKER_PREPARE_COMMAND in backend &&
-          backend[SQLITE_WORKER_PREPARE_COMMAND] !== undefined &&
-          typeof backend[SQLITE_WORKER_PREPARE_COMMAND] !== "function") ||
-        (SQLITE_WORKER_PREPARE_ADMITTED in backend &&
-          backend[SQLITE_WORKER_PREPARE_ADMITTED] !== undefined &&
-          (typeof backend[SQLITE_WORKER_PREPARE_ADMITTED] !== "function" ||
-            typeof backend.assertSettled !== "function")) ||
-        (SQLITE_WORKER_OPERATION_CLEANUP in backend &&
-          backend[SQLITE_WORKER_OPERATION_CLEANUP] !== undefined &&
-          (typeof backend[SQLITE_WORKER_OPERATION_CLEANUP] !== "function" ||
-            typeof backend.assertSettled !== "function")) ||
-        (SQLITE_WORKER_SOURCE_FENCE in backend &&
-          backend[SQLITE_WORKER_SOURCE_FENCE] !== undefined &&
-          (typeof backend[SQLITE_WORKER_SOURCE_FENCE] !== "function" ||
-            typeof backend.assertSettled !== "function")) ||
-        (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
-          backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
-          typeof backend[SQLITE_WORKER_CLOSE_RECEIPT] !== "function") ||
-        (backend.assertSettled !== undefined && typeof backend.assertSettled !== "function") ||
-        (backend.prepare !== undefined && typeof backend.prepare !== "function")
-      ) {
-        throw new Error("SQLite worker module returned an invalid backend");
+        if (timing) {
+          timing.factoryFinished = performance.now();
+        }
+        if (
+          !isRecord(backend) ||
+          typeof backend.execute !== "function" ||
+          typeof backend.close !== "function" ||
+          (SQLITE_WORKER_PREPARE_COMMAND in backend &&
+            backend[SQLITE_WORKER_PREPARE_COMMAND] !== undefined &&
+            typeof backend[SQLITE_WORKER_PREPARE_COMMAND] !== "function") ||
+          (SQLITE_WORKER_PREPARE_ADMITTED in backend &&
+            backend[SQLITE_WORKER_PREPARE_ADMITTED] !== undefined &&
+            (typeof backend[SQLITE_WORKER_PREPARE_ADMITTED] !== "function" ||
+              typeof backend.assertSettled !== "function")) ||
+          (SQLITE_WORKER_OPERATION_CLEANUP in backend &&
+            backend[SQLITE_WORKER_OPERATION_CLEANUP] !== undefined &&
+            (typeof backend[SQLITE_WORKER_OPERATION_CLEANUP] !== "function" ||
+              typeof backend.assertSettled !== "function")) ||
+          (SQLITE_WORKER_SOURCE_FENCE in backend &&
+            backend[SQLITE_WORKER_SOURCE_FENCE] !== undefined &&
+            (typeof backend[SQLITE_WORKER_SOURCE_FENCE] !== "function" ||
+              typeof backend.assertSettled !== "function")) ||
+          (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
+            backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
+            typeof backend[SQLITE_WORKER_CLOSE_RECEIPT] !== "function") ||
+          (backend.assertSettled !== undefined && typeof backend.assertSettled !== "function") ||
+          (backend.prepare !== undefined && typeof backend.prepare !== "function")
+        ) {
+          throw new Error("SQLite worker module returned an invalid backend");
+        }
+        actors.set(request.actor, {
+          // SAFETY: The validated backend and its typed client own the private command contract.
+          backend: backend as SqliteWorkerPreparedBackend<SqliteWorkerOperations>,
+          bridge,
+        });
+        retained = true;
+      } finally {
+        if (!retained) {
+          await bridge?.[Symbol.asyncDispose]();
+        }
       }
-      // SAFETY: The validated backend and its typed client own the private command contract.
-      actors.set(request.actor, backend as SqliteWorkerPreparedBackend<SqliteWorkerOperations>);
     } else if (request.type === "close") {
-      const backend = actors.get(request.actor);
-      if (!backend) {
+      const actor = actors.get(request.actor);
+      if (!actor) {
         throw new Error("SQLite worker actor is closed");
       }
+      const { backend, bridge } = actor;
       try {
         // Cleanup owns its bounded fact exchange, without borrowing an expired operation grant.
         await closeInActorContext(request.actor, () => backend.close());
@@ -494,11 +581,17 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       } catch (error) {
         retire = true;
         throw error;
+      } finally {
+        await bridge?.[Symbol.asyncDispose]();
       }
       actors.delete(request.actor);
       stateContexts.delete(request.actor);
     } else {
       await executeCommand(deserialize(request.input));
+    }
+    const poolFailure = postgresPoolWorkerFailure();
+    if (poolFailure) {
+      throw poolFailure;
     }
     const serialized = serialize(value);
     if (timing && !inputNext && request.type !== "result-next") {
@@ -529,14 +622,14 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       };
     }
   } catch (error) {
-    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
-    if (openNotEntered || refusedOpen) {
+    const refusedBeforeAgentOpen = error instanceof SqliteWorkerOpenRefusedError;
+    if (openNotEntered || (request.type === "open" && refusedBeforeAgentOpen)) {
       stateContexts.delete(request.actor);
     }
     transfers.cancel();
     pendingResult = undefined;
     pendingInput = undefined;
-    const originalError = refusedOpen ? error.originalError : error;
+    const originalError = refusedBeforeAgentOpen ? error.originalError : error;
     const admissionRefused =
       commandAdmissionRefused ||
       (operationAdmission?.actor === request.actor &&
@@ -551,11 +644,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     const sharedState = !executed
       ? encodeOpenClawStateWorkerError(failure, { includeOrdinary: Boolean(errorContext) })
       : undefined;
+    retire ||= Boolean(postgresPoolWorkerFailure());
     reply = {
       id: request.id,
       ok: false,
       ...(retire || (nativeCleanupFailure && executed) ? { retire: true } : {}),
-      ...(refusedOpen ? { openOutcome: "refused-before-agent-open" } : {}),
+      ...(refusedBeforeAgentOpen ? { openOutcome: "refused-before-agent-open" } : {}),
       ...(openNotEntered ? { openNotEntered: true } : {}),
       ...(admissionRefused ? { admissionRefused: true } : {}),
       error: {

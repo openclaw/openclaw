@@ -1,45 +1,32 @@
-import {
-  createServer,
-  request,
-  type RequestListener,
-  type RequestOptions,
-  type Server,
-} from "node:http";
+import http, { type RequestOptions } from "node:http";
 import { request as requestHttps } from "node:https";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import {
+  listenLoopback,
+  readRequestText,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as httpListen from "../server/http-listen.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
 export function usePortalHarness() {
   const services: GatewayPortalService[] = [];
-  const temporary: Server[] = [];
-  const target: { port: number; handler: RequestListener; server: Server } = {
+  const temporary: http.Server[] = [];
+  const target: { port: number; handler: http.RequestListener; server: http.Server } = {
     port: 0,
     handler: (_req, res) => res.end("target"),
-    server: createServer((req, res) => target.handler(req, res)),
+    server: http.createServer((req, res) => target.handler(req, res)),
   };
   const sockets = new Set<import("node:net").Socket>();
   target.server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  async function listen(server: Server) {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing test listener");
-    }
-    return address.port;
-  }
-  async function close(server: Server) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-      server.closeAllConnections();
-    });
+  const listen = async (server: http.Server) => Number(new URL(await listenLoopback(server)).port);
+  function close(server: http.Server) {
+    const closed = server[Symbol.asyncDispose]();
+    server.closeAllConnections();
+    return closed;
   }
   beforeAll(async () => {
     target.port = await listen(target.server);
@@ -67,8 +54,8 @@ export function usePortalHarness() {
       services.push(service);
       return { service, httpServers };
     },
-    listenTarget: async (handler: RequestListener) => {
-      const server = createServer(handler);
+    listenTarget: async (handler: http.RequestListener) => {
+      const server = http.createServer(handler);
       temporary.push(server);
       return listen(server);
     },
@@ -76,29 +63,15 @@ export function usePortalHarness() {
 }
 
 export async function requestText(url: string | URL, options: RequestOptions = {}, body?: string) {
-  const requestFn = new URL(url).protocol === "https:" ? requestHttps : request;
-  return new Promise<{
-    status: number;
-    headers: import("node:http").IncomingHttpHeaders;
-    body: string;
-  }>((resolve, reject) => {
-    const req = requestFn(url, options, (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.once("end", () =>
-        resolve({
-          status: res.statusCode ?? 0,
-          headers: res.headers,
-          body: Buffer.concat(chunks).toString("utf8"),
-        }),
-      );
-    });
-    req.once("error", reject);
-    if (body) {
-      req.write(body);
-    }
-    req.end();
+  const requestFn = new URL(url).protocol === "https:" ? requestHttps : http.request;
+  const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+    requestFn(url, options, resolve).once("error", reject).end(body);
   });
+  return {
+    status: response.statusCode ?? 0,
+    headers: response.headers,
+    body: await readRequestText(response),
+  };
 }
 
 export function holdPortalBind() {

@@ -1,4 +1,15 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import {
+  action,
+  createEffect,
+  createMemo,
+  createSignal,
+  createOptimistic,
+  Errored,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type {
   McpAppSettings,
   McpAppSettingsParams,
@@ -6,31 +17,43 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { McpAppOpenDetail } from "../mcp-app-launch.ts";
+import type { McpAppOpenDetail, McpAppPanelRetirement } from "../mcp-app-launch.ts";
 import { McpAppRetirement } from "../mcp-app-retirement.tsx";
+import { McpAppView } from "../mcp-app-view-lazy.ts";
 import { McpAppSettingsForm } from "./mcp-app-settings.tsx";
 import "../../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
 
-type McpAppPanelProps = { launch?: McpAppOpenDetail };
+type McpAppPanelProps = { launch?: McpAppOpenDetail; observeRetirement: McpAppPanelRetirement };
 
 export function McpAppPanel(props: McpAppPanelProps) {
   let host!: HTMLElement;
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const [viewId, setViewId] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
+  const [busy, setBusy] = createOptimistic(false);
+  const [operationReceipt, setOperationReceipt] = createSignal<{
+    identity: string;
+    result: Promise<null>;
+  } | null>(null);
   const [notice, setNotice] = createSignal("");
-  const [settings, setSettings] = createSignal<McpAppSettings | null>(null);
-  let View: (typeof import("../mcp-app-view.tsx"))["McpAppView"] | undefined;
+  const [receipt, setReceipt] = createSignal<{
+    identity: string;
+    result: Promise<McpAppSettings | null>;
+  } | null>(null);
   let generation = 0;
   let mounted = true;
+  function recordOutcome(identity: string, pending: Promise<unknown>) {
+    const result = pending.then(() => null);
+    // A retired panel may never render its outcome; consume late failures too.
+    void result.catch(() => {});
+    setOperationReceipt({ identity, result });
+  }
   const launchIdentity = () => {
     const launch = props.launch;
     return JSON.stringify([
@@ -43,19 +66,12 @@ export function McpAppPanel(props: McpAppPanelProps) {
       launch?.quickAction,
     ]);
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     mounted = false;
     generation++;
   });
 
-  async function operation<T>(
-    run: (
-      client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
-      launch: McpAppOpenDetail,
-    ) => Promise<T>,
-    commit: (result: T) => void,
-    loadView = false,
-  ) {
+  function admit() {
     const launch = props.launch;
     const client = context.gateway.snapshot.client;
     if (
@@ -64,64 +80,118 @@ export function McpAppPanel(props: McpAppPanelProps) {
       client !== launch.owner ||
       context.gateway.snapshot.phase !== "connected"
     ) {
-      setError(t("mcpApp.disconnected"));
-      return;
+      recordOutcome(openIdentity(), Promise.reject(new UserFacingError(t("mcpApp.disconnected"))));
+      return null;
     }
     const currentGeneration = ++generation;
     const identity = launchIdentity();
     const scope = gatewayPresentationScope(context.gateway).key;
-    const current = () =>
-      mounted &&
-      host.isConnected &&
-      generation === currentGeneration &&
-      launchIdentity() === identity &&
-      props.launch?.owner === client &&
-      context.gateway.snapshot.client === client &&
-      gatewayPresentationScope(context.gateway).key === scope;
-    setBusy(true);
-    setError(null);
+    const current = () => {
+      return (
+        mounted &&
+        host.isConnected &&
+        generation === currentGeneration &&
+        launchIdentity() === identity &&
+        props.launch?.owner === client &&
+        context.gateway.snapshot.client === client &&
+        gatewayPresentationScope(context.gateway).key === scope
+      );
+    };
+    setOperationReceipt(null);
     setNotice("");
-    try {
-      if (loadView) {
-        View = (await import("../mcp-app-view-registration.ts")).McpAppView;
-        // Loading presentation yields; recheck the live target before invoking a tool.
-        if (!current()) {
-          return;
+    return { client, launch, current, identity: JSON.stringify([identity, scope]) };
+  }
+  const presentOperation = action(function* (
+    current: () => boolean,
+    complete: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    if (current()) {
+      setBusy(true);
+    }
+    yield Promise.race([complete, retired]);
+  });
+  async function operation<T>(
+    run: (
+      client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
+      launch: McpAppOpenDetail,
+    ) => Promise<T>,
+    commit: (result: T, identity: string) => void,
+    loadView = false,
+  ) {
+    const admitted = admit();
+    if (!admitted) {
+      return;
+    }
+    const { client, launch } = admitted;
+    const retirement = Promise.withResolvers<void>();
+    let retired = false;
+    const stopRetirement = props.observeRetirement(() => {
+      retired = true;
+      retirement.resolve();
+    });
+    const current = () => !retired && admitted.current();
+    const complete = (async () => {
+      try {
+        if (loadView) {
+          await McpAppView.preload();
+          // Loading presentation yields; recheck the live target before invoking a tool.
+          if (!current()) {
+            return;
+          }
+        }
+        const result = await run(client, launch);
+        if (current()) {
+          commit(result, admitted.identity);
+        }
+      } catch (failure) {
+        if (current()) {
+          throw failure;
         }
       }
-      const result = await run(client, launch);
-      if (current()) {
-        commit(result);
+    })();
+    recordOutcome(admitted.identity, complete);
+    try {
+      await Promise.resolve();
+      if (!current()) {
+        return;
       }
-    } catch (failure) {
-      if (current()) {
-        setError(formatUiError(failure));
-      }
+      // The narrow outcome boundary consumes the operation's rejection.
+      await presentOperation(current, complete, retirement.promise).catch(() => {});
     } finally {
-      if (current()) {
-        setBusy(false);
-      }
+      stopRetirement();
     }
   }
+
   const params = (
     launch: McpAppOpenDetail,
-    action: McpAppSettingsParams["action"],
+    settingsAction: McpAppSettingsParams["action"],
   ): McpAppSettingsParams => ({
     sessionKey: launch.sessionKey,
     agentId: launch.agentId,
     serverName: launch.serverName,
-    action,
+    action: settingsAction,
   });
-  async function readSettings() {
-    await operation(
-      (client, launch) =>
-        client.request<McpAppSettings>("mcp.app.settings", params(launch, "read")),
-      setSettings,
+  function readSettings() {
+    const admitted = admit();
+    if (!admitted) {
+      return;
+    }
+    const { client, launch, current, identity } = admitted;
+    const result = client.request<McpAppSettings>("mcp.app.settings", params(launch, "read")).then(
+      (value) => (current() ? value : null),
+      (failure: unknown) => {
+        if (current()) {
+          throw failure;
+        }
+        return null;
+      },
     );
+    setReceipt({ identity, result });
   }
   async function open() {
     if (props.launch?.settings) {
-      await readSettings();
+      readSettings();
       return;
     }
     await operation(
@@ -138,7 +208,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
         }),
       (result) => {
         if (result.toolResult?.isError || (!result.viewId && !result.toolResult)) {
-          throw new Error(t("mcpApp.errors.requestFailed"));
+          throw new UserFacingError(t("mcpApp.errors.requestFailed"));
         }
         if (result.viewId) {
           setViewId(result.viewId);
@@ -160,12 +230,12 @@ export function McpAppPanel(props: McpAppPanelProps) {
           },
         );
         if (result.toolResult?.isError) {
-          throw new Error(t("mcpApp.errors.requestFailed"));
+          throw new UserFacingError(t("mcpApp.errors.requestFailed"));
         }
         return client.request<McpAppSettings>("mcp.app.settings", params(launch, "read"));
       },
-      (result) => {
-        setSettings(result);
+      (result, identity) => {
+        setReceipt({ identity, result: Promise.resolve(result) });
         setNotice(t("mcpApp.settingsSaved"));
       },
     );
@@ -179,11 +249,10 @@ export function McpAppPanel(props: McpAppPanelProps) {
         ),
       (result) => {
         if (result.toolResult?.isError) {
-          setError(t("mcpApp.errors.requestFailed"));
-          return;
+          throw new UserFacingError(t("mcpApp.errors.requestFailed"));
         }
         if (result.viewId) {
-          setSettings(null);
+          setReceipt(null);
           setViewId(result.viewId);
         } else {
           setNotice(t("mcpApp.actionComplete"));
@@ -196,13 +265,76 @@ export function McpAppPanel(props: McpAppPanelProps) {
     gateway.read();
     return JSON.stringify([launchIdentity(), gatewayPresentationScope(context.gateway).key]);
   });
+  const settingsRead = createMemo(() => {
+    const identity = openIdentity();
+    const admitted = receipt();
+    return admitted?.identity === identity ? admitted.result : Promise.resolve(null);
+  });
+  const currentOperation = () => {
+    const admitted = operationReceipt();
+    return admitted?.identity === openIdentity() ? admitted : null;
+  };
+  const SettingsContent = (content: { settings: McpAppSettings | null; pending: boolean }) => (
+    <>
+      <div class="mcp-app-panel__toolbar">
+        <strong>{props.launch?.entrypoint.title}</strong>
+        <span class="muted">{props.launch?.serverName}</span>
+        <Show when={props.launch?.settings && !content.settings}>
+          <button
+            class="btn btn--sm"
+            disabled={content.pending}
+            onClick={() => {
+              setViewId("");
+              readSettings();
+            }}
+          >
+            {t("mcpApp.settings")}
+          </button>
+        </Show>
+      </div>
+      <Show when={content.pending}>
+        <p role="status">{t("mcpApp.loading")}</p>
+      </Show>
+      <Show when={currentOperation()} keyed>
+        {(admitted) => {
+          const outcome = createMemo(() => admitted.result, { loadingValue: null });
+          return (
+            <Errored
+              fallback={(error) => (
+                <>
+                  <p role="alert">{formatUiError(error())}</p>
+                  <button class="btn" onClick={() => void open()}>
+                    {t("mcpApp.retry")}
+                  </button>
+                </>
+              )}
+            >
+              {outcome()}
+            </Errored>
+          );
+        }}
+      </Show>
+      <Show when={notice()}>
+        <p role="status">{notice()}</p>
+      </Show>
+      <Show when={content.settings}>
+        {(current) => (
+          <McpAppSettingsForm
+            settings={current()}
+            busy={content.pending}
+            onSave={(changes) => void saveSettings(changes)}
+            onTool={(name) => void runTool(name)}
+          />
+        )}
+      </Show>
+    </>
+  );
   createEffect(openIdentity, () => {
     // The memo schedules work; each operation samples its live admission target.
     generation++;
     setViewId("");
-    setSettings(null);
-    setBusy(false);
-    setError(null);
+    setReceipt(null);
+    setOperationReceipt(null);
     if (props.launch && props.launch.owner === context.gateway.snapshot.client) {
       void open();
     }
@@ -212,67 +344,56 @@ export function McpAppPanel(props: McpAppPanelProps) {
       <Show when={props.launch}>
         {(launch) => (
           <section class="mcp-app-panel">
-            <div class="mcp-app-panel__toolbar">
-              <strong>{launch().entrypoint.title}</strong>
-              <span class="muted">{launch().serverName}</span>
-              <Show when={launch().settings && !settings()}>
-                <button
-                  class="btn btn--sm"
-                  disabled={busy()}
-                  onClick={() => {
-                    setViewId("");
-                    void readSettings();
-                  }}
-                >
-                  {t("mcpApp.settings")}
-                </button>
-              </Show>
-            </div>
-            <Show when={busy()}>
-              <p role="status">{t("mcpApp.loading")}</p>
-            </Show>
-            <Show when={error()}>
-              <p role="alert">{error()}</p>
-              <button class="btn" onClick={() => void open()}>
-                {t("mcpApp.retry")}
-              </button>
-            </Show>
-            <Show when={notice()}>
-              <p role="status">{notice()}</p>
-            </Show>
-            <Show when={settings()}>
-              {(current) => (
-                <McpAppSettingsForm
-                  settings={current()}
-                  busy={busy()}
-                  onSave={(changes) => void saveSettings(changes)}
-                  onTool={(name) => void runTool(name)}
-                />
+            <Errored
+              fallback={(failure, reset) => (
+                <>
+                  <SettingsContent settings={null} pending={false} />
+                  <p role="alert">{formatUiError(failure())}</p>
+                  <button
+                    class="btn"
+                    onClick={() => {
+                      readSettings();
+                      reset();
+                    }}
+                  >
+                    {t("mcpApp.retry")}
+                  </button>
+                </>
               )}
-            </Show>
+            >
+              <Loading
+                on={openIdentity()}
+                fallback={<SettingsContent settings={null} pending={true} />}
+              >
+                <SettingsContent settings={latest(settingsRead)} pending={busy()} />
+              </Loading>
+            </Errored>
             <McpAppRetirement identity={viewId()} roots={() => [host]}>
               {(id) => {
                 // Retiring App content keeps its original target until unmount is acknowledged.
-                const initialLaunch = untrack(launch);
-                const initialIdentity = untrack(launchIdentity);
-                const viewLaunch = createMemo<McpAppOpenDetail>((previous) => {
+                const viewLaunch = createMemo<{
+                  launch: McpAppOpenDetail;
+                  identity: string;
+                }>((previous) => {
                   const current = launch();
-                  return launchIdentity() === initialIdentity &&
-                    current.owner === initialLaunch.owner
-                    ? current
-                    : (previous ?? initialLaunch);
+                  const identity = launchIdentity();
+                  return !previous ||
+                    (identity === previous.identity && current.owner === previous.launch.owner)
+                    ? { launch: current, identity }
+                    : previous;
                 });
-                const LoadedView = View;
-                return id && LoadedView ? (
-                  <LoadedView
-                    sessionKey={viewLaunch().sessionKey}
-                    agentId={viewLaunch().agentId ?? ""}
-                    viewId={id}
-                    title={viewLaunch().entrypoint.title}
-                    deepLink={viewLaunch().deepLink}
-                    onRelaunch={() => void open()}
-                    relaunching={busy()}
-                  />
+                return id ? (
+                  <Loading>
+                    <McpAppView
+                      sessionKey={viewLaunch().launch.sessionKey}
+                      agentId={viewLaunch().launch.agentId ?? ""}
+                      viewId={id}
+                      title={viewLaunch().launch.entrypoint.title}
+                      deepLink={viewLaunch().launch.deepLink}
+                      onRelaunch={() => void open()}
+                      relaunching={busy()}
+                    />
+                  </Loading>
                 ) : undefined;
               }}
             </McpAppRetirement>

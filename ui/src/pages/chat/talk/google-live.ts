@@ -1,5 +1,6 @@
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import {
   floatToPcm16,
   RealtimeTalkMediaStreamMeter,
@@ -150,7 +151,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       );
     }, GOOGLE_LIVE_SETUP_TIMEOUT_MS);
     const listenerOptions = { signal: this.socketListeners.signal };
-    ws.addEventListener(
+    listen(
+      ws,
       "open",
       () => {
         if (this.closed || this.ws !== ws) {
@@ -160,21 +162,24 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       },
       listenerOptions,
     );
-    ws.addEventListener(
+    listen(
+      ws,
       "message",
       (event) => {
         this.handleMessage(ws, event.data);
       },
       listenerOptions,
     );
-    ws.addEventListener(
+    listen(
+      ws,
       "close",
       () => {
         this.failConnection(ws, "Realtime connection closed");
       },
       listenerOptions,
     );
-    ws.addEventListener(
+    listen(
+      ws,
       "error",
       () => {
         this.failConnection(ws, "Realtime connection failed");
@@ -232,28 +237,24 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         this.ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
       }
     } finally {
-      this.releaseResources();
+      this.socketListeners.abort();
+      this.clearSetupTimeout();
+      this.pendingTranscripts.user = { text: "", byteCount: 0 };
+      this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
+      this.input.stop();
+      this.toolOwner.release();
+      this.inputPump.stop();
+      this.outputQueue.close();
+      void this.inputContext?.close();
+      this.inputContext = null;
+      this.ws?.close();
+      this.ws = null;
+      // Release capture and native resources before notifying presentation callbacks.
+      this.camera.release();
+      const inputMeter = this.inputMeter;
+      this.inputMeter = null;
+      inputMeter?.stop();
     }
-  }
-
-  private releaseResources(): void {
-    this.socketListeners.abort();
-    this.clearSetupTimeout();
-    this.pendingTranscripts.user = { text: "", byteCount: 0 };
-    this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
-    this.input.stop();
-    this.toolOwner.release();
-    this.inputPump.stop();
-    this.outputQueue.close();
-    void this.inputContext?.close();
-    this.inputContext = null;
-    this.ws?.close();
-    this.ws = null;
-    // Release capture and native resources before notifying presentation callbacks.
-    this.camera.release();
-    const inputMeter = this.inputMeter;
-    this.inputMeter = null;
-    inputMeter?.stop();
   }
 
   private clearSetupTimeout(): void {
@@ -424,7 +425,19 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
             this.outputQueue.stop();
           }
         },
-        speakControlResult: (message) => this.sendControlSpeechMessage(message),
+        speakControlResult: (message) => {
+          this.outputQueue.stop();
+          this.send(
+            this.gemini31LiveModel
+              ? { realtimeInput: { text: message } }
+              : {
+                  clientContent: {
+                    turns: [{ role: "user", parts: [{ text: message }] }],
+                    turnComplete: true,
+                  },
+                },
+          );
+        },
       });
     }
     return !this.closed;
@@ -543,19 +556,5 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       globalThis.clearTimeout(this.videoFrameTimer);
       this.videoFrameTimer = null;
     }
-  }
-
-  private sendControlSpeechMessage(message: string): void {
-    this.outputQueue.stop();
-    this.send(
-      this.gemini31LiveModel
-        ? { realtimeInput: { text: message } }
-        : {
-            clientContent: {
-              turns: [{ role: "user", parts: [{ text: message }] }],
-              turnComplete: true,
-            },
-          },
-    );
   }
 }

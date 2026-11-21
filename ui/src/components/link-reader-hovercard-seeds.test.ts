@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 
@@ -242,7 +243,7 @@ describe("GitHub hovercards with authorized session details", () => {
       expect(hovercard()).toBeNull();
       current.reject(new Error("Unavailable"));
       await vi.advanceTimersByTimeAsync(0);
-      expect(hovercard()?.textContent).toContain("Could not load preview");
+      expect(hovercard()?.textContent).toContain("Couldn’t load preview");
       expect(hovercard()?.textContent).not.toContain(seed.title);
       expect(hovercard()?.textContent).not.toContain(details.title);
     },

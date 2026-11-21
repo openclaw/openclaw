@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
 import { isContextOverflow } from "../utils/overflow.js";
 import { streamOpenAIResponses } from "./openai-responses.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 // Live coverage for the Responses stream state machine: real streams interleave
 // reasoning/message/tool items, so unit fakes alone cannot prove slot tracking,
@@ -18,24 +19,18 @@ const OVERFLOW_CONTEXT_WINDOW = 128_000;
 
 function liveModel(overrides: Partial<Model<"openai-responses">> = {}) {
   return {
-    id: LIVE_MODEL_ID,
-    name: LIVE_MODEL_ID,
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...makeProviderModel("openai-responses", "openai", LIVE_MODEL_ID, {
+      baseUrl: "https://api.openai.com/v1",
+    }),
     contextWindow: 200_000,
-    maxTokens: 8192,
     ...overrides,
   } satisfies Model<"openai-responses">;
 }
 
 describeLive("OpenAI Responses live", () => {
-  it(
-    "streams a reply through a terminal event with usage accounting",
-    async () => {
+  it.each([undefined, "30m", "12h"] as const)(
+    "streams a reply with cache lifetime %s through a terminal event with usage accounting",
+    async (promptCacheTtl) => {
       const context: Context = {
         messages: [{ role: "user", content: "Reply with exactly: OK", timestamp: 0 }],
       };
@@ -43,6 +38,7 @@ describeLive("OpenAI Responses live", () => {
         apiKey: OPENAI_KEY,
         maxTokens: 256,
         temperature: 0.5,
+        promptCacheTtl,
       }).result();
 
       expect(result.errorMessage).toBeUndefined();

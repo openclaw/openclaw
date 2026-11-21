@@ -41,6 +41,8 @@ export const invalidModelRunOptionCases = [
   { args: ["--thinking", "turbo-mode"], error: "Invalid thinking level." },
   { args: ["--thinking", ""], error: "Invalid thinking level." },
   { args: ["--thinking", " \t"], error: "Invalid thinking level." },
+  { args: ["--local", "--gateway"], error: "Pass only one of --local or --gateway." },
+  { args: ["--agent", " "], error: "--agent must not be blank" },
 ];
 
 export async function runCap(...argv: string[]): Promise<void> {

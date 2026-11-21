@@ -78,23 +78,17 @@ export async function defaultCommandRunner(
       ...options,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const output = { stdout: "", stderr: "" };
     let spawnError: Error | undefined;
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (text: string) => {
-      stdout += text;
-      if (options.stdio === "inherit") {
-        process.stdout.write(text);
-      }
-    });
-    child.stderr?.on("data", (text: string) => {
-      stderr += text;
-      if (options.stdio === "inherit") {
-        process.stderr.write(text);
-      }
-    });
+    for (const stream of ["stdout", "stderr"] as const) {
+      child[stream]?.setEncoding("utf8");
+      child[stream]?.on("data", (text: string) => {
+        output[stream] += text;
+        if (options.stdio === "inherit") {
+          process[stream].write(text);
+        }
+      });
+    }
     // Abort emits error before termination. Wait for close so native lease rollback
     // can finish and its final diagnostics are captured; exit 0 cannot erase abort.
     child.on("error", (error) => {
@@ -102,19 +96,19 @@ export async function defaultCommandRunner(
     });
     child.on("close", (code, signal) => {
       if (code === 0 && !spawnError) {
-        resolve({ stdout, stderr });
+        resolve(output);
         return;
       }
       const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
       const error =
         spawnError ??
         new Error(
-          `${command} ${args.join(" ")} failed with ${detail}${stderr ? `\n${stderr.trimEnd()}` : ""}`,
+          `${command} ${args.join(" ")} failed with ${detail}${output.stderr ? `\n${output.stderr.trimEnd()}` : ""}`,
         );
       // These native acquisition markers identify recovery candidates, not ready
       // leases. Inspect the full output so verbose bootstrap cannot erase them.
       const recoveryLeaseCandidates: string[] = [];
-      for (const match of stderr.matchAll(
+      for (const match of output.stderr.matchAll(
         /^(?:leased (cbx_[a-f0-9]{12}) slug=|provisioned lease=(cbx_[a-f0-9]{12}) server=)/gmu,
       )) {
         const id = match[1] ?? match[2];
@@ -303,12 +297,7 @@ function sshCommandForPort(inspect: CrabboxInspect, sshPort: string) {
   };
 }
 
-async function sshCommand(params: {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  inspect: CrabboxInspect;
-  runner: CommandRunner;
-}) {
+async function sshCommand(params: Parameters<typeof copyCrabboxArtifacts>[0]) {
   const candidates = crabboxSshPortCandidates(params.inspect);
   if (candidates.length === 1) {
     return sshCommandForPort(params.inspect, candidates[0]).value;

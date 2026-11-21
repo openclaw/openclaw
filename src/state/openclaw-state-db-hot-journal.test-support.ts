@@ -105,9 +105,9 @@ export async function runHotRollbackJournalRecoveryProbe(params: {
       }
       const immutableUri = \`\${pathToFileURL(databasePath).href}?mode=ro&immutable=1\`;
       const immutable = new DatabaseSync(immutableUri, { readOnly: true });
-      const immutableDirtyRowsBeforeKill = countRows(immutable, "uncommitted");
+      const result = { immutableDirtyRowsBeforeKill: countRows(immutable, "uncommitted") };
       immutable.close();
-      if (immutableDirtyRowsBeforeKill === 0) {
+      if (result.immutableDirtyRowsBeforeKill === 0) {
         throw new Error("writer did not spill uncommitted pages into the main database");
       }
       writer.kill("SIGKILL");
@@ -119,37 +119,27 @@ export async function runHotRollbackJournalRecoveryProbe(params: {
 
       const hashJournal = () =>
         createHash("sha256").update(fs.readFileSync(journalPath)).digest("hex");
-      const journalBytesBeforeReadOnly = fs.statSync(journalPath).size;
-      const journalShaBeforeReadOnly = hashJournal();
-      let readOnly;
+      result.journalBytesBeforeReadOnly = fs.statSync(journalPath).size;
+      result.journalShaBeforeReadOnly = hashJournal();
       try {
         const database = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
         const uncommittedRows = database ? countRows(database.db, "uncommitted") : 0;
         database?.walMaintenance.close();
-        readOnly = { error: null, opened: true, uncommittedRows };
+        result.readOnly = { error: null, opened: true, uncommittedRows };
       } catch (error) {
-        readOnly = {
+        result.readOnly = {
           error: error instanceof Error ? error.message : String(error),
           opened: false, uncommittedRows: null,
         };
       }
-      const journalExistsAfterReadOnly = fs.existsSync(journalPath);
-      const journalShaAfterReadOnly = hashJournal();
+      result.journalExistsAfterReadOnly = fs.existsSync(journalPath);
+      result.journalShaAfterReadOnly = hashJournal();
       const reopened = openOpenClawStateDatabase({ path: databasePath });
-      const committedRowsAfterRecovery = countRows(reopened.db, "committed");
-      const integrity = reopened.db.prepare("PRAGMA integrity_check").get();
+      result.committedRowsAfterRecovery = countRows(reopened.db, "committed");
+      result.integrity = reopened.db.prepare("PRAGMA integrity_check").get()?.integrity_check;
       closeOpenClawStateDatabaseForTest();
-      console.log(JSON.stringify({
-        committedRowsAfterRecovery,
-        immutableDirtyRowsBeforeKill,
-        integrity: integrity?.integrity_check,
-        journalBytesBeforeReadOnly,
-        journalExistsAfterReadOnly,
-        journalExistsAfterRecovery: fs.existsSync(journalPath),
-        journalShaAfterReadOnly,
-        journalShaBeforeReadOnly,
-        readOnly,
-      }));
+      result.journalExistsAfterRecovery = fs.existsSync(journalPath);
+      console.log(JSON.stringify(result));
     } finally {
       if (writer.exitCode === null && writer.signalCode === null) {
         writer.kill("SIGKILL");

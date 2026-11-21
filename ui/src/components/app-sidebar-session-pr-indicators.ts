@@ -1,12 +1,13 @@
 import { createEffect, createMemo, onCleanup } from "solid-js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import {
   summarizeSessionPullRequests,
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
@@ -20,17 +21,17 @@ type IndicatorEntry = {
   branchKnown: boolean;
 };
 
-type SessionPullRequestIndicatorsOptions = {
+/** Passive row projections; the shared store owns snapshots and checkout subscriptions. */
+export function createSessionPullRequestIndicators(options: {
   getConnected: () => boolean;
   getPresented: () => boolean;
   getRows: () => readonly SidebarRecentSession[];
   getSelectedAgentId: () => string;
   getGateway: () => ApplicationGateway | undefined;
   getSessions: () => SessionCapability | undefined;
-};
-
-/** Passive row projections; the shared store owns snapshots and checkout subscriptions. */
-export function createSessionPullRequestIndicators(options: SessionPullRequestIndicatorsOptions) {
+}) {
+  // Any admitted reader projects the shared store; the store itself issues passive sidebar reads only
+  // for broad readers, so a session-only reader sees snapshots its own conversation read delivered.
   const readable = () => {
     const gateway = options.getGateway();
     return gateway &&
@@ -42,22 +43,32 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
       ? gateway
       : null;
   };
+  const broadRead = () => {
+    const gateway = options.getGateway();
+    return Boolean(
+      gateway &&
+      operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []),
+    );
+  };
   const rows = createMemo(() => options.getRows().filter((row) => !row.isChild));
   const scope = createMemo(
     () => {
       const gateway = readable();
+      // Losing or gaining broad read rebinds the store so passive snapshots never outlive their scope.
       return gateway && options.getConnected()
         ? {
             gateway,
             client: gateway.snapshot.client,
             agentId: options.getSelectedAgentId(),
             sessions: options.getSessions(),
+            broad: broadRead(),
           }
         : null;
     },
     {
       equals: (a, b) =>
         a?.gateway === b?.gateway &&
+        a?.broad === b?.broad &&
         a?.client === b?.client &&
         a?.agentId === b?.agentId &&
         a?.sessions === b?.sessions,
@@ -153,6 +164,7 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
           continue;
         }
         if (
+          !snapshot.discardPrevious &&
           snapshot.status !== "ready" &&
           snapshot.pullRequests.length === 0 &&
           !snapshot.taskPullRequests?.length
@@ -163,6 +175,7 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
           continue;
         }
         const branchKnown =
+          snapshot.discardPrevious ||
           snapshot.branchRead !== false ||
           snapshot.pullRequestCount !== undefined ||
           snapshot.pullRequests.length > 0 ||
@@ -197,7 +210,7 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
     return { binding: current, entries };
   });
   const presentation = createParkedProjection(
-    () => ({ readable: Boolean(readable()), entries: summaries().entries }),
+    () => ({ readable: Boolean(readable()), broad: broadRead(), entries: summaries().entries }),
     options.getPresented,
   );
   return {
@@ -211,11 +224,13 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
         // Catalog-only rows already carry an authorized summary; live PR access is separate.
         return worktreeId ? undefined : initial;
       }
+      // A session-only reader shows catalog facts for a checkout row only when its own read confirmed them.
+      const catalogSummary = current.broad || !worktreeId ? initial : undefined;
       const entry = current.entries.get(sessionKey);
       // Receipt-only hydration says nothing about a catalog branch summary.
       return entry?.worktreeId === worktreeId
-        ? (entry.summary ?? (!entry.branchKnown ? initial : undefined))
-        : initial;
+        ? (entry.summary ?? (!entry.branchKnown ? catalogSummary : undefined))
+        : catalogSummary;
     },
   };
 }

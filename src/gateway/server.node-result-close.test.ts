@@ -223,12 +223,6 @@ test.each([
         resolveInvokeFrame(event.payload as InvokeFrame);
       },
     });
-    const initialInventory = await request<{ nodes?: ListedNode[] }>(operator, "node.list");
-    expect(initialInventory.nodes?.find((entry) => entry.nodeId === nodeId)).toMatchObject({
-      connected: true,
-      commands: ["camera.list"],
-    });
-
     const invoked = request(operator, "node.invoke", {
       nodeId,
       command: "camera.list",

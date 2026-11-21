@@ -133,70 +133,52 @@ const config: OpenClawConfig = {
   tools: { exec: { host: "node", node: "build-node", mode: "full" } },
 };
 
-it.each([false, true])(
-  "persists first-turn skills only while the caller is current without caller-thread session SQL (revoked: %s)",
-  async (revokeAtCommit) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:skill-persistence",
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      };
-      const sessionEntry = { sessionId: "skill-session", updatedAt: 1 };
-      await replaceSessionEntry(scope, sessionEntry);
-      const originalEntry = loadSessionEntry(scope);
-      const sessionStore = { [scope.sessionKey]: sessionEntry };
-      const controller = new AbortController();
-      const refusal = new Error("skill caller retired before commit");
-      let commitReached = false;
-      if (revokeAtCommit) {
-        probe.admission(workerAdmission, (request, grant, callback) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.publication) &&
-            request.facts.publication.kind === "session-entry-patch-committed"
-          ) {
-            commitReached = true;
-            controller.abort(refusal);
-          }
-          callback(request, grant);
-        });
+it("refuses first-turn skill persistence when the caller retires at commit without caller-thread SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:skill-persistence",
+      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+    };
+    const sessionEntry = { sessionId: "skill-session", updatedAt: 1 };
+    await replaceSessionEntry(scope, sessionEntry);
+    const originalEntry = loadSessionEntry(scope);
+    const sessionStore = { [scope.sessionKey]: sessionEntry };
+    const controller = new AbortController();
+    const refusal = new Error("skill caller retired before commit");
+    let commitReached = false;
+    probe.admission(workerAdmission, (request, grant, callback) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.publication) &&
+        request.facts.publication.kind === "session-entry-patch-committed"
+      ) {
+        commitReached = true;
+        controller.abort(refusal);
       }
-      const sql = observeHostDataSql();
-      const pending = ensureSkillSnapshot({
-        ...scope,
-        cfg: {},
-        sessionEntry,
-        sessionStore,
-        sessionId: sessionEntry.sessionId,
-        workspaceDir: state.statePath("workspace"),
-        isFirstTurnInSession: true,
-        assertCurrent: () => controller.signal.throwIfAborted(),
-      }).finally(sql.restore);
-
-      if (revokeAtCommit) {
-        await expect(pending).rejects.toBe(refusal);
-        expect(commitReached).toBe(true);
-        expect(loadSessionEntry(scope)).toEqual(originalEntry);
-        expect(sessionStore[scope.sessionKey]).toEqual(sessionEntry);
-      } else {
-        const result = await pending;
-        expect(result).toMatchObject({
-          systemSent: true,
-          sessionEntry: {
-            sessionId: sessionEntry.sessionId,
-            systemSent: true,
-            skillsSnapshot: { prompt: "", skills: [] },
-          },
-        });
-        expect(loadSessionEntry(scope)).toEqual(result.sessionEntry);
-      }
-      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      callback(request, grant);
     });
-  },
-);
+    const sql = observeHostDataSql();
+    const pending = ensureSkillSnapshot({
+      ...scope,
+      cfg: {},
+      sessionEntry,
+      sessionStore,
+      sessionId: sessionEntry.sessionId,
+      workspaceDir: state.statePath("workspace"),
+      isFirstTurnInSession: true,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    }).finally(sql.restore);
+
+    await expect(pending).rejects.toBe(refusal);
+    expect(commitReached).toBe(true);
+    expect(loadSessionEntry(scope)).toEqual(originalEntry);
+    expect(sessionStore[scope.sessionKey]).toEqual(sessionEntry);
+    expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+  });
+});
 
 it("prepares current sandbox and approval skill eligibility without caller-thread SQL", async () => {
   const root = tempDirs.make("openclaw-skill-exec-");
@@ -241,7 +223,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
   }
 });
 
-it("refreshes skills without overwriting other session fields", async () => {
+it.each([true, false])("refreshes only owned skill fields (first turn: %s)", async (firstTurn) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const scope = {
@@ -254,6 +236,8 @@ it("refreshes skills without overwriting other session fields", async () => {
       lifecycleRevision: "original",
       updatedAt: 1,
       pinnedAt: 1,
+      modelOverride: "gpt-5.5",
+      label: "Before rename",
       skillsSnapshot: { prompt: "prepared skills", skills: [] },
     };
     await replaceSessionEntry(scope, entry);
@@ -275,33 +259,46 @@ it("refreshes skills without overwriting other session fields", async () => {
       await resume.promise;
       return { snapshot: skillsSnapshot, shouldRefresh: true };
     });
+    const sql = observeHostDataSql();
     const pending = ensureSkillSnapshot({
       ...scope,
       cfg: {},
       workspaceDir: state.statePath("workspace"),
-      isFirstTurnInSession: false,
+      isFirstTurnInSession: firstTurn,
       sessionEntry: entry,
       sessionEntryHandle: handle,
       reader,
-    });
+    }).finally(sql.restore);
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "skill preparation did not start");
       await replaceSessionEntry(scope, {
         ...entry,
         pinnedAt: undefined,
         updatedAt: 2,
-        systemSent: true,
+        systemSent: !firstTurn,
+        modelOverride: "sonnet-4.6",
+        label: "After rename",
+        sendPolicy: "deny",
       });
       resume.resolve();
       const result = await pending;
       expect(result).toMatchObject({
         systemSent: true,
         skillsSnapshot,
-        sessionEntry: { updatedAt: expect.any(Number), systemSent: true, skillsSnapshot },
+        sessionEntry: {
+          sessionId: entry.sessionId,
+          updatedAt: 2,
+          systemSent: true,
+          skillsSnapshot,
+          modelOverride: "sonnet-4.6",
+          label: "After rename",
+          sendPolicy: "deny",
+        },
       });
       expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
       expect(handle.getCurrent()).toEqual(result.sessionEntry);
       expect(loadSessionEntry(scope)).toMatchObject({ skillsSnapshot, systemSent: true });
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     } finally {
       resume.resolve();
       await Promise.allSettled([pending, databaseClaim.release()]);

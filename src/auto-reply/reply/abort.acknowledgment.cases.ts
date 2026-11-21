@@ -18,7 +18,8 @@ import {
 import { isRpcSourceRegistered } from "../../sessions/session-controller.rpc-sources.js";
 import type { SessionTarget } from "../../sessions/session-controller.target.js";
 import { captureChannelSessionStop } from "./abort-operation.js";
-import { tryFastAbortFromMessage, type FastAbortRequestParams } from "./abort.js";
+import { tryFastAbortFromMessage } from "./abort.js";
+import type { FastAbortRequestParams } from "./abort.types.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { enqueueFollowupRun } from "./queue.js";
@@ -148,9 +149,13 @@ export function registerAbortAcknowledgmentCases({
     signal,
   }) => {
     const state = await setupStop();
-    const prepared = prepareReplySourceInput({ ...state.ctx, SessionKey: sessionKey }, state.cfg, {
-      expectedExistingSessionId: state.entry.sessionId,
-    });
+    const prepared = await prepareReplySourceInput(
+      { ...state.ctx, SessionKey: sessionKey },
+      state.cfg,
+      {
+        expectedExistingSessionId: state.entry.sessionId,
+      },
+    );
     const input = expectDefined(prepared.input, "preparing channel input");
     const preparation = createDeferred();
     const preparationFailure = new Error("late channel preparation cleanup failed");
@@ -440,7 +445,6 @@ export function registerAbortAcknowledgmentCases({
     const tracking = createGatewayTerminalTracking({
       getScopedRpcSource: (id) =>
         id === runId && isRpcSourceRegistered(entry) ? entry : undefined,
-      restartRecoveryCandidates: new Map(),
     });
     const onAbandoned = vi.fn(async () => {
       notificationEntered.resolve();

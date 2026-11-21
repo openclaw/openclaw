@@ -12,12 +12,17 @@ export type BrowserPanelState = {
   view: BrowserPanelView | null;
   loading: boolean;
   errorText: string | null;
+  errorRetry: (() => Promise<unknown>) | null;
   noticeText: string | null;
   mode: BrowserPanelMode;
   strokes: AnnotationStroke[];
   inspected: BrowserInspectedNode | null;
   inspectPointer: { x: number; y: number } | null;
   evaluateUnavailable: boolean;
+  /** This panel's connection holds operator control; other browser input is paused. */
+  controlling: boolean;
+  /** The Gateway confirmed this route reaches a browser the panel can take control of. */
+  controlAvailable: boolean;
   urlDraft: string;
   pendingNewTab: boolean;
   urlDraftEditing: boolean;

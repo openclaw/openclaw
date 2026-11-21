@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { getPairedDevice } from "../infra/device-pairing.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
@@ -12,6 +14,7 @@ import {
   observeGatewayRunExecution,
   waitForAgentCommandCall,
 } from "./agent-command.test-helpers.js";
+import { openTrackedWs, pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
@@ -19,6 +22,7 @@ import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
   agentCommandMock,
+  connectReq,
   installGatewayTestHooks,
   rpcReq,
   testState,
@@ -28,12 +32,7 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-session-", {
-  client: {
-    id: "gateway-client",
-    version: "1.0.0",
-    platform: "test",
-    mode: "backend",
-  },
+  client: { id: "gateway-client", version: "1.0.0", platform: "test", mode: "backend" },
 });
 
 const BASE_IMAGE_PNG =
@@ -68,6 +67,16 @@ async function acceptedAgent(idempotencyKey: string, fields: Record<string, unkn
   expect(response.ok, JSON.stringify(response)).toBe(true);
   return waitForAgentCommandCall(idempotencyKey);
 }
+async function rejectedAgent(
+  idempotencyKey: string,
+  fields: Record<string, unknown>,
+  error: Record<string, unknown>,
+) {
+  const response = await agentRequest(idempotencyKey, fields);
+  expect(response).toMatchObject({ ok: false, error });
+  expect(agentCommandMock).not.toHaveBeenCalled();
+  return response;
+}
 async function setVisionModel(models = [VISION_AGENT_MODEL]) {
   testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
   await setGatewayModelCatalogForTest(models);
@@ -88,22 +97,13 @@ async function setGatewayModelCatalogForTest(
     { refreshPreparedModelRuntimeSnapshots },
     { clearRuntimeConfigSnapshot, getRuntimeConfig, writeConfigFile },
   ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
-  await writeConfigFile({
-    models: {
-      providers: {
-        "ollama-cloud": {
-          baseUrl: "https://ollama-cloud.example.test/v1",
-          models: models.map((model) => ({
-            ...model,
-            reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 8_192,
-          })),
-        },
-      },
-    },
-  });
+  await writeConfigFile(
+    configFor("ollama-cloud", "https://ollama-cloud.example.test/v1", {
+      models: models.map((model) =>
+        modelDefinition(model.id, { ...model, reasoning: false, contextWindow: 128_000 }),
+      ),
+    }),
+  );
   clearRuntimeConfigSnapshot();
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
@@ -165,15 +165,11 @@ describe("gateway server agent", () => {
 
   test("agent rejects an ownerless bare key before session preparation", async () => {
     await setExplicitOwnership();
-
-    const res = await agentRequest("idem-agent-ownerless-global", { sessionKey: "global" });
-
-    expect(res.ok).toBe(false);
-    expect(res.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("has no explicit owner"),
-    });
-    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+    await rejectedAgent(
+      "idem-agent-ownerless-global",
+      { sessionKey: "global" },
+      { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+    );
   });
 
   test.each(["missing", "expired", "requested", "internal"] as const)(
@@ -191,6 +187,7 @@ describe("gateway server agent", () => {
             ? {
                 [sessionKey]: {
                   sessionId: "expired-predecessor",
+                  lifecycleRevision: "expired-lifecycle",
                   updatedAt: expiredAt,
                   sessionStartedAt: expiredAt,
                   lastInteractionAt: expiredAt,
@@ -226,7 +223,9 @@ describe("gateway server agent", () => {
           expect(stored.entry?.sessionId).toBe(boundSessionId);
         }
         if (kind === "expired") {
-          expect(boundSessionId).not.toBe("expired-predecessor");
+          expect(boundSessionId).toBe("expired-predecessor");
+          expect(stored.entry?.lifecycleRevision).toEqual(expect.any(String));
+          expect(stored.entry?.lifecycleRevision).not.toBe("expired-lifecycle");
         } else if (kind === "requested") {
           expect(boundSessionId).toBe("requested-session");
         }
@@ -279,55 +278,48 @@ describe("gateway server agent", () => {
       } else {
         vi.mocked(agentCommandMock).mockImplementationOnce(async () => {});
       }
-      const deleteSpy = vi.spyOn(mediaStore, "deleteMediaBuffer");
+      using deleteSpy = vi.spyOn(mediaStore, "deleteMediaBuffer");
       const inboundBefore = await listInboundMedia();
       const runId = `prompt-suppressed-media-${outcome}`;
-      try {
-        const call = await acceptedAgent(runId, {
-          message: `${outcome} after admission`,
-          sessionKey: "main",
-          suppressPromptPersistence: true,
-          attachments: [offloadedImageAttachment()],
+      const call = await acceptedAgent(runId, {
+        message: `${outcome} after admission`,
+        sessionKey: "main",
+        suppressPromptPersistence: true,
+        attachments: [offloadedImageAttachment()],
+      });
+      if (outcome === "abort") {
+        const abortRes = await rpcReq(gatewaySuite.ws, "chat.abort", {
+          sessionKey: call.sessionKey,
+          runId,
         });
-        if (outcome === "abort") {
-          const abortRes = await rpcReq(gatewaySuite.ws, "chat.abort", {
-            sessionKey: call.sessionKey,
-            runId,
-          });
-          expect(abortRes.ok, JSON.stringify(abortRes)).toBe(true);
-        }
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        await expectNoNewInboundMedia(inboundBefore);
-        await expect(
-          readSessionMessagesAsync(
-            sessionTarget("aborted-media-session", String(call.sessionKey)),
-            { mode: "full", reason: "prompt-suppressed media leak reproduction" },
-          ),
-        ).resolves.toEqual([]);
-
-        const mediaRef = (call.media as Array<{ url: string }>)[0]?.url;
-        const mediaId = mediaRef?.split("/").at(-1);
-        expect(mediaId).toBeTruthy();
-        expect(
-          deleteSpy.mock.calls.filter(([id, subdir]) => id === mediaId && subdir === "inbound"),
-        ).toHaveLength(1);
-      } finally {
-        deleteSpy.mockRestore();
+        expect(abortRes.ok, JSON.stringify(abortRes)).toBe(true);
       }
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await expectNoNewInboundMedia(inboundBefore);
+      await expect(
+        readSessionMessagesAsync(sessionTarget("aborted-media-session", String(call.sessionKey)), {
+          mode: "full",
+          reason: "prompt-suppressed media leak reproduction",
+        }),
+      ).resolves.toEqual([]);
+
+      const mediaRef = (call.media as Array<{ url: string }>)[0]?.url;
+      const mediaId = mediaRef?.split("/").at(-1);
+      expect(mediaId).toBeTruthy();
+      expect(
+        deleteSpy.mock.calls.filter(([id, subdir]) => id === mediaId && subdir === "inbound"),
+      ).toHaveLength(1);
     },
   );
 
   test("agent rejects unknown reply channel", async () => {
     const inboundBefore = await listInboundMedia();
-    const res = await agentRequest("idem-agent-reply-unknown", {
-      replyChannel: "unknown-channel",
-      attachments: [offloadedImageAttachment()],
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toContain("unknown channel");
+    await rejectedAgent(
+      "idem-agent-reply-unknown",
+      { replyChannel: "unknown-channel", attachments: [offloadedImageAttachment()] },
+      { message: expect.stringContaining("unknown channel") },
+    );
     await expectNoNewInboundMedia(inboundBefore);
-
-    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
   });
 
   test("agent retains image offload facts beside the claim-check line", async () => {
@@ -394,17 +386,86 @@ describe("gateway server agent", () => {
     await setVisionModel();
     await setTestSessionStore({ main: sessionEntry("sess-main-missing-provider") });
     const inboundBefore = await listInboundMedia();
-    const res = await agentRequest("idem-agent-missing-provider", {
-      sessionKey: "main",
-      deliver: true,
-      bestEffortDeliver: false,
-      attachments: [offloadedImageAttachment()],
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.code).toBe("INVALID_REQUEST");
-    expect(res.error?.message).toContain("Channel is required");
+    const res = await rejectedAgent(
+      "idem-agent-missing-provider",
+      {
+        sessionKey: "main",
+        deliver: true,
+        bestEffortDeliver: false,
+        attachments: [offloadedImageAttachment()],
+      },
+      { code: "INVALID_REQUEST", message: expect.stringContaining("Channel is required") },
+    );
     expect(res.error?.message).not.toMatch(/^Error:/u);
-    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
     await expectNoNewInboundMedia(inboundBefore);
   });
+
+  test.each([
+    ["gateway-client", "backend"],
+    ["cli", "cli"],
+  ] as const)(
+    "remote write-scoped %s/%s device cannot hide its prompt from the transcript",
+    async (clientId, mode) => {
+      const { readConfigFileSnapshot, writeConfigFile } = await import("../config/io.js");
+      const previousConfig = (await readConfigFileSnapshot()).sourceConfig;
+      await writeConfigFile({
+        ...previousConfig,
+        gateway: { ...previousConfig.gateway, trustedProxies: ["127.0.0.1"] },
+      });
+      try {
+        await setTestSessionStore({ main: sessionEntry(`remote-write-${mode}-session`) });
+        const device = await pairDeviceIdentity({
+          name: `remote-write-${mode}`,
+          role: "operator",
+          scopes: ["operator.write"],
+          clientId,
+          clientMode: mode,
+          platform: "test",
+        });
+        const deviceToken = (await getPairedDevice(device.identity.deviceId))?.tokens?.operator
+          ?.token;
+        expect(deviceToken).toBeTypeOf("string");
+        const ws = await openTrackedWs(gatewaySuite.port, {
+          "x-forwarded-for": "203.0.113.50",
+          "x-forwarded-proto": "https",
+        });
+        try {
+          const hello = await connectReq(ws, {
+            skipDefaultAuth: true,
+            client: { id: clientId, version: "1.0.0", platform: "test", mode },
+            deviceIdentityPath: device.identityPath,
+            deviceToken,
+            scopes: ["operator.write"],
+          });
+          expect(hello.ok, JSON.stringify(hello)).toBe(true);
+          const hidden = await rpcReq(ws, "agent", {
+            message: "steer without a transcript row",
+            sessionKey: "main",
+            idempotencyKey: `remote-write-hidden-${mode}`,
+            suppressPromptPersistence: true,
+          });
+          expect(hidden).toMatchObject({
+            ok: false,
+            error: {
+              message: "internal session-effect controls are reserved for backend callers.",
+            },
+          });
+          // The declared mode alone still admits ordinary turns.
+          const visibleRunId = `remote-write-visible-${mode}`;
+          const visible = await rpcReq(ws, "agent", {
+            message: "an ordinary turn",
+            sessionKey: "main",
+            idempotencyKey: visibleRunId,
+          });
+          expect(visible.ok, JSON.stringify(visible)).toBe(true);
+          await waitForAgentCommandCall(visibleRunId);
+          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        } finally {
+          ws.close();
+        }
+      } finally {
+        await writeConfigFile(previousConfig);
+      }
+    },
+  );
 });

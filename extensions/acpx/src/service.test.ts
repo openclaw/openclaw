@@ -162,8 +162,12 @@ function createOpenKeyedStore(ctx: OpenClawPluginServiceContext) {
 
 function createAcpxRuntimeService(
   ctx: OpenClawPluginServiceContext,
-  params: Omit<Parameters<typeof createRealAcpxRuntimeService>[0], "backendLifecycle"> & {
+  params: Omit<
+    Parameters<typeof createRealAcpxRuntimeService>[0],
+    "backendLifecycle" | "openKeyedStore"
+  > & {
     backendLifecycle?: Parameters<typeof createRealAcpxRuntimeService>[0]["backendLifecycle"];
+    openKeyedStore?: Parameters<typeof createRealAcpxRuntimeService>[0]["openKeyedStore"];
   } = {},
 ) {
   const backendLifecycle = params.backendLifecycle ?? {

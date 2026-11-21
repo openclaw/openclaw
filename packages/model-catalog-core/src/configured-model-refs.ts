@@ -104,11 +104,6 @@ export function collectConfiguredModelRefs(
     );
     if (isRecord(agent.compaction)) {
       pushModelRef(`${path}.compaction.model`, agent.compaction.model, "selector");
-      pushModelRef(
-        `${path}.compaction.memoryFlush.model`,
-        asOptionalRecord(agent.compaction.memoryFlush)?.model,
-        "selector",
-      );
     }
     if (isRecord(agent.models)) {
       for (const modelRef of Object.keys(agent.models)) {

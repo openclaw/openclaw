@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -52,6 +52,23 @@ describe("session descriptor reads", () => {
     h = harness();
   });
   afterEach(() => vi.useRealTimers());
+
+  it("keeps descriptors and roster reads warm across browser profile create and removal", async () => {
+    await h.sessions.refresh({ agentId: "main" });
+    const first = await h.sessions.describe({ key });
+    h.list.mockClear();
+    h.read.mockClear();
+    for (const path of ["browser.profiles.temporary", "browser.profiles"]) {
+      h.event("config.changed", { changedPaths: [path] });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await h.sessions.describe({ key })).toEqual(first);
+    }
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.list).not.toHaveBeenCalled();
+    h.event("config.changed", { changedPaths: ["agents.defaults.model"] });
+    await h.sessions.describe({ key });
+    expect(h.read).toHaveBeenCalledOnce();
+  });
 
   it("reuses concurrent implied-agent descriptors and their runtime sample, isolating other agents", async () => {
     const running: GatewaySessionRow = { ...initial, runtimeMs: 500, status: "running" };
@@ -169,10 +186,7 @@ describe("session descriptor reads", () => {
         h.event(revision % 2 ? "session.message" : "sessions.changed", {
           agentId: "main",
           reason: "patch",
-          session: {
-            ...next,
-            ...enrichment,
-          },
+          session: { ...next, ...enrichment },
           ancestorSessions: [],
         });
         expect(await h.sessions.describe(params)).toEqual({
@@ -284,24 +298,20 @@ describe("session descriptor reads", () => {
         spawnedBy: key,
       };
       const emit = (snapshotAt: number, changed = false) =>
-        h.emitEvent({
-          type: "event",
-          event: snapshotAt % 2 ? "sessions.changed" : "session.message",
-          payload: {
-            agentId: "main",
-            reason: "send",
-            session: { ...child, updatedAt: snapshotAt, snapshotAt },
-            ancestorSessions: changed
-              ? [{ ...parent, snapshotAt, ancestorRevision: "parent-content" }]
-              : [],
-            ...(changed
-              ? {}
-              : {
-                  ancestorSessionRefs: [
-                    { key, sessionId: parent.sessionId, revision: "parent-content", snapshotAt },
-                  ],
-                }),
-          },
+        h.event(snapshotAt % 2 ? "sessions.changed" : "session.message", {
+          agentId: "main",
+          reason: "send",
+          session: { ...child, updatedAt: snapshotAt, snapshotAt },
+          ancestorSessions: changed
+            ? [{ ...parent, snapshotAt, ancestorRevision: "parent-content" }]
+            : [],
+          ...(changed
+            ? {}
+            : {
+                ancestorSessionRefs: [
+                  { key, sessionId: parent.sessionId, revision: "parent-content", snapshotAt },
+                ],
+              }),
         });
       emit(2, true);
       const pending = h.pending();

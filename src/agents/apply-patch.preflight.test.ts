@@ -1,12 +1,8 @@
-/**
- * Tests that apply_patch rejects predictable update failures before any hunk
- * mutates the workspace, including hunks that replace links earlier hunks remove.
- */
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
@@ -15,72 +11,74 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // The temp root's volume decides whether two spellings name one entry (APFS and NTFS by default).
 const caseInsensitiveTemp = existsSync(os.tmpdir().toUpperCase());
 
-async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
-  // Sandbox checks compare canonical paths; macOS tmpdir is itself a symlink.
-  return fn(await fs.realpath(tempDirs.make("openclaw-patch-preflight-")));
+// The tracker canonicalizes the system temp root before creating directories.
+let dir: string;
+beforeEach(() => {
+  dir = tempDirs.make("openclaw-patch-preflight-");
+});
+
+const patch = (...hunks: string[]) => ["*** Begin Patch", ...hunks, "*** End Patch"].join("\n");
+const update = (file: string, before: string, after: string) =>
+  `*** Update File: ${file}\n@@\n-${before}\n+${after}`;
+const execute = (root: string, input: string, workspaceOnly = true) =>
+  createApplyPatchTool({ cwd: root, workspaceOnly }).execute("preflight", { input }, undefined);
+
+async function symlink(root: string, targetDir = root) {
+  const target = path.join(targetDir, "target.txt");
+  const link = path.join(root, "link.txt");
+  await fs.writeFile(target, "keep\n", "utf8");
+  await fs.symlink(target, link);
+  return { target, link };
+}
+
+async function hardlink(root: string, content = "keep\n") {
+  await fs.writeFile(path.join(root, "original.txt"), content, "utf8");
+  await fs.link(path.join(root, "original.txt"), path.join(root, "alias.txt"));
+}
+
+async function expectFiles(root: string, files: Record<string, string>) {
+  const names = (await fs.readdir(root)).toSorted();
+  const contents = await Promise.all(
+    names.map((name) => fs.readFile(path.join(root, name), "utf8")),
+  );
+  expect(Object.fromEntries(names.map((name, i) => [name, contents[i]]))).toEqual(files);
 }
 
 describe("applyPatch preflight", () => {
   it.each([
-    {
-      name: "a delete before an update of a missing file",
-      patch: `*** Begin Patch
-*** Delete File: important.txt
-*** Update File: missing.txt
-@@
--old
-+new
-*** End Patch`,
-      error: /Failed to read file to update .*missing\.txt/,
-    },
-    {
-      name: "an add and an update before a context mismatch",
-      patch: `*** Begin Patch
-*** Add File: created.txt
-+created
-*** Update File: important.txt
-@@
--irreplaceable
-+rewritten
-*** Update File: important.txt
-@@
--not in the file
-+changed
-*** End Patch`,
-      error: /Failed to find expected lines in .*important\.txt/,
-    },
-  ])("leaves the workspace unchanged when $name rejects", async ({ patch, error }) => {
-    await withTempDir(async (dir) => {
-      await fs.writeFile(path.join(dir, "important.txt"), "irreplaceable\n");
+    [
+      "missing file",
+      patch("*** Delete File: important.txt", update("missing.txt", "old", "new")),
+      /Failed to read file to update .*missing\.txt/,
+    ],
+    [
+      "context mismatch",
+      patch(
+        "*** Add File: created.txt\n+created",
+        update("important.txt", "irreplaceable", "rewritten"),
+        update("important.txt", "not in the file", "changed"),
+      ),
+      /Failed to find expected lines in .*important\.txt/,
+    ],
+  ] as const)("leaves the workspace unchanged on %s", async (_name, input, error) => {
+    await fs.writeFile(path.join(dir, "important.txt"), "irreplaceable\n");
 
-      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(error);
+    await expect(applyPatch(input, { cwd: dir })).rejects.toThrow(error);
 
-      expect(await fs.readdir(dir)).toEqual(["important.txt"]);
-      expect(await fs.readFile(path.join(dir, "important.txt"), "utf8")).toBe("irreplaceable\n");
-    });
+    await expectFiles(dir, { "important.txt": "irreplaceable\n" });
   });
 
   it("updates files that earlier hunks in the same patch add or change", async () => {
     const memory = createMemoryPatchSandbox({ "notes.txt": "one\n" });
-    const patch = `*** Begin Patch
-*** Add File: created.txt
-+draft
-*** Update File: created.txt
-@@
--draft
-+final
-*** Update File: notes.txt
-@@
--one
-+two
-*** Update File: notes.txt
-*** Move to: moved.txt
-@@
--two
-+three
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
+    await applyPatch(
+      patch(
+        "*** Add File: created.txt\n+draft",
+        update("created.txt", "draft", "final"),
+        update("notes.txt", "one", "two"),
+        "*** Update File: notes.txt\n*** Move to: moved.txt\n@@\n-two\n+three",
+      ),
+      memory.options,
+    );
 
     expect(Object.fromEntries(memory.files)).toEqual({
       "/sandbox/created.txt": "final\n",
@@ -91,37 +89,25 @@ describe("applyPatch preflight", () => {
   it.runIf(process.platform !== "win32")(
     "replaces an outside symlink that the same patch deletes first",
     async () => {
-      await withTempDir(async (dir) => {
-        const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
-        const outsideTarget = path.join(outsideDir, "target.txt");
-        await fs.writeFile(outsideTarget, "keep\n", "utf8");
-        const link = path.join(dir, "link.txt");
-        await fs.symlink(outsideTarget, link);
-        const input = `*** Begin Patch
-*** Delete File: link.txt
-*** Add File: link.txt
-+draft
-*** Update File: link.txt
-@@
--draft
-+final
-*** End Patch`;
+      const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
+      const { target: outsideTarget, link } = await symlink(dir, outsideDir);
+      const result = await execute(
+        dir,
+        patch(
+          "*** Delete File: link.txt",
+          "*** Add File: link.txt\n+draft",
+          update("link.txt", "draft", "final"),
+        ),
+      );
 
-        const result = await createApplyPatchTool({ cwd: dir }).execute(
-          "call-replace-link",
-          { input },
-          undefined,
-        );
-
-        expect(result.details.summary).toEqual({
-          added: ["link.txt"],
-          modified: ["link.txt"],
-          deleted: ["link.txt"],
-        });
-        expect((await fs.lstat(link)).isFile()).toBe(true);
-        await expect(fs.readFile(link, "utf8")).resolves.toBe("final\n");
-        await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("keep\n");
+      expect(result.details.summary).toEqual({
+        added: ["link.txt"],
+        modified: ["link.txt"],
+        deleted: ["link.txt"],
       });
+      expect((await fs.lstat(link)).isFile()).toBe(true);
+      await expect(fs.readFile(link, "utf8")).resolves.toBe("final\n");
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("keep\n");
     },
   );
 
@@ -129,19 +115,17 @@ describe("applyPatch preflight", () => {
   it.runIf(process.platform === "linux")(
     "updates the other name of a hardlinked symlink after deleting one name",
     async () => {
-      await withTempDir(async (dir) => {
-        await fs.writeFile(path.join(dir, "target.txt"), "old\n", "utf8");
-        await fs.symlink(path.join(dir, "target.txt"), path.join(dir, "a"));
-        await fs.link(path.join(dir, "a"), path.join(dir, "b"));
+      await fs.writeFile(path.join(dir, "target.txt"), "old\n", "utf8");
+      await fs.symlink(path.join(dir, "target.txt"), path.join(dir, "a"));
+      await fs.link(path.join(dir, "a"), path.join(dir, "b"));
 
-        await applyPatch(
-          "*** Begin Patch\n*** Delete File: a\n*** Update File: b\n@@\n-old\n+new\n*** End Patch",
-          { cwd: dir, workspaceOnly: false },
-        );
+      await applyPatch(
+        "*** Begin Patch\n*** Delete File: a\n*** Update File: b\n@@\n-old\n+new\n*** End Patch",
+        { cwd: dir, workspaceOnly: false },
+      );
 
-        expect((await fs.readdir(dir)).toSorted()).toEqual(["b", "target.txt"]);
-        await expect(fs.readFile(path.join(dir, "target.txt"), "utf8")).resolves.toBe("new\n");
-      });
+      expect((await fs.readdir(dir)).toSorted()).toEqual(["b", "target.txt"]);
+      await expect(fs.readFile(path.join(dir, "target.txt"), "utf8")).resolves.toBe("new\n");
     },
   );
 
@@ -159,276 +143,173 @@ describe("applyPatch preflight", () => {
   ])(
     "replaces an outside symlink with $name on a case-insensitive volume",
     async ({ hunks, created }) => {
-      await withTempDir(async (dir) => {
-        const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
-        await fs.writeFile(path.join(outsideDir, "target.txt"), "keep\n", "utf8");
-        await fs.symlink(path.join(outsideDir, "target.txt"), path.join(dir, "link.txt"));
-        await fs.symlink(outsideDir, path.join(dir, "d"));
+      const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
+      await symlink(dir, outsideDir);
+      await fs.symlink(outsideDir, path.join(dir, "d"));
 
-        await createApplyPatchTool({ cwd: dir }).execute(
-          "call-replace-link-case",
-          { input: `*** Begin Patch\n${hunks}\n*** End Patch` },
-          undefined,
-        );
+      await execute(dir, patch(hunks));
 
-        await expect(fs.readFile(path.join(dir, created), "utf8")).resolves.toBe("new\n");
-        expect(await fs.readdir(outsideDir)).toEqual(["target.txt"]);
-        await expect(fs.readFile(path.join(outsideDir, "target.txt"), "utf8")).resolves.toBe(
-          "keep\n",
-        );
-      });
+      await expect(fs.readFile(path.join(dir, created), "utf8")).resolves.toBe("new\n");
+      expect(await fs.readdir(outsideDir)).toEqual(["target.txt"]);
+      await expect(fs.readFile(path.join(outsideDir, "target.txt"), "utf8")).resolves.toBe(
+        "keep\n",
+      );
     },
   );
 
   it.runIf(process.platform !== "win32").each([
     {
       name: "a mismatched update of the target",
-      hunks: `*** Update File: target.txt
-@@
--not in the file
-+changed`,
+      hunks: update("target.txt", "not in the file", "changed"),
       error: /Failed to find expected lines in .*target\.txt/,
     },
     {
       name: "a move of the target onto the link and a later update of the target",
-      hunks: `*** Update File: target.txt
-*** Move to: link.txt
-@@
--keep
-+moved
-*** Update File: target.txt
-@@
--keep
-+changed`,
+      hunks: [
+        "*** Update File: target.txt\n*** Move to: link.txt\n@@\n-keep\n+moved",
+        update("target.txt", "keep", "changed"),
+      ].join("\n"),
       error: /Failed to read file to update .*target\.txt/,
     },
   ])("keeps a deleted in-workspace symlink when $name rejects", async ({ hunks, error }) => {
-    await withTempDir(async (dir) => {
-      const target = path.join(dir, "target.txt");
-      const link = path.join(dir, "link.txt");
-      await fs.writeFile(target, "keep\n", "utf8");
-      await fs.symlink(target, link);
+    const { target, link } = await symlink(dir);
 
-      await expect(
-        createApplyPatchTool({ cwd: dir }).execute(
-          "call-unlink-then-reject",
-          { input: `*** Begin Patch\n*** Delete File: link.txt\n${hunks}\n*** End Patch` },
-          undefined,
-        ),
-      ).rejects.toThrow(error);
+    await expect(execute(dir, patch("*** Delete File: link.txt", hunks))).rejects.toThrow(error);
 
-      expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
-      await expect(fs.readFile(target, "utf8")).resolves.toBe("keep\n");
-    });
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("keep\n");
   });
 
   it.runIf(process.platform !== "win32").each([
-    {
-      name: "a replaced link apart from its old target",
-      hunks: `*** Add File: link.txt
-+draft
-*** Update File: target.txt
-@@
--keep
-+kept
-*** Update File: link.txt
-@@
--draft
-+final`,
-      files: { "link.txt": "final\n", "target.txt": "kept\n" },
-    },
-    {
-      name: "a move of the old target onto the link path",
-      hunks: `*** Update File: target.txt
-*** Move to: link.txt
-@@
--keep
-+moved`,
-      files: { "link.txt": "moved\n" },
-    },
-  ])("stages $name after deleting an in-workspace symlink", async ({ hunks, files }) => {
-    await withTempDir(async (dir) => {
-      const link = path.join(dir, "link.txt");
-      await fs.writeFile(path.join(dir, "target.txt"), "keep\n", "utf8");
-      await fs.symlink(path.join(dir, "target.txt"), link);
+    [
+      "replacement apart from old target",
+      [
+        "*** Add File: link.txt\n+draft",
+        update("target.txt", "keep", "kept"),
+        update("link.txt", "draft", "final"),
+      ].join("\n"),
+      { "link.txt": "final\n", "target.txt": "kept\n" },
+    ],
+    [
+      "move of old target",
+      "*** Update File: target.txt\n*** Move to: link.txt\n@@\n-keep\n+moved",
+      { "link.txt": "moved\n" },
+    ],
+  ] as const)("stages %s after deleting a symlink", async (_name, hunks, files) => {
+    const { link } = await symlink(dir);
+    await execute(dir, patch("*** Delete File: link.txt", hunks));
 
-      await createApplyPatchTool({ cwd: dir }).execute(
-        "call-replace-link",
-        { input: `*** Begin Patch\n*** Delete File: link.txt\n${hunks}\n*** End Patch` },
-        undefined,
-      );
-
-      expect((await fs.lstat(link)).isFile()).toBe(true);
-      const names = (await fs.readdir(dir)).toSorted();
-      const contents = await Promise.all(names.map((name) => fs.readFile(path.join(dir, name))));
-      expect(Object.fromEntries(names.map((name, i) => [name, contents[i]?.toString()]))).toEqual(
-        files,
-      );
-    });
+    expect((await fs.lstat(link)).isFile()).toBe(true);
+    await expectFiles(dir, files);
   });
 
   it.each([
-    {
-      name: "re-creates a hardlinked path",
-      hunks: "*** Add File: alias.txt\n+new",
-      files: { "alias.txt": "new\n", "original.txt": "keep\n" },
-    },
-    {
-      name: "updates the other name of a hardlink",
-      hunks: "*** Update File: original.txt\n@@\n-keep\n+changed",
-      files: { "original.txt": "changed\n" },
-    },
-  ])("$name after the same patch deletes one name", async ({ hunks, files }) => {
-    await withTempDir(async (dir) => {
-      await fs.writeFile(path.join(dir, "original.txt"), "keep\n", "utf8");
-      await fs.link(path.join(dir, "original.txt"), path.join(dir, "alias.txt"));
-
-      await createApplyPatchTool({ cwd: dir }).execute(
-        "call-replace-hardlink",
-        { input: `*** Begin Patch\n*** Delete File: alias.txt\n${hunks}\n*** End Patch` },
-        undefined,
-      );
-
-      const names = (await fs.readdir(dir)).toSorted();
-      const contents = await Promise.all(names.map((name) => fs.readFile(path.join(dir, name))));
-      expect(Object.fromEntries(names.map((name, i) => [name, contents[i]?.toString()]))).toEqual(
-        files,
-      );
-    });
+    [
+      "re-creates path",
+      "*** Add File: alias.txt\n+new",
+      { "alias.txt": "new\n", "original.txt": "keep\n" },
+    ],
+    [
+      "updates other name",
+      update("original.txt", "keep", "changed"),
+      { "original.txt": "changed\n" },
+    ],
+  ] as const)("%s after deleting a hardlink name", async (_name, hunks, files) => {
+    await hardlink(dir);
+    await execute(dir, patch("*** Delete File: alias.txt", hunks));
+    await expectFiles(dir, files);
   });
 
   it.each([
-    {
-      name: "updates the other name with contents written through the first",
-      hunks: "*** Update File: alias.txt\n@@\n-two\n+three",
-      files: { "alias.txt": "three\n", "original.txt": "three\n" },
-    },
-    {
-      name: "updates the other name after deleting the first",
-      hunks: "*** Delete File: original.txt\n*** Update File: alias.txt\n@@\n-two\n+three",
-      files: { "alias.txt": "three\n" },
-    },
-    {
-      name: "keeps the other name's contents when the first is moved away",
-      hunks: "*** Update File: alias.txt\n@@\n-one\n+kept",
-      move: "*** Move to: moved.txt\n",
-      files: { "alias.txt": "kept\n", "moved.txt": "two\n" },
-    },
-  ])("$name after an update through one name of a hardlink", async ({ hunks, move, files }) => {
-    await withTempDir(async (dir) => {
-      await fs.writeFile(path.join(dir, "original.txt"), "one\n", "utf8");
-      await fs.link(path.join(dir, "original.txt"), path.join(dir, "alias.txt"));
-
-      await createApplyPatchTool({ cwd: dir, workspaceOnly: false }).execute(
-        "call-update-hardlink",
-        {
-          input: `*** Begin Patch\n*** Update File: original.txt\n${move ?? ""}@@\n-one\n+two\n${hunks}\n*** End Patch`,
-        },
-        undefined,
-      );
-
-      const names = (await fs.readdir(dir)).toSorted();
-      const contents = await Promise.all(names.map((name) => fs.readFile(path.join(dir, name))));
-      expect(Object.fromEntries(names.map((name, i) => [name, contents[i]?.toString()]))).toEqual(
-        files,
-      );
-    });
+    [
+      "updates other name",
+      update("alias.txt", "two", "three"),
+      "",
+      { "alias.txt": "three\n", "original.txt": "three\n" },
+    ],
+    [
+      "deletes first name",
+      "*** Delete File: original.txt\n*** Update File: alias.txt\n@@\n-two\n+three",
+      "",
+      { "alias.txt": "three\n" },
+    ],
+    [
+      "moves first name",
+      update("alias.txt", "one", "kept"),
+      "*** Move to: moved.txt\n",
+      { "alias.txt": "kept\n", "moved.txt": "two\n" },
+    ],
+  ] as const)("%s after updating a hardlink", async (_name, hunks, move, files) => {
+    await hardlink(dir, "one\n");
+    await execute(dir, patch(`*** Update File: original.txt\n${move}@@\n-one\n+two`, hunks), false);
+    await expectFiles(dir, files);
   });
 
   it("replaces a file with a directory that the same patch deletes first", async () => {
-    await withTempDir(async (dir) => {
-      await fs.writeFile(path.join(dir, "x"), "file\n", "utf8");
+    await fs.writeFile(path.join(dir, "x"), "file\n", "utf8");
 
-      await applyPatch(
-        "*** Begin Patch\n*** Delete File: x\n*** Add File: x/y.txt\n+new\n*** End Patch",
-        {
-          cwd: dir,
-        },
-      );
+    await applyPatch(
+      "*** Begin Patch\n*** Delete File: x\n*** Add File: x/y.txt\n+new\n*** End Patch",
+      { cwd: dir },
+    );
 
-      await expect(fs.readFile(path.join(dir, "x", "y.txt"), "utf8")).resolves.toBe("new\n");
-    });
+    await expect(fs.readFile(path.join(dir, "x", "y.txt"), "utf8")).resolves.toBe("new\n");
   });
 
   it.runIf(process.platform !== "win32")(
     "rejects an update of a moved symlink path before moving it",
     async () => {
-      await withTempDir(async (dir) => {
-        const link = path.join(dir, "link.txt");
-        await fs.writeFile(path.join(dir, "target.txt"), "keep\n", "utf8");
-        await fs.symlink(path.join(dir, "target.txt"), link);
-        const input = `*** Begin Patch
-*** Update File: link.txt
-*** Move to: moved.txt
-@@
--keep
-+moved
-*** Update File: link.txt
-@@
--keep
-+changed
-*** End Patch`;
+      const { link } = await symlink(dir);
+      const input = patch(
+        "*** Update File: link.txt\n*** Move to: moved.txt\n@@\n-keep\n+moved",
+        update("link.txt", "keep", "changed"),
+      );
 
-        await expect(applyPatch(input, { cwd: dir, workspaceOnly: false })).rejects.toThrow(
-          /Failed to read file to update .*link\.txt/,
-        );
+      await expect(applyPatch(input, { cwd: dir, workspaceOnly: false })).rejects.toThrow(
+        /Failed to read file to update .*link\.txt/,
+      );
 
-        expect((await fs.readdir(dir)).toSorted()).toEqual(["link.txt", "target.txt"]);
-        await expect(fs.readFile(link, "utf8")).resolves.toBe("keep\n");
-      });
+      expect((await fs.readdir(dir)).toSorted()).toEqual(["link.txt", "target.txt"]);
+      await expect(fs.readFile(link, "utf8")).resolves.toBe("keep\n");
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "replaces an outside directory symlink that the same patch deletes first",
     async () => {
-      await withTempDir(async (dir) => {
-        const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
-        await fs.writeFile(path.join(outsideDir, "x.txt"), "keep\n", "utf8");
-        await fs.symlink(outsideDir, path.join(dir, "d"));
+      const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
+      await fs.writeFile(path.join(outsideDir, "x.txt"), "keep\n", "utf8");
+      await fs.symlink(outsideDir, path.join(dir, "d"));
 
-        await createApplyPatchTool({ cwd: dir }).execute(
-          "call-replace-dir-link",
-          {
-            input: `*** Begin Patch
-*** Delete File: d
-*** Add File: d/x.txt
-+new
-*** Add File: d/..cache
-+cache
-*** Delete File: d/x.txt
-*** End Patch`,
-          },
-          undefined,
-        );
+      await execute(
+        dir,
+        patch(
+          "*** Delete File: d",
+          "*** Add File: d/x.txt\n+new",
+          "*** Add File: d/..cache\n+cache",
+          "*** Delete File: d/x.txt",
+        ),
+      );
 
-        expect((await fs.lstat(path.join(dir, "d"))).isDirectory()).toBe(true);
-        expect(await fs.readdir(path.join(dir, "d"))).toEqual(["..cache"]);
-        await expect(fs.readFile(path.join(outsideDir, "x.txt"), "utf8")).resolves.toBe("keep\n");
-      });
+      expect((await fs.lstat(path.join(dir, "d"))).isDirectory()).toBe(true);
+      expect(await fs.readdir(path.join(dir, "d"))).toEqual(["..cache"]);
+      await expect(fs.readFile(path.join(outsideDir, "x.txt"), "utf8")).resolves.toBe("keep\n");
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rejects an outside symlink update before an unrelated delete runs",
     async () => {
-      await withTempDir(async (dir) => {
-        const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
-        await fs.writeFile(path.join(outsideDir, "target.txt"), "keep\n", "utf8");
-        await fs.symlink(path.join(outsideDir, "target.txt"), path.join(dir, "link.txt"));
-        await fs.writeFile(path.join(dir, "unrelated.txt"), "keep\n", "utf8");
-        const input = `*** Begin Patch
-*** Delete File: unrelated.txt
-*** Update File: link.txt
-@@
--keep
-+changed
-*** End Patch`;
+      const outsideDir = await fs.realpath(tempDirs.make("openclaw-patch-outside-"));
+      await symlink(dir, outsideDir);
+      await fs.writeFile(path.join(dir, "unrelated.txt"), "keep\n", "utf8");
+      const input = patch("*** Delete File: unrelated.txt", update("link.txt", "keep", "changed"));
 
-        await expect(applyPatch(input, { cwd: dir })).rejects.toThrow(/sandbox root/);
+      await expect(applyPatch(input, { cwd: dir, workspaceOnly: true })).rejects.toThrow(
+        /sandbox root/,
+      );
 
-        await expect(fs.readFile(path.join(dir, "unrelated.txt"), "utf8")).resolves.toBe("keep\n");
-      });
+      await expect(fs.readFile(path.join(dir, "unrelated.txt"), "utf8")).resolves.toBe("keep\n");
     },
   );
 });

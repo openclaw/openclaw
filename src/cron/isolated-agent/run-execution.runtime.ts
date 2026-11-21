@@ -1,10 +1,8 @@
 /** Lazy runtime facade for isolated cron agent execution dependencies. */
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createLazyRuntimeMethodBinder } from "../../shared/lazy-runtime.js";
-export {
-  resolveEffectiveModelFallbacks,
-  resolveSubagentModelFallbacksOverride,
-} from "../../agents/agent-scope.js";
+export { resolveSubagentModelFallbacksOverride } from "../../agents/agent-scope.js";
+export { resolveEffectiveModelFallbacks } from "../../agents/model-selection-config.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 export { resolveFastModeState } from "../../agents/fast-mode.js";
 export { resolveCronAgentLane } from "../../agents/lanes.js";

@@ -13,9 +13,8 @@ on:
         default: true
         type: boolean
       public_release_branch:
-        description: Public branch that contains the release tag commit, usually main or release/YYYY.M.PATCH
-        required: false
-        default: main
+        description: Public branch that contains the release tag commit (main or release/YYYY.M.PATCH)
+        required: true
         type: string
 
 concurrency:
@@ -24,7 +23,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   validate_macos_release_request:

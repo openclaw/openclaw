@@ -15,7 +15,6 @@ import type {
   SessionGroupDefaultsRecord,
 } from "./session-group-catalog.types.js";
 import { readSessionGroupMembership } from "./session-group-membership.read.js";
-import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
 const SIDEBAR_ORDER = "sidebar.sectionOrder";
@@ -114,7 +113,44 @@ export function mutateSessionGroupCatalogInDatabase(
   env: NodeJS.ProcessEnv,
 ): SessionGroupCatalogMutationResult {
   if (input.kind === "register") {
-    const changed = registerSessionGroupInDatabase(database, input.name, env);
+    const name = input.name;
+    const changed = runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const kysely = getNodeSqliteKysely<Pick<DB, "session_groups">>(db);
+        const names = executeSqliteQuerySync(
+          db,
+          kysely.selectFrom("session_groups").select("name"),
+        ).rows.map((row) => row.name);
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: { names } });
+        if (names.includes(name)) {
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return false;
+        }
+        // PG READ COMMITTED + the store advisory lock (SQLite BEGIN IMMEDIATE) serialize allocation.
+        executeSqliteQuerySync(
+          db,
+          kysely.insertInto("session_groups").values((eb) => ({
+            name,
+            position: eb(
+              eb.fn.coalesce(
+                eb
+                  .selectFrom("session_groups")
+                  .select("position")
+                  .orderBy("position", "desc")
+                  .limit(1),
+                eb.val(-1),
+              ),
+              "+",
+              1,
+            ),
+            created_at: Date.now(),
+          })),
+        );
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        return true;
+      },
+      { database, path: database.path, env },
+    );
     return { changed, snapshot: readSessionGroupCatalogSnapshot(database.db) };
   }
   let ensuredDefaults = false;

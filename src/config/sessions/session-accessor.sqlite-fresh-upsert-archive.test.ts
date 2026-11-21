@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryLifecycleMutation,
   createSessionEntryWithTranscript,
@@ -23,6 +23,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 const fixture = useTempSessionsFixture("openclaw-fresh-upsert-archive-");
 const archivedSessionId = "unrelated-archived-session";
@@ -37,25 +38,19 @@ const freshScope = () => ({
 it("skips empty archive recovery during warning-mode upserts", async () => {
   await replaceSessionEntry(freshScope(), freshEntry);
   const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
-  try {
-    for (let turn = 0; turn < 3; turn += 1) {
-      await applySessionEntryLifecycleMutation({
-        storePath: fixture.storePath(),
-        skipMaintenance: false,
-        maintenanceOverride: { mode: "warn" },
-        upserts: [
-          {
-            sessionKey: freshScope().sessionKey,
-            entry: { ...freshEntry, label: `turn-${turn}` },
-          },
-        ],
-      });
-    }
-    expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
-    expect(probe).not.toHaveBeenCalled();
-  } finally {
-    probe.mockRestore();
+  using _ = { [Symbol.dispose]: () => probe.mockRestore() };
+  for (let turn = 0; turn < 3; turn += 1) {
+    await applySessionEntryLifecycleMutation({
+      storePath: fixture.storePath(),
+      skipMaintenance: false,
+      maintenanceOverride: { mode: "warn" },
+      upserts: [
+        { sessionKey: freshScope().sessionKey, entry: { ...freshEntry, label: `turn-${turn}` } },
+      ],
+    });
   }
+  expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
+  expect(probe).not.toHaveBeenCalled();
 });
 
 function readArchive() {
@@ -64,16 +59,7 @@ function readArchive() {
     database.db,
     getSessionKysely(database.db)
       .selectFrom("session_transcript_archives")
-      .select([
-        "archive_blob",
-        "archive_name",
-        "archive_sha256",
-        "generation",
-        "publish_attempts",
-        "last_publish_attempt_at",
-        "last_publish_error",
-        "published_at",
-      ])
+      .selectAll()
       .where("session_id", "=", archivedSessionId),
   );
   return expectDefined(row, "expected the unrelated canonical archive");
@@ -140,7 +126,7 @@ it("creates a fresh session without retrying an unrelated failed export, which d
     published_at: expect.any(Number),
     last_publish_error: null,
   });
-  expect(readSessionArchiveContentSync(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
+  expect(readSessionArchiveText(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
   expect(loadSessionEntry(freshScope())).toMatchObject(freshEntry);
 });
 
@@ -162,13 +148,10 @@ it.each(["canonical", "alias"] as const)(
     };
     const transcript = [
       { type: "session", id: scope.sessionId, version: 3, cwd: "/workspace" },
-      {
-        type: "message",
-        id: "retained-message",
-        parentId: null,
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "Keep adopted history.\r\n  Preserve spacing." },
-      },
+      timedMessageEvent("retained-message", null, "2026-07-15T21:23:03.698Z", {
+        role: "user",
+        content: "Keep adopted history.\r\n  Preserve spacing.",
+      }),
     ];
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, transcript);
@@ -239,9 +222,7 @@ it.each(["canonical", "alias"] as const)(
       });
       if (recovered) {
         expect(fs.readFileSync(collisionPath)).toEqual(Buffer.from(pendingArchive.archive_blob));
-        expect(readSessionArchiveContentSync(collisionPath)).toBe(
-          `${JSON.stringify(archivedEvent)}\n`,
-        );
+        expect(readSessionArchiveText(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
       } else {
         expect(fs.readFileSync(collisionPath, "utf8")).toBe("collision");
       }

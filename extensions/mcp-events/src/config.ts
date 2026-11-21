@@ -44,9 +44,6 @@ export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
 /** DNS/public-address preflight is not a reachability claim or permission to expose the Gateway. */
 export async function preflightCallbackOrigin(origin: string, signal: AbortSignal): Promise<void> {
   const url = new URL(origin);
-  if (url.protocol !== "https:" || url.username || url.password) {
-    throw new Error("MCP Events requires a public HTTPS callback");
-  }
   await resolvePinnedHostnameWithPolicy(url.hostname, { signal });
 }
 

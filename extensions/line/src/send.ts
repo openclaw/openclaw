@@ -3,6 +3,7 @@ import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
@@ -22,7 +23,6 @@ import { normalizeLineMessagingTarget } from "./messaging-target.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
 import { applyLineQuoteToken, withoutLineQuoteTokens } from "./quote-tokens.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 import { findLineHttpError, runLinePushWithRetries } from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
 
@@ -334,11 +334,16 @@ async function pushLineMessages(
   const result: LineSendResult = {
     messageId,
     chatId,
-    receipt: createLineSendReceipt({
-      messageIds,
-      chatId,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: messageIds.map((providerMessageId) => ({
+        channel: "line",
+        messageId: providerMessageId,
+        chatId,
+        conversationId: chatId,
+        meta: { messageCount: messages.length },
+      })),
+      ...(chatId ? { threadId: chatId } : {}),
       kind: resolveLineReceiptKind(messages),
-      messageCount: messages.length,
     }),
   };
 

@@ -4,16 +4,7 @@ import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-co
 import { LruCache } from "../infra/lru-cache.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  buildImageResizeSideGrid,
-  getImageMetadata,
-  IMAGE_REDUCE_QUALITY_STEPS,
-  isImageProcessorUnavailableError,
-  MAX_IMAGE_INPUT_PIXELS,
-  readImageMetadataFromHeader,
-  resizeToJpeg,
-  type ImageMetadata,
-} from "../media/media-services.js";
+import type { ImageMetadata } from "../media/image-ops.js";
 import { isTextContentBlock } from "./content-blocks.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
@@ -35,7 +26,7 @@ type ToolImageSanitizationOptions = ImageSanitizationLimits & {
 // conservative limit well below demonstrated OOM thresholds, leaving headroom
 // for canonicalization, decode, and image-processing allocations while still
 // permitting legitimate tool-output images.
-const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 // Replay re-sanitizes persisted images every attempt without rewriting them. A decoded
 // outcome depends only on the bytes and limits, so content-addressed entries never go
@@ -45,6 +36,43 @@ const verifiedImageOutcomes = new LruCache<string | null>(4096, {
   sizeOf: (replacement) => 128 + (replacement?.length ?? 0),
 });
 
+type PreparedImage = {
+  data: string;
+  mimeType: string;
+  canonicalData?: string;
+  omission?: string;
+  digest?: string;
+};
+// Keep byte validation with the block's lifetime, not a second content-addressed
+// payload store. Mutable blocks invalidate on either input; decode outcomes and
+// backend retries remain owned by the bounded cache above.
+const preparedImages = new WeakMap<ImageContentBlock, PreparedImage>();
+
+function prepareImage(block: ImageContentBlock): PreparedImage {
+  const cached = preparedImages.get(block);
+  if (cached?.data === block.data && cached.mimeType === block.mimeType) {
+    return cached;
+  }
+  const prepared: PreparedImage = { data: block.data, mimeType: block.mimeType };
+  // Enforce the raw input ceiling before trim/canonicalize/decode allocations.
+  if (estimateBase64DecodedBytes(block.data) > MAX_IMAGE_INPUT_BYTES) {
+    prepared.omission = `omitted image payload: image exceeds input size limit (${formatBytesShort(MAX_IMAGE_INPUT_BYTES)})`;
+  } else {
+    const data = block.data.trim();
+    const canonicalData = data ? canonicalizeBase64(data) : undefined;
+    if (!canonicalData) {
+      prepared.omission = data
+        ? "omitted image payload: invalid base64"
+        : "omitted empty image payload";
+    } else if (canonicalData !== block.data) {
+      // Already-canonical input retains only the original string reference.
+      prepared.canonicalData = canonicalData;
+    }
+  }
+  preparedImages.set(block, prepared);
+  return prepared;
+}
+
 function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
   return (
     Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
@@ -52,10 +80,9 @@ function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { 
 }
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
-  if (!isImageTypeBlock(block)) {
-    return false;
-  }
-  return typeof block.data === "string" && typeof block.mimeType === "string";
+  return (
+    isImageTypeBlock(block) && typeof block.data === "string" && typeof block.mimeType === "string"
+  );
 }
 
 function inferMimeTypeFromBase64(base64: string): string | undefined {
@@ -76,6 +103,7 @@ function imageWithinLimits(
   metadata: ImageMetadata | null,
   maxDimensionPx: number,
   maxBytes: number,
+  maxInputPixels: number,
 ): boolean {
   return (
     metadata !== null &&
@@ -84,7 +112,7 @@ function imageWithinLimits(
     buffer.byteLength <= maxBytes &&
     metadata.width <= maxDimensionPx &&
     metadata.height <= maxDimensionPx &&
-    metadata.width * metadata.height <= MAX_IMAGE_INPUT_PIXELS
+    metadata.width * metadata.height <= maxInputPixels
   );
 }
 
@@ -138,13 +166,16 @@ function inferImageFileName(params: {
   return undefined;
 }
 
-async function verifyImageDecodability(buffer: Buffer): Promise<boolean> {
+async function verifyImageDecodability(
+  buffer: Buffer,
+  imageOps: typeof import("../media/image-ops.js"),
+): Promise<boolean> {
   try {
     // Rastermill probes only headers; discard a tiny encode to verify full decodability.
-    await resizeToJpeg({ buffer, maxSide: 1, quality: 1, withoutEnlargement: true });
+    await imageOps.resizeToJpeg({ buffer, maxSide: 1, quality: 1, withoutEnlargement: true });
     return true;
   } catch (err) {
-    if (!isImageProcessorUnavailableError(err)) {
+    if (!imageOps.isImageProcessorUnavailableError(err)) {
       throw err;
     }
     return false;
@@ -172,28 +203,19 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
 
-    // Estimate decoded bytes on the raw payload before trim/canonicalize/decode
-    // so pathological multi-GB base64 cannot force a transient large allocation.
-    // maxBytes is the post-decode resize target; MAX_IMAGE_INPUT_BYTES is a
-    // conservative pre-decode ceiling (10 MiB) far below the 25MP/100MB
-    // processing headroom, so legitimate tool images still decode and resize.
-    if (estimateBase64DecodedBytes(block.data) > MAX_IMAGE_INPUT_BYTES) {
-      omit(
-        `omitted image payload: image exceeds input size limit (${formatBytesShort(MAX_IMAGE_INPUT_BYTES)})`,
-      );
+    const prepared = prepareImage(block);
+    if (prepared.omission) {
+      omit(prepared.omission);
       continue;
     }
-
-    const data = block.data.trim();
-    if (!data) {
-      omit("omitted empty image payload");
-      continue;
-    }
-    const canonicalData = canonicalizeBase64(data);
-    if (!canonicalData) {
-      omit("omitted image payload: invalid base64");
-      continue;
-    }
+    const canonicalData = prepared.canonicalData ?? prepared.data;
+    // Only actual image work loads the backend; text replay stays data-only.
+    const [imageOps, imageMetadata] = await Promise.all([
+      import("../media/image-ops.js"),
+      import("../media/image-header-metadata.js"),
+    ]);
+    const { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } =
+      await import("../media/image-processor-config.js");
 
     try {
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
@@ -203,7 +225,7 @@ export async function sanitizeContentBlocksImages(
       const resized = await (async (): Promise<{ base64: string; mimeType: string }> => {
         // Only callers sanitizing persisted bytes verify them, and only those bytes repeat.
         const cacheKey = verifyDecodability
-          ? `${createHash("sha256").update(canonicalData).digest("base64url")}:${maxDimensionPx}:${maxBytes}`
+          ? `${(prepared.digest ??= createHash("sha256").update(canonicalData).digest("base64url"))}:${maxDimensionPx}:${maxBytes}`
           : undefined;
         const cached = cacheKey === undefined ? undefined : verifiedImageOutcomes.get(cacheKey);
         if (cached !== undefined) {
@@ -212,13 +234,16 @@ export async function sanitizeContentBlocksImages(
             : { base64: cached, mimeType: "image/jpeg" };
         }
         const buf = Buffer.from(canonicalData, "base64");
-        const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
+        const meta =
+          imageMetadata.readImageMetadataFromHeader(buf) ?? (await imageOps.getImageMetadata(buf));
         const overBytes = buf.byteLength > maxBytes;
         const overDimensions =
           meta !== null && (meta.width > maxDimensionPx || meta.height > maxDimensionPx);
-        if (imageWithinLimits(buf, meta, maxDimensionPx, maxBytes)) {
+        if (
+          imageWithinLimits(buf, meta, maxDimensionPx, maxBytes, imageOps.MAX_IMAGE_INPUT_PIXELS)
+        ) {
           // An unavailable backend passes images through unverified; never record that.
-          if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
+          if (cacheKey !== undefined && (await verifyImageDecodability(buf, imageOps))) {
             verifiedImageOutcomes.set(cacheKey, null);
           }
           return {
@@ -229,7 +254,7 @@ export async function sanitizeContentBlocksImages(
 
         const maxDim = meta ? Math.max(meta.width, meta.height) : maxDimensionPx;
         const sideStart = maxDim > 0 ? Math.min(maxDimensionPx, maxDim) : maxDimensionPx;
-        const sideGrid = buildImageResizeSideGrid(maxDimensionPx, sideStart);
+        const sideGrid = imageOps.buildImageResizeSideGrid(maxDimensionPx, sideStart);
 
         const sourcePixels = meta ? `${meta.width}x${meta.height}px` : "unknown";
         const sourceWithFile = fileName ? `${fileName} ${sourcePixels}` : sourcePixels;
@@ -243,12 +268,14 @@ export async function sanitizeContentBlocksImages(
         };
         let smallestSize: number | undefined;
         for (const side of sideGrid) {
-          for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-            const candidateBuffer = await resizeToJpeg({
+          for (const quality of imageOps.IMAGE_REDUCE_QUALITY_STEPS) {
+            // Every candidate is downscaled to maxDimensionPx, so oversized sources stay admissible.
+            const candidateBuffer = await imageOps.resizeToJpeg({
               buffer: buf,
               maxSide: side,
               quality,
               withoutEnlargement: true,
+              maxInputPixels: MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS,
             });
             if (smallestSize === undefined || candidateBuffer.byteLength < smallestSize) {
               smallestSize = candidateBuffer.byteLength;
@@ -303,11 +330,19 @@ export async function sanitizeContentBlocksImages(
           `Image could not be reduced below ${formatBytesShort(maxBytes)} (got ${formatBytesShort(bestSize)})`,
         );
       })();
-      out.push({
-        ...block,
-        data: resized.base64,
-        mimeType: resized.mimeType,
-      });
+      // Preserve the source identity used by provider image preparation.
+      const sanitized =
+        resized.base64 === block.data && resized.mimeType === block.mimeType
+          ? block
+          : { ...block, data: resized.base64, mimeType: resized.mimeType };
+      if (resized.base64 === canonicalData) {
+        preparedImages.set(sanitized, {
+          data: resized.base64,
+          mimeType: resized.mimeType,
+          digest: prepared.digest,
+        });
+      }
+      out.push(sanitized);
     } catch (err) {
       omit(`omitted image payload: ${String(err)}`);
     }

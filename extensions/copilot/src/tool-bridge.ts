@@ -19,7 +19,6 @@ import {
   isSubagentSessionKey,
   isToolResultError,
   resolveEmbeddedAttemptToolConstructionPlan,
-  resolveModelAuthModeAsync,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -92,6 +91,7 @@ interface CopilotToolBridgeInput {
 
 interface CopilotToolBridge {
   cleanup?: () => void;
+  settle?: () => Promise<void>;
   codeModeEngaged?: boolean;
   promptToolPolicy: {
     requireExplicitMessageTarget?: boolean;
@@ -215,7 +215,11 @@ export async function createCopilotToolBridge(
   const runInAttemptContext = AsyncLocalStorage.snapshot();
   let sequentialBarrier = Promise.resolve();
   const pendingCalls = new Set<Promise<void>>();
+  let acceptingCalls = true;
   const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
+    if (!acceptingCalls) {
+      return Promise.reject(new Error("[copilot-tool-bridge] attempt is closing"));
+    }
     // SDK handlers arrive independently. An exclusive call waits for earlier
     // work across the attempt and blocks later calls, regardless of tool name.
     const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
@@ -236,6 +240,10 @@ export async function createCopilotToolBridge(
   );
   return {
     cleanup: toolSurfaceRuntime.cleanup,
+    settle: async () => {
+      acceptingCalls = false;
+      await Promise.all(pendingCalls);
+    },
     // Report the resolved auto mode, which only the tool-surface owner knows.
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {
@@ -337,21 +345,11 @@ async function buildOpenClawCodingToolsOptions(
     modelApi: model?.api,
     modelContextWindowTokens: a.contextTokenBudget ?? model?.contextWindow,
     delegationCapability: a.delegationCapability,
-    modelAuthMode: await resolveModelAuthModeAsync(
-      input.modelProvider,
-      a.config,
-      a.toolAuthProfileStore ?? a.authProfileStore,
-      {
-        workspaceDir,
-      },
-    ),
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
-    enableHeartbeatTool: a.enableHeartbeatTool,
-    forceHeartbeatTool: a.forceHeartbeatTool,
     authProfileStore: a.toolAuthProfileStore ?? a.authProfileStore,
     computerContextEpoch: input.computerContextEpoch,
     onToolOutcome: a.onToolOutcome,

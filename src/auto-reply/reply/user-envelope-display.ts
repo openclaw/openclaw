@@ -1,5 +1,5 @@
 import { stripEnvelope } from "../../shared/chat-envelope.js";
-import { findCodeRegions, isInsideCode, type CodeRegion } from "../../shared/text/code-regions.js";
+import { findCodeRegions, isInsideCode, type CodeRegion } from "../../shared/text/code-ranges.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 
 const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;

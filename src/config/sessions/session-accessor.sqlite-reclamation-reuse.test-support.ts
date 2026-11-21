@@ -23,8 +23,7 @@ export function createFixture(sessionIds = ["first", "second"], agentId = "main"
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("reclamation-reuse-")) };
   const options = { agentId, env };
   const scopes = sessionIds.map((sessionId) => ({
-    agentId: options.agentId,
-    env,
+    ...options,
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
   }));
@@ -65,10 +64,10 @@ export function leasesFor(fixture: ReturnType<typeof createFixture>) {
 
 export function createNativeReclamationSource(
   options: ReturnType<typeof createFixture>["options"],
-) {
+): AgentDatabaseRequestExecutionSource {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = () => context.admission.assertCurrent();
-  const source: AgentDatabaseRequestExecutionSource = {
+  return {
     assertCurrent,
     createAdmission(binding) {
       return () => ({
@@ -83,7 +82,6 @@ export function createNativeReclamationSource(
       });
     },
   };
-  return source;
 }
 
 export function observeNativeGenerationRetirement(databasePath: string) {
@@ -124,13 +122,12 @@ export function observeReclamationLeaseReceipts(database: { agentId: string; pat
     }
   });
   return {
-    onSpawn: (worker: Worker) => {
-      worker.on("message", (message: SqliteReclamationWorkerMessage) => {
+    onSpawn: (worker: Worker) =>
+      void worker.on("message", (message: SqliteReclamationWorkerMessage) => {
         if (message.type === "lease" && message.receipt.path === database.path) {
           reclamationLeaseId = message.receipt.leaseId;
         }
-      });
-    },
+      }),
     read: () => ({ admittedLeaseId, reclamationLeaseId }),
   };
 }

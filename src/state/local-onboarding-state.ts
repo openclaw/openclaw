@@ -111,14 +111,12 @@ export async function completeLocalOnboarding(params: {
   configPath: string;
   runId: string;
   nowMs?: number;
-  database?: OpenClawStateDatabaseOptions;
 }): Promise<boolean> {
-  const context = captureOpenClawStateWorkerContext(params.database);
-  const { database: _database, ...input } = params;
+  const context = captureOpenClawStateWorkerContext();
   return (
     (await runOpenClawStateWorkerOperation(
       context,
-      (scope) => scope.execute({ type: "localOnboarding.complete", input }),
+      (scope) => scope.execute({ type: "localOnboarding.complete", input: params }),
       { existingOnly: true },
     )) ?? false
   );

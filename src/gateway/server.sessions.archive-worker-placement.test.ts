@@ -20,11 +20,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
-import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
-  createCoordinatorTestService,
+  coordinate,
   LOCAL_PLACEMENT,
+  preparedReclaim,
 } from "./worker-environments/placement-dispatch-coordinator.test-support.js";
 import {
   REQUEST,
@@ -147,23 +147,15 @@ test("sessions.patch retries failed cleanup during unrelated dispatch and reject
   const dispatchEntered = createDeferredCore();
   const releaseDispatch = createDeferredCore();
   const reconcile = vi.fn(async () => {});
-  const coordinated = coordinateWorkerPlacementDispatch(
-    createCoordinatorTestService({
-      dispatch: async (request) => {
-        dispatchEntered.resolve();
-        await releaseDispatch.promise;
-        return { ...ACTIVE_PLACEMENT, ...request };
-      },
-      reconcile,
-      reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
-        if (!serialize) {
-          throw new Error("Archive fixture requires reclaim serialization");
-        }
-        return await serialize(reclaim);
-      },
-    }),
-    (_request, run) => run(),
-  );
+  const coordinated = coordinate({
+    dispatch: async (request) => {
+      dispatchEntered.resolve();
+      await releaseDispatch.promise;
+      return { ...ACTIVE_PLACEMENT, ...request };
+    },
+    reconcile,
+    reclaim: preparedReclaim(reclaim),
+  });
   const dispatch = coordinated.dispatch({
     ...REQUEST,
     sessionId: "unrelated-session",

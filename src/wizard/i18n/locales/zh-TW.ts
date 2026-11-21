@@ -230,8 +230,11 @@ export const zh_TW = {
       currentNotInCatalog: "目前值（不在目錄中）",
       allowed: "已允許",
       allowedNotInCatalog: "已允許（不在目錄中）",
+      fallbackText: "備用模型（逗號分隔 provider/model；留空則保留目前值）",
+      fallbackPicker: "備用模型（多選）",
       allowlistPicker: "/model 選擇器中的模型（多選）",
       allowlistText: "允許的模型（逗號分隔 provider/model；留空則保留目前值）",
+      clearFallbacks: "從備用模型中移除這些模型？",
       clearAllowlist: "清空模型允許清單？（將顯示所有模型）",
       configured: "已設定",
       configuredNotInCatalog: "已設定（不在目錄中）",
@@ -328,13 +331,15 @@ export const zh_TW = {
       laneQuickHint: "尋找 AI 存取方式，由你選擇要驗證的連線，然後開啟網頁儀表板。",
       laneCustomLabel: "自訂設定",
       laneCustomHint: "逐項選擇所有設定選項。",
+      quickstartKeepRunningQuestion: "讓 OpenClaw 在背景持續執行？",
       quickstartDashboard: "儀表板：{url}",
       quickstartForeground: "閘道正在前景執行。按 Ctrl+C 停止。",
-      quickstartBackground: "如需日後讓閘道在背景持續執行，請執行：openclaw gateway install",
-      quickstartReopen: "執行 openclaw 開啟 TUI，或執行 openclaw dashboard 重新開啟網頁儀表板。",
+      quickstartBackground: "如需日後讓閘道在背景持續執行，請執行：{command}",
+      quickstartReopen:
+        "執行 {tuiCommand} 開啟 TUI，或執行 {dashboardCommand} 重新開啟網頁儀表板。",
       quickstartBrowserUnavailable: "瀏覽器交接未完成。閘道仍在執行；準備好後請開啟儀表板。",
       quickstartGatewayPending:
-        "閘道尚無法連線。請保持此終端機開啟，並執行 openclaw gateway status 檢查啟動狀態。",
+        "閘道尚無法連線。請保持此終端機開啟，並執行 {statusCommand} 檢查啟動狀態。",
       accessFullHint: "我會尋找這台機器上的 AI 應用程式與金鑰；由你選擇要測試的連線。",
       accessFullLabel: "完整存取 — 自動找出一切",
       accessGuardedHint: "尋找前我會先徵求你的同意，你也可以手動設定。",
@@ -394,7 +399,7 @@ export const zh_TW = {
       nextSteps:
         "工作區：{workspace}\n新增頻道：`openclaw channels add`\n偏好聊天？執行 `openclaw setup`，然後說 `connect telegram`（或 `connect slack`）。\n開啟 dashboard：`openclaw dashboard`\n稍後聊天：`openclaw`",
       nextStepsWithoutAi:
-        "工作區：{workspace}\n稍後新增 AI：重新執行 `openclaw onboard`\n連接 AI 後新增頻道：`openclaw channels add`\n開啟 dashboard：`openclaw dashboard`",
+        "工作區：{workspace}\n稍後新增 AI：重新執行 `{onboardCommand}`\n連接 AI 後新增頻道：`{channelsCommand}`\n開啟 dashboard：`{dashboardCommand}`",
       nextStepsTitle: "下一步",
       noInferenceOptions:
         "尚無可用的推理選項。請先登入 Claude Code 或 Codex，或設定 API 金鑰供應商，然後重新執行引導。",
@@ -474,6 +479,8 @@ export const zh_TW = {
       testAiProgress: "正在用真實 completion 測試 AI 存取…",
       testAiSuccess: "AI 存取正常，在 {seconds} 秒內回覆。",
       testAiTitle: "AI 存取測試",
+      utilityOnlyNote: "請為 agent 對話選擇供應商，或選擇暫時略過。",
+      utilityOnlyTitle: "選擇 agent 的模型",
       whatSetup: "你想設定什麼？",
       workspaceConflictConfirm: "要將現有 agent fleet 移動到要求的工作區嗎？",
       workspaceConflictNotice:
@@ -1092,6 +1099,8 @@ export const zh_TW = {
     channelsPrimer: {
       approveWith: "核准配對：{command}",
       docs: "文件：{link}",
+      credentialStorage:
+        "直接輸入受支援的憑證會將其儲存到共用密鑰庫。Gateway 執行時，從 CLI 執行此操作需要本機 Gateway 管理員權限。如果沒有該權限，請在頻道支援的情況下使用現有的密鑰參照，或先停止 Gateway 再輸入憑證。",
       inboundSafety: "入站 DM 安全預設使用配對：未知傳送者會先取得配對碼。",
       multiUserDm:
         '多使用者 DM 請隔離工作階段：{command}（多帳號頻道也可用 "per-account-channel-peer"）。',
@@ -1156,9 +1165,9 @@ export const zh_TW = {
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
       daemonRuntimeNodeHint: "託管服務的主要與建議執行環境。",
-      daemonRuntimeBun: "Bun 1.4.3+",
+      daemonRuntimeBun: "Bun 1.4.4+",
       daemonRuntimeBunHint:
-        "需要 Bun 1.4.3 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
+        "需要 Bun 1.4.4 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
       editBootstrap: "之後可編輯 BOOTSTRAP.md 來修改 agent 的自我介紹方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次終端機聊天會傳送："醒醒，我的朋友！"',

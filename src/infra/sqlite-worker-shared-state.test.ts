@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -14,7 +15,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
-import { registerRequiredQueuedSubagent } from "../agents/subagents/registry/subagent-registry-queued-registration.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -68,9 +68,21 @@ const readBindingApprovals = {
 } as const;
 
 const readProvenance = {
-  type: "claws.install-schema-versions",
+  type: "templates.install-schema-versions",
   input: { artifactPreservingReadOnly: true },
 } as const;
+const readApprovals = (captured: ReturnType<typeof context>) =>
+  executeOpenClawStateWorker(captured, readBindingApprovals);
+const inspectProvenance = (captured: ReturnType<typeof context>) =>
+  runOpenClawStateWorkerOperation(captured, (scope) => scope.execute(readProvenance), {
+    existingOnly: true,
+  });
+const healthInput = (name: string, signature: string) => ({
+  configPath: `/synthetic/${name}.json`,
+  patch: { last_observed_suspicious_signature: signature },
+  expected: null,
+  updatedAtMs: 100,
+});
 
 async function seedMetadata(captured: ReturnType<typeof context>, value = { plugins: [] }) {
   writeConfigMachineState("plugins.installedIndex", value, databaseOptions(captured));
@@ -90,12 +102,7 @@ describe("canonical shared-state worker admission", () => {
         env,
         ...(part === "agent-path" ? { initializationAgentPaths: [padding] } : {}),
       });
-      await expect(
-        executeOpenClawStateWorker(captured, {
-          type: "plugins.conversationBindingApprovals.read",
-          input: undefined,
-        }),
-      ).rejects.toMatchObject({ code: "overloaded" });
+      await expect(readApprovals(captured)).rejects.toMatchObject({ code: "overloaded" });
       expect(existsSync(captured.admission.databasePath)).toBe(false);
     },
   );
@@ -118,11 +125,10 @@ describe("canonical shared-state worker admission", () => {
       mkdirSync(env.STORE_ROOT);
       const agentPath = path.join(env.STORE_ROOT, "openclaw-agent.sqlite");
       if (retained) {
-        const database = nodeSqlite.openNodeSqliteDatabase(agentPath);
+        using database = nodeSqlite.openNodeSqliteDatabase(agentPath);
         database.exec(
           "CREATE TABLE retained_history (value TEXT); INSERT INTO retained_history VALUES ('kept')",
         );
-        database.close();
       }
       const bytes = retained ? readFileSync(agentPath) : undefined;
       writeFileSync(
@@ -140,10 +146,7 @@ describe("canonical shared-state worker admission", () => {
       env.STORE_ROOT = path.join(root, "later");
       knownPaths[0] = path.join(root, "later", "openclaw-agent.sqlite");
 
-      await executeOpenClawStateWorker(captured, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      });
+      await readApprovals(captured);
       expect(existsSync(captured.admission.databasePath)).toBe(true);
       const database = openOpenClawStateDatabase(databaseOptions(captured));
       const journal = database.db
@@ -163,11 +166,9 @@ describe("canonical shared-state worker admission", () => {
     async (phase) => {
       const captured = context();
       mkdirSync(path.dirname(captured.admission.databasePath), { recursive: true });
-      const database = nodeSqlite.openNodeSqliteDatabase(captured.admission.databasePath);
-      try {
+      {
+        using database = nodeSqlite.openNodeSqliteDatabase(captured.admission.databasePath);
         database.exec("PRAGMA user_version = 999999");
-      } finally {
-        database.close();
       }
       const current = captureOpenClawStateWorkerContext(databaseOptions(captured));
       if (phase === "execute") {
@@ -184,22 +185,14 @@ describe("canonical shared-state worker admission", () => {
         expiresAtMs: 20000,
       };
       let incoming: unknown;
-      let failure: unknown;
-      try {
-        await runOpenClawStateWorkerOperation(current, async (scope) => {
-          try {
-            return await scope.execute({
-              type: "nativeHookRelay.write",
-              input: { record, updatedAtMs: 1 },
-            });
-          } catch (error) {
+      const failure = await runOpenClawStateWorkerOperation(current, (scope) =>
+        scope
+          .execute({ type: "nativeHookRelay.write", input: { record, updatedAtMs: 1 } })
+          .catch((error: unknown) => {
             incoming = error;
             throw error;
-          }
-        });
-      } catch (error) {
-        failure = error;
-      }
+          }),
+      ).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(SqliteSchemaVersionError);
       if (phase === "execute") {
         expect(incoming).toBe(failure);
@@ -213,17 +206,11 @@ describe("canonical shared-state worker admission", () => {
       const captured = context();
       const databasePath = captured.admission.databasePath;
       if (operation === "repair") {
-        const database = openOpenClawStateDatabase({
-          path: databasePath,
-          env: captured.environment,
-        });
+        const database = openOpenClawStateDatabase(databaseOptions(captured));
         database.db.exec("DROP INDEX idx_subagent_runs_child_session_key");
         await closeOpenClawStateDatabaseAsync();
       }
-      const admission = captureOpenClawStateWorkerContext({
-        path: databasePath,
-        env: captured.environment,
-      });
+      const admission = captureOpenClawStateWorkerContext(databaseOptions(captured));
       const gateway = acquireGatewayStateOwner({
         databasePath,
         payload: {
@@ -237,12 +224,7 @@ describe("canonical shared-state worker admission", () => {
       });
       const mainSql = observeMainThreadSql();
       try {
-        expect(
-          await executeOpenClawStateWorker(admission, {
-            type: "plugins.conversationBindingApprovals.read",
-            input: undefined,
-          }),
-        ).toEqual([]);
+        expect(await readApprovals(admission)).toEqual([]);
         mainSql.expectIdle();
         expect(admission.admission.identity.key).toMatch(/^file:/);
       } finally {
@@ -250,7 +232,7 @@ describe("canonical shared-state worker admission", () => {
         await closeOpenClawStateDatabaseAsync();
         gateway.release();
       }
-      const reopened = openOpenClawStateDatabase({ path: databasePath, env: captured.environment });
+      const reopened = openOpenClawStateDatabase(databaseOptions(captured));
       expect(
         reopened.db
           .prepare("SELECT name FROM sqlite_schema WHERE name = ?")
@@ -304,26 +286,19 @@ describe("canonical shared-state worker admission", () => {
       const databasePath = seeded.admission.databasePath;
       await seedMetadata(seeded);
       const captured = captureOpenClawStateWorkerContext(databaseOptions(seeded));
-      await runOpenClawStateWorkerOperation(captured, (scope) => scope.execute(readProvenance), {
-        existingOnly: true,
-      });
+      await inspectProvenance(captured);
       const before = statSync(databasePath, { bigint: true });
       // macOS can change birth time without reallocating the inode.
       execFileSync("/usr/bin/SetFile", ["-d", "01/02/2000 03:04:05", databasePath]);
       const after = statSync(databasePath, { bigint: true });
       expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
       expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
-      const input = {
-        configPath: "/synthetic/changed-birthtime.json",
-        patch: { last_observed_suspicious_signature: "metadata-change" },
-        expected: null,
-        updatedAtMs: 100,
-      };
+      const input = healthInput("changed-birthtime", "metadata-change");
       await expect(
         executeOpenClawStateWorker(captured, { type: "config.health.patch", input }),
       ).resolves.toBe(true);
       await closeOpenClawStateDatabaseAsync();
-      const database = openOpenClawStateDatabase({ path: databasePath, env: seeded.environment });
+      const database = openOpenClawStateDatabase(databaseOptions(seeded));
       const row = database.db
         .prepare(
           "SELECT last_observed_suspicious_signature FROM config_health_entries WHERE config_path = ?",
@@ -346,43 +321,28 @@ describe("canonical shared-state worker admission", () => {
         path: aliasPath,
         env: original.environment,
       });
-      const inspect = (captured: typeof opening) =>
-        runOpenClawStateWorkerOperation(captured, (scope) => scope.execute(readProvenance), {
-          existingOnly: true,
-        });
-      await inspect(opening);
-      await inspect(alias);
+      await inspectProvenance(opening);
+      await inspectProvenance(alias);
       renameSync(
         path.dirname(originalPath),
         path.join(dirs.make("openclaw-worker-moved-"), "state"),
       );
-      const input = {
-        configPath: "/synthetic/warm-alias.json",
-        patch: { last_observed_suspicious_signature: "warm-alias" },
-        expected: null,
-        updatedAtMs: 100,
-      };
+      const input = healthInput("warm-alias", "warm-alias");
       if (operation === "audit") {
         expect(
           await executeOpenClawStateWorker(alias, {
             type: "audit.writer.prune",
             input: undefined,
           }),
-        ).toEqual([
-          { status: "settled", error: expect.any(String) },
-          { status: "settled", error: expect.any(String) },
-          { status: "settled", error: expect.any(String) },
-          { status: "settled", error: expect.any(String) },
-        ]);
+        ).toEqual(
+          Array.from({ length: 4 }, () => ({ status: "settled", error: expect.any(String) })),
+        );
       } else {
         await expect(
           executeOpenClawStateWorker(
             alias,
             operation === "config health"
-              ? {
-                  type: "config.health.patch",
-                  input,
-                }
+              ? { type: "config.health.patch", input }
               : {
                   type: "machineState.write",
                   input: { key: "warm-alias-state", value: "must-not-commit" },
@@ -397,9 +357,7 @@ describe("canonical shared-state worker admission", () => {
         database.db
           .prepare("SELECT count(*) AS count FROM config_health_entries WHERE config_path = ?")
           .get(input.configPath),
-      ).toEqual({
-        count: 0,
-      });
+      ).toEqual({ count: 0 });
       expect(readConfigMachineStateRowInDatabase(database.db, "warm-alias-state")).toBeUndefined();
     },
   );
@@ -448,13 +406,7 @@ describe("canonical shared-state worker admission", () => {
           );
           if (healthyActor) {
             // C opens the actor before A receives its secondary client.
-            expect(
-              await runOpenClawStateWorkerOperation(
-                survivingAlias,
-                (scope) => scope.execute(readProvenance),
-                { existingOnly: true },
-              ),
-            ).toEqual([]);
+            expect(await inspectProvenance(survivingAlias)).toEqual([]);
           }
         }
         const relocate = () => {
@@ -470,18 +422,10 @@ describe("canonical shared-state worker admission", () => {
           expect(existsSync(originalPath)).toBe(false);
           return relocated;
         };
-        const input = {
-          configPath: "/synthetic/relocated-state.json",
-          patch: { last_observed_suspicious_signature: "current-database" },
-          expected: null,
-          updatedAtMs: 100,
-        };
+        const input = healthInput("relocated-state", "current-database");
         const write = async (relocated: ReturnType<typeof captureOpenClawStateWorkerContext>) => {
           expect(
-            await executeOpenClawStateWorker(relocated, {
-              type: "config.health.patch",
-              input,
-            }),
+            await executeOpenClawStateWorker(relocated, { type: "config.health.patch", input }),
           ).toBe(true);
         };
         const relocatedDuringCallback = await runOpenClawStateWorkerOperation(
@@ -514,11 +458,7 @@ describe("canonical shared-state worker admission", () => {
           (ownership === "retired opening scope" || ownership === "active retained alias") &&
           survivingAlias
         ) {
-          await runOpenClawStateWorkerOperation(
-            survivingAlias,
-            (scope) => scope.execute(readProvenance),
-            { existingOnly: true },
-          );
+          await inspectProvenance(survivingAlias);
           await originalMaintenance.close();
           if (ownership === "active retained alias") {
             relocatedDuringAliasCallback = await runOpenClawStateWorkerOperation(
@@ -592,10 +532,7 @@ describe("canonical shared-state worker admission", () => {
     async (phase) => {
       const captured = context();
       if (phase === "execute") {
-        await executeOpenClawStateWorker(captured, {
-          type: "plugins.conversationBindingApprovals.read",
-          input: undefined,
-        });
+        await readApprovals(captured);
       }
       claimOpenClawStateOwnership("synthetic-manager", {
         path: captured.admission.databasePath,
@@ -605,40 +542,19 @@ describe("canonical shared-state worker admission", () => {
         await closeOpenClawStateDatabaseAsync();
       }
       const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
-      await expect(
-        executeOpenClawStateWorker(reopened, {
-          type: "plugins.conversationBindingApprovals.read",
-          input: undefined,
-        }),
-      ).rejects.toBeInstanceOf(OpenClawStateOwnershipError);
+      await expect(readApprovals(reopened)).rejects.toBeInstanceOf(OpenClawStateOwnershipError);
     },
   );
 
   it("opens a fresh actor for the first new call after the previous worker exits", async () => {
     const captured = context();
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
-    await executeOpenClawStateWorker(captured, {
-      type: "plugins.conversationBindingApprovals.read",
-      input: undefined,
-    });
+    using messages = vi.spyOn(Worker.prototype, "postMessage");
+    await readApprovals(captured);
     const worker = messages.mock.contexts[0];
-    messages.mockRestore();
-    if (!(worker instanceof Worker)) {
-      throw new Error("Expected the shared-state worker to receive its open request");
-    }
+    assert(worker instanceof Worker, "Expected the shared-state worker open request");
     await worker.terminate();
-    await expect(
-      executeOpenClawStateWorker(captured, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      }),
-    ).resolves.toEqual([]);
-    expect(
-      await executeOpenClawStateWorker(captured, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      }),
-    ).toEqual([]);
+    await expect(readApprovals(captured)).resolves.toEqual([]);
+    expect(await readApprovals(captured)).toEqual([]);
   });
 });
 
@@ -672,12 +588,6 @@ it("commits captured registry rows without host SQL", async () => {
     const queued = createRun("queued");
     const capturedTask = 'captured task with "quotes", \\slashes, and 🦞\n'.repeat(256);
     queued.task = capturedTask;
-    queued.queuedLaunch = {
-      request: { sessionKey: queued.childSessionKey, task: queued.task },
-      timeoutMs: 100,
-      schedulerGroupKey: "synthetic-group",
-      maxConcurrent: 1,
-    };
     const terminal = createRun("private-terminal");
     terminal.completionTarget = "parent";
     terminal.execution = { status: "terminal", endedAt: 200 };
@@ -734,7 +644,6 @@ it("commits captured registry rows without host SQL", async () => {
         await Promise.race([captured.promise.then(() => "captured"), write.then(() => "settled")]),
       ).toBe("captured");
       queued.task = "mutated after capture";
-      queued.queuedLaunch.request.task = "mutated descriptor";
       terminal.completion.resultText = "mutated result";
       terminalReply.text = "mutated reply";
       expect(runs.has(queued.runId)).toBe(false);
@@ -775,60 +684,5 @@ it("commits captured registry rows without host SQL", async () => {
       calibration.restore();
       await closeOpenClawStateDatabaseAsync();
     }
-  });
-});
-
-it("awaits the queued registration caller's two writes without host SQL", async () => {
-  await withEnvAsync({ OPENCLAW_STATE_DIR: dirs.make("openclaw-queued-caller-") }, async () => {
-    const entry = createRun("queued-caller");
-    entry.requesterStorePath = "synthetic-requester-store";
-    entry.controllerStorePath = "synthetic-controller-store";
-    const descriptor = {
-      request: { sessionKey: entry.childSessionKey },
-      timeoutMs: 100,
-      schedulerGroupKey: "synthetic-group",
-      maxConcurrent: 1,
-    };
-    const capturedContext = captureOpenClawStateWorkerContext();
-    const runs = new Map<string, SubagentRunRecord>();
-    saveSubagentRegistryToSqlite(new Map());
-    const activate = vi.fn();
-    const sql = observeMainThreadSql();
-    try {
-      await mutateSubagentRuns(
-        [entry.runId],
-        () => ({
-          value: undefined,
-          postimages: new Map([[entry.runId, entry]]),
-        }),
-        { runs, context: capturedContext },
-      );
-      const registration = registerRequiredQueuedSubagent({
-        context: capturedContext,
-        entry,
-        manager: {
-          runs,
-          getRunsForChildSession: () => runs.values(),
-          getRuntimeConfig: () => ({}),
-        },
-        queuedLaunch: descriptor,
-        activate,
-      });
-      expect(runs.get(entry.runId)?.queuedLaunch).toBeUndefined();
-      expect(activate).not.toHaveBeenCalled();
-      await registration;
-      sql.expectIdle();
-      expect(activate).toHaveBeenCalledOnce();
-      expect(runs.get(entry.runId)?.queuedLaunch).toEqual(descriptor);
-    } finally {
-      sql.restore();
-      await closeOpenClawStateDatabaseAsync();
-    }
-    expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
-      queuedLaunch: descriptor,
-      requesterStorePath: entry.requesterStorePath,
-      controllerStorePath: entry.controllerStorePath,
-    });
-    await closeOpenClawStateDatabaseAsync();
   });
 });

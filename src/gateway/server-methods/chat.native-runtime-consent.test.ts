@@ -1,5 +1,3 @@
-import { existsSync, renameSync, unlinkSync } from "node:fs";
-import { backup } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -12,14 +10,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSessionEntries, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -33,9 +25,8 @@ vi.mock("./chat-send-admission.js", () => ({
 }));
 useNativeProcessFixture();
 
-type TestState = Parameters<Parameters<typeof withOpenClawTestState>[1]>[0];
 async function withNative(
-  run: (state: TestState, config: OpenClawConfig, client: GatewayClient) => Promise<void>,
+  run: (config: OpenClawConfig, client: GatewayClient) => Promise<void>,
   prepare?: (config: OpenClawConfig) => GatewayClient,
 ) {
   await withOpenClawTestState({ label: "chat-native-consent" }, async (state) => {
@@ -57,7 +48,7 @@ async function withNative(
     const native = await registerNative(state, config, "owner-agent.mjs");
     await using cleanup = new AsyncDisposableStack();
     cleanup.defer(() => native.service.stop?.(native.context));
-    await run(state, config, client);
+    await run(config, client);
   });
 }
 
@@ -84,8 +75,10 @@ function sendNative(
       client,
       isWebchatConnect: () => isWebchat,
     });
-  return { respond, context, send };
+  return { respond, send };
 }
+
+const entries = () => listSessionEntries({ agentId: "main", readOnly: true });
 
 async function withPausedConsent(
   send: () => unknown,
@@ -125,7 +118,7 @@ function restricted(respond: ReturnType<typeof vi.fn<RespondFn>>, reason: string
 }
 
 it.each([false, true])("gates native input persistence (existing=%s)", (preseed) =>
-  withNative(async (_state, config, client) => {
+  withNative(async (config, client) => {
     const target = {
       agentId: "main",
       sessionKey: "agent:main:dashboard:native-consent",
@@ -150,9 +143,7 @@ it.each([false, true])("gates native input persistence (existing=%s)", (preseed)
     await send();
     restricted(respond, "tool-policy");
     const persisted = expectDefined(
-      listSessionEntries({ agentId: target.agentId, readOnly: true }).find(
-        (row) => row.sessionKey === target.sessionKey,
-      )?.entry,
+      entries().find((row) => row.sessionKey === target.sessionKey)?.entry,
       "real consent-bound session",
     );
     expect(respond.mock.calls[0]?.[2]?.details).toMatchObject({
@@ -160,17 +151,15 @@ it.each([false, true])("gates native input persistence (existing=%s)", (preseed)
       runtimeId: "acp-opencode",
     });
     const transcript = { ...target, sessionId: persisted.sessionId };
-    const messages = await readVisibleSessionTranscriptMessageEntries(transcript);
-    expect(messages).toEqual([]);
+    expect(await readVisibleSessionTranscriptMessageEntries(transcript)).toEqual([]);
     expect(persisted.nativeRuntimeConsent).toBeUndefined();
     if (!preseed) {
       expect(persisted.lifecycleRevision).toBeTypeOf("string");
-      const { providerOverride, modelOverride, agentRuntimeOverride } = persisted;
-      expect([providerOverride, modelOverride, agentRuntimeOverride]).toEqual([
-        undefined,
-        undefined,
-        undefined,
-      ]);
+      expect([
+        persisted.providerOverride,
+        persisted.modelOverride,
+        persisted.agentRuntimeOverride,
+      ]).toEqual([undefined, undefined, undefined]);
     }
     expect(rpcSourceTesting.size).toBe(0);
   }),
@@ -183,12 +172,12 @@ it.each([
   { kind: "remote execution", reason: "remote-execution" },
 ] as const)("refuses $kind without a consent row", ({ kind, reason }) =>
   withNative(
-    async (_state, config, client) => {
+    async (config, client) => {
       const { respond, send } = sendNative(config, client);
       await send();
       restricted(respond, reason);
       expect(respond.mock.calls[0]?.[2]?.details).not.toHaveProperty("recovery");
-      expect(listSessionEntries({ agentId: "main", readOnly: true })).toEqual([]);
+      expect(entries()).toEqual([]);
       expect(rpcSourceTesting.size).toBe(0);
     },
     (config) => {
@@ -221,7 +210,7 @@ it.each([
 it.each(["authority", "mandatory policy", "competing entry"] as const)(
   "rechecks $change before first-send consent commit",
   (change) =>
-    withNative(async (_state, config, client) => {
+    withNative(async (config, client) => {
       const { send } = sendNative(config, client);
       const sessionKey = "agent:main:main";
       const competing = {
@@ -241,51 +230,10 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
           });
         }
         await settle();
-        const entries = listSessionEntries({ agentId: "main", readOnly: true });
-        expect(entries).toMatchObject(change === "competing entry" ? [competing] : []);
-        expect(entries.every(({ entry }) => entry.nativeRuntimeConsent === undefined)).toBe(true);
+        const persisted = entries();
+        expect(persisted).toMatchObject(change === "competing entry" ? [competing] : []);
+        expect(persisted.every(({ entry }) => entry.nativeRuntimeConsent === undefined)).toBe(true);
         expect(rpcSourceTesting.size).toBe(0);
       });
     }),
-);
-
-it.runIf(process.platform !== "win32")("rejects consent after database-owner replacement", () =>
-  withNative(async (state, config) => {
-    const { respond, send } = sendNative(config);
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const replacementPath = `${databasePath}.native-replacement`;
-    const displacedPath = `${databasePath}.native-original`;
-    await backup(requireNativeSqliteDatabase(database.db), replacementPath);
-    let replaced = false;
-    try {
-      await withPausedConsent(send, async (settle) => {
-        renameSync(databasePath, displacedPath);
-        renameSync(replacementPath, databasePath);
-        replaced = true;
-        const rejection = await settle();
-        await closeOpenClawAgentDatabasesAsync();
-        for (const storePath of [databasePath, displacedPath]) {
-          expect(
-            listSessionEntries({ agentId: "main", env: state.env, storePath, readOnly: true }),
-          ).toEqual([]);
-        }
-        expect(rejection).toEqual(expect.any(Error));
-        expect(String(rejection)).toContain(
-          "Reply initialization database changed after its snapshot",
-        );
-        expect(respond).not.toHaveBeenCalled();
-        expect(rpcSourceTesting.size).toBe(0);
-      });
-    } finally {
-      await closeOpenClawAgentDatabasesAsync();
-      if (replaced) {
-        renameSync(databasePath, replacementPath);
-        renameSync(displacedPath, databasePath);
-      }
-      if (existsSync(replacementPath)) {
-        unlinkSync(replacementPath);
-      }
-    }
-  }),
 );

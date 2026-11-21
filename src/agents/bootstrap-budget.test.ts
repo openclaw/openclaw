@@ -70,7 +70,6 @@ describe("bootstrap budget", () => {
     expect(state).toMatchObject({
       bootstrapMaxChars: 10,
       bootstrapTotalMaxChars: 12,
-      bootstrapPromptWarningMode: "always",
       bootstrapAnalysis: { totalNearLimit: true },
       bootstrapPromptWarning: { warningShown: true },
     });
@@ -231,11 +230,10 @@ describe("bootstrap budget", () => {
       });
     const meta = buildBootstrapTruncationReportMeta({
       analysis,
-      warningMode: "once",
       warning,
     });
     expect(meta).toMatchObject({
-      warningMode: "once",
+      warningMode: "always",
       warningShown: true,
       truncatedFiles: 1,
       nearLimitFiles: 1,

@@ -1,4 +1,4 @@
-import type { CopilotSession } from "@github/copilot-sdk";
+import type { CopilotClient, CopilotSession, SessionConfig } from "@github/copilot-sdk";
 import {
   buildAgentHookContextChannelFields,
   type AgentHarnessCompactParams,
@@ -40,4 +40,39 @@ export function buildCopilotCompactionHookContext(params: AgentHarnessCompactPar
     trigger: params.trigger,
     ...buildAgentHookContextChannelFields(params),
   };
+}
+
+export async function compactTrackedSdkSession(params: {
+  abortSignal?: AbortSignal;
+  assertCurrent: () => void;
+  client: CopilotClient;
+  customInstructions?: string;
+  gitHubToken?: string;
+  onSession?: (session: CopilotHistoryCompactSession) => void;
+  sessionConfig: SessionConfig;
+  sdkSessionId: string;
+}): Promise<CopilotHistoryCompactResult> {
+  params.assertCurrent();
+  throwIfAborted(params.abortSignal);
+  const session = await params.client.resumeSession(params.sdkSessionId, {
+    ...params.sessionConfig,
+    continuePendingWork: false,
+    ...(params.gitHubToken ? { gitHubToken: params.gitHubToken } : {}),
+    suppressResumeEvent: true,
+  });
+  params.onSession?.(session);
+  const request = params.customInstructions?.trim()
+    ? { customInstructions: params.customInstructions }
+    : undefined;
+  try {
+    params.assertCurrent();
+    throwIfAborted(params.abortSignal);
+    return await session.rpc.history.compact(request);
+  } finally {
+    try {
+      await session.disconnect();
+    } catch {
+      // Preserve the compaction or cancellation outcome; cleanup is best-effort here.
+    }
+  }
 }

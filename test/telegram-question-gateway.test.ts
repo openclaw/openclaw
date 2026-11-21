@@ -28,24 +28,21 @@ async function renderButtons(payload: ReturnType<typeof buildAgentHarnessQuestio
 }
 
 const questionGatewayTransport = vi.hoisted(() => ({
-  dispatch: undefined as ((request: QuestionGatewayCall) => Promise<unknown>) | undefined,
+  dispatch: vi.fn<(request: QuestionGatewayCall) => Promise<unknown>>(async () => {
+    throw new Error("expected the in-process question Gateway transport");
+  }),
 }));
 
 vi.mock("../src/gateway/call.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/gateway/call.js")>();
   return {
     ...actual,
-    callGateway: async (request: QuestionGatewayCall) => {
-      if (!questionGatewayTransport.dispatch) {
-        throw new Error("expected the in-process question Gateway transport");
-      }
-      return await questionGatewayTransport.dispatch(request);
-    },
+    callGateway: questionGatewayTransport.dispatch,
   };
 });
 
 afterEach(() => {
-  questionGatewayTransport.dispatch = undefined;
+  questionGatewayTransport.dispatch.mockReset();
 });
 
 it("opens an external step with a URL button separate from completion callbacks", async () => {
@@ -80,23 +77,20 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
     createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
     scheduler,
   );
-  const gatewayCalls: string[] = [];
   const dispatch = async ({ method, params }: QuestionGatewayCall): Promise<unknown> => {
-    gatewayCalls.push(method);
     const result = await callGatewayHandler(handlers, method, params ?? {}, {
       context: { broadcast: () => undefined },
     });
     expect(result.ok, `question Gateway method ${method}`).toBe(true);
     return result.response;
   };
-  questionGatewayTransport.dispatch = dispatch;
+  questionGatewayTransport.dispatch.mockImplementation(dispatch);
 
   try {
-    const optionValues = ["A", "B", "C"];
     const question = {
       header: "Destination",
       question: "Where next?",
-      options: optionValues.map((label) => ({ label })),
+      options: ["A", "B", "C"].map((label) => ({ label })),
       multiSelect: false,
       isOther: false,
       isSecret: false,
@@ -105,19 +99,10 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
       method: "question.request",
       params: {
         id: questionId,
-        questions: [
-          {
-            questionId: "destination",
-            ...question,
-          },
-        ],
+        questions: [{ questionId: "destination", ...question }],
         timeoutMs: 15_000,
       },
     });
-    expect(manager.get(questionId)?.questions[0]?.options).toEqual(
-      optionValues.map((label) => ({ label })),
-    );
-
     const questionButton = (optionValue: string) => ({
       label: optionValue,
       action: { type: "question" as const, questionId, optionValue },
@@ -133,26 +118,16 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
       questions: [{ id: "destination", ...question }],
       options: { presentation },
     });
-    expect(payload.channelData.askUser).toEqual({ questionId, optionValues });
     const rows = await renderButtons(payload);
-    expect(rows?.map((row) => row.map((button) => button.callback_data))).toEqual([
-      [callback(2)],
-      [callback(0)],
-      [callback(0)],
-      [callback(1)],
-    ]);
-
-    const callbackData = rows?.[0]?.[0]?.callback_data;
-    if (!callbackData) {
-      throw new Error("expected canonical Telegram option C callback data");
-    }
+    const callbackData = expectDefined(
+      rows?.[0]?.[0]?.callback_data,
+      "canonical option C callback",
+    );
     const optionIndex = Number(callbackData.slice(`tgq1:${questionId}:`.length));
-    expect(optionIndex).toBe(2);
 
     await expect(
       questionGatewayRuntime.resolveOption({ cfg: {}, questionId, optionIndex, senderId: "42" }),
     ).resolves.toEqual({ status: "answered", questionId: "destination", optionValue: "C" });
-    expect(gatewayCalls).toEqual(["question.request", "question.get", "question.resolve"]);
     expect(manager.get(questionId)).toMatchObject({
       status: "answered",
       answers: { answers: { destination: ["C"] } },

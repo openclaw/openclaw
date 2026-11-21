@@ -53,7 +53,12 @@ const edge = vi.hoisted(() => {
 });
 
 vi.mock("node:sqlite", () => edge.forbid("DatabaseSync"));
-vi.mock("node:worker_threads", () => ({ isMainThread: true, threadId: 0, Worker: edge.forbidden }));
+vi.mock("node:worker_threads", () => ({
+  isMainThread: true,
+  threadId: 0,
+  workerData: null,
+  Worker: edge.forbidden,
+}));
 vi.mock("node:child_process", () =>
   edge.forbid("spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"),
 );

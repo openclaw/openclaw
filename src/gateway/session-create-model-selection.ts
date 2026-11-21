@@ -11,8 +11,8 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
+import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
-import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -20,6 +20,7 @@ import { resolveDefaultModelForAgent, type ModelRef } from "../agents/model-sele
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
@@ -36,15 +37,31 @@ import type {
   CreateGatewaySessionParams,
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import {
+  prepareSessionPermissionModeAuthorization,
+  readSessionPermissionAuthority,
+} from "./session-permission-authorization.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
 /** Creation and adoption retain the settings mutation owner's native permission guard. */
 export async function prepareSessionCreateRuntimeSelection(params: {
   request: Pick<
     CreateGatewaySessionParams,
-    "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes" | "waitForModelCatalog"
+    | "cfg"
+    | "getCurrentConfig"
+    | "commitGuard"
+    | "readSessionSharing"
+    | "getCurrentSessionAccessCap"
+    | "model"
+    | "agentRuntime"
+    | "requestingOperatorScopes"
+    | "requestingOperatorProfileId"
+    | "operatorRoleActor"
+    | "waitForModelCatalog"
   >;
   agentId: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   sessionKey: string;
   storePath: string;
   entry: SessionEntry;
@@ -63,6 +80,8 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   const selection = await prepareSessionPatchRuntimeSelection({
     cfg: request.cfg,
     agentId: params.agentId,
+    operatorAuthority: params.operatorAuthority,
+    validateInheritedRuntime: true,
     callerCanConsent: request.requestingOperatorScopes?.includes(ADMIN_SCOPE) === true,
     patch: { key: sessionKey, agentRuntime: request.agentRuntime, model: request.model },
     entry,
@@ -80,7 +99,35 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   ) {
     return selection;
   }
+  let permissionAuthority:
+    | Awaited<ReturnType<typeof prepareSessionPermissionModeAuthorization>>
+    | undefined;
+  const release = () => {
+    permissionAuthority?.release();
+    selection.release?.();
+  };
   try {
+    const getCurrentConfig = request.getCurrentConfig ?? (() => request.cfg);
+    permissionAuthority = await prepareSessionPermissionModeAuthorization({
+      ...params,
+      permissionMode: entry.permissionMode,
+      getCurrentConfig,
+      readSharing: request.readSessionSharing,
+      assertCurrent: request.commitGuard,
+      readAuthority: () =>
+        readSessionPermissionAuthority(getCurrentConfig(), {
+          ...request,
+          operatorAuthority: params.operatorAuthority,
+        }),
+    });
+    request.commitGuard?.();
+    const validatePermissionAuthority = () =>
+      permissionAuthority!.validate(existingEntry, entry.permissionMode);
+    const authorityError = validatePermissionAuthority();
+    if (authorityError) {
+      release();
+      return { ok: false, error: authorityError };
+    }
     // Keep execution runtime imports lazy for creation without permission changes.
     const { prepareSessionPatchSandboxChange } =
       await import("./server-methods/sessions-patch-sandbox.runtime.js");
@@ -95,15 +142,16 @@ export async function prepareSessionCreateRuntimeSelection(params: {
       storePath: params.storePath,
       lifecycleIdentities: [sessionKey, existingEntry?.sessionId],
     });
-    const validate = () => validatePermissions() || selection.validate?.();
+    const validate = () =>
+      validatePermissionAuthority() || validatePermissions() || selection.validate?.();
     const error = validate();
     if (error) {
-      selection.release?.();
+      release();
       return { ok: false, error };
     }
-    return { ...selection, validate };
+    return { ...selection, validate, release };
   } catch (error) {
-    selection.release?.();
+    release();
     throw error;
   }
 }
@@ -234,34 +282,15 @@ export function resolveSessionCreationCommitGuard(
     readOperatorAuthority: () => AdmittedRunOperatorAuthority | undefined;
     assertPreparedTargetCurrent: () => void;
     validateSelection: () => ErrorShape | undefined;
+    isCreationCommitted: () => boolean;
+    assertPermissionDefaultCurrent: () => void;
+    validateVisibility: () => ErrorShape | undefined;
   },
-): (() => void) | undefined {
+) {
   const assertDelegationCurrent = captureDelegatedToolPolicyAssertion(
     params.cfg,
     params.spawnToolPolicy?.delegatedToolPolicy,
   );
-  const assertCallerCurrent =
-    params.childSessionPublication || assertDelegationCurrent
-      ? () => {
-          params.commitGuard?.();
-          params.childSessionPublication?.assertCurrent();
-          assertDelegationCurrent?.();
-        }
-      : params.commitGuard;
-  if (
-    !(
-      params.personalModelSelection ||
-      params.operatorAuthority ||
-      params.personalAccountDefaults ||
-      params.activeParentFork ||
-      params.preparedModelSelection ||
-      params.preparedPermissionSelection ||
-      typeof params.model === "string" ||
-      params.agentRuntime !== undefined
-    )
-  ) {
-    return assertCallerCurrent;
-  }
   const selections = [
     params.activeParentFork,
     params.preparedModelSelection,
@@ -269,18 +298,35 @@ export function resolveSessionCreationCommitGuard(
     params.personalModelSelection,
     params.personalAccountDefaults,
   ];
-  return () => {
-    assertCallerCurrent?.();
-    prepared.assertPreparedTargetCurrent();
-    prepared.readOperatorAuthority()?.assertCurrent();
-    const error = prepared.validateSelection();
-    if (error) {
-      throw new Error(error.message);
+  const hasSelection =
+    selections.some(Boolean) ||
+    params.operatorAuthority ||
+    typeof params.model === "string" ||
+    params.agentRuntime !== undefined;
+  return composeSessionSourceAssertion([params.commitGuard], (assertSources) => {
+    assertSources();
+    params.childSessionPublication?.assertCurrent();
+    assertDelegationCurrent?.();
+    if (hasSelection) {
+      prepared.assertPreparedTargetCurrent();
+      prepared.readOperatorAuthority()?.assertCurrent();
+      const error = prepared.validateSelection();
+      if (error) {
+        throw new Error(error.message);
+      }
+      for (const selection of selections) {
+        selection?.assertCurrent?.();
+      }
     }
-    for (const selection of selections) {
-      selection?.assertCurrent();
+    // Creation restrictions end at commit; a later policy change cannot block this chat's turn.
+    if (!prepared.isCreationCommitted()) {
+      prepared.assertPermissionDefaultCurrent();
+      const error = prepared.validateVisibility();
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
     }
-  };
+  });
 }
 
 /** New unpinned sessions bind an account for the caller's permitted default without storing a model pin. */

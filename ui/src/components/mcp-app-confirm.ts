@@ -1,3 +1,5 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+
 type Confirmation = {
   frame: HTMLIFrameElement;
   title: string;
@@ -9,15 +11,14 @@ type Confirmation = {
 /** One synchronous admission owner for pending App decisions. */
 export function createMcpAppConfirm() {
   let pending: (Confirmation & { resolve: (accepted: boolean) => void }) | null = null;
-  const listeners = new Set<() => void>();
-  const publish = () => listeners.forEach((notify) => notify());
+  const listeners = createChangeListeners();
   function finish(accepted: boolean, restoreFocus = true): void {
     const decision = pending;
     if (!decision) {
       return;
     }
     pending = null;
-    publish();
+    listeners.publish();
     const current = decision.isCurrent() && decision.frame.isConnected;
     if (restoreFocus && current) {
       decision.frame.focus({ preventScroll: true });
@@ -26,17 +27,14 @@ export function createMcpAppConfirm() {
   }
   return {
     read: () => pending,
-    subscribe(notify: () => void) {
-      listeners.add(notify);
-      return () => listeners.delete(notify);
-    },
+    subscribe: listeners.subscribe,
     request(confirmation: Confirmation): Promise<boolean> {
       if (pending || !confirmation.isCurrent()) {
         return Promise.resolve(false);
       }
       return new Promise<boolean>((resolve) => {
         pending = { ...confirmation, resolve };
-        publish();
+        listeners.publish();
       });
     },
     cancel: () => finish(false, false),

@@ -87,6 +87,9 @@ extension IOSGatewayChatTransport {
                 allowedByScope: canWrite),
             effortMutationAvailable: Self.composerMutationAvailable(
                 methodSupport: patchCapability,
+                allowedByScope: canWrite),
+            verboseMutationAvailable: Self.composerMutationAvailable(
+                methodSupport: patchCapability,
                 allowedByScope: canAdmin),
             webSearchBaseEnabled: config?.runtimeConfig.tools?.web?.search?.enabled != false,
             webSearchAvailable: configSurface.loaded,
@@ -258,6 +261,7 @@ extension IOSGatewayChatTransport {
             agentID: target.agentID,
             expectedSessionRoutingContract: guardedContract,
             expectedSessionSettings: target.expectedSessionSettings,
+            queueMode: target.queueMode,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -271,6 +275,7 @@ extension IOSGatewayChatTransport {
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
@@ -295,6 +300,7 @@ extension IOSGatewayChatTransport {
             expectedSessionRoutingContract: expectedSessionRoutingContract,
             expectedSessionSettings: expectedSessionSettings,
             supportsSessionSettingsCAS: supportsSettingsCAS,
+            queueMode: queueMode,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,

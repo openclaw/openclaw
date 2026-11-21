@@ -1,4 +1,6 @@
+import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -21,6 +23,10 @@ import {
   deliverSpy,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 import { getRuntimeConfig } from "./subagent-announce.runtime.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Unmocked transcript-archive reads open the agent database beside this store.
+let storePath: string;
 
 export let sessionStore: Record<
   string,
@@ -70,7 +76,7 @@ vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   readSubagentSessionEntry: vi.fn(
     (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
   ),
-  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => storePath),
 }));
 
 // mock-isolation: Requester settlement uses the fixture session map and delivery receipt, without transport or session-store access.
@@ -115,6 +121,7 @@ export function wakeParams(
 }
 
 beforeEach(() => {
+  storePath = path.join(tempDirs.make("openclaw-requester-settle-"), "sessions.json");
   vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockImplementation(
     async (sessionKey) => ({
       readCurrent: () => {

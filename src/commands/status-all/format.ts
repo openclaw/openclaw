@@ -16,6 +16,7 @@ import { VERSION } from "../../version.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+export { redactStatusSecrets } from "../status-redaction.js";
 
 type StatusOverviewRow = {
   Item: string;
@@ -87,10 +88,8 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
-    channelInfo,
-    channelLabel: channelInfo.label,
+    channelLabel: resolveStatusUpdateChannelInfo(params).label,
     gitLabel: formatGitInstallLabel(params.update),
     updateLine: formatUpdateOneLiner(params.update).replace(/^Update:\s*/i, ""),
     updateAvailable: resolveUpdateAvailability(params.update).available,
@@ -289,45 +288,4 @@ function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null
         .filter(Boolean)
         .join(" ")
     : null;
-}
-
-export function buildGatewayStatusJsonPayload(
-  params: Pick<
-    Parameters<typeof buildStatusOverviewSurfaceRows>[0],
-    | "gatewayMode"
-    | "gatewayConnection"
-    | "remoteUrlMissing"
-    | "gatewayReachable"
-    | "gatewaySelf"
-    | "gatewayProbeAuthWarning"
-  > & { gatewayProbe: StatusGatewayProbe | undefined },
-) {
-  return {
-    mode: params.gatewayMode,
-    url: projectGatewayUrlForDiagnostics(params.gatewayConnection.url),
-    urlSource: params.gatewayConnection.urlSource,
-    misconfigured: params.remoteUrlMissing,
-    reachable: params.gatewayReachable,
-    ...(params.gatewayProbe?.startupPhase
-      ? { readiness: "still-starting", startupPhase: params.gatewayProbe.startupPhase }
-      : {}),
-    connectLatencyMs: params.gatewayProbe?.connectLatencyMs ?? null,
-    self: params.gatewaySelf ?? null,
-    error: params.gatewayProbe?.error ?? null,
-    authWarning: params.gatewayProbeAuthWarning ?? null,
-  };
-}
-
-export function redactStatusSecrets(text: string): string {
-  if (!text) {
-    return text;
-  }
-  let out = text;
-  out = out.replace(
-    /(\b(?:access[_-]?token|refresh[_-]?token|token|password|secret|api[_-]?key)\b\s*[:=]\s*)("?)([^"\\s]+)("?)/gi,
-    "$1$2***$4",
-  );
-  out = out.replace(/\bBearer\s+[A-Za-z0-9._-]+\b/g, "Bearer ***");
-  out = out.replace(/\bsk-[A-Za-z0-9]{10,}\b/g, "sk-***");
-  return out;
 }

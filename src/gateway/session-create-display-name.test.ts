@@ -190,6 +190,7 @@ it.for(["durable", "incognito", "shared"])(
           key,
           incognito,
           label: " Shared label ",
+          displayName: "Non-unique native title",
           prepareLifecycle: prepare(withCommit),
         });
       });
@@ -199,6 +200,9 @@ it.for(["durable", "incognito", "shared"])(
         expect(outcomes.find((outcome) => !outcome.ok)).toMatchObject(
           labelConflict("Shared label"),
         );
+        expect(outcomes.find((outcome) => outcome.ok)).toMatchObject({
+          entry: { label: "Shared label", displayName: "Non-unique native title" },
+        });
         for (const [index, key] of keys.entries()) {
           const stored = loadSessionEntry({ sessionKey: key, storePath });
           expect(stored?.label).toBe(outcomes[index]?.ok ? "Shared label" : undefined);
@@ -271,22 +275,3 @@ it.each([
     ]);
   }),
 );
-
-it("preserves explicit labels and still rejects equivalent duplicate labels", () =>
-  withOpenClawTestState({ label: "create-title-with-label" }, async () => {
-    const create = (key: string, label: string) =>
-      createSession({
-        cfg: {},
-        key,
-        label,
-        displayName: "Non-unique native title",
-      });
-    const first = await create("agent:main:operator-first", "Operator label");
-    expect(first).toMatchObject({
-      ok: true,
-      entry: { label: "Operator label", displayName: "Non-unique native title" },
-    });
-    await expect(create("agent:main:operator-second", "  Operator label  ")).resolves.toMatchObject(
-      labelConflict("Operator label"),
-    );
-  }));

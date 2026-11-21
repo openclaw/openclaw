@@ -1,3 +1,4 @@
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
@@ -102,48 +103,6 @@ function classifyJsonValue(
   return null;
 }
 
-function findBalancedJsonEnd(text: string, start: number): number | null {
-  const stack = [text[start] === "{" ? "}" : "]"];
-  let inString = false;
-  let escaped = false;
-  for (let index = start + 1; index < text.length; index += 1) {
-    // Cap candidate size so diagnostic scans cannot spend unbounded time on prose
-    // that happens to contain many braces.
-    if (index - start > MAX_JSON_CANDIDATE_CHARS) {
-      return null;
-    }
-    const ch = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === "{" || ch === "[") {
-      stack.push(ch === "{" ? "}" : "]");
-      continue;
-    }
-    if (ch === "}" || ch === "]") {
-      if (stack.at(-1) !== ch) {
-        return null;
-      }
-      stack.pop();
-      if (stack.length === 0) {
-        return index + 1;
-      }
-    }
-  }
-  return null;
-}
-
 function* iterateJsonCandidates(text: string): Generator<string> {
   // Fenced candidates take precedence even when balanced JSON appears earlier.
   const fenceRe = /```(?:json|tool|tool_call|function_call)?[^\n\r]*[\r\n]([\s\S]*?)```/gi;
@@ -160,16 +119,19 @@ function* iterateJsonCandidates(text: string): Generator<string> {
     if (ch !== "{" && ch !== "[") {
       continue;
     }
-    const end = findBalancedJsonEnd(text, index);
-    if (end === null) {
+    // Bound each diagnostic scan even when prose contains many unmatched braces.
+    const fragment = extractBalancedJsonPrefix(
+      text.slice(index, index + MAX_JSON_CANDIDATE_CHARS + 1),
+    );
+    if (!fragment) {
       continue;
     }
-    const candidate = text.slice(index, end).trim();
+    const candidate = fragment.json;
     if (candidate.length > 1) {
       count += 1;
       yield candidate;
     }
-    index = end - 1;
+    index += fragment.endIndex;
   }
 }
 
@@ -200,13 +162,48 @@ function detectXmlToolCall(text: string): ToolCallShapedTextDetection | null {
   return { kind: "xml_tool_call", ...(toolName ? { toolName } : {}) };
 }
 
+const LEGACY_TOOL_CALL_OPEN_RE = /\[\s*TOOL_CALL\s*\]\s*{/gi;
+const LEGACY_TOOL_NAME_RE = /\btool\s*=>\s*["']([A-Za-z_][A-Za-z0-9_.:-]{0,119})["']/gi;
+const LEGACY_ARGS_RE = /\bargs\s*=>/gi;
+const LEGACY_FIELD_GAP_CHARS = 8_000;
+
+// `[TOOL_CALL] { tool => "name", args => ... }`: the leftmost opener whose first
+// `tool =>` within 8,000 characters is followed by `args =>` within another 8,000.
+// Matches of each part never overlap, so both passes only move forward.
+function findLegacyBracketedToolName(text: string): string | undefined {
+  const argsStarts = Array.from(text.matchAll(LEGACY_ARGS_RE), (match) => match.index);
+  const callable: Array<{ start: number; name: string }> = [];
+  let nextArgs = 0;
+  for (const match of text.matchAll(LEGACY_TOOL_NAME_RE)) {
+    const end = match.index + match[0].length;
+    while (nextArgs < argsStarts.length && argsStarts[nextArgs]! < end) {
+      nextArgs += 1;
+    }
+    if (nextArgs < argsStarts.length && argsStarts[nextArgs]! - end <= LEGACY_FIELD_GAP_CHARS) {
+      callable.push({ start: match.index, name: match[1]! });
+    }
+  }
+  let nextCallable = 0;
+  for (const opener of text.matchAll(LEGACY_TOOL_CALL_OPEN_RE)) {
+    const end = opener.index + opener[0].length;
+    while (nextCallable < callable.length && callable[nextCallable]!.start < end) {
+      nextCallable += 1;
+    }
+    const tool = callable[nextCallable];
+    if (!tool) {
+      return undefined;
+    }
+    if (tool.start - end <= LEGACY_FIELD_GAP_CHARS) {
+      return tool.name;
+    }
+  }
+  return undefined;
+}
+
 function detectBracketedToolCall(text: string): ToolCallShapedTextDetection | null {
-  const legacyMatch =
-    /\[\s*TOOL_CALL\s*\]\s*{[\s\S]{0,8000}?\btool\s*=>\s*["']([A-Za-z_][A-Za-z0-9_.:-]{0,119})["'][\s\S]{0,8000}?\bargs\s*=>[\s\S]*?(?:\[\s*\/\s*TOOL_CALL\s*\]|$)/i.exec(
-      text,
-    );
-  if (legacyMatch?.[1]) {
-    return { kind: "bracketed_tool_call", toolName: legacyMatch[1] };
+  const legacyToolName = findLegacyBracketedToolName(text);
+  if (legacyToolName) {
+    return { kind: "bracketed_tool_call", toolName: legacyToolName };
   }
 
   const match =
@@ -219,7 +216,7 @@ function detectBracketedToolCall(text: string): ToolCallShapedTextDetection | nu
 
 function detectReactAction(text: string): ToolCallShapedTextDetection | null {
   const match =
-    /(?:^|\n)\s*Action\s*:\s*([A-Za-z_][A-Za-z0-9_.:-]{0,119})\s*(?:\r?\n)+\s*Action Input\s*:/i.exec(
+    /(?:^|\n)[^\S\n]*Action\s*:\s*([A-Za-z_][A-Za-z0-9_.:-]{0,119})[^\S\n]*\n\s*Action Input\s*:/i.exec(
       text,
     );
   if (!match?.[1]) {
@@ -242,12 +239,29 @@ export function detectToolCallShapedText(text: string): ToolCallShapedTextDetect
   );
 }
 
+// `<tool_call>body</tool_call>` (also `tool_calls`, `function_call`), closing tag in
+// any case, body trimmed. A `\s*([\s\S]*?)\s*` body lets all three parts split one
+// whitespace run, so the tags are checked directly.
+function unwrapToolCallTag(text: string): string | undefined {
+  const open = /^<(tool_calls?|function_call)>/i.exec(text);
+  if (!open) {
+    return undefined;
+  }
+  const close = `</${open[1]!}>`;
+  if (text.length < open[0].length + close.length) {
+    return undefined;
+  }
+  if (text.slice(-close.length).toLowerCase() !== close.toLowerCase()) {
+    return undefined;
+  }
+  return text.slice(open[0].length, text.length - close.length).trim();
+}
+
 function isStructuredCall(
   text: string,
   hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
 ): boolean {
-  const wrapper = /^<(tool_calls?|function_call)>\s*([\s\S]*?)\s*<\/\1>$/i.exec(text);
-  const body = wrapper?.[2] ?? text;
+  const body = unwrapToolCallTag(text) ?? text;
   const detection = classifyJsonValue(safeParseJson(body), hasToolName);
   if (detection?.toolName) {
     return true;
@@ -282,6 +296,49 @@ function isStructuredCall(
   );
 }
 
+// Text ending in a fenced block: `prefix`, then the earliest opening fence line whose
+// marker matches the final closing line, then `body` up to that closing line. The
+// closing line is fixed by the end of the text, so each line start is tried once.
+function splitTrailingFence(text: string): { prefix: string; body: string } | undefined {
+  const marker = text.slice(-3);
+  if (marker !== "```" && marker !== "~~~") {
+    return undefined;
+  }
+  let closeLineStart = text.length - 3;
+  while (
+    closeLineStart > 0 &&
+    (text[closeLineStart - 1] === " " || text[closeLineStart - 1] === "\t")
+  ) {
+    closeLineStart -= 1;
+  }
+  const closeNewline = closeLineStart - 1;
+  if (closeNewline < 0 || text[closeNewline] !== "\n") {
+    return undefined;
+  }
+  const openLine = /[ \t]*(```|~~~)(?:json|xml)?[ \t]*\r?\n/iy;
+  for (let lineStart = 0; lineStart <= closeNewline;) {
+    openLine.lastIndex = lineStart;
+    const open = openLine.exec(text);
+    const bodyStart = openLine.lastIndex;
+    if (open?.[1] === marker && bodyStart <= closeNewline) {
+      const bodyEnd =
+        closeNewline > bodyStart && text[closeNewline - 1] === "\r"
+          ? closeNewline - 1
+          : closeNewline;
+      return {
+        prefix: text.slice(0, Math.max(0, lineStart - 1)),
+        body: text.slice(bodyStart, bodyEnd),
+      };
+    }
+    const nextNewline = text.indexOf("\n", lineStart);
+    if (nextNewline < 0) {
+      break;
+    }
+    lineStart = nextNewline + 1;
+  }
+  return undefined;
+}
+
 /** Detects a non-executable near miss; this must never be used to dispatch a tool. */
 export function isPlainTextToolCallAttempt(
   text: string,
@@ -294,13 +351,10 @@ export function isPlainTextToolCallAttempt(
   if (isStructuredCall(trimmed, hasToolName)) {
     return true;
   }
-  const fence =
-    /^([\s\S]*?)(?:^|\n)[ \t]*(```|~~~)(?:json|xml)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\2$/i.exec(
-      trimmed,
-    );
+  const fence = splitTrailingFence(trimmed);
   const trailing = /^([^\n]+)\n\s*((?:<|\{|\[|Action\s*:)[\s\S]*)$/i.exec(trimmed);
-  const prefix = (fence?.[1] ?? trailing?.[1] ?? "").trim();
-  const body = fence?.[3] ?? trailing?.[2];
+  const prefix = (fence?.prefix ?? trailing?.[1] ?? "").trim();
+  const body = fence?.body ?? trailing?.[2];
   const announcement = /^(?:I(?:'ll| will| am going to)|Let me) (.+?)(?: now)?[.!:]?$/i.exec(
     prefix,
   )?.[1];

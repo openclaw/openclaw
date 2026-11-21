@@ -15,6 +15,7 @@ export type ModelCatalogReadScope = Pick<
 >;
 type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
   sessionsOnly?: boolean;
+  pendingOnly?: boolean;
   sessionModelRevision?: string;
 };
 export type ModelCatalogCacheUpdate = {
@@ -23,25 +24,29 @@ export type ModelCatalogCacheUpdate = {
 };
 
 export type ModelCatalogClient = Pick<GatewayBrowserClient, "request">;
-export type ModelCatalogInvalidation = "clear" | "refresh";
+export type ModelCatalogInvalidation = "clear" | "refresh" | "pending";
 
 export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
   scope?: ModelCatalogReadScope,
 ): ModelCatalogInvalidation | undefined {
-  if (event.event === "config.changed") {
-    return "refresh";
-  }
   if (event.event === "chat.metadata.changed") {
     const payload = asNullableRecord(event.payload);
-    return payload?.modelSelectionChanged === true
-      ? "clear"
-      : payload?.modelCatalogChanged === false ||
-          (scope?.agentId !== undefined &&
-            typeof payload?.agentId === "string" &&
-            scope.agentId.trim() !== payload.agentId.trim())
-        ? undefined
-        : "refresh";
+    if (payload?.modelSelectionChanged === true) {
+      return "clear";
+    }
+    if (
+      scope?.agentId !== undefined &&
+      typeof payload?.agentId === "string" &&
+      scope.agentId.trim() !== payload.agentId.trim()
+    ) {
+      return undefined;
+    }
+    return payload?.modelCatalogChanged === false
+      ? payload.modelCatalogStatusChanged === true
+        ? "pending"
+        : undefined
+      : "refresh";
   }
   return undefined;
 }
@@ -77,6 +82,7 @@ export type ModelCatalogEntry = {
 
 // Application lifecycle invalidation must not eagerly load catalog readers or presentation.
 export const modelCatalogCache = new WeakMap<ModelCatalogClient, ModelCatalogCache>();
+
 export const modelCatalogObservers = new WeakMap<
   ModelCatalogClient,
   Set<(update: ModelCatalogCacheUpdate) => void>
@@ -145,33 +151,15 @@ export function beginModelCatalogSnapshot(
 
 const MAX_CACHED_MODEL_CATALOGS = 64;
 
-function trimModelCatalogCache(client: ModelCatalogClient, cache: ModelCatalogCache): void {
-  const retired = new Set<string>();
-  for (const key of cache.entries.keys()) {
-    if (cache.entries.size <= MAX_CACHED_MODEL_CATALOGS) {
-      break;
-    }
-    cache.entries.delete(key);
-    retired.add(key);
-  }
-  if (retired.size && modelCatalogCache.get(client) === cache) {
-    notifyModelCatalogCache(client, {
-      type: "invalidated",
-      matches: (_scope, key) => retired.has(key),
-    });
-  }
-}
-
 export function modelCatalogParams(options: ModelsListParams): ModelsListParams {
   const { agentId, view = "configured", ...params } = options;
   return { view, ...params, ...(agentId === undefined ? {} : { agentId: agentId.trim() }) };
 }
 
 export function modelCatalogKey(params: ModelsListParams): string {
-  const { refresh: _refresh, ...projection } = params;
   return JSON.stringify(
-    Object.entries(projection)
-      .filter(([, value]) => value !== undefined)
+    Object.entries(params)
+      .filter(([key, value]) => key !== "refresh" && value !== undefined)
       .toSorted(([a], [b]) => a.localeCompare(b)),
   );
 }
@@ -232,7 +220,20 @@ export function publishModelCatalogResult(
       pending.resolve(result);
     }
   }
-  trimModelCatalogCache(client, cache);
+  const retired = new Set<string>();
+  for (const candidateKey of cache.entries.keys()) {
+    if (cache.entries.size <= MAX_CACHED_MODEL_CATALOGS) {
+      break;
+    }
+    cache.entries.delete(candidateKey);
+    retired.add(candidateKey);
+  }
+  if (retired.size && modelCatalogCache.get(client) === cache) {
+    notifyModelCatalogCache(client, {
+      type: "invalidated",
+      matches: (_scope, candidateKey) => retired.has(candidateKey),
+    });
+  }
   if (params.refresh && discoverySucceeded) {
     notifyModelCatalogCache(client, {
       type: "invalidated",
@@ -319,9 +320,13 @@ export function invalidateModelCatalogCache(
     return () => true;
   }
   const unchanged = new Set(
-    scope?.sessionModelRevision
+    scope?.sessionModelRevision || scope?.pendingOnly
       ? Array.from(cache.entries)
-          .filter(([, entry]) => entry.result?.sessionModelRevision === scope.sessionModelRevision)
+          .filter(([, entry]) =>
+            scope.pendingOnly
+              ? entry.result !== undefined && !entry.result.pendingProviders?.length
+              : entry.result?.sessionModelRevision === scope.sessionModelRevision,
+          )
           .map(([key]) => key)
       : [],
   );
@@ -373,4 +378,27 @@ export function invalidateModelCatalogCache(
     matches,
   });
   return matches;
+}
+
+export function subscribeModelCatalogCache(
+  client: ModelCatalogClient,
+  listener: (update: ModelCatalogCacheUpdate) => void,
+  readScope?: () => ModelCatalogReadScope,
+): () => void {
+  const scopedListener = readScope
+    ? (update: ModelCatalogCacheUpdate) => {
+        const scope = modelCatalogParams(readScope());
+        if (update.matches(scope, modelCatalogKey(scope))) {
+          listener(update);
+        }
+      }
+    : listener;
+  const listeners = modelCatalogObservers.get(client) ?? new Set();
+  modelCatalogObservers.set(client, listeners);
+  listeners.add(scopedListener);
+  return () => {
+    if (listeners.delete(scopedListener) && listeners.size === 0) {
+      modelCatalogObservers.delete(client);
+    }
+  };
 }

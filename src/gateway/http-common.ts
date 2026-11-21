@@ -21,7 +21,7 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
  * Apply baseline security headers that are safe for all response types (API JSON,
  * HTML pages, static assets, SSE streams). Headers that restrict framing or set a
  * Content-Security-Policy are intentionally omitted here because some handlers
- * (canvas host, A2UI) serve content that may be loaded inside frames.
+ * (canvas host) serve content that may be loaded inside frames.
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
@@ -172,6 +172,15 @@ export function sendMissingScopeForbidden(res: ServerResponse, missingScope: str
   });
 }
 
+/** The session exists but is not visible to the authenticated profile. */
+export function sendSessionReadForbidden(res: ServerResponse) {
+  res.setHeader("cache-control", "no-store");
+  sendJson(res, 403, {
+    ok: false,
+    error: { type: "forbidden", message: "session access required" },
+  });
+}
+
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,
@@ -272,9 +281,7 @@ export function watchClientDisconnect(
   const handleClose = () => {
     stopWatchingDisconnect();
     onDisconnect?.();
-    if (!abortController.signal.aborted) {
-      abortController.abort(new ClientDisconnectError());
-    }
+    abortController.abort(new ClientDisconnectError());
   };
   const handleResponseClose = () => {
     res.off("error", handleClose);

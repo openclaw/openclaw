@@ -1,16 +1,23 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  isNativeAppUiClient,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ECHO_TRANSCRIPT_FORMAT } from "../../media-understanding/echo-transcript.js";
+import {
+  DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+  formatAudioTranscriptForAgent,
+} from "../../media-understanding/echo-transcript.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { formatAudioTranscriptForAgent } from "../../plugin-sdk/media-understanding-runtime.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  UserTurnInput,
+  PersistedUserTurnMessage,
+} from "../../sessions/user-turn-input.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { PreparedSkillLibrarySession } from "../../skills/library/selection.js";
 import {
@@ -23,14 +30,13 @@ import {
   discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -38,15 +44,6 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
-
-type ChatSendUserTurnInputController = {
-  baseInput: UserTurnInput;
-  setInputPromise: (input: Promise<UserTurnInput>) => void;
-};
-
-type PersistedChatSendMedia = Awaited<
-  ReturnType<typeof persistInboundImagesForTranscript>
->["entries"];
 
 const audioPreflightLoader = createLazyImportLoader(
   () => import("../../media-understanding/audio-preflight.js"),
@@ -121,20 +118,6 @@ async function resolveChatUiTranscriptEcho(params: {
   return echoFormat.replace("{transcript}", () => transcript);
 }
 
-function resolveChatSendManagedMedia(
-  entries: PersistedChatSendMedia,
-  suppressPromptHydration = false,
-): MediaFact[] {
-  return entries.map((entry) => ({
-    path: entry.path,
-    contentType: entry.fact.contentType ?? "application/octet-stream",
-    ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
-    ...(suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
-      ? { hydrationSuppressed: true }
-      : {}),
-  }));
-}
-
 type ChatSendManagedMediaApplyMode = "replace-empty" | "append-missing";
 
 export function applyChatSendManagedMedia(
@@ -191,16 +174,16 @@ export function prepareChatSendUserTurn(params: {
   logGateway: GatewayRequestContext["logGateway"];
   getConfig?: () => OpenClawConfig;
   assertInputCurrent?: () => void;
-  userTurn: ChatSendUserTurnInputController;
+  userTurn: {
+    baseInput: UserTurnInput;
+    setInputPromise: (input: Promise<UserTurnInput>) => void;
+  };
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
   const persistedMediaForTranscriptPromise = (async (): ReturnType<
     typeof persistInboundImagesForTranscript
   > => {
-    if (
-      (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) ||
-      isAcpBridgeClient(client)
-    ) {
+    if (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) {
       return { entries: [], omission: "none" };
     }
     return await persistInboundImagesForTranscript({
@@ -214,18 +197,28 @@ export function prepareChatSendUserTurn(params: {
       },
     });
   })();
-  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) =>
-    resolveChatSendManagedMedia(
-      result.entries.filter(
-        (entry) =>
-          attachments.explicitOriginTargetsPlugin ||
-          entry.imageKind === "inline" ||
-          (entry.imageKind === "offloaded" &&
-            !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) => {
+    const entries = result.entries.filter(
+      (entry) =>
+        attachments.explicitOriginTargetsPlugin ||
+        entry.imageKind === "inline" ||
+        (entry.imageKind === "offloaded" &&
+          !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+    );
+    const suppressPromptHydration = !attachments.explicitOriginTargetsPlugin;
+    return entries.map((entry): MediaFact =>
+      Object.assign(
+        {
+          path: entry.path,
+          contentType: entry.fact.contentType ?? "application/octet-stream",
+        },
+        entry.fact.fileName ? { fileName: entry.fact.fileName } : {},
+        suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
+          ? { hydrationSuppressed: true }
+          : {},
       ),
-      !attachments.explicitOriginTargetsPlugin,
-    ),
-  );
+    );
+  });
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;
@@ -299,16 +292,28 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
-  const recoveredRequester = readChatInputRecoveryAdmission(session.clientRunId)?.requesterProfile;
+  const recoveredRequester = readQueuedChatInputAdmission(session.clientRunId)?.requesterProfile;
   const requester = client?.authenticatedUserProfile;
   const externalInput =
     !request.systemInputProvenance || request.systemInputProvenance.kind === "external_user";
-  if (
+  if (recoveredRequester && externalInput) {
+    bindRequesterProfile(ctx, {
+      ...recoveredRequester,
+      isCurrent: () => {
+        try {
+          admission.assertWorkAdmissionCurrent?.();
+          return recoveredRequester.isCurrent();
+        } catch {
+          return false;
+        }
+      },
+    });
+  } else if (
     client &&
     requester &&
-    (recoveredRequester || client.authenticatedUserId || client.internal?.authenticatedOperator) &&
-    isBrowserOperatorUiClient(request.clientInfo) &&
-    (recoveredRequester || !isSyntheticGatewayCaller(client)) &&
+    (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+    (isBrowserOperatorUiClient(request.clientInfo) || isNativeAppUiClient(request.clientInfo)) &&
+    !isSyntheticGatewayCaller(client) &&
     externalInput
   ) {
     const authenticatedUserId = client.authenticatedUserId;
@@ -321,9 +326,6 @@ export function prepareChatSendUserTurn(params: {
           admission.assertWorkAdmissionCurrent?.();
         } catch {
           return false;
-        }
-        if (recoveredRequester) {
-          return recoveredRequester.id === profileId && recoveredRequester.isCurrent();
         }
         return (
           !client.invalidated &&
@@ -340,8 +342,7 @@ export function prepareChatSendUserTurn(params: {
     transferGatewayLocalUserIngress(client, ctx);
   }
   if (attachments.mediaPathOffloads.length > 0) {
-    // Pre-staged offloads must use structured facts and marker text so the
-    // dispatch path renders their prompt note without staging them a second time.
+    // Carry durable originals into turn preparation, which owns workspace staging.
     ctx.media = attachments.mediaPathOffloads;
   }
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloads.some((fact) =>

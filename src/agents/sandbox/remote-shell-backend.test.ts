@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { spawnCommand } from "../../process/exec.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { createRemoteShellSandboxBackend } from "./remote-shell-backend.js";
 import {
@@ -40,6 +42,7 @@ function createBackend(
   workspaceDir: string,
   createSession: () => Promise<RemoteShellSandboxSession>,
   options: Partial<Parameters<typeof createRemoteShellSandboxBackend>[0]> = {},
+  backendOptions: Partial<Parameters<typeof createRemoteShellSandboxBackend>[1]> = {},
 ) {
   return createRemoteShellSandboxBackend(
     {
@@ -51,25 +54,14 @@ function createBackend(
       skillsWorkspaceDir: workspaceDir,
       ...options,
     },
-    { createSession },
+    { ...backendOptions, createSession },
   );
 }
 
-function barrier() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: () => release.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
-
-async function createCommandCancellationFixture() {
-  const workspaceDir = tempDirs.make("remote-shell-cancellation-");
+async function createCommandCancellationFixture(
+  workspaceDir = tempDirs.make("remote-shell-cancellation-"),
+  backendOptions: Partial<Parameters<typeof createRemoteShellSandboxBackend>[1]> = {},
+) {
   const session = {
     runCommand: vi.fn<RemoteShellSandboxSession["runCommand"]>(async () => ({
       ...emptyResult(),
@@ -82,7 +74,7 @@ async function createCommandCancellationFixture() {
     dispose: vi.fn(async () => {}),
   } satisfies RemoteShellSandboxSession;
   const createSession = vi.fn(async () => session);
-  const backend = await createBackend(workspaceDir, createSession);
+  const backend = await createBackend(workspaceDir, createSession, {}, backendOptions);
   await run(backend);
   session.runCommand.mockClear();
   session.uploadDirectory.mockClear();
@@ -97,8 +89,8 @@ describe("remote shell command cancellation", () => {
     async (phase) => {
       const { backend, session, createSession } = await createCommandCancellationFixture();
       const controller = new AbortController();
-      const work = barrier();
-      const disposal = barrier();
+      const work = createEnteredGate();
+      const disposal = createEnteredGate();
       const onAbort = vi.fn();
       const onComplete = vi.fn();
       const hold = async (signal?: AbortSignal) => {
@@ -147,6 +139,97 @@ describe("remote shell command cancellation", () => {
   );
 });
 
+describe("remote skills refresh", () => {
+  it.each([
+    {
+      name: "one SSH destination",
+      first: { configLabel: "ssh-a" },
+      second: { configLabel: "ssh-a" },
+      shared: true,
+    },
+    {
+      name: "different SSH targets",
+      first: { configLabel: "ssh-a" },
+      second: { configLabel: "ssh-b" },
+      shared: false,
+    },
+    {
+      name: "different Crabbox leases",
+      first: { backendId: "crabbox", runtimeId: "lease-a", configLabel: "provider/class" },
+      second: { backendId: "crabbox", runtimeId: "lease-b", configLabel: "provider/class" },
+      shared: false,
+    },
+  ])(
+    "queues refreshes only for $name when sharing a remote path",
+    async ({ first, second, shared }) => {
+      const workspaceDir = tempDirs.make("remote-shell-skills-refresh-");
+      const active = await createCommandCancellationFixture(workspaceDir, first);
+      const other = await createCommandCancellationFixture(workspaceDir, second);
+      const upload = createEnteredGate();
+      active.session.uploadDirectory.mockImplementationOnce(upload.wait);
+      const activeRun = run(active.backend);
+      const runs = [activeRun];
+      try {
+        await upload.entered;
+        runs.push(run(other.backend));
+        await setImmediate();
+        expect(other.session.runCommand.mock.calls[0]?.[0].remoteCommand).toEqual(
+          shared ? undefined : expect.stringContaining("openclaw-sandbox-clear"),
+        );
+        upload.release();
+        await Promise.all(runs);
+        expect(other.session.uploadDirectory).toHaveBeenCalledOnce();
+      } finally {
+        upload.release();
+        await Promise.allSettled(runs);
+      }
+    },
+  );
+
+  it("cancels a queued refresh promptly without letting a later writer overtake the upload", async () => {
+    const workspaceDir = tempDirs.make("remote-shell-skills-cancel-");
+    const active = await createCommandCancellationFixture(workspaceDir);
+    const waiting = await createCommandCancellationFixture(workspaceDir);
+    const following = await createCommandCancellationFixture(workspaceDir);
+    const upload = createEnteredGate();
+    active.session.uploadDirectory.mockImplementationOnce(upload.wait);
+    // Hold any premature clear so it cannot finish before the abort assertion.
+    waiting.session.runCommand.mockImplementationOnce(async () => {
+      await upload.wait();
+      return emptyResult();
+    });
+    const runs: Promise<unknown>[] = [run(active.backend)];
+    try {
+      await upload.entered;
+      const controller = new AbortController();
+      const reason = new Error("queued refresh interrupted");
+      const cancelled = waiting.backend
+        .runShellCommand({ script: "true", signal: controller.signal })
+        .catch((error: unknown) => error);
+      runs.push(cancelled);
+      await setImmediate();
+      expect(waiting.createSession).toHaveBeenCalledOnce();
+      controller.abort(reason);
+      expect(await Promise.race([cancelled, setImmediate("still waiting")])).toMatchObject({
+        name: "AbortError",
+        cause: reason,
+      });
+      expect(waiting.session.runCommand).not.toHaveBeenCalled();
+      expect(waiting.session.dispose).toHaveBeenCalledOnce();
+      const next = run(following.backend);
+      runs.push(next);
+      await setImmediate();
+      expect(following.session.runCommand).not.toHaveBeenCalled();
+      upload.release();
+      await Promise.all(runs);
+      expect(following.session.uploadDirectory).toHaveBeenCalledOnce();
+    } finally {
+      upload.release();
+      await Promise.allSettled(runs);
+    }
+  });
+});
+
 async function createFixture() {
   const root = await fs.realpath(tempDirs.make("remote-shell-bootstrap-"));
   const remoteRoot = path.join(root, "remote");
@@ -167,12 +250,7 @@ async function createFixture() {
     return createBackend(
       workspaceDir,
       async () => {
-        const session = createRemoteShellSandboxSession({
-          buildCommand: ({ remoteCommand }) => ({
-            argv: ["/bin/sh", "-c", remoteCommand],
-            env: process.env,
-          }),
-        });
+        const session = sessionFor(workspaceDir);
         return {
           ...session,
           uploadDirectory: (params) =>
@@ -211,7 +289,11 @@ async function createFixture() {
     expect((await fs.stat(protectedDir)).mode & 0o777).toBe(0o555);
     await expectText(path.join(protectedDir, "untouched"), "outside stage");
   };
-  const pausedBackend = (label: string, pause: ReturnType<typeof barrier>, readOnly = false) =>
+  const pausedBackend = (
+    label: string,
+    pause: ReturnType<typeof createEnteredGate>,
+    readOnly = false,
+  ) =>
     createTestBackend(label, async (params, upload) => {
       await upload(params);
       if (path.basename(params.remoteDir) === "agent") {
@@ -276,8 +358,8 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
       async (winner) => {
         const readOnlyLoser = winner === "edited";
         const fixture = await createFixture();
-        const firstGate = barrier();
-        const secondGate = barrier();
+        const firstGate = createEnteredGate();
+        const secondGate = createEnteredGate();
         const first = await fixture.pausedBackend("first", firstGate);
         const second = await fixture.pausedBackend("second", secondGate, readOnlyLoser);
         const one = run(first);
@@ -314,6 +396,20 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
       },
     );
 
+    it("validates real workspace and agent directories without creating missing paths", async () => {
+      const fixture = await createFixture();
+      const backend = await fixture.createBackend("source one");
+      await run(backend);
+      for (const root of [backend.workdir, path.join(path.dirname(backend.workdir), "agent")]) {
+        const workdir = path.join(root, "src");
+        await fs.mkdir(workdir);
+        await expect(backend.validateWorkdir?.(workdir)).resolves.toBe(await fs.realpath(workdir));
+      }
+      const missing = path.join(backend.workdir, "missing");
+      await expect(backend.validateWorkdir?.(missing)).resolves.toBeNull();
+      await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("adopts existing unmarked remote workspaces without reseeding them", async () => {
       const fixture = await createFixture();
       const backend = await fixture.createBackend("source");
@@ -326,3 +422,94 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
     });
   },
 );
+
+const sessionFor = (
+  root: string,
+  argv = (command: string) => ["/bin/sh", "-c", command],
+  env = process.env,
+) =>
+  createRemoteShellSandboxSession({
+    buildCommand: ({ remoteCommand }) => ({ argv: argv(remoteCommand), env, cwd: root }),
+  });
+
+async function uploadFixture(prefix: string, payload: string | Buffer) {
+  const root = await fs.realpath(tempDirs.make(prefix));
+  const localDir = path.join(root, "local");
+  const remoteDir = path.join(root, "remote");
+  await fs.mkdir(localDir);
+  await fs.writeFile(path.join(localDir, "payload"), payload);
+  return { root, localDir, remoteDir, remoteRootDir: root };
+}
+
+describe.runIf(process.platform !== "win32")("provider-owned remote shell transport", () => {
+  it("keeps uploads, private exec staging, execution, and cleanup behind the command owner", async () => {
+    const payload = Buffer.from([0, 1, 2, 255]);
+    const upload = await uploadFixture("remote-shell-owner-", payload);
+    const { root, localDir, remoteDir } = upload;
+    const claimFile = path.join(root, "claim");
+    const providerFile = path.join(root, "provider.cjs");
+    await fs.writeFile(claimFile, "original");
+    await fs.writeFile(
+      providerFile,
+      `
+      const fs = require("node:fs");
+      const { spawnSync } = require("node:child_process");
+      if (fs.readFileSync(${JSON.stringify(claimFile)}, "utf8") !== "original") {
+        process.stderr.write("provider owner changed");
+        process.exit(42);
+      }
+      if (process.env.PROVIDER_LOCAL_ONLY !== "synthetic-provider-auth") process.exit(43);
+      const child = spawnSync("/bin/sh", ["-c", process.argv[2]], {
+        stdio: "inherit", env: { PATH: process.env.PATH },
+      });
+      process.exit(child.status ?? 1);
+    `,
+    );
+    const session = sessionFor(root, (command) => [process.execPath, providerFile, command], {
+      ...process.env,
+      PROVIDER_LOCAL_ONLY: "synthetic-provider-auth",
+    });
+    await session.uploadDirectory(upload);
+    expect(await fs.readFile(path.join(remoteDir, "payload"))).toEqual(payload);
+
+    const prepared = await session.prepareExec({
+      remoteCommand: 'printf "%s:%s" "$EXEC_PRIVATE" "${PROVIDER_LOCAL_ONLY-unset}"',
+      env: { EXEC_PRIVATE: "synthetic-exec-private" },
+    });
+    try {
+      expect(prepared.argv.join(" ")).not.toContain("synthetic-exec-private");
+      expect(prepared.cwd).toBe(root);
+      await fs.writeFile(claimFile, "transferred");
+      const execute = (reject = true) =>
+        spawnCommand(prepared.argv, {
+          baseEnv: prepared.env,
+          cwd: prepared.cwd,
+          reject,
+        });
+      const refused = await execute(false);
+      expect(refused).toMatchObject({ exitCode: 42, stdout: "" });
+      await fs.writeFile(path.join(localDir, "payload"), "changed after claim transfer");
+      await expect(session.uploadDirectory(upload)).rejects.toThrow();
+      expect(await fs.readFile(path.join(remoteDir, "payload"))).toEqual(payload);
+      await fs.writeFile(claimFile, "original");
+      await expect(execute()).resolves.toMatchObject({ stdout: "synthetic-exec-private:unset" });
+    } finally {
+      await fs.writeFile(claimFile, "original");
+      await prepared.cleanup();
+      await session.dispose();
+    }
+  });
+
+  it("rejects an upload when the remote shell dies from a signal without a status", async () => {
+    const upload = await uploadFixture("remote-shell-signal-", "payload-bytes");
+    const session = sessionFor(upload.root, () => [
+      "/bin/sh",
+      "-c",
+      'cat >/dev/null; kill -TERM "$$"',
+    ]);
+    await expect(session.uploadDirectory(upload)).rejects.toThrow(
+      "remote exited from signal SIGTERM",
+    );
+    await session.dispose();
+  });
+});

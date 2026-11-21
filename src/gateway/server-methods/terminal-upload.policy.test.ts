@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { stageTerminalUpload } from "../../infra/terminal-file-upload.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -12,6 +13,7 @@ import {
   expectTerminalOpen,
   makeFakePty,
 } from "../terminal/session-manager.test-helpers.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { terminalUploadHandlers } from "./terminal-upload.js";
 
 vi.mock("node:fs/promises", async (original) => {
@@ -59,17 +61,7 @@ it.each(["queued", "before-write"])("rechecks upload policy at %s", async (phase
     terminalSessions: manager,
     isTerminalEnabled: () => true,
   });
-  const respond = vi.fn();
   const params = { sessionId: opened.sessionId, name: "client.bin", contentBase64: "AQID" };
-  const invoke = () =>
-    upload({
-      req: { type: "req", id: "upload", method: "terminal.upload", params },
-      params,
-      context,
-      respond,
-      isWebchatConnect: () => false,
-      client: { connId: "conn-1", connect },
-    });
   const agent =
     phase === "queued"
       ? stageTerminalUpload({ name: "agent.bin", contentBase64: "BAUG" }, { tempRoot: root })
@@ -77,7 +69,10 @@ it.each(["queued", "before-write"])("rechecks upload policy at %s", async (phase
   if (agent) {
     await entered.promise;
   }
-  const pending = Promise.resolve(invoke());
+  const pending = callAgentHandler(upload, "terminal.upload", params, {
+    context,
+    client: { connId: "conn-1", connect },
+  });
   try {
     if (!agent) {
       await Promise.race([
@@ -89,12 +84,12 @@ it.each(["queued", "before-write"])("rechecks upload policy at %s", async (phase
     }
     config = { gateway: { uploads: { enabled: false } } };
     release.resolve();
-    await pending;
+    const respond = await pending;
     const disabled = { code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } };
     expect.soft(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(disabled));
     const writes = vi.mocked(fs.writeFile).mock.calls;
     expect.soft(writes.filter(([target]) => isClientFile(target))).toEqual([]);
-    const files = await fs.readdir(root, { recursive: true });
+    const files = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.relativePath);
     expect.soft(files.filter((file) => file.endsWith("client.bin"))).toEqual([]);
     if (agent) {
       expect(await fs.readFile((await agent).path)).toEqual(Buffer.from([4, 5, 6]));

@@ -8,6 +8,7 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import { listCodexAppServerModels } from "./models.js";
 import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import {
@@ -51,7 +52,11 @@ export function registerSharedClientIdleTests() {
     "releasing",
     "background",
   ] as const)("idle retirement waits for %s ownership to settle", async (kind) => {
-    const { client, send } = await startIdleClient();
+    vi.useFakeTimers();
+    const harness = createIdleLifecycleHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const { send } = harness;
+    const client = await getLeasedSharedCodexAppServerClient();
     const releaseGate = createDeferred<void>();
     const failure = vi.fn();
     let finish: () => Promise<unknown>;
@@ -102,29 +107,11 @@ export function registerSharedClientIdleTests() {
   });
 }
 
-async function startIdleClient() {
-  vi.useFakeTimers();
-  const harness = createIdleLifecycleHarness();
-  vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-  return { ...harness, client: await getLeasedSharedCodexAppServerClient() };
-}
-
 function createIdleLifecycleHarness() {
   const responses = {
     initialize: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
     "model/list": {
-      data: [
-        {
-          id: "fixture-model",
-          model: "fixture-model",
-          displayName: "Fixture",
-          description: "Fixture",
-          hidden: false,
-          isDefault: true,
-          supportedReasoningEfforts: [],
-          defaultReasoningEffort: "medium",
-        },
-      ],
+      data: [createModelFixture("fixture-model")],
     },
     "thread/unsubscribe": {},
   };

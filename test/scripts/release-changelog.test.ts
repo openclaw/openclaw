@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, test } from "vitest";
@@ -52,28 +52,6 @@ test("mechanical split preserves every section and authentic record, including C
     assert.equal(f.load("2026.8.1").record, null);
     assert.deepEqual(changelog.checkChangelogLayout(f), { releases: 2, records: 1 });
   }
-});
-
-test("legacy and split immutable Git reads are independent of working-tree changes", () => {
-  const f = fixture();
-  const identity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"];
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", f.rootDir, ...identity, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  git("init", "-q");
-  git("add", "CHANGELOG.md");
-  git("commit", "-qm", "legacy");
-  const legacy = git("rev-parse", "HEAD");
-  changelog.splitChangelog(f);
-  git("add", "CHANGELOG.md", "CHANGELOG");
-  git("commit", "-qm", "split");
-  const split = git("rev-parse", "HEAD");
-  f.write(entry, "broken");
-  assert.equal(f.load("2026.9.4", legacy).layout, "legacy");
-  assert.equal(f.load("2026.9.4", split).section, current);
-  assert.throws(() => f.load(), /mismatched/u);
 });
 
 test("duplicate historical sections are retained together but never silently selected", () => {
@@ -211,32 +189,20 @@ describe("release docs mirrors", () => {
 
   it("keeps inline patch disclosures in the same tight list through the native CLI", () => {
     const f = mirrorFixture();
+    f.write(recordFile, "Frozen original record.\n");
     const input = [
       "# Release title",
-      "",
       `AI agents and tools can read these release notes as [plain Markdown](https://raw.githubusercontent.com/openclaw/openclaw/main/CHANGELOG/${version}.md).`,
-      "",
       "## Messaging",
-      "",
       "- First reader-facing fix.",
-      "",
-      '  <details class="release-source-inline release-source-toggle" id="first">',
-      "  <summary>More details</summary>",
-      "",
+      '  <details class="release-source-inline release-source-toggle" id="first">\n  <summary>More details</summary>',
       "  [#42](https://github.com/openclaw/openclaw/pull/42). Thanks to [@alice](https://github.com/alice).",
-      "",
       "  </details>",
-      "",
       "- Second reader-facing fix.",
-      "",
-      '  <details class="release-source-toggle  release-source-inline">',
-      "  <summary>More details</summary>",
-      "",
+      '  <details class="release-source-toggle  release-source-inline">\n  <summary>More details</summary>',
       "  [Guide](/channels/example) and `literal` remain in order.",
-      "",
-      "  </details>",
-      "",
-    ].join("\n");
+      "  </details>\n",
+    ].join("\n\n");
     f.write(source, input);
     const output = f.file(`CHANGELOG/${version}.md`);
     const rendered = f.cli("--version", version, "--source", source, "--output", output);
@@ -244,14 +210,10 @@ describe("release docs mirrors", () => {
     const mirror = fs.readFileSync(output, "utf8");
     expect(mirror.slice(mirror.indexOf("\n\n") + 2)).toBe(
       [
-        `## ${version}`,
-        "",
-        "### Release title",
-        "",
-        `For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).`,
-        "",
-        "#### Messaging",
-        "",
+        `## ${version}\n`,
+        "### Release title\n",
+        `For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).\n`,
+        "#### Messaging\n",
         "- First reader-facing fix.",
         "  [#42](https://github.com/openclaw/openclaw/pull/42). Thanks to [@alice](https://github.com/alice).",
         "- Second reader-facing fix.",
@@ -262,48 +224,34 @@ describe("release docs mirrors", () => {
     expect(f.read(source)).toBe(input);
     const checked = f.cli("--check", "--version", version);
     expect(checked.status, checked.stderr).toBe(0);
+    expect(
+      f.cli("--version", version, "--source", source, "--output", f.file(recordFile)).status,
+    ).toBe(1);
+    expect(f.read(recordFile)).toBe("Frozen original record.\n");
+    fs.appendFileSync(f.file(source), "Approved docs revision.\n");
+    expect(f.cli("--check").status).toBe(1);
   });
 
   it("preserves intentional detail paragraphs, literal code and non-inline disclosures", () => {
     const literal = [
-      "  ```md",
-      '  <details class="release-source-inline">',
-      "  <summary>More details</summary>",
-      "",
-      "  - Literal example.",
-      "  </details>",
-      "  ```",
+      '  ```md\n  <details class="release-source-inline">\n  <summary>More details</summary>\n',
+      "  - Literal example.\n  </details>\n  ```",
     ].join("\n");
     const input = [
       "# Release title",
-      "",
       "- A fix.",
-      "",
-      '  <details class="release-source-toggle release-source-inline">',
-      "  <summary>More details</summary>",
-      "",
+      '  <details class="release-source-toggle release-source-inline">\n  <summary>More details</summary>',
       "      Initial indented code.",
-      "",
       "  First supporting paragraph.",
-      "",
       "  Second supporting paragraph.",
-      "",
       literal,
-      "",
       "  </details>",
-      "",
       "      - Literal list marker in indented code.",
-      "",
       "## Supporting updates",
-      "",
-      '<details class="release-source-toggle release-source-inline-extra">',
-      "<summary>Full sources</summary>",
-      "",
+      '<details class="release-source-toggle release-source-inline-extra">\n<summary>Full sources</summary>',
       "Unchanged standalone detail.",
-      "",
-      "</details>",
-      "",
-    ].join("\n");
+      "</details>\n",
+    ].join("\n\n");
     const result = docs.flattenReleaseDocs(input, source);
     const codeBlocks = createDocsMarkdown({ html: false })
       .parse(result, {})
@@ -369,29 +317,5 @@ describe("release docs mirrors", () => {
     }
     fs.symlinkSync(f.file("../outside.md"), f.file("docs/escape.md"));
     expect(() => f.render(["docs/escape.md"])).toThrow();
-  });
-
-  it("runs the rendering and checking CLI without touching frozen records or docs", () => {
-    const f = mirrorFixture();
-    const record = f.file(`CHANGELOG/records/${version}.md`);
-    fs.writeFileSync(record, "Frozen original record.\n");
-    const original = f.read(source);
-    const output = f.file(`CHANGELOG/${version}.md`);
-    const render = (destination: string) =>
-      f.cli("--version", version, "--source", source, "--output", destination);
-    expect(render(output).status).toBe(0);
-    const rendered = fs.readFileSync(output, "utf8");
-    expect(rendered.slice(rendered.indexOf("\n\n") + 2)).toBe(
-      `## ${version}\n\n\n### Release title\n\nFor formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).\n\nExact prose.\n\n`,
-    );
-    expect(rendered).not.toContain("raw.githubusercontent.com");
-    const check = f.cli("--check");
-    expect(check.status, check.stderr).toBe(0);
-    expect(check.stdout).toContain("Checked 1 docs mirror(s)");
-    expect(render(record).status).toBe(1);
-    expect(fs.readFileSync(record, "utf8")).toBe("Frozen original record.\n");
-    expect(f.read(source)).toEqual(original);
-    fs.appendFileSync(f.file(source), "Approved docs revision.\n");
-    expect(f.cli("--check").status).toBe(1);
   });
 });

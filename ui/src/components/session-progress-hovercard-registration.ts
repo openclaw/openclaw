@@ -3,9 +3,11 @@ import {
   LazyHovercardBootstrap,
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
-import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
+import {
+  installSessionTitleRegistrar,
+  sessionProgressHoverTargetFromEvent,
+} from "./session-progress-hovercard-target.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
-import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 
@@ -17,18 +19,21 @@ const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   },
 });
 
-installSessionTitleRegistrar((target, label) => {
+installSessionTitleRegistrar((target, label, display) => {
   let active = true;
   let release: (() => void) | undefined;
   // The registrar promise lets producers finish mounting before this lookup.
   const provider = bootstrap.providerFor(target);
   if (provider) {
-    void bootstrap.define().then(async () => {
-      await provider.updateComplete;
-      if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
-        release = provider.registerSessionTitleTarget(target, label);
-      }
-    });
+    void bootstrap
+      .define()
+      .then(async () => {
+        await provider.updateComplete;
+        if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
+          release = provider.registerSessionTitleTarget(target, label, display);
+        }
+      })
+      .catch(() => undefined);
   }
   return () => {
     active = false;
@@ -38,9 +43,9 @@ installSessionTitleRegistrar((target, label) => {
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
+    // Touch pointers are rejected by sessionProgressHoverTargetFromEvent below.
     trigger === "pointer" &&
-    ((event instanceof PointerEvent && event.pointerType === "touch") ||
-      !globalThis.matchMedia?.("(hover: hover)").matches)
+    !globalThis.matchMedia?.("(hover: hover)").matches
   ) {
     return;
   }
@@ -65,4 +70,5 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   );
 }
 
-bootstrap.install(activateHovercard);
+// The native link/title remains usable when optional hovercard code cannot load.
+bootstrap.install((event, trigger) => activateHovercard(event, trigger).catch(() => undefined));

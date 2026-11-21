@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createChangedNodeTestShards as changedTests,
+  createNodeWorkerE2eTestShards,
   hasControlUiPerformanceAffectingChange,
   hasPromptSnapshotAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
@@ -32,7 +33,10 @@ import {
   isReleaseOnlyRuntimeTestFile,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
-import { createNativeSoloTimingKey } from "../../scripts/lib/ci-test-timings-schema.mts";
+import {
+  createNativeSoloTimingKey,
+  type CiTimingProfile,
+} from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -49,53 +53,29 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createAgentsCoreIsolatedVitestConfig } from "../vitest/vitest.agents-core-isolated.config.ts";
-import { createAgentsCoreVitestConfig } from "../vitest/vitest.agents-core.config.ts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
-import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.config.ts";
-import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
 import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
+import { createBoundaryVitestConfig } from "../vitest/vitest.boundary.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
-import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
-import { diagnosticForksPool } from "../vitest/vitest.forks-pool.ts";
-import { createGatewayClientVitestConfig } from "../vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "../vitest/vitest.gateway-core.config.ts";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "../vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
-import {
-  gatewayDatabaseWorkerTestFiles,
-  gatewayServerSerialTestFiles,
-  isGatewayServerTestFile,
-} from "../vitest/vitest.gateway-server-paths.mjs";
+import { gatewayServerSerialTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
-import { createGatewayVitestConfig } from "../vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
-import { createPluginSdkLightVitestConfig } from "../vitest/vitest.plugin-sdk-light.config.ts";
-import { createPluginSdkVitestConfig } from "../vitest/vitest.plugin-sdk.config.ts";
-import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config.config.ts";
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
-import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
-import {
-  uiE2ePrebuiltParallelTestFiles,
-  uiE2eRealGatewayTestFiles,
-} from "../vitest/vitest.ui-paths.mjs";
-import {
-  getUnitFastIsolatedTestFiles,
-  getUnitFastTimerTestFiles,
-} from "../vitest/vitest.unit-fast-paths.mjs";
-import { createUnitFastVitestConfig } from "../vitest/vitest.unit-fast.config.ts";
-import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.ts";
-import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
+import * as uiPaths from "../vitest/vitest.ui-paths.mjs";
+import * as unitFastPaths from "../vitest/vitest.unit-fast-paths.mjs";
 import {
   createChangedNodeTestShards as changedOwnerTests,
   selectedFiles,
@@ -109,6 +89,8 @@ import {
 } from "./ci-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { uiE2eRealGatewayTestFiles } = uiPaths;
+const { getUnitFastIsolatedTestFiles, getUnitFastTimerTestFiles } = unitFastPaths;
 
 function required<T>(value: T | null | undefined) {
   return expectDefined(value, "required test fixture");
@@ -126,6 +108,7 @@ const sumSeconds = (jobs: readonly CompactNodeTestShard[]) =>
 const sumOptionalSeconds = (jobs: readonly CompactNodeTestShard[]) =>
   jobs.reduce((sum, job) => sum + (job.predictedSeconds ?? 0), 0);
 const configPath = (name: string) => `test/vitest/vitest.${name}.config.ts`;
+const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 function planFiles(jobs: readonly CompactNodeTestShard[], patterns = optionalPatterns) {
   return jobs.flatMap(jobGroups).flatMap(patterns);
 }
@@ -228,6 +211,7 @@ const fixtureModuleIds = {
   fast: "../vitest/vitest.unit-fast-paths.mjs",
   database: "../vitest/vitest.database-worker-core-paths.mjs",
   inventory: "../../scripts/lib/ci-node-test-inventory.mts",
+  ui: "../vitest/vitest.ui-paths.mjs",
 } as const;
 type FixtureModules = {
   shards: typeof import("../vitest/vitest.test-shards.mjs");
@@ -238,6 +222,7 @@ type FixtureModules = {
   fast: typeof import("../vitest/vitest.unit-fast-paths.mjs");
   database: typeof import("../vitest/vitest.database-worker-core-paths.mjs");
   inventory: typeof nodeTestInventory;
+  ui: typeof uiPaths;
 };
 type FixtureOwner = keyof FixtureModules;
 function mockFixture<K extends FixtureOwner>(
@@ -252,7 +237,7 @@ function mockFixture<K extends FixtureOwner>(
 }
 
 function resetPlanMocks(extraMocks: readonly FixtureOwner[]) {
-  for (const owner of [...extraMocks, "timings", "files", "shards"] as const) {
+  for (const owner of [...extraMocks, "timings", "files", "shards", "ui", "fast"] as const) {
     vi.doUnmock(fixtureModuleIds[owner]);
   }
   vi.resetModules();
@@ -273,6 +258,9 @@ async function withPlanModule<T>(
 }
 
 function mockPlanShards(shards: () => typeof fullSuiteVitestShards) {
+  // Synthetic packing fixtures reuse actual inventories instead of rediscovering unrelated files.
+  mockFixture("ui", () => uiPaths);
+  mockFixture("fast", () => unitFastPaths);
   mockFixture("shards", async (original) => ({
     ...(await original()),
     fullSuiteVitestShards: shards(),
@@ -291,6 +279,17 @@ function mockPlanTimings(read: () => Readonly<Record<string, number>>) {
 function mockUnbuiltRuntime() {
   mockOriginal("build", { resolveVitestPretestBuildMode: () => undefined });
 }
+async function mockFastPaths(files: string[] = []) {
+  const original = await vi.importActual<FixtureModules["fast"]>(fixtureModuleIds.fast);
+  vi.resetModules();
+  mockFixture("fast", () => ({
+    ...original,
+    getUnitFastTestFiles: () => [...files],
+    getUnitFastIsolatedTestFiles: () => [],
+    getUnitFastTimerTestFiles: () => [],
+    getUnitFastTestFilesForIncludePatterns: () => [...files],
+  }));
+}
 
 describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";
@@ -298,6 +297,7 @@ describe("Control UI release-only inventories", () => {
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
   const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
   const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
+  const mantis = "ui/src/e2e/mantis-chat-proof.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const reconnectContinuity = "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts";
@@ -340,65 +340,154 @@ describe("Control UI release-only inventories", () => {
     );
     // Array equality also catches duplicate ownership between jobs or desktop proof.
     expectSameEntries(files, expectedFiles);
-    // Desktop and serial proof must not acquire a second parallel-fixture phase.
-    expect(shards[1]?.groups[0]?.includePatterns.toSorted()).toEqual(
-      expectedFiles.filter((file) => uiE2ePrebuiltParallelTestFiles.includes(file)).toSorted(),
-    );
   }
 
-  it("retains PR-exempt entries while omitting release-only UI matrices", () => {
-    const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
+  it("balances serial and qualified real-Gateway work around desktop proof", () => {
+    const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
+    const serial = [
+      "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+      "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+      "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
+    ];
+    const parallel = [
+      "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
+      "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+    ];
+    const fileSeconds: Record<string, number> = {
+      [desktop]: 80,
+      [serial[0]!]: 60,
+      [serial[1]!]: 50,
+      [serial[2]!]: 10,
+    };
+    for (const file of parallel) {
+      fileSeconds[file] = 100;
+    }
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings").mockReturnValue({
+      fileSeconds,
+      perFileOverheadSeconds: 0,
+    });
+    onTestFinished(() => timings.mockRestore());
+    const selected = [desktop, ...serial, ...parallel];
+    const shards = createUiRealGatewayTestShards([
+      { configs: [configPath("ui-e2e")], shard_name: "ui", includePatterns: selected },
+    ]);
+    expectSameEntries(
+      shards.flatMap((shard) => [
+        ...(shard.run_desktop ? [desktop] : []),
+        ...shard.groups.flatMap((group) => group.includePatterns),
+      ]),
+      selected,
+    );
+    const first = shards[0]!;
+    expect(first.run_desktop).toBe(true);
+    const work = shards.map((shard) => {
+      const files = shard.groups[0]!.includePatterns;
+      const serialSeconds = files
+        .filter((file) => serial.includes(file))
+        .reduce((sum, file) => sum + fileSeconds[file]!, 0);
+      // Whole 100s files occupy two workers; an odd final file still costs 100s.
+      const parallelWaves = Math.ceil(files.filter((file) => parallel.includes(file)).length / 2);
+      return Math.max(shard.run_desktop ? 80 : 0, serialSeconds) + parallelWaves * 100;
+    });
+    expect(Math.max(...work)).toBeLessThanOrEqual(190);
+  });
+
+  it.each([
+    { name: "disabled proofs", env: {}, activeIndex: -1 },
+    { name: "empty steering variant", env: { OPENCLAW_STEER_CUSTODY_PROOF: "" }, activeIndex: -1 },
+    { name: "enabled steering", env: { OPENCLAW_STEER_CUSTODY_PROOF: "fixed" }, activeIndex: 1 },
+    {
+      name: "invalid nonempty steering variant",
+      env: { OPENCLAW_STEER_CUSTODY_PROOF: "invalid" },
+      activeIndex: 1,
+    },
+    { name: "disabled DeepSeek flag", env: { OPENCLAW_DEEPSEEK_UI_LIVE: "0" }, activeIndex: -1 },
+    {
+      name: "enabled DeepSeek without preflight credentials",
+      env: { OPENCLAW_DEEPSEEK_UI_LIVE: "1" },
+      activeIndex: 0,
+    },
+  ])("prices $name without removing selected opt-in files", ({ env, activeIndex }) => {
+    const optInFiles = [
+      "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
+    ];
+    const parallel = [
+      "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
+      "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+    ];
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings").mockReturnValue({
+      // Disabled proofs must ignore even a retained timing from an opted-in run.
+      fileSeconds: Object.fromEntries([
+        ...optInFiles.map((file) => [file, 60]),
+        ...parallel.map((file) => [file, 20]),
+      ]),
+      perFileOverheadSeconds: 1,
+    });
+    onTestFinished(() => timings.mockRestore());
+    const selected = [...optInFiles, ...parallel];
+    const shards = createUiRealGatewayTestShards(
+      [{ configs: [configPath("ui-e2e")], shard_name: "ui", includePatterns: selected }],
+      env,
+    );
+    expectSameEntries(
+      shards.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns)),
+      selected,
+    );
+    const work = shards.map((shard) => {
+      const files = shard.groups[0]!.includePatterns;
+      const serialSeconds = optInFiles.reduce(
+        (sum, file, index) => sum + (files.includes(file) ? (index === activeIndex ? 61 : 1) : 0),
+        0,
+      );
+      const parallelWaves = Math.ceil(files.filter((file) => parallel.includes(file)).length / 2);
+      return serialSeconds + parallelWaves * 21;
+    });
+    expect(Math.max(...work)).toBeLessThanOrEqual(activeIndex < 0 ? 23 : 61);
+    expect(shards.every((shard) => !shard.run_desktop)).toBe(true);
+  });
+
+  it.each([
+    { name: "automatic selection", full: false, edited: [] },
+    { name: "full automatic selection", full: true, edited: [] },
+    {
+      name: "directly edited release matrices",
+      full: false,
+      edited: [entry, staleBuild, teamScale, mantis, ...releaseOnlyRealGateway],
+    },
+    {
+      name: "full selection with one edited release suite",
+      full: true,
+      edited: [automationManagement],
+    },
+  ])("retains PR exemptions and direct edits in $name", ({ full, edited }) => {
+    const groups = createUiTestShardGroups({
+      includeReleaseOnlyTests: false,
+      includeReleaseOnlyE2eTests: full,
+      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale, mantis] : undefined,
+      changedPaths: [...edited, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
+    });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
-    expect(groups.e2e[0]?.includePatterns).toContain(embed);
-    expect(groups.e2e[0]?.includePatterns).toContain(entry);
-    expect(groups.e2e[0]?.includePatterns).not.toContain(staleBuild);
-    expect(groups.e2e[0]?.includePatterns).not.toContain(teamScale);
-    expect(
-      uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
-    ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
     expect(groups.ui[0]?.includePatterns).toContain(
       "ui/src/components/app-sidebar-row-identity.browser.test.ts",
     );
     expect(groups.ui[0]?.includePatterns?.some((file) => file.endsWith(".e2e.test.ts"))).toBe(
       false,
     );
+    for (const file of [embed, entry]) {
+      expect(groups.e2e[0]?.includePatterns).toContain(file);
+    }
+    for (const file of [staleBuild, teamScale, mantis]) {
+      expect(groups.e2e[0]?.includePatterns?.includes(file)).toBe(edited.includes(file));
+    }
     expectRealGatewayCoverage(
       groups.e2e,
-      uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)),
-    );
-  });
-
-  it("retains directly edited release matrices alongside PR-exempt entries", () => {
-    const options = {
-      includeReleaseOnlyTests: false,
-      changedPaths: [
-        entry,
-        staleBuild,
-        teamScale,
-        ...releaseOnlyRealGateway,
-        "ui/src/components/app-sidebar.ts",
-        "ui/src/e2e",
-      ],
-    };
-    const groups = createUiTestShardGroups(options);
-    expect(groups.e2e[0]?.includePatterns).toContain(entry);
-    expect(groups.e2e[0]?.includePatterns).toContain(staleBuild);
-    expect(groups.e2e[0]?.includePatterns).toContain(teamScale);
-    expect(
-      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
-    ).toEqual(
-      uiE2eRealGatewayTestFiles.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
-    );
-    expect(groups.e2e[0]?.includePatterns).toContain(embed);
-    expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
-    expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
-    expectRealGatewayCoverage(
-      createUiTestShardGroups({
-        includeReleaseOnlyTests: false,
-        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
-      }).e2e,
       uiE2eRealGatewayTestFiles.filter(
-        (file) => !releaseOnlyRealGateway.has(file) || file === automationManagement,
+        (file) => !releaseOnlyRealGateway.has(file) || edited.includes(file),
       ),
     );
   });
@@ -410,6 +499,13 @@ describe("Control UI release-only inventories", () => {
       e2e: [{ configs: [configPath("ui-e2e")], shard_name: configPath("ui-e2e") }],
     });
     expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
+    expectRealGatewayCoverage(
+      createUiTestShardGroups({
+        includeReleaseOnlyE2eTests: true,
+        uiE2eFiles: [entry],
+      }).e2e,
+      uiE2eRealGatewayTestFiles,
+    );
   });
 });
 
@@ -464,8 +560,7 @@ describe("startup corpus coverage", () => {
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 const RELEASE_REPORT_OWNER_TEST = "test/scripts/vitest-report-owner.test.ts";
 const PRIVATE_QA_TOOLING_TEST = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
-const MEASURED_STORAGE_RECOVERY_TEST =
-  "src/agents/main-session-recovery/main-session-restart-recovery.test.ts";
+const MEASURED_STORAGE_WORK_TEST = "src/system-agent/setup-inference-activate.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
@@ -538,9 +633,14 @@ function mockPackingEntries(entries: readonly PackingEntry[], timingName = (name
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it.each([false, true])(
-    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
-    (extraGroup) => {
+  it.each(
+    ["hybrid", "github"].flatMap((runnerBackend) =>
+      [false, true].map((extraGroup) => ({ runnerBackend, extraGroup })),
+    ),
+  )(
+    "keeps the scheduled main inventory within its reserved compact capacity ($runnerBackend, extra group: $extraGroup)",
+    ({ runnerBackend, extraGroup }) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
       const original = fullSuiteVitestShards.slice();
       if (extraGroup) {
         // A new isolated group must not exhaust main's capacity on arrival.
@@ -553,22 +653,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
       }
       try {
-        const jobs = bundleTests({
+        const workerRows = createNodeWorkerE2eTestShards();
+        const compactRows = bundleTests({
           includeProofTests: true,
           includeReleaseOnlyPluginShards: false,
           includeReleaseOnlyToolingShards: true,
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: true,
           compactMode: "pull-request",
-          compactNodeJobCap: 76,
+          compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
-          runnerBackend: "hybrid",
+          runnerBackend,
         });
-        // Main's 77 Node rows reserve one for the separate worker-E2E owner.
-        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
-        expect(jobs.length).toBeLessThanOrEqual(78);
+        const jobs = [...compactRows, ...workerRows];
+        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+        expect(jobs.length).toBeLessThanOrEqual(79);
         expect(
-          jobs
+          compactRows
             .flatMap(jobGroups)
             .filter((group) => group.shard_name === "synthetic-capacity-growth"),
         ).toHaveLength(extraGroup ? 1 : 0);
@@ -1186,10 +1287,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("discovers only tooling files for a cold precise tooling plan", () => {
     const result = spawnNodeEvalSync(`
+      import childProcess from "node:child_process";
       import fs from "node:fs";
       import path from "node:path";
       import { syncBuiltinESMExports } from "node:module";
       let sourceReads = 0;
+      let fullInventoryReads = 0;
+      const spawnSync = childProcess.spawnSync;
+      childProcess.spawnSync = function(command, args, ...options) {
+        if (command === "git" && args?.[0] === "ls-files" && !args.includes("--")) fullInventoryReads += 1;
+        return spawnSync.call(this, command, args, ...options);
+      };
       const readFileSync = fs.readFileSync;
       fs.readFileSync = function(file, ...args) {
         const relative = path.relative(process.cwd(), String(file)).replaceAll("\\\\", "/");
@@ -1206,6 +1314,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       console.log(JSON.stringify({
         importReads,
         sourceReads,
+        fullInventoryReads,
         distOwners: plan?.filter((shard) => shard.requiresDist).map((shard) => shard.groups.flatMap((group) => group.configs)).flat().sort(),
         selected: plan?.filter((shard) => !shard.requiresDist).flatMap((shard) => shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? []).sort(),
       }));
@@ -1214,6 +1323,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(JSON.parse(result.stdout)).toEqual({
       importReads: 0,
       sourceReads: 0,
+      fullInventoryReads: 0,
       distOwners: [],
       selected: [
         "test/scripts/managed-child-process.test.ts",
@@ -1252,7 +1362,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           file === pricedFile ? 53 : fileSeconds(file),
         );
       }
-      const timings: Record<"blacksmith" | "github", Record<string, number>> = {
+      const timings: Record<CiTimingProfile, Record<string, number>> = {
         blacksmith: indivisible
           ? {
               "agentic-agents-embedded-base-1": 66,
@@ -1265,6 +1375,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             }
           : { [owner]: 120 },
         github: { [owner]: 160 },
+        boat: {},
       };
       spyTimings().mockImplementation((profile) => timings[profile]);
       vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
@@ -1325,18 +1436,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const buildMode = vi.fn<typeof buildPrerequisites.resolveVitestPretestBuildMode>(
         () => undefined,
       );
-      const unitFastPaths = await vi.importActual<
-        typeof import("../vitest/vitest.unit-fast-paths.mjs")
-      >("../vitest/vitest.unit-fast-paths.mjs");
-      vi.resetModules();
-      mockFixture("fast", () => ({
-        ...unitFastPaths,
-        getUnitFastTestFiles: () => [fastModel],
-        getUnitFastIsolatedTestFiles: () => [],
-        getUnitFastTimerTestFiles: () => [],
-        getUnitFastTestFilesForIncludePatterns: () => [fastModel],
-      }));
       mockPlanShards(() => [fixtureShard("agentic", [config], configPath("full-agentic"))]);
+      await mockFastPaths([fastModel]);
       mockTrackedFiles((root: string) => (root === "src/agents" ? files : []));
       mockPlanTimings(() => seconds);
       mockFixture("metadata", () => ({
@@ -1374,7 +1475,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(predicted(measured)).toBe(
         runnerBackend === "blacksmith" ? 240 : runnerBackend === "hybrid" ? 435 : 440,
       );
-      expectPlanFiles(measured, files);
+      expectPlanFiles(
+        measured,
+        files.filter((file) => file !== e2eModel && file !== fastModel),
+      );
       expectEvery(
         measured.flatMap(jobGroups).filter((group) => group.shard_name.startsWith(models)),
         (group) => group.timing_key?.startsWith(`${models}-parallel`),
@@ -1384,13 +1488,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .flatMap(jobGroups)
           .filter((group) => group.shard_name.startsWith(models));
         expect(modelGroups).toHaveLength(2);
-        expect(
-          modelGroups.map(
-            (group) =>
-              group.includePatterns?.filter((file) => file !== e2eModel && file !== fastModel)
-                .length,
-          ),
-        ).toEqual([1, 1]);
+        expect(modelGroups.map((group) => group.includePatterns?.length)).toEqual([1, 1]);
         modelGroups.forEach((group, index) => {
           seconds[group.timing_key!] = index === 0 ? 180 : 190;
         });
@@ -1479,9 +1577,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it.each(["hybrid", "github"])(
-    "gates Gateway method workers without changing complete coverage (%s)",
-    (runnerBackend) => {
+  it.each([
+    { runnerBackend: "hybrid", compactMode: "push" as const },
+    { runnerBackend: "github", compactMode: "push" as const },
+    { runnerBackend: "github", compactMode: "pull-request" as const },
+  ])(
+    "bounds Gateway method files and workers without losing coverage ($runnerBackend/$compactMode)",
+    ({ runnerBackend, compactMode }) => {
       const owner = "agentic-gateway-methods";
       const configs = new Set([
         configPath("gateway-methods"),
@@ -1494,13 +1596,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
 
       const jobs = bundleTests({
-        compactMode: "push",
+        compactMode,
         runnerBackend,
         includeReleaseOnlyPluginShards: false,
         includeReleaseOnlyRuntimeTests: true,
       });
       const groups = jobs.flatMap(jobGroups);
       expect(groups.length).toBeGreaterThan(0);
+      if (runnerBackend === "github") {
+        expectEvery(groups, (group) => requiredPatterns(group).length <= 96);
+      }
       expectSameEntries(groups.flatMap(optionalPatterns), [
         ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
         ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
@@ -1563,9 +1668,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
     useFixtureProjects((candidate) => candidate === config);
 
-    let overlays: Record<"blacksmith" | "github", Readonly<Record<string, number>>> = {
+    let overlays: Record<CiTimingProfile, Readonly<Record<string, number>>> = {
       blacksmith: { [owner]: 165 },
       github: { [owner]: 253 },
+      boat: {},
     };
     spyTimings().mockImplementation((profile) => overlays[profile]);
     const options = compactOptions("hybrid", "pull-request");
@@ -1607,6 +1713,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const partialA = swappedGeneration(0, 1);
     const partialB = swappedGeneration(2, 3);
     overlays = {
+      boat: {},
       github: { [owner]: 100 },
       blacksmith: {
         [owner]: 100,
@@ -1742,7 +1849,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap(jobGroups)
         .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner);
     const inherited = select();
-    expect(inherited).toHaveLength(2);
+    expect(inherited).toHaveLength(4);
     expectEvery(inherited, (group) => workers(group) === "2");
     const parallelParent = required(
       parseCompactSplitTimingKey(inherited[0]!.timing_key!)?.parentShardName,
@@ -1756,16 +1863,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       serialEnv,
     );
     timings[serialGeneration.timingKeys[0]!] = 500;
-    expect(select()).toHaveLength(2);
-    timings[serialGeneration.timingKeys[1]!] = 500;
+    expect(select()).toEqual(inherited);
+    for (const key of serialGeneration.timingKeys) {
+      timings[key] = 250;
+    }
     expect(select()).toHaveLength(4);
     timings[`${owner}-parallel-native-serial`] = 440;
     timings[parallelParent] = 440;
     const measured = select();
-    expect(measured).toHaveLength(3);
+    // Full inventory retains the file bound even when timing permits three groups.
+    expect(measured).toHaveLength(4);
     expectSameEntries(measured.flatMap(requiredPatterns), inherited.flatMap(requiredPatterns));
     const reduced = select(false);
-    expect(reduced).toHaveLength(measured.length);
+    expect(reduced).toHaveLength(3);
     expectSameEntries(
       reduced.flatMap(requiredPatterns),
       measured.flatMap(requiredPatterns).filter((file) => !isReleaseOnlyRuntimeTestFile(file)),
@@ -1964,6 +2074,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     for (const changedPath of [
       "src/auto-reply/reply/new.test.tsx",
       "src/infra/outbound/new.test.ts",
+      "src/media/new.test.ts",
       "test/tsconfig/tsconfig.core.test.messaging.json",
       "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
     ]) {
@@ -1982,7 +2093,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("selects provisioning and closure guards without replacing source test owners", () => {
+  it("limits provisioning to copied inputs while retaining source closure guards", () => {
     const guards = [
       // Provisioning inspects templates through the fork-owned SQLite broker.
       ["test/scripts/pr-worktree-provision.test.ts", configPath("infra")],
@@ -2004,9 +2115,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const newModule = "src/plugins/unrelated-new-plugin.ts";
     const newModuleTargets = resolvePolicyTestTargets([newModule]);
     const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
+    expect(newModuleTargets).not.toContain(guards[0][0]);
+    expect(newModuleTargets).toContain(guards[1][0]);
+    expect(newModuleTargets).toContain("test/scripts/pr-wrapper-source-closure.test.ts");
     for (const [guard] of guards) {
-      expect(newModuleTargets).toContain(guard);
       expect(testOnlyTargets).not.toContain(guard);
+    }
+    for (const changedPath of ["test/setup.ts", "test/vitest/vitest.tooling.config.ts"]) {
+      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(guards[0][0]);
     }
     expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
@@ -2064,6 +2180,37 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(isPolicyTestOwnedPath(lookalike), lookalike).toBe(false);
       expect(resolvePolicyTestTargets([lookalike]), lookalike).toEqual([]);
     }
+  });
+
+  it("keeps full-dispatch Gateway chunks off neighboring hosted rows", () => {
+    const jobs = bundleTests({
+      runnerBackend: "github",
+      compactMode: "pull-request",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+      includeProofTests: true,
+    });
+    expect(jobs.length).toBeLessThanOrEqual(96);
+    const gateway = jobs
+      .flatMap(jobGroups)
+      .filter((group) => /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(group.shard_name));
+    expect(gateway.length).toBeGreaterThan(0);
+    expectEvery(gateway, (group) => requiredPatterns(group).length <= 96);
+    for (const job of jobs) {
+      if (
+        job.groups.some((group) => gateway.includes(group) && requiredPatterns(group).length > 32)
+      ) {
+        expect(job.groups).toHaveLength(1);
+        expect(job.planConcurrency).toBe(1);
+        expect(workers(job.groups[0]!)).toBe("2");
+      }
+    }
+    expectSameEntries(gateway.flatMap(optionalPatterns), [
+      ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
+      ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
+    ]);
   });
 
   it("bounds Gateway cache collections without dropping or repeating owner files", () => {
@@ -2291,11 +2438,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }));
       const options = compactOptions(profile, "push");
       const unmeasured = bundleTests(options);
-      const initialGroup = unmeasured
+      const supportGroups = unmeasured
         .flatMap(jobGroups)
-        .find((group) => group.shard_name === shardName);
+        .filter((group) => group.shard_name.startsWith("agentic-agents-support-hosted-"));
+      const initialGroup = supportGroups.find((group) => group.shard_name === shardName);
       expect(initialGroup?.timing_key).toMatch(
-        /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
+        new RegExp(
+          `^agentic-agents-support#selector-.+#generation-.+#part-2-of-${supportGroups.length}#include-.+$`,
+          "u",
+        ),
       );
       const timingKey = initialGroup!.timing_key!;
       directTimings = { [timingKey]: 1 };
@@ -2350,60 +2501,72 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it.each([
-    { companion: false, nativeSample: false },
-    { companion: true, nativeSample: true },
-  ])(
-    "prices storage work without changing placement (companion: $companion, native sample: $nativeSample)",
-    async ({ companion, nativeSample }) => {
+  it.each([false, true])(
+    "prices storage work without changing placement (companion: %s)",
+    async (companion) => {
       const config = configPath("infra");
-      const longest = MEASURED_STORAGE_RECOVERY_TEST;
+      const longest = MEASURED_STORAGE_WORK_TEST;
       const ordinary = "src/infra/sqlite-readonly-location.copy.test.ts";
-      vi.resetModules();
-      mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
-      mockOriginal("database", { databaseWorkerCoreTestFiles: [longest] });
-      mockTrackedFiles((root: string) => (companion && root === "src/infra" ? [ordinary] : []));
       const measurements: Record<string, number> = { "core-runtime-infra-storage-state": 1 };
-      mockPlanTimings(() => measurements);
+      mockProject("core-runtime", config, "src/infra", companion ? [ordinary] : [], measurements);
+      mockOriginal("database", { databaseWorkerCoreTestFiles: [longest] });
       mockUnbuiltRuntime();
-      const {
-        createNodeTestShardBundles: createPlan,
-        createSelectedNodeTestShardBundles: createSelectedPlan,
-      } = await loadPlanModule(["build", "database"]);
+      const { createNodeTestShardBundles: createPlan } = await loadPlanModule([
+        "build",
+        "database",
+      ]);
 
       const plan = createPlan({ compactMode: "push", runnerBackend: "blacksmith" });
       expectPlanFiles(plan, companion ? [longest, ordinary] : [longest], requiredPatterns);
       const longestJob = required(findFileJob(plan, longest));
       // The measured file span is indivisible; its wrapper is paid once even at more workers.
-      expect(longestJob.predictedTestSeconds).toBeGreaterThanOrEqual(279.963 + 20);
-      expect(longestJob.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+      expect(longestJob.predictedTestSeconds).toBeGreaterThanOrEqual(69.039 + 20);
+      expect(longestJob.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
       expectEvery(plan, (job) => job.predictedTestSeconds! <= 300);
-      if (nativeSample) {
-        const targets = [longest, ordinary];
-        const selectedBefore = createSelectedPlan(targets, { runnerBackend: "blacksmith" });
-        const hostedBefore = createPlan({ compactMode: "push", runnerBackend: "github" });
-        const key = required(createNativeSoloTimingKey(longestJob.groups[0]!));
-        measurements[key] = 123;
-        for (const [before, after] of [
-          [plan, createPlan({ compactMode: "push", runnerBackend: "blacksmith" })],
-          [selectedBefore, createSelectedPlan(targets, { runnerBackend: "blacksmith" })],
-        ]) {
-          expect(before).not.toBeNull();
-          expect(after).not.toBeNull();
-          const expected = structuredClone(before!);
-          for (const job of expected) {
-            if (job.groups.some((group) => group.includePatterns?.includes(longest))) {
-              job.predictedSeconds = 123;
-              job.predictedTestSeconds = 123;
-            }
-          }
-          expect(after).toEqual(expected);
-        }
-        // A native price cannot reprice hosted execution of the same file.
-        expect(createPlan({ compactMode: "push", runnerBackend: "github" })).toEqual(hostedBefore);
-      }
     },
   );
+
+  it("applies native solo prices without changing placement or hosted prices", async () => {
+    const config = agentVitestProjectOwners.support.config;
+    const file = "src/agents/harness/lifecycle.test.ts";
+    const files = [file, "src/agents/harness/prompt-context.test.ts"];
+    const measurements: Record<string, number> = { "agentic-agents-support": 240 };
+    mockProject("agentic", config, "src/agents", files, measurements);
+    mockOriginal("inventory", {
+      listWholeConfigSplitFiles: (owner: string) =>
+        owner === "agentic-agents-support" ? files : undefined,
+    });
+    mockUnbuiltRuntime();
+    const {
+      createNodeTestShardBundles: createPlan,
+      createSelectedNodeTestShardBundles: createSelectedPlan,
+    } = await loadPlanModule(["build", "inventory"]);
+    const plan = createPlan({ compactMode: "push", runnerBackend: "blacksmith" });
+    expectPlanFiles(plan, files, requiredPatterns);
+    const job = required(findFileJob(plan, file));
+    expectFields(job, { planConcurrency: 1, runner: EXTRA_LARGE_NODE_TEST_RUNNER });
+    const selectedBefore = createSelectedPlan([file], { runnerBackend: "blacksmith" });
+    const hostedBefore = createPlan({ compactMode: "push", runnerBackend: "github" });
+    const key = required(createNativeSoloTimingKey(job.groups[0]!));
+    measurements[key] = 123;
+    for (const [before, after] of [
+      [plan, createPlan({ compactMode: "push", runnerBackend: "blacksmith" })],
+      [selectedBefore, createSelectedPlan([file], { runnerBackend: "blacksmith" })],
+    ]) {
+      expect(before).not.toBeNull();
+      expect(after).not.toBeNull();
+      const expected = structuredClone(before!);
+      for (const candidate of expected) {
+        if (candidate.groups.some((group) => group.includePatterns?.includes(file))) {
+          candidate.predictedSeconds = 123;
+          candidate.predictedTestSeconds = 123;
+        }
+      }
+      expect(after).toEqual(expected);
+    }
+    // A native price cannot reprice hosted execution of the same file.
+    expect(createPlan({ compactMode: "push", runnerBackend: "github" })).toEqual(hostedBefore);
+  });
 
   it.each([
     {
@@ -2431,13 +2594,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         (_, index) => `${root}/fixture/entry-${String(index).padStart(3, "0")}.test.ts`,
       );
       const timings: Record<string, number> = { [owner]: 240 };
-      vi.resetModules();
-      mockPlanShards(() => [fixtureShard(suite, [config])]);
-      mockTrackedFiles((candidate: string) => (candidate === root ? files : []));
+      mockProject(suite, config, root, files, timings);
       mockOriginal("inventory", {
         listWholeConfigSplitFiles: (candidate: string) => (candidate === owner ? files : undefined),
       });
-      mockPlanTimings(() => timings);
       mockUnbuiltRuntime();
       const { createNodeTestShardBundles: createPlan } = await loadPlanModule([
         "build",
@@ -2599,7 +2759,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const configs = new Set([configPath("cli"), configPath("cli-process")]);
     const restore = selectFixtureProjects((config) => configs.has(config));
     const timings = spyTimings().mockReturnValue({
-      "agentic-cli": 136,
+      "agentic-cli": 130,
     });
     const options = compactOptions("hybrid", "pull-request");
     try {
@@ -2712,8 +2872,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(planFiles(selected)).toEqual([fast]);
   });
 
-  it("retains recovery contracts in their main, PR, and manual Node tiers", () => {
-    const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
+  it("retains recovery and feature transport contracts in their main, PR, and manual Node tiers", () => {
+    const proofFiles = [
+      "src/gateway/server.codex-failure-recovery.test.ts",
+      "src/gateway/server.feature-session-actions.test.ts",
+    ];
     const files = (mode: "push" | "pull-request") => planFiles(committedPlan(mode));
     const mainFiles = files("push");
     const prFiles = files("pull-request");
@@ -2723,6 +2886,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(prFiles.filter((target) => target === file)).toHaveLength(1);
       const rawConfig = required(buildVitestRunPlans([file])[0]?.config);
       const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      expect(config).toBe(configPath("gateway-server-isolated"));
       expect(
         manual.filter(
           (shard) =>
@@ -2740,18 +2904,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(
       isolated.includePatterns ?? listMatchedTestFiles(createGatewayServerIsolatedVitestConfig({})),
     ).toContain("src/gateway/server.chat-recovered-output.test.ts");
-
-    const coldRecovery = "src/gateway/gateway.sessions-send-recovery.test.ts";
-    expect(mainFiles.filter((file) => file === coldRecovery)).toHaveLength(1);
-    expect(prFiles).not.toContain(coldRecovery);
-    const coldOwners = defaultShards.flatMap((shard) =>
-      (shard.includePatterns ?? []).filter((file) => file === coldRecovery).map(() => shard),
-    );
-    expect(coldOwners).toHaveLength(1);
-    expect(coldOwners[0]).toMatchObject({
-      configs: expect.arrayContaining([configPath("gateway-core")]),
-      pretestBuildMode: "runtime",
-    });
   });
 
   it("defers exactly the runtime release inventory from automatic plans on github", () => {
@@ -2800,6 +2952,30 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
   });
+
+  it.each([undefined, "blacksmith", "hybrid"])(
+    "prices fully measured tooling selections without discarded siblings on %s",
+    (runnerBackend) => {
+      const target = "test/scripts/update-restart-module-outcome.test.ts";
+      // Unknown files must cost more than startup headroom regardless of which
+      // siblings the current checkout places in the target's tooling stripe.
+      vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(60);
+      const timings = vi
+        .spyOn(testTimings, "readToolingFileTimings")
+        .mockReturnValue({ [target]: 1 });
+      const measured = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(measured, [target]);
+      expect(sumSeconds(measured)).toBe(25);
+      expectEvery(measured, (job) => job.planConcurrency === 1);
+      expectEvery(measured.flatMap(jobGroups), (group) => workers(group) === "2");
+
+      timings.mockReturnValue({});
+      const unknown = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(unknown, [target]);
+      expect(sumSeconds(unknown)).toBeGreaterThan(25);
+      expect(sumSeconds(unknown)).toBeGreaterThanOrEqual(60);
+    },
+  );
 
   it("keeps precise tooling selection through hosted overflow refusal", () => {
     const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
@@ -2861,62 +3037,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("uses 16-class capacity for the qualified compact selection without changing its scope", async () => {
-    const targets = [
-      "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
-      "src/gateway/client-callsites.guard.test.ts",
-      "src/gateway/mcp-app-extension-runtime.test.ts",
-      "src/agents/cli-runner.helpers.test.ts",
-    ];
-    const configs = new Set([
-      ...embeddedAgentVitestProjectOwners.map((owner) => owner.config),
-      configPath("gateway-client"),
-      configPath("gateway-core"),
-      configPath("agents-core"),
-    ]);
-    // Pin the inventory and costs: unrelated test removals can otherwise move
-    // these owners between serial and parallel canonical jobs.
-    const inventory = [
-      ...targets,
-      "src/agents/embedded-agent-runner/capacity-a.test.ts",
-      "src/agents/embedded-agent-runner/capacity-b.test.ts",
-      "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
-      "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
-      "src/agents/embedded-agent-runner/run/capacity.test.ts",
-    ];
-    vi.resetModules();
-    mockPlanShards(() =>
-      fullSuiteVitestShards
-        .map((shard) =>
-          Object.assign({}, shard, {
-            projects: shard.projects.filter((config) => configs.has(config)),
-          }),
-        )
-        .filter((shard) => shard.projects.length > 0),
-    );
-    mockTrackedFiles((root: string) =>
-      inventory.filter((file) => root === "." || file.startsWith(`${root}/`)),
-    );
-    mockOriginal("timings", {
-      readCompactGroupTimings: () => ({}),
-      readRuntimePlacementTimings: () => [],
-    });
-    const { createSelectedNodeTestShardBundles: createSelected } = await loadPlanModule();
-
-    const plan = required(createSelected(targets, { runnerBackend: "hybrid" }));
-    expectPlanFiles(plan, targets);
-    for (const job of plan) {
-      expect(job).toMatchObject({
-        runner: "blacksmith-16vcpu-ubuntu-2404",
-        planConcurrency: 1,
-        requiresDist: false,
-      });
-      for (const group of job.groups) {
-        expect(workers(group) ?? String(group.fallbackMaxWorkers)).toBe("2");
-      }
-    }
-  });
-
   it.each([
     ["blacksmith", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
     ["hybrid", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
@@ -2938,53 +3058,42 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("keeps selected Gateway and embedded-agent work within its runner capacity", () => {
-    const targets = [
-      "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
-      "src/gateway/mcp-app-extension-runtime.test.ts",
-      "src/agents/cli-runner.helpers.test.ts",
-      "src/gateway/openai-http.test.ts",
-      "src/agents/embedded-agent-runner/compact.small-context.test.ts",
-      "src/agents/embedded-agent-runner/stream-resolution.test.ts",
-      "src/gateway/client-callsites.guard.test.ts",
-      "src/gateway/server-plugin-subagent-runtime.fork-transport.test.ts",
-    ];
-    const plan = required(selectTests(targets, { runnerBackend: "hybrid" }));
-    const groups = plan.flatMap(jobGroups);
-    expectSameEntries(groups.flatMap(optionalPatterns), targets);
-    // Selection retains overlap only for multiple groups. Unrelated inventory may move these
-    // groups into serial Gateway templates; fixed-inventory coverage below proves
-    // parallel capacity is retained when the canonical templates permit it.
-    for (const job of plan) {
-      expect(job.requiresDist).toBe(false);
-      expect([1, 2]).toContain(job.planConcurrency);
-      expect(job.runner).toBe(
-        job.planConcurrency === 2
-          ? "blacksmith-32vcpu-ubuntu-2404"
-          : "blacksmith-16vcpu-ubuntu-2404",
-      );
-    }
-    for (const group of groups) {
-      expect(workers(group) ?? String(group.fallbackMaxWorkers)).toBe("2");
-    }
-  });
-
-  it("shares one prepared runtime across affordable github groups", () => {
+  it("shares one prepared runtime across affordable github groups", async () => {
     const runnerBackend = "github";
-
+    const config = configPath("infra");
     const targets = [
       PRIVATE_QA_TOOLING_TEST,
-      "src/infra/update-candidate-canary.integration.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     ];
-    spyTimings().mockReturnValue(
-      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
-    );
-    const plan = selectTests(targets, { runnerBackend });
+    // Keep the misc and system-runtime owners distinct so affordable groups
+    // exercise build sharing instead of coalescing into one prerequisite group.
+    vi.resetModules();
+    mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
+    mockOriginal("database", { databaseWorkerCoreTestFiles: [] });
+    mockOriginal("inventory", {
+      listScopedOwnerTestFiles: ({ root }) => (root === "src/infra" ? targets : []),
+      listNodeTestConfigFiles: (candidate) => (candidate === config ? targets : []),
+    });
+    mockPlanTimings(() => ({
+      "core-runtime-infra-misc": 1,
+      "core-runtime-infra-system-runtime": 1,
+    }));
+    const { createSelectedNodeTestShardBundles: select } = await loadPlanModule([
+      "database",
+      "inventory",
+    ]);
+    const plan = select(targets, { runnerBackend });
     expect(plan).not.toBeNull();
     const readers = plan!.filter((shard) => !shard.requiresDist);
     const reader = only(readers);
     expect(reader).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
     expect(reader.predictedSeconds).toBeLessThanOrEqual(210);
+    expect(reader.groups).toHaveLength(2);
+    expect(
+      reader.groups
+        .map((group) => required(group.pretestBuildMode))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["private-qa", "runtime"]);
     expectEvery(reader.groups, (group) => group.pretestBuildMode);
     expectSameEntries(reader.groups.flatMap(optionalPatterns), targets);
   });
@@ -3008,7 +3117,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const targets = [
       "src/config/allowed-values.test.ts",
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
-      "src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts",
+      "src/infra/heartbeat-events.test.ts",
       "src/infra/runtime-guard.test.ts",
       heavyCli,
       "src/cli/directory-cli.test.ts",
@@ -3030,7 +3139,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const cliFiles = [heavyCli, "src/cli/directory-cli.test.ts", ...fillers("src/cli/fixture", 8)];
     const infraFiles = [
       ...targets.filter((file) => file.startsWith("src/infra/")),
-      ...fillers("src/infra/heartbeat-runner"),
+      ...fillers("src/infra/heartbeat"),
       ...fillers("src/infra/runtime-guard"),
       ...fillers("src/infra/os-summary", 10),
       ...fillers("src/infra/provider-usage", 10),
@@ -3041,7 +3150,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const inventory = [...configFiles, ...cliFiles, ...infraFiles, ...commandFiles];
     const timings: Record<string, number> = {
       "core-runtime-config": 240,
-      "core-runtime-infra-heartbeat-runner": 170,
+      "core-runtime-infra-heartbeat-core": 170,
       "core-runtime-infra-system-runtime": 160,
       "core-runtime-infra-misc-os": 170,
       "core-runtime-infra-provider-push": 160,
@@ -3241,6 +3350,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         isDatabaseWorkerCoreTestFile: () => false,
       });
       mockTrackedFiles((root: string) => (root === "src/infra" ? files : []));
+      await mockFastPaths();
       mockPlanTimings(() =>
         Object.fromEntries(entries.map(([, owner, seconds]) => [owner, seconds])),
       );
@@ -3291,29 +3401,33 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     files: string[];
     shards: typeof fullSuiteVitestShards;
     timings: Record<string, number>;
+    fileTimings?: Readonly<Record<string, number>>;
+    githubFileTimings?: Readonly<Record<string, number>>;
     fileSeconds: (file: string) => number;
+    expectedSourcePatterns?: { file: string; patterns: string[] };
     options: {
       compactMode: "push" | "pull-request";
-      runnerBackend: string;
+      runnerBackend?: string;
       includeReleaseOnlyPluginShards: false;
+      includeReleaseOnlyToolingShards?: boolean;
+      includePrExemptRuntimeTests?: boolean;
+      includeProofTests?: boolean;
       compactNodeJobCap?: number;
     };
   }) {
-    const unitFastPaths = await vi.importActual<
-      typeof import("../vitest/vitest.unit-fast-paths.mjs")
-    >("../vitest/vitest.unit-fast-paths.mjs");
-    vi.resetModules();
-    mockFixture("fast", () => ({
-      ...unitFastPaths,
-      getUnitFastTestFiles: () => [],
-      getUnitFastIsolatedTestFiles: () => [],
-      getUnitFastTimerTestFiles: () => [],
-      getUnitFastTestFilesForIncludePatterns: () => [],
-    }));
     mockPlanShards(() => params.shards);
+    await mockFastPaths();
     mockFixture("timings", () => ({
       ...testTimings,
       readCompactGroupTimings: () => params.timings,
+      ...(params.fileTimings
+        ? {
+            readToolingFileTimings: (profile?: CiTimingProfile) =>
+              profile === "github"
+                ? (params.githubFileTimings ?? params.fileTimings!)
+                : params.fileTimings!,
+          }
+        : {}),
     }));
     mockFixture("metadata", () => ({
       ...shardMetadata,
@@ -3321,7 +3435,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }));
     mockTrackedFiles((rootDir: string) => (rootDir === "test" ? params.files.toSorted() : []));
     return await withPlanModule(
-      ({ createNodeTestShardBundles: createPlan }) => {
+      ({ createNodeTestShardBundles: createPlan, createNodeTestShards: createShards }) => {
+        if (params.expectedSourcePatterns) {
+          const expected = params.expectedSourcePatterns;
+          const sources = createShards({
+            ...params.options,
+            includeReleaseOnlyToolingShards: true,
+          });
+          expect(
+            sources
+              .filter((source) => source.includePatterns?.includes(expected.file))
+              .map((source) => source.includePatterns),
+          ).toEqual([expected.patterns]);
+        }
         // These fixtures exercise a caller's 90-row reservation independently
         // of the profile ceiling; explicit tighter reservations remain authoritative.
         return createPlan({
@@ -3332,6 +3458,120 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ["metadata", "fast"],
     );
   }
+
+  it.each<{
+    label: string;
+    runnerBackend?: string;
+    compactMode?: "push" | "pull-request";
+    retainedSeconds?: number;
+    githubSeconds?: number;
+    known?: boolean;
+    discardSiblings?: boolean;
+    expectedSeconds: number;
+  }>([
+    { label: "scaled Blacksmith fallback", expectedSeconds: 32 },
+    { label: "direct GitHub timing", githubSeconds: 30, expectedSeconds: 30 },
+    { label: "startup floor", retainedSeconds: 1, expectedSeconds: 25 },
+    { label: "unknown retained file", known: false, expectedSeconds: 128 },
+    {
+      label: "nonbinding retained cost",
+      retainedSeconds: 80,
+      expectedSeconds: 128,
+    },
+    {
+      label: "unchanged selection",
+      retainedSeconds: 80,
+      discardSiblings: false,
+      expectedSeconds: 128,
+    },
+    { label: "Blacksmith parent floor", runnerBackend: "blacksmith", expectedSeconds: 80 },
+    { label: "hybrid parent floor", runnerBackend: "hybrid", expectedSeconds: 80 },
+    { label: "pull-request parent floor", compactMode: "pull-request", expectedSeconds: 128 },
+  ])("prices implicit reduced tooling with $label", async (params) => {
+    const retained = "test/vitest-pr-exempt-retention.test.ts";
+    // Two workers pair equal-cost files: fill fifteen pairs and one singleton first.
+    const discarded =
+      params.discardSiblings === false
+        ? []
+        : Array.from({ length: 31 }, (_, index) => `test/scripts/release-only-${index}.test.ts`);
+    const retainedSeconds = params.retainedSeconds ?? 20;
+    const discardedSeconds = 80;
+    const jobs = await createToolingFixturePlan({
+      files: [...discarded, retained],
+      shards: [
+        fixtureShard("core-tooling", [configPath("tooling")], configPath("full-core-tooling")),
+      ],
+      timings: {},
+      fileTimings: {
+        ...Object.fromEntries(discarded.map((file) => [file, discardedSeconds])),
+        ...(params.known === false ? {} : { [retained]: retainedSeconds }),
+      },
+      githubFileTimings:
+        params.githubSeconds === undefined ? {} : { [retained]: params.githubSeconds },
+      fileSeconds: (file) => (file === retained ? retainedSeconds : discardedSeconds),
+      expectedSourcePatterns: {
+        file: retained,
+        patterns: discarded.length ? [discarded.toSorted().at(-1)!, retained] : [retained],
+      },
+      options: {
+        compactMode: params.compactMode ?? "push",
+        runnerBackend: params.runnerBackend ?? "github",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includePrExemptRuntimeTests: true,
+        includeProofTests: true,
+      },
+    });
+    expectPlanFiles(jobs, [retained]);
+    const job = only(jobs);
+    expect(job.predictedTestSeconds).toBeCloseTo(params.expectedSeconds);
+    expect(job.planConcurrency).toBe(1);
+    expect(workers(only(job.groups))).toBe("2");
+    expect(job.requiresDist).toBe(false);
+    expect(job.pretestBuildMode).toBeUndefined();
+  });
+
+  it.each([undefined, "blacksmith"])(
+    "preserves compiler/artifact capacity (%s)",
+    async (runnerBackend) => {
+      const ordinary = Array.from(
+        { length: 64 },
+        (_, index) => `test/scripts/tooling-capacity-${String(index).padStart(2, "0")}.test.ts`,
+      );
+      const longFiles = new Set(ordinary.slice(0, 16));
+      const protectedFiles = [
+        "test/scripts/vitest-worker-artifacts.ci.test.ts",
+        "test/scripts/write-unified-entry-dts.test.ts",
+        "test/scripts/write-plugin-sdk-entry-dts.test.ts",
+      ];
+      const files = [...ordinary, ...protectedFiles];
+      const jobs = await createToolingFixturePlan({
+        files,
+        shards: [
+          fixtureShard("core-tooling", [configPath("tooling")], configPath("full-core-tooling")),
+        ],
+        timings: {},
+        fileTimings: {},
+        fileSeconds: (file) => (longFiles.has(file) ? 125 : 50),
+        options: {
+          compactMode: "pull-request",
+          runnerBackend,
+          includeReleaseOnlyPluginShards: false,
+        },
+      });
+      expectPlanFiles(jobs, files);
+      expect(new Set(planFiles(jobs)).size).toBe(files.length);
+      expect(jobs.some((job) => job.runner === "blacksmith-16vcpu-ubuntu-2404")).toBe(true);
+      for (const job of jobs) {
+        const needsCapacity = planFiles([job]).some((file) => protectedFiles.includes(file));
+        expectFields(job, {
+          runner: needsCapacity ? EXTRA_LARGE_NODE_TEST_RUNNER : "blacksmith-16vcpu-ubuntu-2404",
+          planConcurrency: 1,
+        });
+        expectEvery(job.groups, (group) => workers(group) === "2");
+      }
+    },
+  );
 
   it("exchanges hosted anchors before opening another pull-request job", async () => {
     const compactMode = "pull-request" as const;
@@ -3594,25 +3834,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("preserves Gateway runner hooks while assigning database consumers to parallel forks", () => {
+  it("retains Gateway database consumers in the canonical worker plan", () => {
     const worker = createGatewayDatabaseWorkersVitestConfig({});
     const core = createGatewayCoreVitestConfig({});
-    const server = createGatewayServerVitestConfig({ OPENCLAW_VITEST_MAX_WORKERS: "8" });
+    const server = createGatewayServerVitestConfig({});
     const methods = createGatewayMethodsVitestConfig({});
-    expect(server.test?.fileParallelism).toBe(true);
-    expect(
-      createGatewayServerVitestConfig({ OPENCLAW_VITEST_MAX_WORKERS: "1" }).test?.fileParallelism,
-    ).toBe(false);
-    expect(methods.test?.pool).toBe("forks");
-    expect(worker.test).toMatchObject({ pool: "forks", fileParallelism: true });
+    expect(worker.test).toMatchObject({ pool: "forks", fileParallelism: true, isolate: false });
     expect(core.test?.isolate).toBe(true);
-    for (const shared of [worker, server, methods]) {
-      expect(shared.test?.isolate).toBe(false);
-    }
+    expect(methods.test).toMatchObject({ pool: "forks", isolate: false });
     for (const previous of [core, server, methods]) {
       expectInherited(worker.test, previous.test, "runner", "setupFiles");
     }
-    expect(listMatchedTestFiles(worker)).toEqual(gatewayDatabaseWorkerTestFiles);
     expect(listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
         "src/gateway/github-publication-transcript.test.ts",
@@ -3630,33 +3862,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "src/gateway/session-utils.queued-collector.test.ts",
       ]),
     );
-    const former = new Set([core, server, methods].flatMap(listMatchedTestFiles));
-    for (const file of gatewayDatabaseWorkerTestFiles) {
-      expect(former.has(file), file).toBe(false);
-      expect(isGatewayServerTestFile(file), file).toBe(false);
-    }
     expect(
       defaultShards.filter((shard) =>
         shard.configs.includes(configPath("gateway-database-workers")),
       ),
     ).toHaveLength(1);
-    const includeFile = join(tempDirs.make("gateway-database-routing-"), "include.json");
-    writeFileSync(includeFile, JSON.stringify([gatewayDatabaseWorkerTestFiles[0]]));
-    expect(
-      listMatchedTestFiles(
-        createGatewayDatabaseWorkersVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
-      ),
-    ).toEqual([gatewayDatabaseWorkerTestFiles[0]]);
   });
 
-  it("keeps host-owned database consumers in forks and out of their former projects", () => {
+  it("retains host-owned database consumers in the canonical infra plan", () => {
     const infra = createInfraVitestConfig({});
-    const support = createAgentsSupportVitestConfig({});
-    expectFields(infra.test, {
-      pool: diagnosticForksPool,
-      isolate: true,
-      setupFiles: support.test?.setupFiles,
-    });
+    expect(infra.test?.setupFiles).toEqual(createAgentsSupportVitestConfig({}).test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
       "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
@@ -3674,37 +3889,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ]) {
       expect(admitted.has(file), file).toBe(true);
     }
-    const former = new Set(
-      [
-        createUnitVitestConfigWithOptions({}),
-        createUnitFastVitestConfig(),
-        createAgentsCoreVitestConfig({}),
-        createAgentsCoreIsolatedVitestConfig({}),
-        support,
-        createAgentsToolsVitestConfig({}),
-        createAgentsVitestConfig({}),
-        createAutoReplyReplyVitestConfig({}),
-        createPluginSdkLightVitestConfig({}),
-        createPluginSdkVitestConfig({}),
-        createPluginsVitestConfig({}),
-        createToolingVitestConfig({}),
-        createWizardVitestConfig({}),
-        createCommandsVitestConfig({}),
-        createRuntimeConfigVitestConfig({}),
-        createGatewayVitestConfig({}),
-        createGatewayCoreVitestConfig({}),
-        createGatewayClientVitestConfig({}),
-        createGatewayMethodsVitestConfig({}),
-        createGatewayMethodsIsolatedVitestConfig({}),
-        createGatewayServerVitestConfig({}),
-        createGatewayServerIsolatedVitestConfig({}),
-        createGatewayDatabaseWorkersVitestConfig({}),
-      ].flatMap(listMatchedTestFiles),
-    );
-    for (const file of databaseWorkerCoreTestFiles) {
-      expect(admitted.has(file), file).toBe(true);
-      expect(former.has(file), file).toBe(false);
-    }
     const gatewayWorkerFiles = databaseWorkerCoreTestFiles.filter((file) =>
       file.startsWith("src/gateway/"),
     );
@@ -3719,9 +3903,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       infraPlanFiles.filter((file) => gatewayWorkerFiles.includes(file)),
       gatewayWorkerFiles,
     );
-    const recoveryTest = "src/wizard/setup.inference-recovery.integration.test.ts";
-    expect(admitted.has(recoveryTest), recoveryTest).toBe(true);
-    expect(former.has(recoveryTest), recoveryTest).toBe(false);
     const selected = [
       "src/plugin-state/plugin-state-store.test.ts",
       "test/plugins/beam-http-identity.test.ts",
@@ -3795,7 +3976,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(hasTooling(automatic)).toBe(false);
     const files = automatic.flatMap(optionalPatterns);
     expectNone(files, (file) => file.startsWith("test/scripts/"));
-    expect(files).toContain("src/infra/home-dir.test.ts");
+    expect(automatic.flatMap((shard) => shard.configs)).toContain(configPath("boundary"));
+    expect(listMatchedTestFiles(createBoundaryVitestConfig({}, []))).toContain(
+      "src/infra/home-dir.test.ts",
+    );
   });
 
   it.each([
@@ -3805,7 +3989,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "config/ci-budget.md",
     configPath("tooling"),
     "package.json",
-    "patches/vitest@5.0.3.patch",
+    "patches/vitest@5.0.5.patch",
     ".github/workflows/ci.yml",
     "apps/ios/fastlane/Fastfile",
     "extensions/matrix/scripts/build.mjs",
@@ -3968,9 +4152,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       owner: "infra",
       prefix: "core-runtime-infra-",
       config: configPath("infra"),
-      expectedFiles: () => [
-        ...new Set([...listTestFiles("src/infra"), ...databaseWorkerCoreTestFiles]),
-      ],
+      expectedFiles: () => listMatchedTestFiles(createInfraVitestConfig({})),
     },
     {
       owner: "cron",
@@ -4015,6 +4197,7 @@ function expectImpacts(
 describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
+    ["src/gateway/control-ui-route-preloads.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     // Erased TSX header imports do not bring Gateway server code into the UI runtime.
     ["packages/gateway-client/src/index.ts", false],
@@ -4101,10 +4284,17 @@ describe("CI changed Node test plan", () => {
   it("keeps the complete budgeted corpus plan beside a documentation page", () => {
     const targets = startupCorpusTestFiles;
     const before = changedOwnerTests(targets);
-    expect(before).toHaveLength(3);
-    expect(before?.every((shard) => (shard.predictedSeconds ?? 0) <= 150)).toBe(true);
-    expect(before?.flatMap((shard) => shard.targets ?? []).toSorted()).toEqual(targets.toSorted());
-    expect(before?.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
+    expect(before).toHaveLength(4);
+    expect(selectedFiles(before)).toContain(lintSuppressionInventoryTest);
+    const corpusShards =
+      before?.filter((shard) => !selectedFiles([shard]).includes(lintSuppressionInventoryTest)) ??
+      [];
+    expect(corpusShards).toHaveLength(3);
+    expect(corpusShards.every((shard) => (shard.predictedSeconds ?? 0) <= 150)).toBe(true);
+    expect(corpusShards.flatMap((shard) => shard.targets ?? []).toSorted()).toEqual(
+      targets.toSorted(),
+    );
+    expect(corpusShards.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
     expect(changedOwnerTests([...targets, "docs/ci/pipeline.md"])).toEqual(before);
   });
 

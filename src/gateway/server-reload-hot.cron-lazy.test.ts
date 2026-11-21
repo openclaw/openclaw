@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
+import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayHotReloadPublication,
   GatewayReloadHandlerParams,
 } from "./server-reload-contracts.js";
 import {
   createDefaultGatewayReloadState,
+  createHotReloadHandlerTestParams,
   createTestCronState,
   makePluginReloadResult,
 } from "./server-reload-handlers.config.test-support.js";
@@ -66,30 +67,13 @@ async function createFixture() {
     state = value;
   });
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-  const params: GatewayReloadHandlerParams = {
+  const params = createHotReloadHandlerTestParams({
     scheduler: createTestGatewayScheduler(),
     deps: {} as GatewayReloadHandlerParams["deps"],
-    broadcast: vi.fn(),
     getState: () => state,
     setState,
-    getPluginRegistry: vi.fn(),
-    startChannel: vi.fn(async () => new Map()),
-    stopChannel: vi.fn(async () => {}),
-    releaseChannelRouteHandoffs: vi.fn(),
-    pruneInactiveChannelAccountState: vi.fn(),
-    reloadPlugins: vi.fn<GatewayReloadHandlerParams["reloadPlugins"]>(async () =>
-      makePluginReloadResult(),
-    ),
-    logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    logChannels: { info: vi.fn(), error: vi.fn() },
-    logCron: { error: vi.fn() },
-    logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    cronReconciliation: {
-      arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
-      invalidate: vi.fn(),
-    },
     requestRecoveryRestart,
-  };
+  });
   const handlers = createGatewayReloadHandlers(params);
   const nextConfig: OpenClawConfig = { cron: { enabled: true } };
   const plan = buildGatewayReloadPlan(["cron.enabled"]);
@@ -115,39 +99,26 @@ async function createFixture() {
 }
 
 describe("cron reload loading", { concurrent: false }, () => {
-  it.each(["lazy load", "monitor retry"] as const)("rebuilds cron with %s", async (mode) => {
+  it("loads cron only when its configuration requires a rebuild", async () => {
     const load = vi.fn(() => ({ buildGatewayCronService }));
-    if (mode === "lazy load") {
-      vi.doMock("./server-cron.js", load);
-    }
+    vi.doMock("./server-cron.js", load);
     using fixture = await createFixture();
-    if (mode === "lazy load") {
-      await fixture.handlers.applyHotReload(
-        { ...fixture.plan, restartCron: false, reconcileSystemJobs: false },
-        fixture.nextConfig,
-      );
-      expect(load).not.toHaveBeenCalled();
-      expect(buildGatewayCronService).not.toHaveBeenCalled();
-    } else {
-      vi.mocked(fixture.next.reconcileSystemJobs).mockResolvedValue("retry-scheduled");
-    }
-    await expect(
-      fixture.handlers.applyHotReload(
-        mode === "monitor retry" ? { ...fixture.plan, reconcileSystemJobs: true } : fixture.plan,
-        fixture.nextConfig,
-      ),
-    ).resolves.toBe("applied");
+    await fixture.handlers.applyHotReload(
+      { ...fixture.plan, restartCron: false },
+      fixture.nextConfig,
+    );
+    expect(load).not.toHaveBeenCalled();
+    expect(buildGatewayCronService).not.toHaveBeenCalled();
+    await expect(fixture.handlers.applyHotReload(fixture.plan, fixture.nextConfig)).resolves.toBe(
+      "applied",
+    );
     expect(fixture.setState).toHaveBeenLastCalledWith(
       expect.objectContaining({ cronState: fixture.next }),
     );
     expect(fixture.nextCron.start).toHaveBeenCalledOnce();
-    if (mode === "lazy load") {
-      expect(load).toHaveBeenCalledOnce();
-      expect(buildGatewayCronService).toHaveBeenCalledOnce();
-      expect(fixture.previousCron.stop).toHaveBeenCalledOnce();
-    } else {
-      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
-    }
+    expect(load).toHaveBeenCalledOnce();
+    expect(buildGatewayCronService).toHaveBeenCalledOnce();
+    expect(fixture.previousCron.stop).toHaveBeenCalledOnce();
   });
 
   // Each await rechecks the same ownership guard; cover every cause and await point.

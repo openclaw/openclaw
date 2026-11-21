@@ -9,7 +9,7 @@ import {
   readPersistedSharedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
+import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -46,14 +46,12 @@ vi.mock("../agents/model-auth.js", async () => {
 vi.mock("../agents/model-catalog.js", () => ({ loadManifestModelCatalog: () => [] }));
 vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInference: vi.fn() }));
 vi.mock("../system-agent/setup-inference-turn.js", () => ({ runSetupInferenceTurn: mocks.probe }));
+// mock-isolation: Select the fixture's configured route without loading real system-agent state.
 vi.mock("../system-agent/inference-route.js", () => ({
   resolveSystemAgentConfiguredRouteFromConfig: async (config: OpenClawConfig, agentId: string) => {
     const agent = config.agents?.entries?.[agentId];
     const raw = typeof agent?.model === "string" ? agent.model : agent?.model?.primary;
-    if (!raw) {
-      return null;
-    }
-    const [modelLabel, authProfileId] = raw.split("@");
+    const [modelLabel, authProfileId] = raw?.split("@") ?? [];
     if (!modelLabel) {
       return null;
     }
@@ -112,21 +110,16 @@ it.each([
     vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
     const agentDir = path.join(stateDir, "agents", "owner", "agent");
     const env = { ...process.env };
-    const auth: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider,
-          access: "synthetic-original-access",
-          refresh: "synthetic-original-refresh",
-          expires: expired ? 1 : Date.now() + 3_600_000,
-        },
-      },
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider,
+      access: "synthetic-original-access",
+      refresh: "synthetic-original-refresh",
+      expires: expired ? 1 : Date.now() + 3_600_000,
     };
     writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
     noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
-    writePersistedAuthProfileStoreRaw(auth);
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles: { [profileId]: credential } });
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       agents: {
@@ -149,12 +142,8 @@ it.each([
     expect(selected).toMatchObject({ ok: true, route: { agentDir, provider, model: "tools" } });
     expect(mocks.probe).toHaveBeenCalledOnce();
     expect(mocks.refresh).toHaveBeenCalledTimes(expired ? 1 : 0);
-    expect(readPersistedSharedAuthProfileStoreRaw(env)).toMatchObject({
-      profiles: {
-        [profileId]: {
-          access: expired ? "synthetic-refreshed-access" : "synthetic-original-access",
-        },
-      },
-    });
+    const access = expired ? "synthetic-refreshed-access" : "synthetic-original-access";
+    const stored = readPersistedSharedAuthProfileStoreRaw(env);
+    expect(stored).toMatchObject({ profiles: { [profileId]: { access } } });
   },
 );

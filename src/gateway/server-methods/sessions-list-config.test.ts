@@ -25,6 +25,7 @@ import type { OperatorScope } from "../operator-scopes.js";
 import * as projectionWork from "../session-projection-work.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { watchRowFacts } from "../session-row-projection.read-fixture.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import {
   identifiedClient,
@@ -33,8 +34,6 @@ import {
 } from "./sessions-read-cache.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-const readDatabases = history.withSessionHistoryWorkerDatabases;
 
 function config(defaults: NonNullable<OpenClawConfig["agents"]>["defaults"]): OpenClawConfig {
   const cfg = { agents: { entries: { main: {} }, defaults }, plugins: { enabled: false } };
@@ -57,33 +56,16 @@ function withScopes(cfg: OpenClawConfig, scopes: OperatorScope[]): OpenClawConfi
   return { ...cfg, gateway: { auth: { identityScopes: { "viewer@example.test": scopes } } } };
 }
 
-function resolvedKeyFacts() {
-  return createConfigResolutionFacts(
-    [],
-    new Map(),
-    undefined,
-    new Map([["models.providers.unit.apiKey", "UNIT_KEY"]]),
-  );
-}
-
 function observeRowFacts(reads: string[], pause?: () => Promise<void>) {
-  vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
-    readDatabases(targets, (owners) =>
-      consume(
-        owners.map((owner) => ({
-          ...owner,
-          async readRowFacts(input) {
-            reads.push(...input.sessionKeys);
-            const rows = await owner.readRowFacts(input);
-            if (pause) {
-              await pause();
-            }
-            return rows;
-          },
-        })),
-      ),
-    ),
-  );
+  vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockRestore();
+  watchRowFacts((owner) => async (input) => {
+    reads.push(...input.sessionKeys);
+    const rows = await owner.readRowFacts(input);
+    if (pause) {
+      await pause();
+    }
+    return rows;
+  });
 }
 
 function pauseRowFacts(reads: string[]) {
@@ -277,19 +259,9 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       );
       expect(changedModel.sessions.map((row) => row.model)).toEqual(["changed", "changed"]);
 
-      for (const [index, facts] of [
-        createConfigResolutionFacts([]),
-        createConfigResolutionFacts([], new Map([["models.providers.unit.apiKey", "UNIT_KEY"]])),
-        resolvedKeyFacts(),
-      ].entries()) {
-        const next = withScopes(cfg, [index % 2 === 0 ? "operator.read" : "operator.admin"]);
-        setConfigResolutionFacts(next, facts);
-        await publish(next, true);
-      }
-
       reads.length = 0;
       const forced = withScopes(cfg, ["operator.admin"]);
-      setConfigResolutionFacts(forced, resolvedKeyFacts());
+      setConfigResolutionFacts(forced, createConfigResolutionFacts([]));
       context.getRuntimeConfig = () => forced;
       sessionChanges.emit({ all: true, scope: "config", factsInvalidated: true });
       await list();

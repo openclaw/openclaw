@@ -1,7 +1,9 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { describeCronHostExecutionRestriction } from "../cron/service/state.js";
 import { assertCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import {
   CronStreamJobOwner,
   isCronStreamJob,
@@ -43,12 +45,15 @@ export function resolveStreamStopReason(input: {
 }
 
 /** Supervise line-producing cron sources through one serialized owner per job. */
-export function createCronStreamWatchers(
-  params: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
-    /** Test seams; production uses the built-in cadence and retry schedules. */
-    minIntervalMs?: number;
-  },
-): CronStreamWatchers {
+export function createCronStreamWatchers({
+  hostExecutionDisabled,
+  ...params
+}: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
+  hostExecutionDisabled?: boolean;
+  /** Test seams; production uses the built-in cadence and retry schedules. */
+  minIntervalMs?: number;
+}): CronStreamWatchers {
+  const spawnBroker = getSpawnBroker();
   const owners = new Map<string, CronStreamJobOwner>();
   let stopped = false;
 
@@ -58,7 +63,7 @@ export function createCronStreamWatchers(
   };
 
   const createOwner = (job: CronStreamJob): CronStreamJobOwner => {
-    const owner = new CronStreamJobOwner(job, ownerParams);
+    const owner = new CronStreamJobOwner(job, ownerParams, spawnBroker);
     owners.set(job.id, owner);
     return owner;
   };
@@ -111,6 +116,10 @@ export function createCronStreamWatchers(
     }
     if (!isCronStreamJob(job)) {
       await stop(job.id, "schedule-update");
+      return;
+    }
+    if (describeCronHostExecutionRestriction(job, hostExecutionDisabled)) {
+      await stop(job.id, "host-execution-disabled", job);
       return;
     }
     try {

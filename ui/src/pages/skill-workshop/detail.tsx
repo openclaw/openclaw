@@ -1,23 +1,74 @@
-import type { SkillWorkshopChange } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, createUniqueId, Errored, For, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
-import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { visitTextDiff } from "../../lib/chat/tool-call-diff.ts";
+import { SettingsEmpty } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { undoMutationFor } from "./api.ts";
+import { Diff, LoadState, splitFrontmatter } from "./diff.tsx";
+import { History, VersionLink } from "./history.tsx";
 import {
   MutationButton,
-  renderUses,
-  WorkshopChangeText,
   UNUSED_ARCHIVE_DAYS,
   unusedDays,
+  type WorkshopPage,
   type WorkshopView,
-  type WorkshopViewer,
+  type WorkshopReads,
 } from "./view-shared.tsx";
 
-export function Detail(props: { view: WorkshopView }) {
+/** The skill and draft pages share the detail model: breadcrumb, header, content and facts. */
+export function WorkshopDetailShell(props: {
+  /** A skill page has one header action; a draft page has Discard and Apply. */
+  kind: "skill" | "draft";
+  view: WorkshopView;
+  page: WorkshopPage;
+  name: string;
+  summary?: string;
+  byline?: JSX.Element;
+  actions: JSX.Element;
+  panel: JSX.Element;
+  facts: JSX.Element;
+}) {
+  const id = `sw-detail-${createUniqueId()}`;
+  return (
+    <div class={["sw-detail", `sw-detail--${props.kind}`]}>
+      <PluginDetailShell
+        id={id}
+        rail
+        name={props.name}
+        summary={props.summary}
+        backHref={props.view().context.router.getState().location.pathname}
+        backLabel={t("tabs.skillWorkshop")}
+        onBack={() => props.page.close()}
+        icon={
+          <span class="sw-tile sw-tile--page">
+            <Icon name="wandSparkles" />
+          </span>
+        }
+        identity={
+          props.byline ? (
+            <div class="plugin-catalog-detail__publisher">
+              <span class="sw-byline">{props.byline}</span>
+            </div>
+          ) : undefined
+        }
+        titleAction={props.actions}
+        panel={props.panel}
+        sidebar={<dl class="plugin-metadata__facts--rail sw-facts">{props.facts}</dl>}
+      />
+    </div>
+  );
+}
+
+export function Detail(props: {
+  view: WorkshopView;
+  reads: WorkshopReads;
+  page: WorkshopPage;
+  errors: JSX.Element;
+}) {
   const viewer = () => props.view().viewer!;
   const target = () => viewer().target;
   const snapshot = () => props.view().snapshot!;
@@ -32,48 +83,36 @@ export function Detail(props: { view: WorkshopView }) {
   );
   const files = () => {
     const current = viewer();
-    return target().versionId && current.status === "ready"
+    return target().versionId && current.result
       ? current.result.files
-      : (skill()?.files ??
-          (current.status === "ready" ? current.result.files : [target().filePath]));
+      : (skill()?.files ?? (current.result ? current.result.files : [target().filePath]));
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
   const description = createMemo(() => {
     const current = viewer();
     const own =
-      current.status === "ready" && current.target.filePath === "SKILL.md"
+      current.result && current.target.filePath === "SKILL.md"
         ? splitFrontmatter(current.result.content).description
         : undefined;
     return target().versionId ? own : skill()?.description || own;
   });
-  const meta = () => {
-    const current = skill();
+  const byline = () => {
     const created = history().findLast((entry) => entry.action === "create");
-    return [
-      current ? renderUses(current.useCount) : null,
-      current?.lastUsedAtMs
-        ? t("skillWorkshop.viewer.lastUsed", {
-            time: formatRelativeTimestamp(current.lastUsedAtMs),
-          })
-        : null,
-      created
-        ? t("skillWorkshop.viewer.createdBy", {
-            actor: t(`skillWorkshop.changes.actors.${created.actor}`).toLowerCase(),
-          })
-        : null,
-      versions().length > 0
-        ? versions().length === 1
-          ? t("skillWorkshop.viewer.versionsOne")
-          : t("skillWorkshop.viewer.versions", { count: String(versions().length) })
-        : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    if (created) {
+      return t("skillWorkshop.viewer.createdBy", {
+        actor: t(`skillWorkshop.changes.actors.${created.actor}`),
+      });
+    }
+    const archivedAt = skill() ? undefined : versions()[0]?.createdAtMs;
+    return archivedAt
+      ? t("skillWorkshop.skills.archivedAgo", { time: formatRelativeTimestamp(archivedAt) })
+      : undefined;
   };
   const unused = () => {
     const current = skill();
     return current ? unusedDays(current, history()[0], props.view().mode) : null;
   };
+  const latest = () => history()[0];
   const tabs = () => {
     const listed = new Set(
       history()
@@ -91,157 +130,257 @@ export function Detail(props: { view: WorkshopView }) {
     ] as const;
   };
   return (
-    <>
-      <header class="sw-detail__head">
-        <div class="sw-detail__identity">
-          <h2 class="sw-detail__title">{target().name}</h2>
-          {description() && <p class="sw-detail__desc">{description()}</p>}
-          {meta() && <p class="sw-detail__meta">{meta()}</p>}
-        </div>
-        <div class="sw-detail__actions">
-          <MutationButton
-            view={props.view}
-            label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
-            title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
-            mutation={{
-              method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
-              name: target().name,
-            }}
-            actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
-            variant={skill() ? "danger" : "default"}
-          />
-        </div>
-      </header>
-      {!skill() ? (
-        <div class="sw-notice">{t("skillWorkshop.viewer.archivedNotice")}</div>
-      ) : unused() !== null ? (
-        <div class="sw-notice sw-notice--warning">
-          {t("skillWorkshop.unused.notice", {
-            days: String(unused()),
-            limit: String(UNUSED_ARCHIVE_DAYS),
-          })}
-        </div>
-      ) : null}
-      <nav class="sw-tabs" aria-label={t("skillWorkshop.tabs.aria")}>
-        <For each={tabs()} keyed={(tab) => tab.value}>
-          {(tab) => (
-            <button
-              type="button"
-              class={["sw-tab", { "sw-tab--active": props.view().tab === tab().value }]}
-              aria-pressed={props.view().tab === tab().value ? "true" : "false"}
-              onClick={() => props.view().onTab(tab().value)}
-            >
-              {tab().label}
-              {tab().count > 0 && (
-                <>
-                  {" "}
-                  <span class="settings-count">{tab().count}</span>
-                </>
-              )}
-            </button>
-          )}
-        </For>
-      </nav>
-      <div class="sw-detail__body">
-        {props.view().tab === "history" ? (
-          <History view={props.view} />
-        ) : props.view().tab === "files" ? (
-          <Files view={props.view} files={supportFiles()} />
-        ) : (
-          <Instructions view={props.view} />
-        )}
-      </div>
-    </>
-  );
-}
-
-function LoadState(props: { viewer: WorkshopViewer }) {
-  return (
-    <>
-      {props.viewer.status === "loading" ? (
-        <SettingsEmpty message={t("skillWorkshop.viewer.loading")} />
-      ) : props.viewer.status === "error" ? (
-        <div role="alert">
-          <SettingsStatus kind="danger" label={props.viewer.error} carapace />
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-function Instructions(props: { view: WorkshopView }) {
-  const ready = () => {
-    const viewer = props.view().viewer;
-    return viewer?.status === "ready" ? viewer : null;
-  };
-  return (
-    <Show when={ready()} fallback={<LoadState viewer={props.view().viewer!} />}>
-      {(viewer) => {
-        const versions = () =>
-          props.view().snapshot?.list.archived.find((entry) => entry.name === viewer().target.name)
-            ?.versions ?? [];
-        const version = () => versions().find((entry) => entry.id === viewer().target.versionId);
-        const showVersionBar = () =>
-          viewer().target.versionId !== undefined &&
-          (viewer().current !== undefined || versions()[0]?.id !== viewer().target.versionId);
-        return (
-          <>
-            {showVersionBar() && (
-              <div class="sw-version-bar">
-                <span>
-                  {t("skillWorkshop.viewer.viewingVersion", {
-                    time: version()
-                      ? formatRelativeTimestamp(version()!.createdAtMs)
-                      : (viewer().target.versionId ?? ""),
-                  })}
-                  {viewer().current !== undefined && <> · {t("skillWorkshop.viewer.diffHint")}</>}
-                </span>
-                <span class="sw-version-bar__actions">
-                  {viewer().current !== undefined && (
-                    <button
-                      type="button"
-                      class="sw-link-button"
-                      onClick={() =>
-                        props.view().onOpen({ name: viewer().target.name, filePath: "SKILL.md" })
-                      }
-                    >
-                      {t("skillWorkshop.viewer.backToCurrent")}
-                    </button>
-                  )}
-                  <MutationButton
-                    view={props.view}
-                    label={t(
-                      viewer().current !== undefined
-                        ? "skillWorkshop.viewer.restoreVersion"
-                        : "skillWorkshop.viewer.restore",
+    <WorkshopDetailShell
+      kind="skill"
+      view={props.view}
+      page={props.page}
+      name={target().name}
+      summary={description()}
+      byline={byline()}
+      actions={
+        <MutationButton
+          view={props.view}
+          label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
+          title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
+          mutation={{
+            method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
+            name: target().name,
+          }}
+          actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
+          icon={skill() ? "archive" : "archiveRestore"}
+        />
+      }
+      panel={
+        <>
+          {props.errors}
+          {!skill() ? (
+            <div class="sw-notice">{t("skillWorkshop.viewer.archivedNotice")}</div>
+          ) : unused() !== null ? (
+            <InlineAlert tone="warning" class="sw-detail-alert">
+              {t("skillWorkshop.unused.notice", {
+                days: String(unused()),
+                limit: String(UNUSED_ARCHIVE_DAYS),
+              })}
+            </InlineAlert>
+          ) : null}
+          <div class="sw-section">
+            <nav class="sw-tabs" aria-label={t("skillWorkshop.tabs.aria")}>
+              <For each={tabs()} keyed={(tab) => tab.value}>
+                {(tab) => (
+                  <button
+                    type="button"
+                    class={["sw-tab", { "sw-tab--active": props.view().tab === tab().value }]}
+                    aria-pressed={props.view().tab === tab().value ? "true" : "false"}
+                    onClick={() => props.view().onTab(tab().value)}
+                  >
+                    {tab().label}
+                    {tab().count > 0 && (
+                      <>
+                        {" "}
+                        <span class="settings-count">{tab().count}</span>
+                      </>
                     )}
-                    mutation={{
-                      method: "skills.workshop.restore",
-                      name: viewer().target.name,
-                      versionId: viewer().target.versionId,
-                    }}
-                    actionKey={`restore:${viewer().target.name}:${viewer().target.versionId}`}
-                  />
-                </span>
-              </div>
+                  </button>
+                )}
+              </For>
+            </nav>
+            <div class="sw-detail__body">
+              {/* Boolean conditions keep each tab mounted across owner updates. */}
+              <Show
+                when={props.view().tab === "history"}
+                fallback={
+                  <Show
+                    when={props.view().tab === "files"}
+                    fallback={<Instructions view={props.view} reads={props.reads} />}
+                  >
+                    <Files view={props.view} reads={props.reads} files={supportFiles()} />
+                  </Show>
+                }
+              >
+                <History view={props.view} reads={props.reads} />
+              </Show>
+            </div>
+          </div>
+        </>
+      }
+      facts={
+        <>
+          <Show when={latest()}>
+            {(change) => {
+              const undo = () => undoMutationFor(change(), snapshot().list);
+              const retained = () =>
+                change().versionId !== undefined &&
+                versions().some((version) => version.id === change().versionId);
+              return (
+                <div class="sw-facts__change">
+                  <dt>
+                    {t(`skillWorkshop.changes.actors.${change().actor}`)}{" "}
+                    {t(`skillWorkshop.changes.actions.${change().action}`)}
+                  </dt>
+                  <dd>
+                    <span>{formatRelativeTimestamp(change().createdAtMs)}</span>
+                  </dd>
+                  <Show when={retained() || undo()}>
+                    <dd class="sw-facts__actions">
+                      <Show when={retained()}>
+                        <VersionLink
+                          name={target().name}
+                          versionId={change().versionId!}
+                          live={Boolean(skill())}
+                          view={props.view}
+                        />
+                      </Show>
+                      <Show when={undo()}>
+                        {(mutation) => (
+                          <MutationButton
+                            view={props.view}
+                            label={t("skillWorkshop.changes.undo")}
+                            title={t("skillWorkshop.changes.undoTitle", { name: target().name })}
+                            mutation={mutation()}
+                            actionKey={`undo:${change().id}`}
+                          />
+                        )}
+                      </Show>
+                    </dd>
+                  </Show>
+                </div>
+              );
+            }}
+          </Show>
+          <Show when={skill()}>
+            {(current) => (
+              <>
+                <div>
+                  <dt>{t("skillWorkshop.viewer.usesLabel")}</dt>
+                  <dd>
+                    {current().useCount
+                      ? String(current().useCount)
+                      : t("skillWorkshop.skills.noUses")}
+                  </dd>
+                </div>
+                <Show when={current().lastUsedAtMs}>
+                  {(time) => (
+                    <div>
+                      <dt>{t("skillWorkshop.viewer.lastUsedLabel")}</dt>
+                      <dd>{formatRelativeTimestamp(time())}</dd>
+                    </div>
+                  )}
+                </Show>
+              </>
             )}
-            {viewer().current !== undefined ? (
-              <Diff current={viewer().current!} version={viewer().result.content} />
-            ) : (
-              <MarkdownHtml
-                class="sw-markdown chat-text"
-                markdown={splitFrontmatter(viewer().result.content).body}
-                options={{ mode: "document" }}
-              />
-            )}
-          </>
-        );
-      }}
-    </Show>
+          </Show>
+          <Show when={versions().length > 0}>
+            <div>
+              <dt>{t("skillWorkshop.viewer.versionsLabel")}</dt>
+              <dd>{String(versions().length)}</dd>
+            </div>
+          </Show>
+        </>
+      }
+    />
   );
 }
 
-function Files(props: { view: WorkshopView; files: string[] }) {
+function Instructions(props: { view: WorkshopView; reads: WorkshopReads }) {
+  return (
+    <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
+      <Errored fallback={(error) => <LoadState error={error()} />}>
+        <Show when={props.reads.viewer()}>
+          {(viewer) => {
+            const versions = () =>
+              props
+                .view()
+                .snapshot?.list.archived.find((entry) => entry.name === viewer().target.name)
+                ?.versions ?? [];
+            const version = () =>
+              versions().find((entry) => entry.id === viewer().target.versionId);
+            const showVersionBar = () =>
+              viewer().target.versionId !== undefined &&
+              (viewer().current !== undefined || versions()[0]?.id !== viewer().target.versionId);
+            return (
+              <>
+                {showVersionBar() && (
+                  <div class="sw-version-bar">
+                    <span>
+                      <strong>
+                        {t("skillWorkshop.viewer.viewingVersion", {
+                          time: version()
+                            ? formatRelativeTimestamp(version()!.createdAtMs)
+                            : (viewer().target.versionId ?? ""),
+                        })}
+                      </strong>
+                      {viewer().current !== undefined && (
+                        <> · {t("skillWorkshop.viewer.diffHint")}</>
+                      )}
+                    </span>
+                    <span class="sw-version-bar__actions">
+                      {viewer().current !== undefined && (
+                        <button
+                          type="button"
+                          class="btn btn--sm oc-action"
+                          onClick={() =>
+                            props
+                              .view()
+                              .onOpen({ name: viewer().target.name, filePath: "SKILL.md" })
+                          }
+                        >
+                          {t("skillWorkshop.viewer.backToCurrent")}
+                        </button>
+                      )}
+                      <MutationButton
+                        view={props.view}
+                        label={t(
+                          viewer().current !== undefined
+                            ? "skillWorkshop.viewer.restoreVersion"
+                            : "skillWorkshop.viewer.restore",
+                        )}
+                        mutation={{
+                          method: "skills.workshop.restore",
+                          name: viewer().target.name,
+                          versionId: viewer().target.versionId,
+                        }}
+                        actionKey={`restore:${viewer().target.name}:${viewer().target.versionId}`}
+                      />
+                    </span>
+                  </div>
+                )}
+                {viewer().current !== undefined ? (
+                  <Diff
+                    before={viewer().result.content}
+                    after={viewer().current!}
+                    beforeLabel={t("skillWorkshop.viewer.diffVersion")}
+                    afterLabel={t("skillWorkshop.viewer.diffCurrent")}
+                  />
+                ) : (
+                  <div class="sw-well">
+                    <MarkdownHtml
+                      class="sw-markdown chat-text"
+                      markdown={splitFrontmatter(viewer().result.content).body}
+                      options={{ mode: "document" }}
+                    />
+                  </div>
+                )}
+              </>
+            );
+          }}
+        </Show>
+      </Errored>
+    </Loading>
+  );
+}
+
+/** Support files grouped by their folder; root files come first without a label. */
+function fileGroups(files: readonly string[]) {
+  const groups = new Map<string, string[]>();
+  for (const file of files) {
+    const slash = file.lastIndexOf("/");
+    const folder = slash === -1 ? "" : file.slice(0, slash);
+    groups.set(folder, [...(groups.get(folder) ?? []), file]);
+  }
+  return [...groups].map(([folder, entries]) => ({ folder, entries }));
+}
+
+function Files(props: { view: WorkshopView; reads: WorkshopReads; files: string[] }) {
   const viewer = () => props.view().viewer!;
   const active = () =>
     props.files.includes(viewer().target.filePath) ? viewer().target.filePath : null;
@@ -251,273 +390,66 @@ function Files(props: { view: WorkshopView; files: string[] }) {
       fallback={<SettingsEmpty message={t("skillWorkshop.viewer.noFiles")} />}
     >
       <div class="sw-files">
-        <ul class="sw-files__list">
-          <For each={props.files} keyed>
-            {(file) => (
-              <li>
-                <button
-                  type="button"
-                  class={["sw-files__item", { "sw-files__item--active": file === active() }]}
-                  aria-current={file === active() ? "true" : undefined}
-                  onClick={() => props.view().onOpen({ ...viewer().target, filePath: file })}
-                >
-                  <span aria-hidden="true">
-                    <Icon name="fileText" />
-                  </span>
-                  <span>{file}</span>
-                </button>
-              </li>
+        <div class="sw-files__list">
+          <For each={fileGroups(props.files)} keyed={(group) => group.folder}>
+            {(group) => (
+              <>
+                {group().folder && <span class="sw-files__folder">{group().folder}</span>}
+                <ul>
+                  <For each={group().entries} keyed>
+                    {(file) => (
+                      <li>
+                        <button
+                          type="button"
+                          class={[
+                            "sw-files__item",
+                            { "sw-files__item--active": file === active() },
+                          ]}
+                          aria-current={file === active() ? "true" : undefined}
+                          title={file}
+                          onClick={() =>
+                            props.view().onOpen({ ...viewer().target, filePath: file })
+                          }
+                        >
+                          {group().folder ? file.slice(group().folder.length + 1) : file}
+                        </button>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </>
             )}
           </For>
-        </ul>
+        </div>
         <div class="sw-files__content">
           {active() === null ? (
             <SettingsEmpty message={t("skillWorkshop.viewer.pickFile")} />
           ) : (
-            <FileContent viewer={viewer()} />
+            <FileContent reads={props.reads} />
           )}
         </div>
       </div>
     </Show>
   );
 }
-function FileContent(props: { viewer: WorkshopViewer }) {
+function FileContent(props: { reads: WorkshopReads }) {
   return (
-    <>
-      {props.viewer.status === "ready" ? (
-        props.viewer.target.filePath.endsWith(".md") ? (
-          <MarkdownHtml
-            class="sw-markdown chat-text"
-            markdown={props.viewer.result.content}
-            options={{ mode: "document" }}
-          />
-        ) : (
-          <pre class="sw-file">{props.viewer.result.content}</pre>
-        )
-      ) : (
-        <LoadState viewer={props.viewer} />
-      )}
-    </>
+    <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
+      <Errored fallback={(error) => <LoadState error={error()} />}>
+        <Show when={props.reads.viewer()}>
+          {(viewer) =>
+            viewer().target.filePath.endsWith(".md") ? (
+              <MarkdownHtml
+                class="sw-markdown chat-text"
+                markdown={viewer().result.content}
+                options={{ mode: "document" }}
+              />
+            ) : (
+              <pre class="sw-file">{viewer().result.content}</pre>
+            )
+          }
+        </Show>
+      </Errored>
+    </Loading>
   );
-}
-
-type SavedVersion = { id: string; action: SkillWorkshopChange["action"]; createdAtMs: number };
-function VersionLink(props: {
-  name: string;
-  versionId: string;
-  live: boolean;
-  view: WorkshopView;
-}) {
-  return (
-    <button
-      type="button"
-      class="sw-link-button"
-      title={props.live ? t("skillWorkshop.changes.compareTitle") : undefined}
-      onClick={() => {
-        props.view().onTab("instructions");
-        props.view().onOpen({ name: props.name, filePath: "SKILL.md", versionId: props.versionId });
-      }}
-    >
-      {t(props.live ? "skillWorkshop.changes.compare" : "skillWorkshop.changes.view")}
-    </button>
-  );
-}
-function History(props: { view: WorkshopView }) {
-  const name = () => props.view().viewer!.target.name;
-  const snapshot = () => props.view().snapshot!;
-  const history = createMemo(() =>
-    snapshot().changes.filter((change) => change.skillName === name()),
-  );
-  const versions = createMemo(
-    () => snapshot().list.archived.find((entry) => entry.name === name())?.versions ?? [],
-  );
-  const retained = createMemo(() => new Set(versions().map((version) => version.id)));
-  const older = createMemo(() => {
-    const listed = new Set(
-      history()
-        .map((change) => change.versionId)
-        .filter(Boolean),
-    );
-    return versions().filter((version) => !listed.has(version.id));
-  });
-  const live = () => snapshot().list.skills.some((skill) => skill.name === name());
-  return (
-    <Show
-      when={history().length > 0 || older().length > 0}
-      fallback={<SettingsEmpty message={t("skillWorkshop.changes.empty")} />}
-    >
-      <ol class="sw-timeline">
-        <For each={history()} keyed={(change) => change.id}>
-          {(change, index) => {
-            const undo = () => undoMutationFor(change(), snapshot().list);
-            return (
-              <li class={["sw-timeline__item", { "sw-timeline__item--latest": index() === 0 }]}>
-                <span class="sw-timeline__dot" aria-hidden="true" />
-                <div class="sw-timeline__text">
-                  <WorkshopChangeText change={change()} prefix="sw-timeline__" />
-                </div>
-                <div class="sw-timeline__actions">
-                  {change().versionId && retained().has(change().versionId!) && (
-                    <VersionLink
-                      name={name()}
-                      versionId={change().versionId!}
-                      live={live()}
-                      view={props.view}
-                    />
-                  )}
-                  <Show when={undo()}>
-                    {(mutation) => (
-                      <>
-                        {(index() === 0 || mutation().method === "skills.workshop.restore") && (
-                          <MutationButton
-                            view={props.view}
-                            label={t(
-                              index() === 0
-                                ? "skillWorkshop.changes.undo"
-                                : "skillWorkshop.changes.restoreBefore",
-                            )}
-                            title={t("skillWorkshop.changes.undoTitle", { name: name() })}
-                            mutation={mutation()}
-                            actionKey={`undo:${change().id}`}
-                            variant="link"
-                          />
-                        )}
-                      </>
-                    )}
-                  </Show>
-                </div>
-              </li>
-            );
-          }}
-        </For>
-        <For each={older()} keyed={(version: SavedVersion) => version.id}>
-          {(version) => (
-            <li class="sw-timeline__item">
-              <span class="sw-timeline__dot" aria-hidden="true" />
-              <div class="sw-timeline__text">
-                <span class="sw-timeline__who">
-                  {t("skillWorkshop.changes.savedBefore", {
-                    action: t(`skillWorkshop.changes.actions.${version().action}`),
-                  })}
-                </span>
-                <span class="sw-timeline__when">
-                  {formatRelativeTimestamp(version().createdAtMs)}
-                </span>
-              </div>
-              <div class="sw-timeline__actions">
-                <VersionLink
-                  name={name()}
-                  versionId={version().id}
-                  live={live()}
-                  view={props.view}
-                />
-                <MutationButton
-                  view={props.view}
-                  label={t("skillWorkshop.viewer.restore")}
-                  mutation={{
-                    method: "skills.workshop.restore",
-                    name: name(),
-                    versionId: version().id,
-                  }}
-                  actionKey={`restore:${name()}:${version().id}`}
-                  variant="link"
-                />
-              </div>
-            </li>
-          )}
-        </For>
-      </ol>
-    </Show>
-  );
-}
-
-function Diff(props: { current: string; version: string }) {
-  const lines = createMemo(() => diffLines(props.version, props.current));
-  return (
-    <Show
-      when={lines() && !lines()!.every((line) => line.kind === "same")}
-      fallback={
-        <>
-          <p class="sw-diff__same">
-            {t(
-              lines() === null
-                ? "skillWorkshop.viewer.diffTooLarge"
-                : "skillWorkshop.viewer.noDiff",
-            )}
-          </p>
-          <MarkdownHtml
-            class="sw-markdown chat-text"
-            markdown={splitFrontmatter(props.version).body}
-            options={{ mode: "document" }}
-          />
-        </>
-      }
-    >
-      <div class="sw-diff">
-        <div class="sw-diff__legend">
-          <span class="sw-diff__key sw-diff__key--remove">
-            {t("skillWorkshop.viewer.diffVersion")}
-          </span>
-          <span class="sw-diff__key sw-diff__key--add">
-            {t("skillWorkshop.viewer.diffCurrent")}
-          </span>
-        </div>
-        <div class="sw-diff__lines" role="table">
-          <For each={lines() ?? []}>
-            {(line) => (
-              <div class={["sw-diff__line", `sw-diff__line--${line.kind}`]} role="row">
-                <span class="sw-diff__sign" aria-hidden="true">
-                  {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""}
-                </span>
-                <span class="sw-diff__text">{line.text}</span>
-              </div>
-            )}
-          </For>
-        </div>
-      </div>
-    </Show>
-  );
-}
-/** SKILL.md frontmatter is shown as the header; the body renders as markdown. */
-function splitFrontmatter(content: string): { description?: string; body: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
-  if (!match) {
-    return { body: content };
-  }
-  const description = /^description:\s*(.*)$/m.exec(match[1] ?? "")?.[1]?.trim();
-  return { description, body: content.slice(match[0].length).replace(/^\s*\n/, "") };
-}
-
-type DiffLine = { kind: "same" | "add" | "remove"; text: string };
-
-// Skills cap at 200 KB, which can mean tens of thousands of lines; the LCS table is quadratic.
-const MAX_DIFF_CELLS = 2_000_000;
-
-/** Line diff (LCS over the lines between the common prefix and suffix); null when too large. */
-function diffLines(before: string, after: string): DiffLine[] | null {
-  const a = before.split("\n");
-  const b = after.split("\n");
-  let start = 0;
-  while (start < a.length && start < b.length && a[start] === b[start]) {
-    start += 1;
-  }
-  let endA = a.length;
-  let endB = b.length;
-  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
-    endA -= 1;
-    endB -= 1;
-  }
-  const midA = a.slice(start, endA);
-  const midB = b.slice(start, endB);
-  if ((midA.length + 1) * (midB.length + 1) > MAX_DIFF_CELLS) {
-    return null;
-  }
-  const lines: DiffLine[] = a.slice(0, start).map((text) => ({ kind: "same", text }));
-  visitTextDiff(midA, midB, (kind, text) => {
-    lines.push({ kind: kind === "ctx" ? "same" : kind === "del" ? "remove" : "add", text });
-  });
-  for (const text of a.slice(endA)) {
-    lines.push({ kind: "same", text });
-  }
-  return lines;
 }

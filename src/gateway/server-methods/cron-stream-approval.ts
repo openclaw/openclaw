@@ -194,8 +194,6 @@ export async function withCronStreamExecApproval<T>(params: {
             }
           };
           assertOperatorDecision();
-          await execution.revalidate?.();
-          assertOperatorDecision();
           const consumption = manager.prepareConsumeAllowOnce(
             record.id,
             `cron.stream:${mutation.method}:${job.id}`,
@@ -207,6 +205,8 @@ export async function withCronStreamExecApproval<T>(params: {
           const value = await params.mutate({
             policyKey: error.policyKey,
             binding,
+            createdAtMs: job.createdAtMs,
+            revalidateExecution: execution.revalidate,
             consumption: {
               ...consumption,
               markCommitted: (committed) => {

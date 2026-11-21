@@ -1,9 +1,10 @@
+import { getEventListeners } from "node:events";
 import { expect, it, vi, type Mock } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { captureBackendEvents } from "./embedded-backend.stream.test-support.js";
 import {
-  deferred,
   flushMicrotasks,
   localSessionEntry,
   sendMainChat,
@@ -89,7 +90,11 @@ export function registerEmbeddedFollowupTests({
           opts.abortSignal?.addEventListener("abort", firstAbort);
           return first.promise;
         })
-        .mockReturnValueOnce(second.promise)
+        .mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+          // Only the run's own cancellation observer remains after queue admission.
+          expect(getEventListeners(abortSignal, "abort")).toHaveLength(1);
+          return second.promise;
+        })
         .mockResolvedValueOnce({ payloads: [{ text: "third done" }], meta: {} });
       const entry = { queueMode: mode, queueDebounceMs: 0 };
       loadSessionEntryMock.mockImplementation((sessionKey, opts) =>

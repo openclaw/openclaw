@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { createSessionsYieldTool } from "./sessions-yield-tool.js";
+import {
+  createSessionsYieldTool,
+  isResumingAlreadyPendingSessionsYieldResult,
+} from "./sessions-yield-tool.js";
 
 function setup(options: Parameters<typeof createSessionsYieldTool>[0] = {}) {
   const onYield = vi.fn();
@@ -95,28 +98,25 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("keeps the turn active without a tool failure when it owns no pending child completion", async () => {
-    const { onYield, execute } = setup({ claimYield: () => false });
-    const result = await execute();
-
-    expect(isToolResultError(result)).toBe(false);
-    expect(result.details).toMatchObject({
-      status: "nothing_pending",
-      message: expect.stringContaining("did not pause the turn or schedule a continuation"),
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
-
-  it("does not ask an ineligible caller to repeat explicit message intent", async () => {
-    const { onYield, execute } = setup({ sessionId: "root", claimYield: () => false });
-    const result = await execute({ waitFor: "message" });
-    expect(result.details).toMatchObject({
-      status: "nothing_pending",
-      message: expect.stringContaining("eligible active native task"),
-    });
-    expect(JSON.stringify(result)).not.toContain("set waitFor");
-    expect(onYield).not.toHaveBeenCalled();
-  });
+  it.each([
+    [undefined, "test-session", "Reply to the user now"],
+    ["message", "root", "No active native task registered this message wait"],
+  ] as const)(
+    "keeps an ineligible turn active with intent %s",
+    async (waitFor, sessionId, message) => {
+      const { onYield, execute } = setup({ sessionId, claimYield: () => false });
+      const result = await execute({ waitFor });
+      expect(isToolResultError(result)).toBe(false);
+      expect(result.details).toMatchObject({
+        status: "nothing_pending",
+        message: expect.stringContaining(message),
+      });
+      if (waitFor) {
+        expect(JSON.stringify(result)).not.toContain("set waitFor");
+      }
+      expect(onYield).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports children an earlier turn already waits for instead of the generic error", async () => {
     const pendingChildren = [
@@ -166,6 +166,52 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["running", true, "yielded"],
+    ["running", false, "already_pending"],
+    ["paused", true, "already_pending"],
+  ] as const)(
+    "preserves a waiting acknowledgment only for an active armed completion (%s, %s)",
+    async (state, wakeArmed, status) => {
+      const pendingChildren = [
+        { runId: "earlier-child", childSessionKey: "agent:helper:child", state, wakeArmed },
+      ];
+      const acknowledgment = "The existing task is still running; I will report its result.";
+      const message = "PRIVATE_PENDING_WORK_CONTEXT";
+      const { onYield, execute } = setup({ claimYield: () => ({ pendingChildren }) });
+
+      const result = await execute({ message, acknowledgment });
+
+      expect(result.details).toMatchObject({ status, pendingChildren });
+      expect(JSON.stringify(result)).not.toContain(message);
+      if (status === "yielded") {
+        expect(result.details).toHaveProperty("acknowledgment", acknowledgment);
+        expect(onYield).toHaveBeenCalledExactlyOnceWith(message, acknowledgment, undefined);
+      } else {
+        expect(onYield).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("reports when waitFor was not applied because the turn yielded for its own children", async () => {
+    const { tool } = setup({ sessionId: "runner-session", claimYield: () => true });
+    const childWait = await tool.execute("child-wait", { waitFor: "message" });
+    expect(childWait.details).toEqual({
+      status: "yielded",
+      note: 'waitFor: "message" was not applied: this turn yielded for its own pending child completions or background commands, which resume this session. Omit waitFor when yielding for them.',
+    });
+    expect((await tool.execute("plain", {})).details).toEqual({ status: "yielded" });
+
+    const paused = setup({
+      sessionId: "runner-session",
+      claimYield: () => ({ messageWaitRegistered: true }),
+    });
+    expect((await paused.tool.execute("message-wait", { waitFor: "message" })).details).toEqual({
+      status: "yielded",
+    });
+    expect(paused.onYield).toHaveBeenCalledWith("Turn yielded.", undefined, true);
+  });
+
   it("passes explicit message intent to its owner without treating private text as intent", async () => {
     const claimYield = vi.fn(() => true);
     const { onYield, tool } = setup({ sessionId: "child-session", claimYield });
@@ -177,5 +223,43 @@ describe("sessions_yield tool", () => {
     expect(invalid.details).toMatchObject({ status: "error" });
     expect(claimYield).toHaveBeenCalledTimes(2);
     expect(onYield).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("isResumingAlreadyPendingSessionsYieldResult", () => {
+  const result = (status: string, children: unknown[]) => ({
+    content: [],
+    details: { status, pendingChildren: children },
+  });
+  const child = (state: string, wakeArmed: boolean) => ({
+    runId: "earlier-child",
+    childSessionKey: "agent:main:subagent:child",
+    state,
+    wakeArmed,
+  });
+
+  it.each([
+    ["an active armed child", [child("running", true)], true],
+    ["an armed child among paused ones", [child("paused", false), child("completing", true)], true],
+    ["only an unarmed child", [child("running", false)], false],
+    ["only a paused child", [child("paused", true)], false],
+    ["no children", [], false],
+  ])("requires a child that wakes the session: %s", (_name, children, expected) => {
+    expect(
+      isResumingAlreadyPendingSessionsYieldResult(
+        "sessions_yield",
+        result("already_pending", children),
+      ),
+    ).toBe(expected);
+  });
+
+  it("ignores other statuses and tools", () => {
+    const armed = [child("running", true)];
+    expect(
+      isResumingAlreadyPendingSessionsYieldResult("sessions_yield", result("yielded", armed)),
+    ).toBe(false);
+    expect(
+      isResumingAlreadyPendingSessionsYieldResult("message", result("already_pending", armed)),
+    ).toBe(false);
   });
 });

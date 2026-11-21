@@ -12,11 +12,11 @@ import {
   extractTextFromGatewayPayload,
   type ClaudeChannelNotification,
   type GatewayRpcClient,
-  maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels.fixture.ts";
 import {
   connectMcpClientWithPairingReconnect,
+  maybeApprovePendingBridgePairing,
   createMcpClientTempState,
 } from "./mcp-client-temp-state.fixture.ts";
 

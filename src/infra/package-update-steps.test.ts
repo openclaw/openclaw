@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
@@ -14,6 +16,7 @@ import {
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import { runStep as runCommandStep } from "./update-runner-command.js";
 
@@ -203,6 +206,61 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it("reports an interrupted step as the interruption, not a package failure", async () => {
+    const { globalRoot } = await npmPackage(base);
+    const interruption = new Error('Could not record update step "x": interrupted', {
+      cause: Object.assign(new Error("interrupted"), { code: "interrupted" }),
+    });
+    await expect(
+      runGlobalPackageUpdateSteps({
+        ...createNpmUpdateOptions(globalRoot, "openclaw@github:openclaw/openclaw#main"),
+        runStep: async () => {
+          throw interruption;
+        },
+      }),
+    ).rejects.toBe(interruption);
+  });
+
+  it.each([false, true])(
+    "cleans a throwing npm pack unless cleanup is uncertain (%s)",
+    async (uncertain) => {
+      const { globalRoot } = await npmPackage(base);
+      const failure = new Error("pack step threw", {
+        cause: uncertain ? new CommandProcessCleanupError() : undefined,
+      });
+      let packDir: string | undefined;
+      try {
+        const update = runGlobalPackageUpdateSteps({
+          ...createNpmUpdateOptions(globalRoot, "openclaw@github:openclaw/openclaw#main"),
+          runStep: async ({ argv }) => {
+            packDir = argv[argv.indexOf("--pack-destination") + 1];
+            throw failure;
+          },
+        });
+        if (uncertain) {
+          await expect(update).rejects.toBe(failure);
+        } else {
+          expect((await update).failedStep).toMatchObject({
+            name: "package-update",
+            stderrTail: "pack step threw",
+          });
+        }
+        if (!packDir) {
+          throw new Error("expected npm pack directory");
+        }
+        if (uncertain) {
+          await expect(fs.access(packDir)).resolves.toBeUndefined();
+        } else {
+          await expectPathMissing(packDir);
+        }
+      } finally {
+        if (packDir) {
+          await fs.rm(packDir, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
   it("swaps staged npm package roots through the copy fallback when rename crosses devices", async () => {
     const { globalRoot, packageRoot } = await npmPackage(base, false);
 
@@ -300,6 +358,55 @@ describe("runGlobalPackageUpdateSteps", () => {
         unlinkSpy.mockRestore();
         renameSpy.mockRestore();
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { name: "original 0644", mode: 0o644, changed: false, warning: false },
+    { name: "extra execute bits", mode: 0o755, changed: false, warning: true },
+    { name: "restored 0644", mode: 0o644, changed: false, warning: false },
+    { name: "changed bytes", mode: 0o644, changed: true, warning: false },
+    { name: "world-writable 0777", mode: 0o777, rejected: true },
+    { name: "group-writable executable 0775", mode: 0o775, rejected: true },
+    { name: "setuid 4755", mode: 0o4755, rejected: true },
+    { name: "missing executable bits", inventoryMode: 0o755, mode: 0o644, rejected: true },
+    { name: "owner-only 0600", mode: 0o600 },
+    { name: "non-executable 0664", mode: 0o664 },
+  ])(
+    "verifies staged npm content with $name",
+    async ({ name: caseName, mode, inventoryMode, changed, warning, rejected }) => {
+      const { globalRoot, packageRoot } = await npmPackage(base);
+      const result = await runGlobalPackageUpdateSteps({
+        ...createNpmUpdateOptions(globalRoot),
+        packageRoot,
+        runStep: async ({ name, argv, cwd }) => {
+          const layout = resolveNpmGlobalPrefixLayoutFromPrefix(stagedNpmPrefix(argv));
+          const stagedRoot = path.join(layout.globalRoot, "openclaw");
+          await writePackageRoot(stagedRoot, "2.0.0");
+          const entry = path.join(stagedRoot, "dist/index.js");
+          await fs.chmod(entry, inventoryMode ?? 0o644);
+          await writePackageDistInventory(stagedRoot);
+          if (caseName === "restored 0644") {
+            await fs.chmod(entry, 0o755);
+          }
+          await fs.chmod(entry, mode);
+          if (changed) {
+            await fs.writeFile(entry, "export const altered = true;\n");
+          }
+          return packageUpdateStepResult({ name, argv, cwd });
+        },
+      });
+
+      const failsVerification = changed || rejected;
+      expect(result.failedStep?.name ?? null).toBe(failsVerification ? "package-verify" : null);
+      expect(result.afterVersion).toBe(failsVerification ? "1.0.0" : "2.0.0");
+      await expectText(packageRoot, "package.json").toContain(
+        failsVerification ? '"version":"1.0.0"' : '"version":"2.0.0"',
+      );
+      const warnings = updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep));
+      expect(warnings).toEqual(
+        warning ? [expect.stringContaining("1 packaged dist file(s) have extra execute bits")] : [],
+      );
     },
   );
 
@@ -475,6 +582,7 @@ it.each([
     attempts: 1,
   },
   { manager: "npm", code: "ECONNRESET", spec: "", repaired: false, attempts: 2 },
+  { manager: "npm", code: "ERESOLVE", spec: "", repaired: true, attempts: 2 },
   { manager: "bun", code: "ETARGET", spec: "file-type@22.1.1", repaired: true, attempts: 2 },
 ] as const)(
   "bounds $manager $code retry for $spec (repaired=$repaired)",
@@ -538,14 +646,14 @@ it.each([
         }),
     });
     expect(installs).toHaveLength(attempts);
-    const refresh = attempts === 2 && code !== "ECONNRESET";
+    const refresh = attempts === 2 && ["E404", "EINTEGRITY", "ETARGET"].includes(code);
     expect(
       installs
         .flatMap(({ argv }) => argv)
         .filter((arg) => arg === "--prefer-online" || arg === "--no-cache"),
     ).toEqual(refresh ? [manager === "npm" ? "--prefer-online" : "--no-cache"] : []);
     expect(installs.flatMap(({ argv }) => argv).includes("--omit=optional")).toBe(
-      code === "ECONNRESET",
+      code === "ECONNRESET" || code === "ERESOLVE",
     );
     if (attempts === 2) {
       expect(installs[1]!.root).not.toBe(installs[0]!.root);
@@ -563,6 +671,22 @@ it.each([
     const warnings = updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep));
     expect(
       warnings.some((message) => message.includes(`Repaired stale package cache for ${spec}`)),
-    ).toBe(repaired);
+    ).toBe(repaired && refresh);
+    if (repaired) {
+      expect(result.steps[0]?.exitCode).toBe(1);
+      expect(result.steps[0]?.stderrTail).toContain(stderr);
+      const report = renderUpdateRunReport(
+        updateRunReportInputFromResult({
+          status: "ok",
+          mode: manager,
+          durationMs: 0,
+          steps: result.steps,
+        }),
+      );
+      expect(report.lines.some((line) => line.startsWith("Failed:"))).toBe(false);
+      if (!refresh) {
+        expect(warnings).toContain("Package install succeeded with optional dependencies omitted.");
+      }
+    }
   },
 );

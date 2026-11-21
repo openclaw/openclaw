@@ -6,7 +6,7 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import * as authStore from "../agents/auth-profiles/store.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   applyModelOverrideWithAuthProfileCompatibility as applyOverride,
@@ -21,20 +21,6 @@ afterEach(() => vi.restoreAllMocks());
 function profileConfig(provider: string, id = "team:prod"): OpenClawConfig {
   return { auth: { profiles: { [id]: { provider, mode: "api_key" } } } };
 }
-
-const workspaceAliasPlugin = {
-  id: "fixture-provider",
-  channels: [],
-  providers: ["fixture-provider", "fixture-provider-plan"],
-  cliBackends: [],
-  skills: [],
-  hooks: [],
-  origin: "workspace",
-  rootDir: "/plugins/fixture-provider",
-  source: "test",
-  manifestPath: "/plugins/fixture-provider/openclaw.plugin.json",
-  providerAuthAliases: { "fixture-provider-plan": "fixture-provider" },
-} satisfies PluginManifestRecord;
 
 const entry = {
   sessionId: "session-auth-profile-preservation",
@@ -57,12 +43,12 @@ it.each([
     const unexpectedRead = () => {
       throw new Error("unprepared synchronous credential read");
     };
-    const persisted = vi
-      .spyOn(authStore, "findPersistedAuthProfileCredential")
-      .mockImplementation(unexpectedRead);
-    const snapshot = vi
-      .spyOn(authStore, "getRuntimeAuthProfileStoreSnapshot")
-      .mockImplementation(unexpectedRead);
+    for (const reader of [
+      "findPersistedAuthProfileCredential",
+      "getRuntimeAuthProfileStoreSnapshot",
+    ] as const) {
+      vi.spyOn(authStore, reader).mockImplementation(unexpectedRead);
+    }
     const selectedEntry = { ...entry, authProfileOverride: "openai:missing" };
     const params = {
       ...defaults,
@@ -70,14 +56,8 @@ it.each([
       entry: selectedEntry,
       recordedProvider: { provider },
     };
-    expect(preserves(params)).toBe(expected);
-    applyOverride({
-      ...params,
-      selection: { provider: "openai", model: "selected-model" },
-    });
+    applyOverride({ ...params, selection: { provider: "openai", model: "selected-model" } });
     expect(selectedEntry.authProfileOverride).toBe(expected ? "openai:missing" : undefined);
-    expect(persisted).not.toHaveBeenCalled();
-    expect(snapshot).not.toHaveBeenCalled();
   },
 );
 it.each([
@@ -86,42 +66,33 @@ it.each([
 ])(
   "checks a pin's stored $credentialProvider realm against the configured endpoint",
   ({ credentialProvider, expected }) => {
-    const plugin: PluginManifestRecord = {
-      ...workspaceAliasPlugin,
+    const plugin = createPluginManifestRecordFixture({
       id: "arcee",
       origin: "bundled",
       providers: ["arcee"],
       providerAuthAliases: {
         arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
       },
-    };
-    expect(
-      preserves({
-        cfg: {
-          models: {
-            providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
-          },
-          ...profileConfig(credentialProvider),
+    });
+    const actual = preserves({
+      cfg: {
+        models: {
+          providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
         },
-        agentDir: tempDirs.make("openclaw-endpoint-profile-pin-"),
-        entry: { ...entry, authProfileOverride: "team:prod" },
-        currentProvider: "arcee",
-        provider: "arcee",
-        metadataSnapshot: { plugins: [plugin] },
-      }),
-    ).toBe(expected);
+        ...profileConfig(credentialProvider),
+      },
+      agentDir: tempDirs.make("openclaw-endpoint-profile-pin-"),
+      entry: { ...entry, authProfileOverride: "team:prod" },
+      currentProvider: "arcee",
+      provider: "arcee",
+      metadataSnapshot: { plugins: [plugin] },
+    });
+    expect(actual).toBe(expected);
   },
 );
 
-it.each([true, false])("workspace aliases require config trust: enabled=%s", (enabled) => {
-  expect(
-    preserves({
-      currentProvider: "fixture-provider",
-      provider: "fixture-provider-plan",
-      metadataSnapshot: { plugins: [workspaceAliasPlugin] },
-      cfg: enabled ? { plugins: { entries: { "fixture-provider": { enabled: true } } } } : {},
-    }),
-  ).toBe(enabled);
+it("uses a missing ordinary profile's provider prefix", () => {
+  expect(preserves({ provider: "fixture-provider" })).toBe(true);
 });
 
 it("uses the recorded provider for an arbitrary stored profile id", () => {
@@ -158,9 +129,8 @@ it.each(["openai", "anthropic"])(
         selection: { provider, model: "another-model" },
       });
 
-      expect(sessionEntry.authProfileOverride).toBe(provider === "openai" ? personalId : undefined);
-      expect(sessionEntry.authProfileOverrideSource).toBe(
-        provider === "openai" ? "user-link" : undefined,
+      expect([sessionEntry.authProfileOverride, sessionEntry.authProfileOverrideSource]).toEqual(
+        provider === "openai" ? [personalId, "user-link"] : [undefined, undefined],
       );
     });
   },

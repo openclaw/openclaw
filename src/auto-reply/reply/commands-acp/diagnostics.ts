@@ -1,5 +1,7 @@
+import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
@@ -9,11 +11,13 @@ import {
   listAcpSessionEntries,
   readAcpSessionEntryAsync,
 } from "../../../acp/runtime/session-meta.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listSessionBindingsBySessionsAsync } from "../../../infra/outbound/session-binding-service.js";
+import { canAccess } from "../../../infra/path-existence.js";
+import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
-import { resolveAcpInstallCommandHint } from "./install-hints.js";
 import {
   ACP_DOCTOR_USAGE,
   ACP_INSTALL_USAGE,
@@ -21,6 +25,40 @@ import {
   formatAcpCapabilitiesText,
 } from "./shared.js";
 import { resolveAcpTargetSessionKey } from "./targets.js";
+
+/** Resolves the install command hint shown when the configured ACP backend is missing. */
+async function resolveAcpInstallCommandHint(cfg: OpenClawConfig): Promise<string> {
+  const configured = normalizeOptionalString(cfg.acp?.runtime?.installCommand);
+  if (configured) {
+    return configured;
+  }
+  const workspaceDir = process.cwd();
+  const backendId = normalizeOptionalLowercaseString(cfg.acp?.backend) ?? "acpx";
+  if (backendId === "acpx") {
+    const workspaceLocalPath = path.join(workspaceDir, "extensions", "acpx");
+    if (await canAccess(workspaceLocalPath)) {
+      return `openclaw plugins install ${workspaceLocalPath}`;
+    }
+    const bundledInstallHint = resolveBundledPluginInstallCommandHint({
+      pluginId: backendId,
+      workspaceDir,
+    });
+    if (bundledInstallHint) {
+      const localPath = bundledInstallHint.replace(/^openclaw plugins install /u, "");
+      const resolvedLocalPath = path.resolve(localPath);
+      const relativeToWorkspace = path.relative(workspaceDir, resolvedLocalPath);
+      // Only surface local path hints that belong to the current workspace.
+      const belongsToWorkspace =
+        relativeToWorkspace.length === 0 ||
+        (!relativeToWorkspace.startsWith("..") && !path.isAbsolute(relativeToWorkspace));
+      if (belongsToWorkspace && (await canAccess(resolvedLocalPath))) {
+        return bundledInstallHint;
+      }
+    }
+    return "openclaw plugins install acpx";
+  }
+  return `Install and enable the plugin that provides ACP backend "${backendId}".`;
+}
 
 export async function handleAcpDoctorAction(
   params: HandleCommandsParams,
@@ -31,7 +69,7 @@ export async function handleAcpDoctorAction(
   }
 
   const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
-  const installHint = resolveAcpInstallCommandHint(params.cfg);
+  const installHint = await resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
   const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot();
   const lines = [
@@ -119,15 +157,15 @@ export async function handleAcpDoctorAction(
   return commandReply(lines.join("\n"));
 }
 
-export function handleAcpInstallAction(
+export async function handleAcpInstallAction(
   params: HandleCommandsParams,
   restTokens: string[],
-): CommandHandlerResult {
+): Promise<CommandHandlerResult> {
   if (restTokens.length > 0) {
     return commandReply(`⚠️ ${ACP_INSTALL_USAGE}`);
   }
   const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
-  const installHint = resolveAcpInstallCommandHint(params.cfg);
+  const installHint = await resolveAcpInstallCommandHint(params.cfg);
   const lines = [
     "ACP install:",
     "-----",

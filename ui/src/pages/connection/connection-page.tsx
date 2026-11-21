@@ -1,8 +1,9 @@
 import "../../styles/connection.css";
-import { createSignal, onCleanup } from "solid-js";
+import { createDeferred, createMemo, createSignal, onSettled } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -10,6 +11,8 @@ import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import { ConnectionDraft } from "./connection-draft.ts";
 import { ConnectionView } from "./view.tsx";
+
+registerRouteSubtitlesEnglish();
 
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
 
@@ -28,11 +31,26 @@ export function ConnectionPage() {
     },
     onPageActivation: () => draft.syncDiagnosticsPolling(),
   });
-  onCleanup(() => draft.dispose());
+  onSettled(() => () => draft.dispose());
   const viewProps = () => {
     revision();
     return draft.viewProps();
   };
+  const systemInfoReceipt = createMemo(
+    () => {
+      revision();
+      return { completion: draft.systemInfoRead, failed: draft.statusFailed };
+    },
+    {
+      equals: (previous, next) =>
+        previous.completion === next.completion && previous.failed === next.failed,
+    },
+  );
+  // Revalidation retains host data without holding live connection/draft changes.
+  const systemInfoReady = createDeferred(() => {
+    const receipt = systemInfoReceipt();
+    return receipt.completion ?? receipt.failed;
+  });
   return (
     <openclaw-connection-page>
       <SettingsPageHeader
@@ -44,7 +62,7 @@ export function ConnectionPage() {
         }
       />
       <SettingsWorkspace>
-        <ConnectionView {...viewProps()} />
+        <ConnectionView {...viewProps()} systemInfoReady={systemInfoReady} />
       </SettingsWorkspace>
     </openclaw-connection-page>
   );

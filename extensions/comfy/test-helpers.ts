@@ -1,4 +1,3 @@
-// Comfy helper module supports test helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createCapturedPluginRegistration,
@@ -10,19 +9,7 @@ import plugin from "./index.js";
 
 type FetchGuardMock = ReturnType<typeof vi.fn>;
 
-type FetchGuardRequest = {
-  init?: {
-    body?: unknown;
-  };
-};
-
-type ComfyCloudJobResponseOptions = {
-  body: BodyInit;
-  contentType: string;
-  filename: string;
-  outputKind: "gifs" | "images";
-  promptId: string;
-};
+type FetchGuardRequest = { init?: { body?: unknown } };
 
 export function registerComfyProviders() {
   const captured = createCapturedPluginRegistration();
@@ -35,23 +22,11 @@ export function registerComfyProviders() {
 }
 
 export function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
-  return {
-    plugins: {
-      entries: {
-        comfy: { config },
-      },
-    },
-  } as unknown as OpenClawConfig;
+  return { plugins: { entries: { comfy: { config } } } } as unknown as OpenClawConfig;
 }
 
 export function buildLegacyComfyConfig(config: Record<string, unknown>): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        comfy: config,
-      },
-    },
-  } as unknown as OpenClawConfig;
+  return { models: { providers: { comfy: config } } } as unknown as OpenClawConfig;
 }
 
 export function parseComfyJsonBody(
@@ -75,46 +50,13 @@ export function mockComfyProviderApiKey(apiKey = "comfy-test-key") {
   });
 }
 
-export function mockComfyCloudJobResponses(
-  fetchWithSsrFGuardMock: FetchGuardMock,
-  options: ComfyCloudJobResponseOptions,
-) {
-  fetchWithSsrFGuardMock
-    .mockResolvedValueOnce(fetchGuardJson({ prompt_id: options.promptId }))
-    .mockResolvedValueOnce(fetchGuardJson({ status: "completed" }))
-    .mockResolvedValueOnce(
-      fetchGuardJson({
-        [options.promptId]: {
-          outputs: {
-            "9": {
-              [options.outputKind]: [{ filename: options.filename, subfolder: "", type: "output" }],
-            },
-          },
-        },
-      }),
-    )
-    .mockResolvedValueOnce(
-      fetchGuardResponse(
-        new Response(options.body, {
-          status: 200,
-          headers: { "content-type": options.contentType },
-        }),
-      ),
-    );
-}
-
 export function fetchGuardJson(body: unknown) {
-  return fetchGuardResponse(
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
-  );
+  return fetchGuardResponse(JSON.stringify(body), "application/json");
 }
 
-function fetchGuardResponse(response: Response) {
+export function fetchGuardResponse(body: BodyInit, contentType: string) {
   return {
-    response,
+    response: new Response(body, { status: 200, headers: { "content-type": contentType } }),
     release: vi.fn(async () => {}),
   };
 }

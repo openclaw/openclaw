@@ -38,15 +38,6 @@ function stripTrustedUpstreamPrefix(modelId: string, prefix: string): string | n
   return upstreamModelId || null;
 }
 
-function hasVercelSpecificClaudeProfile(profile: ProviderThinkingProfile): boolean {
-  return Boolean(
-    profile.defaultLevel ||
-    profile.levels.some(
-      (level) => level.id === "adaptive" || level.id === "xhigh" || level.id === "max",
-    ),
-  );
-}
-
 export function resolveVercelAiGatewayThinkingProfile(
   modelId: string,
 ): ProviderThinkingProfile | undefined {
@@ -63,7 +54,12 @@ export function resolveVercelAiGatewayThinkingProfile(
     // Returning a base-only provider profile would hide catalog compat metadata
     // from generic thinking resolution. Only take over when Claude has an
     // upstream-specific default or elevated level set.
-    return hasVercelSpecificClaudeProfile(profile) ? profile : undefined;
+    return profile.defaultLevel ||
+      profile.levels.some(
+        (level) => level.id === "adaptive" || level.id === "xhigh" || level.id === "max",
+      )
+      ? profile
+      : undefined;
   }
 
   return undefined;

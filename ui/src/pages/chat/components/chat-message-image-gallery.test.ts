@@ -10,6 +10,7 @@ import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
+import { readImageOriginalBlob } from "./chat-message-image-open.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   imageResponse,
@@ -115,6 +116,40 @@ function createGallery() {
 }
 
 describe("message image gallery loading", () => {
+  it.each([false, true])("reads full original bytes for managed=%s images", async (managed) => {
+    const source = managed ? managedSource() : "https://images.example.test/original.png";
+    stubObjectUrls();
+    const fetchImage = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchImage);
+
+    const blob = await readImageOriginalBlob(
+      { url: source, mimeType: "image/png" },
+      { mediaOwner: onMediaChange },
+    );
+
+    expect(blob.type).toBe("image/png");
+    expect(await blob.text()).toBe("png");
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(fetchImage.mock.calls[0]).toEqual([
+      source,
+      expect.objectContaining(
+        managed
+          ? { method: "GET", credentials: "same-origin", signal: expect.any(AbortSignal) }
+          : { credentials: "same-origin", referrerPolicy: "no-referrer" },
+      ),
+    ]);
+  });
+
+  it("rejects an unsuccessful original image download", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 503 })),
+    );
+    await expect(
+      readImageOriginalBlob({ url: "https://images.example.test/unavailable.png" }),
+    ).rejects.toThrow("Image download failed");
+  });
+
   it("renders canonical inbound transcript images through the authenticated media route", async () => {
     const source = `media://inbound/${crypto.randomUUID()}.png`;
     const filename = "café 雪 🦞.png";
@@ -321,37 +356,94 @@ function renderMessage(
 }
 
 describe("message attachment image gallery projection", () => {
-  it.each([
-    {
-      format: "MEDIA directives",
-      content:
-        "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
-    },
-    {
-      format: "mixed image blocks and document-shaped images",
-      content: [
-        { type: "text", text: "Introduction\n\n**Before**" },
-        { type: "image", url: "https://example.com/before.png" },
-        { type: "text", text: "**After**" },
-        createAttachmentBlock(
-          "https://example.com/after.png",
-          "document",
-          "after.png",
-          "application/octet-stream; charset=binary",
-        ),
-        { type: "text", text: "Closing paragraph" },
-      ],
-    },
-  ])(
-    "keeps assistant $format in order and in one image gallery without persisted mirrors",
-    async ({ content }) => {
+  it.each([0, 40_001])(
+    "opens recovered Markdown images with %i characters of padding",
+    async (length) => {
+      const src = "https://example.com/preview.png";
+      const markdown = "x".repeat(length) + "\n\n![Preview](" + src + ")";
       const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      renderMessage(
+        createAssistantMessage("Loading preview", {
+          __openclaw: { id: "recovered-image", seq: 1, truncated: true },
+        }),
+        "assistant",
+        {
+          onOpenImage,
+          sessionKey: "agent:main:main",
+          loadFullAssistantMessage: async () => null,
+          getAssistantMessageExpansion: () => ({
+            status: "loaded",
+            markdown,
+            message: length ? createAssistantMessage(markdown) : undefined,
+            revision: 1,
+          }),
+          onToggleAssistantMessageExpanded: vi.fn(),
+        },
+      );
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-text img")?.getAttribute("src")).toBe(src),
+      );
+      container.querySelector<HTMLImageElement>(".chat-text img")?.click();
+      expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ src }));
+    },
+  );
+
+  it.each(
+    [
+      {
+        format: "MEDIA directives",
+        content:
+          "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
+      },
+      {
+        format: "mixed image blocks and document-shaped images",
+        content: [
+          { type: "text", text: "Introduction\n\n**Before**" },
+          { type: "image", url: "https://example.com/before.png" },
+          { type: "text", text: "**After**" },
+          createAttachmentBlock(
+            "https://example.com/after.png",
+            "document",
+            "after.png",
+            "application/octet-stream; charset=binary",
+          ),
+          { type: "text", text: "Closing paragraph" },
+        ],
+      },
+    ].flatMap((fixture) =>
+      [false, true].map((cachedDimensions) => Object.assign({}, fixture, { cachedDimensions })),
+    ),
+  )(
+    "keeps assistant $format in one gallery with cached dimensions=$cachedDimensions",
+    async ({ content, cachedDimensions }) => {
+      const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      const images = Object.fromEntries(
+        ["before", "after"].map((name) => [
+          JSON.stringify([null, `https://example.com/${name}.png`, 480]),
+          { width: 480, height: 240, rendition: 480 as const },
+        ]),
+      );
       renderMessage(
         createAssistantMessage(content, {
           timestamp: 1000,
+          __openclaw: { id: "cached-gallery" },
         }),
         "assistant",
-        { onOpenImage },
+        {
+          onOpenImage,
+          displayFacts: cachedDimensions
+            ? {
+                forRow: (id) =>
+                  id === "cached-gallery"
+                    ? {
+                        read: () => ({ scope: "cached-gallery", facts: { images } }),
+                        write: vi.fn(),
+                      }
+                    : undefined,
+              }
+            : undefined,
+        },
       );
 
       await waitForSolid(() =>
@@ -433,5 +525,64 @@ describe("message attachment image gallery projection", () => {
       index,
       items: [expect.any(Function), expect.any(Function)],
     });
+  });
+  it("follows transcript tile order across the opened turn", async () => {
+    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+    const first = createAssistantMessage(
+      [
+        { type: "text", text: "Introduction" },
+        { type: "image", url: "https://example.com/inline.png" },
+      ],
+      {
+        __openclaw: {
+          id: "turn-first",
+          media: [{ path: "https://example.com/supplemental.png", contentType: "image/png" }],
+        },
+      },
+    );
+    const last = createAssistantMessage([{ type: "image", url: "https://example.com/last.png" }], {
+      __openclaw: { id: "turn-last" },
+    });
+    const turn = [
+      { key: "first", message: first },
+      { key: "last", message: last },
+    ];
+    mountSolid(
+      MessageGroup,
+      {
+        group: createMessageGroup(first, "assistant", {
+          messages: [{ key: "first", message: first }],
+        }),
+        options: {
+          showReasoning: false,
+          showToolCalls: false,
+          assistantName: "OpenClaw",
+          assistantAvatar: null,
+          getThreadMediaMessages: (key) => (key === "first" ? turn : undefined),
+          onOpenImage,
+        },
+      },
+      container,
+    );
+    const rendered = () =>
+      Array.from(
+        container.querySelectorAll<HTMLImageElement>(".chat-message-image"),
+        (image) => new URL(image.src).pathname,
+      );
+    // In-order replies place unpositioned media above their text.
+    await waitForSolid(() => expect(rendered()).toEqual(["/supplemental.png", "/inline.png"]));
+    const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
+    for (const [index, tile] of tiles.entries()) {
+      tile.click();
+      const gallery = expectDefined(onOpenImage.mock.calls.at(-1)?.[0].gallery, "turn gallery");
+      expect(gallery.index).toBe(index);
+      const items = await Promise.all(gallery.items.map((load) => load()));
+      expect(items.map((item) => item && new URL(item.src).pathname)).toEqual([
+        "/supplemental.png",
+        "/inline.png",
+        "/last.png",
+      ]);
+      items.forEach((item) => item?.release?.());
+    }
   });
 });

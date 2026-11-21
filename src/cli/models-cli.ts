@@ -37,20 +37,8 @@ async function withModelsRuntime(
   return runtime.runModelsCommand(() => action(runtime));
 }
 
-function runAgentModelCommand<T extends object>(
-  command: Command,
-  options: (agent: string | undefined) => T,
-  load: () => Promise<(opts: T, runtime: ModelsCliRuntime["defaultRuntime"]) => Promise<void>>,
-): Promise<void> {
-  return withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-    const agent = resolveModelAgentOption(command);
-    const run = await load();
-    await run(options(agent), defaultRuntime);
-  });
-}
-
 // Ownership is selected before loading any mutation-capable auth runtime.
-function runAuthModelCommand<T extends object>(
+export function runAuthModelCommand<T extends object>(
   command: Command,
   options: (agent: string | undefined) => T,
   load: () => Promise<(opts: T, runtime: ModelsCliRuntime["defaultRuntime"]) => Promise<void>>,
@@ -331,11 +319,11 @@ export function registerModelsCli(program: Command) {
     .option("--probe-max-tokens <n>", "Maximum tokens per check (best-effort)")
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .action((opts: ModelsStatusOptions, command) =>
-      runAgentModelCommand(
-        command,
-        (agent) => ({ ...opts, json: hasJsonOutput(opts), agent }),
-        async () => (await import("../commands/models/list.status-command.js")).modelsStatusCommand,
-      ),
+      withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command);
+        const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
+        await modelsStatusCommand({ ...opts, json: hasJsonOutput(opts), agent }, defaultRuntime);
+      }),
     );
 
   models
@@ -522,6 +510,8 @@ export function registerModelsCli(program: Command) {
     .command("auth")
     .description("Manage system/agent credentials on this machine");
   auth.option("--agent <id>", "Agent id for auth commands");
+  const mutationAgentHelp =
+    "Agent id (default: the only configured agent; required when multiple agents are configured)";
   auth.action(() => {
     auth.help();
   });
@@ -543,7 +533,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("add")
     .description("Interactive auth helper (provider auth or paste token)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .action((_opts, command) =>
       runAuthModelCommand(
         command,
@@ -556,7 +546,7 @@ export function registerModelsCli(program: Command) {
     .command("activate")
     .description("Test a saved sign-in and use it for this agent")
     .argument("<profileId>", "Saved sign-in id from models auth list")
-    .option("--agent <id>", "Agent id (default: the only configured agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .action((profileId: string, _opts, command) =>
       runAuthModelCommand(
         command,
@@ -569,7 +559,7 @@ export function registerModelsCli(program: Command) {
     .command("logout")
     .description("Remove a saved auth profile (see `models auth list` for ids)")
     .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .option("--yes", "Skip the confirmation prompt", false)
     .action((profileId: string, opts: { agent?: string; yes?: boolean }, command) =>
       runAuthModelCommand(
@@ -582,7 +572,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("login")
     .description("Sign in for system/agent use on this machine (OAuth/API key)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--device-code", "Use the provider device-code auth method", false)
@@ -609,7 +599,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("setup-token")
     .description("Run a provider CLI to create/sync a token (TTY required)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .option("--provider <name>", "Provider id")
     .option("--yes", "Skip confirmation", false)
     .action((opts: { provider?: string; agent?: string; yes?: boolean }, command) =>
@@ -629,7 +619,7 @@ export function registerModelsCli(program: Command) {
       .description(
         `Save ${name === "paste-token" ? "a" : "an"} ${noun} in an auth profile and update config`,
       )
-      .option("--agent <id>", "Agent id (default: configured default agent)")
+      .option("--agent <id>", mutationAgentHelp)
       .requiredOption("--provider <name>", `Provider id (e.g. ${exampleProvider})`)
       .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)");
     if (name === "paste-token") {
@@ -650,7 +640,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("login-github-copilot")
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .option("--yes", "Overwrite existing profile without prompting", false)
     .action((opts: { agent?: string; yes?: boolean }, command) =>
       runAuthModelCommand(
@@ -680,7 +670,7 @@ export function registerModelsCli(program: Command) {
     .command("set")
     .description("Set per-agent auth profile order override")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:default)")
     .action((profileIds: string[], opts: ModelsAuthOrderOptions, command) =>
       runAuthModelCommand(
@@ -694,7 +684,7 @@ export function registerModelsCli(program: Command) {
     .command("clear")
     .description("Clear per-agent auth profile order override")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", mutationAgentHelp)
     .action((opts: ModelsAuthOrderOptions, command) =>
       runAuthModelCommand(
         command,

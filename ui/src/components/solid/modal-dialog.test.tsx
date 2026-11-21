@@ -4,8 +4,9 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush, untrack } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
-import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.ts";
+import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.tsx";
 
 function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
   const dialog = host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
@@ -16,15 +17,10 @@ function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
 }
 
 let restoreDialog: () => void;
-let frames: Map<number, FrameRequestCallback>;
-let nextFrame: number;
+let frameClock: ReturnType<typeof createFrameClock>;
 
 async function completeFrames() {
-  const pending = [...frames.values()];
-  frames.clear();
-  for (const frame of pending) {
-    frame(0);
-  }
+  frameClock.flush(0);
   await Promise.resolve();
   await Promise.resolve();
 }
@@ -70,13 +66,11 @@ function mount(
 
 beforeEach(() => {
   restoreDialog = installDialogPolyfill();
-  frames = new Map();
-  nextFrame = 0;
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+  frameClock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    frameClock.request(callback),
+  );
+  vi.stubGlobal("cancelAnimationFrame", (frame: number) => frameClock.cancel(frame));
   vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
 });
 

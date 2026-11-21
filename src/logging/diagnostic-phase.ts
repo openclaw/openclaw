@@ -6,6 +6,7 @@ import {
   type DiagnosticPhaseSnapshot,
 } from "../infra/diagnostic-events.js";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { roundDiagnosticMetric as roundMetric } from "./diagnostic-metric.js";
 
 const RECENT_PHASE_CAPACITY = 40;
 
@@ -19,14 +20,6 @@ type ActiveDiagnosticPhase = {
 
 let activePhaseStack: ActiveDiagnosticPhase[] = [];
 let recentPhases: DiagnosticPhaseSnapshot[] = [];
-
-function roundMetric(value: number, digits = 1): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor;
-}
 
 function pushRecentPhase(snapshot: DiagnosticPhaseSnapshot): void {
   recentPhases.push(snapshot);

@@ -111,7 +111,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
                 model: { primary: MODEL_KEY },
                 models: { [MODEL_KEY]: { agentRuntime: { id: "openclaw" } } },
                 thinkingDefault: "low",
-                heartbeat: { every: "0m" },
                 sandbox: { mode: "off" },
                 timeoutSeconds: RUN_TIMEOUT_MS / 1000,
               },
@@ -146,7 +145,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
           const connected = await connectGatewayClient({
             url: instance.url,
             token: instance.gatewayToken,
-            clientName: GATEWAY_CLIENT_NAMES.TEST,
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],

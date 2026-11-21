@@ -250,6 +250,7 @@ export async function createNativeRuntime(
           stop: options?.stop,
           serviceTier: options?.serviceTier,
           cacheRetention: options?.cacheRetention,
+          promptCacheTtl: options?.promptCacheTtl,
           timeoutMs: options?.timeoutMs,
           maxRetryDelayMs: options?.maxRetryDelayMs,
           onActiveResponse: options?.onActiveResponse,
@@ -282,9 +283,6 @@ export async function createNativeRuntime(
             }
           },
         });
-        assertActive();
-        await assertWorkspace(workspace);
-        await assertWorkspace(assignedWorkspace);
         assertActive();
         return result;
       } finally {

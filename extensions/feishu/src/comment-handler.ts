@@ -332,7 +332,7 @@ export async function handleFeishuCommentEvent(
       });
     },
     onError: (err, info) => {
-      runtime.error?.(
+      runtime.error(
         `feishu[${account.accountId}]: comment dispatcher failed kind=${info.kind} comment=${turn.commentId}: ${String(err)}`,
       );
     },

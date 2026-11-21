@@ -1,9 +1,11 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { gmailGogCheck } from "./doctor-gmail-gog-check.js";
 import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
 import {
   runClaudeCliHealth,
@@ -30,7 +32,9 @@ import {
   legacyOwnedRepair,
   recordDoctorHealthWarnings,
 } from "./doctor-health-contribution.js";
+import { memberRolesCheck, runMemberRolesHealth } from "./doctor-member-roles.js";
 import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
+import { openClawIdAccessCheck, runOpenClawIdAccessHealth } from "./doctor-openclaw-id-access.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
   return async (ctx) => {
@@ -87,11 +91,23 @@ export function resolveInitialDoctorHealthContributions(params: {
         await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
       },
     }),
+    createDoctorHealthContribution("doctor:runtime-capabilities", "Runtime capabilities", {
+      healthCheckIds: ["core/doctor/runtime-capabilities"],
+      async run() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        note(
+          formatRuntimeCapabilities(collectRuntimeCapabilities()),
+          "Runtime capabilities (Doctor process)",
+        );
+      },
+    }),
     createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {
       healthCheckIds: ["core/doctor/gateway-config"],
       run: params.runGatewayConfigHealth,
     }),
     createDoctorHealthContribution("doctor:database-engine", "Database engines", {
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Selected database engines, physical store health, and recovery guidance.",
         async detect(ctx) {
@@ -125,6 +141,10 @@ export function resolveInitialDoctorHealthContributions(params: {
       updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/claude-cli"],
       run: runClaudeCliHealth,
+    }),
+    createDoctorHealthContribution("doctor:gmail-gog", "Gmail Gog", {
+      updateWork: { kind: "inspection", scope: "run" },
+      healthChecks: gmailGogCheck,
     }),
     createDoctorHealthContribution("doctor:gateway-auth", "Gateway auth", {
       healthCheckIds: ["core/doctor/gateway-auth"],
@@ -162,12 +182,16 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     ),
     createDoctorHealthContribution("doctor:legacy-state", "Legacy state", {
-      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
+      healthCheckIds: [
+        "core/doctor/legacy-state",
+        "core/doctor/removed-workspaces-state",
+        "core/doctor/session-archive-read-cache",
+      ],
       run: params.runLegacyStateHealth,
     }),
-    createDoctorHealthContribution("doctor:session-transcripts", "Session transcripts", {
+    createDoctorHealthContribution("doctor:session-transcripts", "Chat history", {
       healthChecks: {
-        description: "Legacy or branchy session transcript files are represented as findings.",
+        description: "Legacy or branched chat history files are represented as findings.",
         defaultEnabled: false,
         async detect() {
           const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
@@ -281,7 +305,6 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           const { maybeRunConfiguredPluginInstallReleaseStep } =
             await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-          const { note } = await import("../../packages/terminal-core/src/note.js");
           const { VERSION } = await import("../version.js");
           const result = await maybeRunConfiguredPluginInstallReleaseStep({
             cfg: ctx.cfg,
@@ -295,7 +318,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           if (result.postInstallDoctorResult) {
             ctx.postInstallDoctorResult = result.postInstallDoctorResult;
           }
-          noteDoctorRepairResult(result, note);
+          noteDoctorRepairResult(result);
           if (!result.touchedConfig) {
             return;
           }
@@ -407,10 +430,10 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
-        async detect() {
+        async detect(ctx) {
           const { collectDiskSpaceHealthFindings } =
             await import("../commands/doctor-disk-space.js");
-          return collectDiskSpaceHealthFindings();
+          return collectDiskSpaceHealthFindings(ctx.env);
         },
       },
       async run() {
@@ -421,17 +444,17 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:project-clone-shape", "Project clones", {
       updateWork: { kind: "standalone" },
       healthChecks: {
-        description: "Partial and shallow registry-owned project clones need manual repair.",
+        description: "Shallow registry-owned project clones need full history.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectProjectCloneShapeHealthFindings } =
             await import("../commands/doctor-project-clone-shape.js");
-          return await collectProjectCloneShapeHealthFindings(ctx.cfg);
+          return await collectProjectCloneShapeHealthFindings(ctx.cfg, { env: ctx.env });
         },
       },
       async run(ctx) {
         const { noteProjectCloneShape } = await import("../commands/doctor-project-clone-shape.js");
-        await noteProjectCloneShape(ctx.cfg);
+        await noteProjectCloneShape(ctx.cfg, { repair: ctx.options.repair, env: ctx.env });
       },
     }),
     createDoctorHealthContribution("doctor:db-bloat", "SQLite database size", {
@@ -508,7 +531,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution(
       "doctor:session-transcript-headers",
-      "Session transcript headers",
+      "Chat history headers",
       async (ctx) => {
         const { noteSessionTranscriptHeaderHealth } =
           await import("../commands/doctor-session-transcript-headers.js");
@@ -522,7 +545,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution(
       "doctor:session-transcript-labels",
-      "Session transcript labels",
+      "Chat history labels",
       async (ctx) => {
         const { noteSessionTranscriptLabelHealth } =
           await import("../commands/doctor-session-transcript-labels.js");
@@ -583,33 +606,43 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:legacy-cron", "Legacy cron", {
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
+      healthCheckIds: [
+        "core/doctor/legacy-whatsapp-crontab",
+        "core/doctor/legacy-cron-store",
+        "core/doctor/cron-inference-accounts",
+      ],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
-      healthChecks: {
-        id: "core/doctor/sandbox/registry-files",
-        description: "Legacy sandbox registry files are represented in SQLite registry storage.",
-        async detect() {
-          const {
-            detectLegacySandboxRegistryFileIssues,
-            legacySandboxRegistryInspectionToHealthFinding,
-          } = await import("../commands/doctor-sandbox.js");
-          return (await detectLegacySandboxRegistryFileIssues()).map(
-            legacySandboxRegistryInspectionToHealthFinding,
-          );
+      healthChecks: [
+        {
+          id: "core/doctor/sandbox/registry-files",
+          description: "Legacy sandbox registry files are represented in SQLite registry storage.",
+          async detect() {
+            const {
+              detectLegacySandboxRegistryFileIssues,
+              legacySandboxRegistryInspectionToHealthFinding,
+            } = await import("../commands/doctor-sandbox.js");
+            return (await detectLegacySandboxRegistryFileIssues()).map(
+              legacySandboxRegistryInspectionToHealthFinding,
+            );
+          },
+          repair: legacyOwnedRepair(async () => {
+            const {
+              detectLegacySandboxRegistryFileIssues,
+              legacySandboxRegistryInspectionToRepairEffect,
+            } = await import("../commands/doctor-sandbox.js");
+            return (await detectLegacySandboxRegistryFileIssues()).map(
+              legacySandboxRegistryInspectionToRepairEffect,
+            );
+          }, "legacy doctor sandbox contribution owns registry migration"),
         },
-        repair: legacyOwnedRepair(async () => {
-          const {
-            detectLegacySandboxRegistryFileIssues,
-            legacySandboxRegistryInspectionToRepairEffect,
-          } = await import("../commands/doctor-sandbox.js");
-          return (await detectLegacySandboxRegistryFileIssues()).map(
-            legacySandboxRegistryInspectionToRepairEffect,
-          );
-        }, "legacy doctor sandbox contribution owns registry migration"),
-      },
+        memberRolesCheck,
+        openClawIdAccessCheck,
+      ],
       async run(ctx) {
+        await runOpenClawIdAccessHealth(ctx);
+        await runMemberRolesHealth(ctx);
         const {
           maybeRepairSandboxImages,
           maybeRepairSandboxRegistryFiles,
@@ -624,7 +657,8 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           maintenance.assertOwnerCurrent();
         });
-        await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        const imageWarnings = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        recordDoctorHealthWarnings(ctx, [], imageWarnings);
         noteSandboxScopeWarnings(ctx.cfg);
       },
     }),

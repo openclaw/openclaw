@@ -172,6 +172,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       // The packet supplies signed source identity; the capsule carrier HEAD is different.
       declaredSignedCommit,
     };
+    const proofIdentity = { mode, cell, identity, source };
     const evidence = await createEvidenceDirectory(cell);
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "slack-crabline-candidate-"));
     const gatewayOwner = createQaGatewayChild();
@@ -249,20 +250,17 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       const botUserId = probe.user_id;
       const nativeMessages = async (channel: string, threadId?: string) => {
         const method = threadId ? "conversations.replies" : "conversations.history";
-        const response = await fetch(`${manifest.endpoints.apiRoot}${method}`, {
+        const history = await json<{
+          ok: boolean;
+          messages: Array<{ ts: string; text: string; user: string; thread_ts?: string }>;
+        }>(`${manifest.endpoints.apiRoot}${method}`, signal, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             authorization: `Bearer ${manifest.botToken}`,
           },
           body: JSON.stringify({ channel, ...(threadId ? { ts: threadId } : {}) }),
-          signal,
         });
-        expect(response.ok).toBe(true);
-        const history = (await response.json()) as {
-          ok: boolean;
-          messages: Array<{ ts: string; text: string; user: string; thread_ts?: string }>;
-        };
         expect(history.ok).toBe(true);
         return history.messages;
       };
@@ -389,8 +387,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         expect(normalized.id).not.toBe("");
         const requests = await modelRequests(cursor.modelCursor);
         const ownRequests = requests.filter((entry) => entry.allInputText.includes(marker));
-        expect(ownRequests).toHaveLength(1);
-        expect(ownRequests[0]!.outcome).toBe("success");
+        expect(ownRequests).toMatchObject([{ outcome: "success" }]);
         expect(requests.every((entry) => !entry.allInputText.includes(unboundMarker))).toBe(true);
         const posts = (await records())
           .slice(cursor.recorderCursor)
@@ -412,8 +409,10 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
           kind === "thread" ? parentId : undefined,
         );
         const nativeReply = history.find((message) => message.text === reply);
-        expect(nativeReply?.ts).toMatch(/^\d+\.\d+$/u);
-        expect(nativeReply?.user).toBe(botUserId);
+        expect(nativeReply).toMatchObject({
+          ts: expect.stringMatching(/^\d+\.\d+$/u),
+          user: botUserId,
+        });
         expect(nativeReply?.thread_ts).toBe(kind === "thread" ? parentId : undefined);
         expect(normalized.threadId).toBe(kind === "thread" ? parentId : undefined);
         cells.push({
@@ -448,11 +447,8 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         observeCleanup("snapshot", async () => {
           snapshot = {
             proof: "slack-public-callback-candidate",
-            mode,
-            cell,
+            ...proofIdentity,
             completed,
-            identity,
-            source,
             effectiveConfig,
             cells: cells.map((entry) => Object.assign({}, entry)),
             artifactDirectory: directory,
@@ -554,10 +550,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
                 ...closure,
                 bodyFailure:
                   bodyFailure instanceof Error
-                    ? {
-                        name: bodyFailure.name,
-                        message: bodyFailure.message,
-                      }
+                    ? { name: bodyFailure.name, message: bodyFailure.message }
                     : (bodyFailure ?? null),
               }),
             );
@@ -597,10 +590,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
                 await receipt.writeFile(
                   JSON.stringify({
                     ...snapshot,
-                    cell,
-                    mode,
-                    identity,
-                    source,
+                    ...proofIdentity,
                     completed,
                     closure,
                     raw,

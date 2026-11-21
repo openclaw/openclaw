@@ -1,27 +1,9 @@
 import type { MatrixRoomKeyBackupStatus } from "./sdk/client-support.js";
 
-type MatrixRoomKeyBackupIssueCode =
-  | "missing-server-backup"
-  | "key-load-failed"
-  | "key-not-loaded"
-  | "key-mismatch"
-  | "untrusted-signature"
-  | "inactive"
-  | "indeterminate"
-  | "ok";
-
-type MatrixRoomKeyBackupIssue = {
-  code: MatrixRoomKeyBackupIssueCode;
-  summary: string;
-  message: string | null;
-};
-
-export function resolveMatrixRoomKeyBackupIssue(
-  backup: MatrixRoomKeyBackupStatus,
-): MatrixRoomKeyBackupIssue {
+export function resolveMatrixRoomKeyBackupIssue(backup: MatrixRoomKeyBackupStatus) {
   if (!backup.serverVersion) {
     return {
-      code: "missing-server-backup",
+      code: "missing-server-backup" as const,
       summary: "missing on server",
       message: "no room-key backup exists on the homeserver",
     };
@@ -29,42 +11,42 @@ export function resolveMatrixRoomKeyBackupIssue(
   if (backup.decryptionKeyCached === false) {
     if (backup.keyLoadError) {
       return {
-        code: "key-load-failed",
+        code: "key-load-failed" as const,
         summary: "present but backup key unavailable on this device",
         message: `backup decryption key could not be loaded from secret storage (${backup.keyLoadError})`,
       };
     }
     if (backup.keyLoadAttempted) {
       return {
-        code: "key-not-loaded",
+        code: "key-not-loaded" as const,
         summary: "present but backup key unavailable on this device",
         message:
           "backup decryption key is not loaded on this device (secret storage did not return a key)",
       };
     }
     return {
-      code: "key-not-loaded",
+      code: "key-not-loaded" as const,
       summary: "present but backup key unavailable on this device",
       message: "backup decryption key is not loaded on this device",
     };
   }
   if (backup.matchesDecryptionKey === false) {
     return {
-      code: "key-mismatch",
+      code: "key-mismatch" as const,
       summary: "present but backup key mismatch on this device",
       message: "backup key mismatch (this device does not have the matching backup decryption key)",
     };
   }
   if (backup.trusted === false) {
     return {
-      code: "untrusted-signature",
+      code: "untrusted-signature" as const,
       summary: "present but not trusted on this device",
       message: "backup signature chain is not trusted by this device",
     };
   }
   if (!backup.activeVersion) {
     return {
-      code: "inactive",
+      code: "inactive" as const,
       summary: "present on server but inactive on this device",
       message: "backup exists but is not active on this device",
     };
@@ -75,13 +57,13 @@ export function resolveMatrixRoomKeyBackupIssue(
     backup.decryptionKeyCached === null
   ) {
     return {
-      code: "indeterminate",
+      code: "indeterminate" as const,
       summary: "present but trust state unknown",
       message: "backup trust state could not be fully determined",
     };
   }
   return {
-    code: "ok",
+    code: "ok" as const,
     summary: "active and trusted on this device",
     message: null,
   };

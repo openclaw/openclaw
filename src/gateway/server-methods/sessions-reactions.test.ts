@@ -4,7 +4,6 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import { registerConversationAddresses } from "../../config/sessions/conversation-registry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import * as reactionStore from "../../config/sessions/session-reaction-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { publishSystemEventStoreConfig } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,6 +31,7 @@ import {
   client,
   context,
   roleConfig,
+  reactionGate,
   seedSession,
   sessionId,
   sessionKey,
@@ -41,6 +41,7 @@ import {
 
 const runMessageAction = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({ runMessageAction }));
+const actionResult = { kind: "action", payload: { ok: true } } as const;
 
 function writeFixture(build: (db: Kysely<DB>) => Compilable) {
   return runOpenClawAgentWriteTransaction(
@@ -104,11 +105,17 @@ async function seedChannelMessage() {
   };
 }
 
+async function channelFixture(reactionSlots?: "single" | "multiple") {
+  registerReactionChannel(true, reactionSlots);
+  const fixture = await seedChannelMessage();
+  return { ...fixture, requestContext: context(fixture.config) };
+}
+
 beforeEach(() => {
   runMessageAction.mockReset().mockImplementation(async (input: MessageActionInput) => {
     await input.onPlatformSendDispatch?.();
     input.assertDirectAdapterHandoff?.();
-    return { kind: "action", payload: { ok: true } };
+    return actionResult;
   });
 });
 
@@ -228,17 +235,8 @@ it("requires an identified author and one emoji grapheme", () =>
       code: "INVALID_REQUEST",
       message: "identified reaction author required",
     });
-    for (const emoji of [
-      "",
-      "hello",
-      "👍👍",
-      "a👍",
-      "👍 ",
-      "🇺",
-      "1",
-      "\u200d",
-      `🏴${"\u{e0067}".repeat(31)}\u{e007f}`,
-    ]) {
+    const oversizedTag = `🏴${"\u{e0067}".repeat(31)}\u{e007f}`;
+    for (const emoji of ["", "hello", "👍👍", "a👍", "👍 ", "🇺", "1", "\u200d", oversizedTag]) {
       const requestContext = context();
       const result = await setReaction(messageId, { emoji }, client("alice"), requestContext);
       expect(result[0], JSON.stringify(emoji)).toBe(false);
@@ -345,7 +343,6 @@ it("reports own prompts and assistant replies with author label fallbacks", () =
   withReactionState(async () => {
     await seedSession();
     for (const [role, metadata, author] of [
-      ["user", { senderName: "Alice", senderId: "alice" }, "Alice"],
       ["user", { senderUsername: "riley", senderId: "peer-id" }, "riley"],
       ["user", { senderId: "peer-id" }, "peer-id"],
       ["assistant", undefined, "assistant"],
@@ -360,8 +357,7 @@ it("reports own prompts and assistant replies with author label fallbacks", () =
 
 it("uses the kernel's newest surviving emoji for a single-slot replacement", () =>
   withReactionState(async () => {
-    registerReactionChannel(true, "single");
-    const { messageId, config } = await seedChannelMessage();
+    const { messageId, requestContext } = await channelFixture("single");
     writeFixture((db) =>
       db.insertInto("session_reactions").values(
         [
@@ -380,12 +376,11 @@ it("uses the kernel's newest surviving emoji for a single-slot replacement", () 
         })),
       ),
     );
-    const write = vi.spyOn(reactionStore, "setSessionReactionAsync");
     const response = await setReaction(
       messageId,
       { emoji: "🚀", remove: true },
       client("alice"),
-      context(config),
+      requestContext,
     );
     expectMirror(response, { status: "delivered" }, [
       { emoji: "👍", count: 2 },
@@ -396,14 +391,12 @@ it("uses the kernel's newest surviving emoji for a single-slot replacement", () 
         params: expect.objectContaining({ emoji: "👍", remove: false }),
       }),
     );
-    expect(await write.mock.results[0]?.value).toMatchObject({ newestRemainingEmoji: "👍" });
     expect(response[1]).not.toHaveProperty("newestRemainingEmoji");
   }));
 
 it("serializes different emoji in a single channel slot without blocking other messages", () =>
   withReactionState(async () => {
-    registerReactionChannel(true, "single");
-    const { messageId, config, conversationRef } = await seedChannelMessage();
+    const { messageId, requestContext, conversationRef } = await channelFixture("single");
     const otherMessageId = await appendMessage({
       role: "user",
       content: "Other channel prompt",
@@ -411,9 +404,7 @@ it("serializes different emoji in a single channel slot without blocking other m
         transport: { channel: "testchat", conversationRef, messageId: "channel-message-10" },
       },
     });
-    const requestContext = context(config);
-    const firstEntered = createDeferredCore();
-    const releaseFirst = createDeferredCore();
+    const firstGate = reactionGate();
     const secondCommitted = createDeferredCore();
     const delivered: unknown[] = [];
     vi.mocked(requestContext.broadcast).mockImplementation((_event, payload) => {
@@ -425,16 +416,15 @@ it("serializes different emoji in a single channel slot without blocking other m
       await input.onPlatformSendDispatch?.();
       input.assertDirectAdapterHandoff?.();
       if (input.params.emoji === "🎉") {
-        firstEntered.resolve();
-        await releaseFirst.promise;
+        await firstGate.wait();
       }
       delivered.push(input.params.emoji);
-      return { kind: "action", payload: { ok: true } };
+      return actionResult;
     });
     const set = (id: string, emoji: string) =>
       setReaction(id, { emoji }, client("alice"), requestContext);
     const first = set(messageId, "🎉");
-    await firstEntered.promise;
+    await firstGate.entered;
     const second = set(messageId, "👍");
     try {
       await secondCommitted.promise;
@@ -443,7 +433,7 @@ it("serializes different emoji in a single channel slot without blocking other m
       });
       expect(delivered).toEqual(["🚀"]);
     } finally {
-      releaseFirst.resolve();
+      firstGate.release();
       await Promise.all([first, second]);
     }
     expect(delivered).toEqual(["🚀", "🎉", "👍"]);
@@ -451,22 +441,18 @@ it("serializes different emoji in a single channel slot without blocking other m
 
 it("rechecks revoked reactor authority at channel I/O after commit", () =>
   withReactionState(async () => {
-    registerReactionChannel();
-    const { messageId, config } = await seedChannelMessage();
-    const requestContext = context(config);
+    const { messageId, requestContext } = await channelFixture();
     const reactor = client("alice");
-    const handoffEntered = createDeferredCore();
-    const releaseHandoff = createDeferredCore();
+    const handoff = reactionGate();
     const channelRequest = vi.fn();
     runMessageAction.mockImplementationOnce(async (input: MessageActionInput) => {
-      handoffEntered.resolve();
-      await releaseHandoff.promise;
+      await handoff.wait();
       input.assertDirectAdapterHandoff?.();
       channelRequest(input.params);
-      return { kind: "action", payload: { ok: true } };
+      return actionResult;
     });
     const pending = setReaction(messageId, {}, reactor, requestContext);
-    await handoffEntered.promise;
+    await handoff.entered;
     try {
       expect(requestContext.broadcast).toHaveBeenCalledTimes(1);
       expect((await listReactions())[1]).toMatchObject({
@@ -475,7 +461,7 @@ it("rechecks revoked reactor authority at channel I/O after commit", () =>
       expect(channelRequest).not.toHaveBeenCalled();
       reactor.invalidated = true;
     } finally {
-      releaseHandoff.resolve();
+      handoff.release();
     }
     const result = await pending;
     expectMirror(result, {
@@ -513,7 +499,7 @@ it("rechecks the source conversation after awaited action preparation", () =>
         await input.onPlatformSendDispatch?.();
         input.assertDirectAdapterHandoff?.();
         channelRequest(input.params);
-        return { kind: "action", payload: { ok: true } };
+        return actionResult;
       });
       expectMirror(await setReaction(messageId, {}, client("alice"), context(config)), {
         status: "failed",
@@ -526,23 +512,19 @@ it("rechecks the source conversation after awaited action preparation", () =>
 
 it("keeps one bot reaction per emoji while any reactor remains, in commit order", () =>
   withReactionState(async () => {
-    registerReactionChannel();
-    const { messageId, config } = await seedChannelMessage();
-    const requestContext = context(config);
-    const firstHeld = createDeferredCore();
-    const firstEntered = createDeferredCore();
+    const { messageId, requestContext } = await channelFixture();
+    const firstGate = reactionGate();
     runMessageAction
       .mockImplementationOnce(async () => {
-        firstEntered.resolve();
-        await firstHeld.promise;
-        return { kind: "action", payload: { ok: true } };
+        await firstGate.wait();
+        return actionResult;
       })
-      .mockResolvedValue({ kind: "action", payload: { ok: true } });
+      .mockResolvedValue(actionResult);
     const set = (profile: string, remove: boolean) =>
       setReaction(messageId, { remove }, client(profile, profile), requestContext);
     // Alice's add is still in flight at the channel when Bob joins and Alice leaves.
     const aliceAdd = set("alice", false);
-    await firstEntered.promise;
+    await firstGate.entered;
     expect(runMessageAction).toHaveBeenCalledTimes(1);
     expect((await set("bob", false))[1]).toMatchObject({
       mirror: { status: "skipped", reason: expect.stringContaining("other reactors") },
@@ -554,7 +536,7 @@ it("keeps one bot reaction per emoji while any reactor remains, in commit order"
     const bobRemove = set("bob", true);
     await Promise.resolve();
     expect(runMessageAction).toHaveBeenCalledTimes(1);
-    firstHeld.resolve();
+    firstGate.release();
     expect((await aliceAdd)[1]).toMatchObject({ mirror: { status: "delivered" } });
     expect((await bobRemove)[1]).toMatchObject({ mirror: { status: "delivered" } });
     expect(
@@ -566,9 +548,7 @@ it("keeps one bot reaction per emoji while any reactor remains, in commit order"
 
 it("keeps local reactions successful when channel mirroring fails or cannot be supported", () =>
   withReactionState(async () => {
-    registerReactionChannel();
-    const { messageId, config } = await seedChannelMessage();
-    const requestContext = context(config);
+    const { messageId, config, requestContext } = await channelFixture();
     runMessageAction.mockRejectedValueOnce(new Error("channel offline"));
     const failed = await setReaction(messageId, {}, client("alice"), requestContext);
     expectMirror(failed, {

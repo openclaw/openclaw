@@ -3,6 +3,7 @@ import type { MSTeamsConfig } from "../runtime-api.js";
 
 const hostMockState = vi.hoisted(() => ({
   tokenError: null as Error | null,
+  token: "token",
   delegatedTokenAccountId: undefined as string | null | undefined,
   delegatedTokens: undefined as ReturnType<typeof delegatedTokens> | undefined,
 }));
@@ -14,7 +15,7 @@ vi.mock("@microsoft/teams.apps", () => ({
         if (hostMockState.tokenError) {
           throw hostMockState.tokenError;
         }
-        return { toString: () => "token" };
+        return { toString: () => hostMockState.token };
       },
     };
   },
@@ -57,6 +58,7 @@ const delegatedTokens = () => ({
 describe("msteams probe", () => {
   beforeEach(() => {
     hostMockState.tokenError = null;
+    hostMockState.token = "token";
     hostMockState.delegatedTokenAccountId = undefined;
     hostMockState.delegatedTokens = undefined;
     vi.stubEnv("MSTEAMS_APP_ID", "");
@@ -92,6 +94,18 @@ describe("msteams probe", () => {
       ok: true,
       appId: "app",
       graph: { ok: true, roles: undefined, scopes: undefined },
+    });
+  });
+
+  it("reports Graph permissions from an unpadded base64url token payload", async () => {
+    const payload = Buffer.from(
+      JSON.stringify({ roles: ["Chat.Read.All"], scp: "Chat.Read User.Read", name: "\uffff" }),
+    ).toString("base64url");
+    hostMockState.token = `header.${payload}.signature`;
+
+    await expect(probeMSTeams(config())).resolves.toMatchObject({
+      ok: true,
+      graph: { ok: true, roles: ["Chat.Read.All"], scopes: ["Chat.Read", "User.Read"] },
     });
   });
 

@@ -5,20 +5,71 @@ import { assert, expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent as refreshUsage } from "./session-cost-usage-aggregation.js";
+import { loadSessionCostSummariesFromCache } from "./session-cost-usage-cache-runtime.js";
 import {
   acquireUsageLock,
   createUsageCacheWrite as rollup,
   createUsagePartitionWrites as partitions,
 } from "./session-cost-usage-cache.fixtures.test-support.js";
 import { readSessionCostUsageRollupRows as readRows } from "./session-cost-usage-cache.test-support.js";
-import { createUsageTranscriptEntry } from "./session-cost-usage-fixtures.test-support.js";
+import {
+  createUsageTranscriptEntry,
+  overviewRows,
+} from "./session-cost-usage-fixtures.test-support.js";
 import {
   LEGACY_USAGE_COST_PARTITION_SCOPE,
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
 } from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
-import { withUsageWorkerPreload } from "./session-cost-usage-worker-io.test-support.js";
+import {
+  observeUsageWorkerReads,
+  withUsageWorkerPreload,
+} from "./session-cost-usage-worker-io.test-support.js";
+import { loadSessionUsageOverviewFromCache } from "./session-cost-usage.js";
+
+it("reads selected usage months through the index after outgrowing sparse statistics", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-indexed-months";
+    const files = ["first", "second"].map((name) =>
+      path.join(state.sessionsDir(agentId), `${name}.jsonl`),
+    );
+    const observer = await observeUsageWorkerReads(state.stateDir, files);
+    await observer.run(async () => {
+      await fs.mkdir(path.dirname(files[0]!), { recursive: true });
+      const transcript =
+        ["2026-01-01", "2026-09-01", "2026-10-01"]
+          .map((date) =>
+            JSON.stringify(
+              createUsageTranscriptEntry(3, { timestamp: `${date}T00:00:00Z`, cost: 3 }),
+            ),
+          )
+          .join("\n") + "\n";
+      await Promise.all(files.map((file) => fs.writeFile(file, transcript)));
+      const { db } = openOpenClawAgentDatabase({ agentId });
+      db.exec(
+        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('other', 'seed', '{}', 1); ANALYZE cache_entries; DELETE FROM cache_entries",
+      );
+      await refreshUsage({ config: {}, agentId, sessionFiles: files });
+      await observer.clear();
+      const result = await loadSessionCostSummariesFromCache({
+        config: {},
+        agentId,
+        sessions: files.map((sessionFile) => ({ sessionFile })),
+        startMs: Date.UTC(2026, 8, 1),
+        endMs: Date.UTC(2026, 9, 1) - 1,
+        requestRefresh: false,
+      });
+      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([3, 3]);
+      const reads = await observer.read();
+      const plans = reads.flatMap((read) => (read.kind === "partitions" ? read.plan : []));
+      expect(plans.length).toBeGreaterThan(0);
+      expect(plans.filter((detail) => detail.startsWith("SCAN cache_entries"))).toEqual([]);
+      expect(reads.filter((read) => read.kind === "transcript")).toEqual([]);
+    });
+  });
+});
 
 it("rebuilds retired usage partitions even when the transcript is unchanged", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -113,26 +164,30 @@ it("retires selected months across batches atomically while retaining other part
   });
 });
 
-it("batches mixed usage replacement and append writes while retaining unrelated months", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const log = path.join(state.root, "usage-write-counts.txt");
-    const preload = path.join(state.root, "usage-write-counts.cjs");
-    await fs.writeFile(log, "");
-    await fs.writeFile(
-      preload,
-      `const fs = require("node:fs");
+it.each([0, 24])(
+  "keeps mixed usage writes indexed after outgrowing %i months of statistics",
+  async (months) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const log = path.join(state.root, "usage-write-counts.txt");
+      const preload = path.join(state.root, "usage-write-counts.cjs");
+      await fs.writeFile(log, "");
+      await fs.writeFile(
+        preload,
+        `const fs = require("node:fs");
 const { isMainThread } = require("node:worker_threads");
 if (!isMainThread) {
   const { DatabaseSync } = require("node:sqlite");
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
+    const database = this;
     const statement = Reflect.apply(prepare, this, [sql]);
     const kind = /^delete from "cache_entries"/i.test(sql) ? "delete"
       : /^insert into "cache_entries"/i.test(sql) ? "insert" : null;
     if (kind) for (const method of ["run", "all", "get"]) {
       const original = statement[method];
       statement[method] = function(...args) {
-        fs.appendFileSync(${JSON.stringify(log)}, kind + "\\n");
+        const plan = Reflect.apply(prepare, database, ["EXPLAIN QUERY PLAN " + sql]).all(...args);
+        fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ kind, plan }) + "\\n");
         return Reflect.apply(original, this, args);
       };
     }
@@ -140,79 +195,181 @@ if (!isMainThread) {
   };
 }
 `,
-    );
-    await withUsageWorkerPreload(state.stateDir, preload, async () => {
-      const agentId = "usage-batched-publication";
-      const { db } = openOpenClawAgentDatabase({ agentId });
-      await using owner = await acquireUsageLock(agentId);
-      const ids = Array.from({ length: 50 }, (_, index) => `session-${index}`);
-      await owner.writeRollup(
-        [...ids, "unrelated"].map((id) =>
-          Object.assign(rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])), {
-            partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
-          }),
-        ),
       );
-      await fs.writeFile(log, "");
-      expect(
+      await withUsageWorkerPreload(state.stateDir, preload, async () => {
+        const agentId = "usage-batched-publication";
+        const { db } = openOpenClawAgentDatabase({ agentId });
+        // Statistics describe one sparse session; refreshes later grow this cache.
+        const seed = db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, '{}', 1)",
+        );
+        for (let month = 0; month < months; month++) {
+          for (const scope of [USAGE_COST_PARTITION_SCOPE, USAGE_COST_QUARTER_SCOPE]) {
+            seed.run(scope, usageCostPartitionKey("seed", String(month)));
+          }
+        }
+        seed.run(USAGE_COST_ROLLUP_SCOPE, "seed");
+        db.exec("ANALYZE cache_entries; DELETE FROM cache_entries");
+        await using owner = await acquireUsageLock(agentId);
+        const ids = Array.from({ length: 50 }, (_, index) => `session-${index}`);
         await owner.writeRollup(
-          ids.map((id, index) => ({
-            ...rollup(id, { totalTokens: 20 + index }, 2, new Uint8Array([17])),
-            partitions: partitions(
-              [index < 25 ? "2026-03-01" : "2026-02-01"],
-              { tokens: 10 + index },
-              34,
-            ),
-            ...(index < 25 ? { replacePartitions: true } : { removedDates: ["2026-01-01"] }),
-          })),
-        ),
-      ).toBe(true);
-      const executions = (await fs.readFile(log, "utf8")).trim().split("\n");
-      expect({
-        deletes: executions.filter((kind) => kind === "delete").length,
-        inserts: executions.filter((kind) => kind === "insert").length,
-      }).toEqual({ deletes: 2, inserts: 1 });
+          [...ids, "unrelated"].map((id) =>
+            Object.assign(rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])), {
+              partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
+            }),
+          ),
+        );
+        await fs.writeFile(log, "");
+        expect(
+          await owner.writeRollup(
+            ids.map((id, index) => ({
+              ...rollup(id, { totalTokens: 20 + index }, 2, new Uint8Array([17])),
+              partitions: partitions(
+                [index < 25 ? "2026-03-01" : "2026-02-01"],
+                { tokens: 10 + index },
+                34,
+              ),
+              ...(index < 25 ? { replacePartitions: true } : { removedDates: ["2026-01-01"] }),
+            })),
+          ),
+        ).toBe(true);
+        const executions = (await fs.readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                kind: string;
+                plan: { detail: string }[];
+              },
+          );
+        expect(executions.filter(({ kind }) => kind === "insert")).toHaveLength(1);
+        const deletes = executions.filter(({ kind }) => kind === "delete");
+        expect(deletes.length).toBeGreaterThan(0);
+        expect(
+          deletes
+            .flatMap(({ plan }) => plan.map(({ detail }) => detail))
+            .filter((detail) => detail.startsWith("SCAN cache_entries")),
+        ).toEqual([]);
 
-      const rows = db
-        .prepare(
-          `SELECT scope, key, value_json, hex(blob) AS blob, updated_at
+        const rows = db
+          .prepare(
+            `SELECT scope, key, value_json, hex(blob) AS blob, updated_at
            FROM cache_entries WHERE scope IN (?, ?)`,
-        )
-        .all(USAGE_COST_ROLLUP_SCOPE, USAGE_COST_PARTITION_SCOPE);
-      const expected = ids.flatMap((id, index) => [
-        {
-          scope: USAGE_COST_ROLLUP_SCOPE,
-          key: id,
-          value_json: `{"totalTokens":${20 + index}}`,
-          blob: "11",
-          updated_at: 2,
-        },
-        {
-          scope: USAGE_COST_PARTITION_SCOPE,
-          key: usageCostPartitionKey(id, index < 25 ? "2026-03-01" : "2026-02-01"),
-          value_json: `{"tokens":${10 + index}}`,
-          blob: "22",
-          updated_at: 2,
-        },
-      ]);
-      expected.push(
-        {
-          scope: USAGE_COST_ROLLUP_SCOPE,
-          key: "unrelated",
-          value_json: '{"totalTokens":7}',
-          blob: "01",
-          updated_at: 1,
-        },
-        ...["2026-01-01", "2026-02-01"].map((date) => ({
-          scope: USAGE_COST_PARTITION_SCOPE,
-          key: usageCostPartitionKey("unrelated", date),
-          value_json: '{"tokens":3}',
-          blob: "02",
-          updated_at: 1,
-        })),
-      );
-      expect(rows).toHaveLength(103);
-      expect(rows).toEqual(expect.arrayContaining(expected));
+          )
+          .all(USAGE_COST_ROLLUP_SCOPE, USAGE_COST_PARTITION_SCOPE);
+        const row = (scope: string, key: string, value: object, blob: string, updated_at = 2) => ({
+          scope,
+          key,
+          value_json: JSON.stringify(value),
+          blob,
+          updated_at,
+        });
+        const expected = ids.flatMap((id, index) => [
+          row(USAGE_COST_ROLLUP_SCOPE, id, { totalTokens: 20 + index }, "11"),
+          row(
+            USAGE_COST_PARTITION_SCOPE,
+            usageCostPartitionKey(id, index < 25 ? "2026-03-01" : "2026-02-01"),
+            { tokens: 10 + index },
+            "22",
+          ),
+        ]);
+        expected.push(
+          row(USAGE_COST_ROLLUP_SCOPE, "unrelated", { totalTokens: 7 }, "01", 1),
+          ...["2026-01-01", "2026-02-01"].map((date) =>
+            row(
+              USAGE_COST_PARTITION_SCOPE,
+              usageCostPartitionKey("unrelated", date),
+              { tokens: 3 },
+              "02",
+              1,
+            ),
+          ),
+        );
+        expect(rows).toHaveLength(103);
+        expect(rows).toEqual(expect.arrayContaining(expected));
+      });
     });
+  },
+);
+
+it("pairs quarter rows with their partitions through refresh, rollback writes, and pruning", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-quarter-lifecycle";
+    const sessionsDir = state.sessionsDir(agentId);
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const entry = (timestamp: string, tokens: number) =>
+      JSON.stringify(createUsageTranscriptEntry(tokens, { timestamp, cost: tokens }));
+    const first = path.join(sessionsDir, "first.jsonl");
+    const second = path.join(sessionsDir, "second.jsonl");
+    await fs.writeFile(
+      first,
+      `${entry("2026-08-31T23:50:00Z", 2)}\n${entry("2026-09-01T00:05:00Z", 3)}\n`,
+    );
+    await fs.writeFile(second, `${entry("2026-09-02T10:00:00Z", 5)}\n`);
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    const count = (sql: string) =>
+      (
+        db.prepare(sql).get(USAGE_COST_PARTITION_SCOPE, USAGE_COST_QUARTER_SCOPE) as {
+          count: number;
+        }
+      ).count;
+    const coverage = () => ({
+      partitions: count("SELECT count(*) AS count FROM cache_entries WHERE scope = ? OR ? IS NULL"),
+      quarters: count(
+        "SELECT count(*) AS count FROM cache_entries WHERE ? IS NOT NULL AND scope = ?",
+      ),
+      paired: count(`SELECT count(*) AS count FROM cache_entries p JOIN cache_entries q
+        ON q.key = p.key AND q.updated_at = p.updated_at AND q.scope = ?2 WHERE p.scope = ?1`),
+    });
+    const overview = async () =>
+      overviewRows(
+        await loadSessionUsageOverviewFromCache({
+          config: {},
+          agentId,
+          families: [[{ sessionFile: first }], [{ sessionFile: second }]],
+          startMs: Date.UTC(2026, 7, 31),
+          endMs: Date.UTC(2026, 8, 3) - 1,
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        }),
+      );
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first, second] });
+    // The partition producer commits each month's quarter row with it.
+    expect(coverage()).toEqual({ partitions: 3, quarters: 3, paired: 3 });
+    expect(await overview()).toMatchObject({
+      rows: [{ totalTokens: 5 }, { totalTokens: 5 }],
+      summarizing: 0,
+    });
+
+    // A build without quarter rows rewrites a partition; the stale quarter row no longer pairs.
+    db.prepare(
+      "UPDATE cache_entries SET updated_at = updated_at + 1 WHERE scope = ? AND key = ?",
+    ).run(USAGE_COST_PARTITION_SCOPE, usageCostPartitionKey(first, "2026-09-01"));
+    // Report committed coverage immediately, then let the refresh owner repair the missing row.
+    expect(await overview()).toMatchObject({
+      rows: [null, { totalTokens: 5 }],
+      computing: [true, false],
+      summarizing: 1,
+      cacheStatus: { status: "refreshing" },
+    });
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first], waitForRefresh: true });
+    expect(await overview()).toMatchObject({
+      rows: [{ totalTokens: 5 }, { totalTokens: 5 }],
+      computing: [false, false],
+      summarizing: 0,
+      cacheStatus: { status: "fresh" },
+    });
+    expect(coverage()).toEqual({ partitions: 3, quarters: 3, paired: 3 });
+    const derived = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first] });
+    expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(derived);
+
+    // Removed months and pruned sessions delete their quarter rows with the partitions.
+    await fs.writeFile(first, `${entry("2026-09-01T00:05:00Z", 3)}\n`);
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first] });
+    expect(coverage()).toEqual({ partitions: 2, quarters: 2, paired: 2 });
+    await fs.unlink(second);
+    await refreshUsage({ config: {}, agentId });
+    expect(coverage()).toEqual({ partitions: 1, quarters: 1, paired: 1 });
   });
 });

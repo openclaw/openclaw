@@ -1,9 +1,10 @@
-import { copyFileSync, existsSync, renameSync } from "node:fs";
+import fs, { copyFileSync, existsSync, renameSync } from "node:fs";
 import path from "node:path";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -35,7 +36,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore as snapshot,
   registerRuntimeAuthProfileStoreMutationListener,
-  setRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot as setSnapshot,
 } from "./runtime-snapshots.js";
 import * as sqliteRead from "./sqlite-read.js";
 import {
@@ -44,14 +45,16 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "./sqlite.js";
 import {
-  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntime as loadStore,
+  loadAuthProfileStoreForRuntimeAsync,
   saveAuthProfileStore,
-  updateAuthProfileStoreWithLock,
+  updateAuthProfileStoreWithLock as updateStore,
 } from "./store-runtime.js";
 import * as publication from "./store-update-publication.js";
 import { withEnvOnlyAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
+import { markAuthProfileBlockedUntil } from "./usage.js";
 
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 const credential = (key: string) => ({ type: "api_key" as const, provider: "fixture", key });
@@ -75,7 +78,7 @@ function update(
   agentDir?: string,
   sharedStoreWrite = false,
 ) {
-  return updateAuthProfileStoreWithLock({
+  return updateStore({
     agentDir,
     sharedStoreWrite,
     saveOptions,
@@ -92,7 +95,7 @@ function update(
 }
 function seedSnapshot(current: AuthProfileStore, agentDir?: string, inherited?: AuthProfileStore) {
   save(current, agentDir);
-  setRuntimeAuthProfileStoreSnapshot(
+  setSnapshot(
     inherited ? mergeLocalAuthProfileStoreWithInheritedStore(current, inherited) : current,
     agentDir,
   );
@@ -103,7 +106,7 @@ const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
 async function prepareCredentialReader(env: NodeJS.ProcessEnv, agentDir?: string) {
   const context = captureOpenClawStateWorkerContext({ env });
   const reader = agentDir
-    ? sqliteRead.prepareAgentAuthProfileRowsRead({
+    ? await sqliteRead.prepareAgentAuthProfileRowsRead({
         databasePath: resolveAuthProfileDatabasePath(agentDir),
         agentId: "child",
         env,
@@ -136,6 +139,66 @@ async function prepareCredentialReader(env: NodeJS.ProcessEnv, agentDir?: string
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
+});
+
+it("updates a cold auth owner without synchronous legacy-source probes", async () => {
+  await withState(async (state) => {
+    const agentDir = state.agentDir("child");
+    save(makeStore({ selected: "synthetic-before" }), agentDir);
+    await closeOpenClawAgentDatabasesAsync();
+    const exists = vi.spyOn(fs, "existsSync");
+    expect(await update({ profiles: { selected: "synthetic-after" } }, agentDir)).toMatchObject({
+      profiles: { selected: credential("synthetic-after") },
+    });
+    expect(
+      exists.mock.calls.filter(
+        ([file]) =>
+          path.dirname(String(file)) === agentDir &&
+          ["auth-profiles.json", "auth-state.json", "auth.json"].includes(
+            path.basename(String(file)),
+          ),
+      ),
+    ).toEqual([]);
+  });
+});
+
+it("publishes a durable shared block without withdrawing inherited snapshots", async () => {
+  await withState(async (state) => {
+    const agentDir = state.agentDir("child");
+    save(makeStore({ shared: "synthetic-shared" }));
+    save(makeStore({ local: "synthetic-local" }), agentDir);
+    const options = { externalCli: { mode: "none" as const } };
+    setSnapshot(await loadAuthProfileStoreForRuntimeAsync(undefined, options));
+    const child = await loadAuthProfileStoreForRuntimeAsync(agentDir, options);
+    setSnapshot(child, agentDir);
+    expect(snapshot(agentDir)?.profiles).toEqual(child.profiles);
+    const observed: Array<{ availabilityOnly: boolean; childPresent: boolean }> = [];
+    const unregister = registerRuntimeAuthProfileStoreMutationListener((event) => {
+      observed.push({
+        availabilityOnly: event.availabilityOnly,
+        childPresent: snapshot(agentDir) !== undefined,
+      });
+    });
+    const blockedUntil = Date.now() + 60_000;
+    try {
+      await markAuthProfileBlockedUntil({
+        store: child,
+        profileId: "shared",
+        blockedUntil,
+        source: "codex_rate_limits",
+        agentDir,
+      });
+      expect(readPersistedStore()?.usageStats?.shared?.blockedUntil).toBe(blockedUntil);
+      expect(snapshot(agentDir)?.usageStats?.shared?.blockedUntil).toBe(blockedUntil);
+      expect(snapshot(agentDir)?.profiles).toEqual(child.profiles);
+      expect(observed.length).toBeGreaterThan(0);
+      for (const event of observed) {
+        expect(event).toEqual({ availabilityOnly: true, childPresent: true });
+      }
+    } finally {
+      unregister();
+    }
+  });
 });
 
 it.each(["shared", "agent"] as const)(
@@ -262,7 +325,7 @@ it("keeps env-only agent callbacks isolated when saving", async () => {
     const explicit = makeStore({ added: "synthetic-explicit" });
     save(shared);
     save(local, localDir);
-    const updater = vi.fn<Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"]>(
+    const updater = vi.fn<Parameters<typeof updateStore>[0]["updater"]>(
       (store, _owner, inherited) => {
         expect(store).toEqual(empty);
         expect(inherited).toBeNull();
@@ -272,7 +335,7 @@ it("keeps env-only agent callbacks isolated when saving", async () => {
     );
 
     const result = await withEnvOnlyAuthProfileStore(() =>
-      updateAuthProfileStoreWithLock({ agentDir: localDir, saveOptions, updater }),
+      updateStore({ agentDir: localDir, saveOptions, updater }),
     );
     expect(updater).toHaveBeenCalledOnce();
     expect(result).toEqual(explicit);
@@ -320,14 +383,28 @@ it.for(["local", "legacy-shared"] as const)(
       const reservation = reserveAuthProfileUsagePreparation([
         resolveOpenClawStateSqlitePath(state.env),
       ]);
+      const captured = createDeferred();
+      const capture = executions.captureOpenClawAgentDatabaseExecutionAsync;
+      vi.spyOn(executions, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+        async (...args) => {
+          const execution = await capture(...args);
+          captured.resolve();
+          return execution;
+        },
+      );
       const updater = vi.fn(() => false);
-      const updating = updateAuthProfileStoreWithLock({
+      const updating = updateStore({
         agentDir: kind === "local" ? agentDir : undefined,
         saveOptions,
         updater,
       });
       void updating.catch(() => {});
       try {
+        await awaitGateBeforeSettlement(
+          captured.promise,
+          updating,
+          "Auth update settled before physical capture",
+        );
         const original = `${databasePath}.original`;
         renameSync(databasePath, original);
         copyFileSync(original, databasePath);
@@ -348,11 +425,11 @@ it.each(["stale", "newer-write", "rebound-owner"])(
     await withState(async (state) => {
       const agentDir = state.agentDir("child");
       seedSnapshot(makeStore({ selected: "synthetic-before" }), agentDir);
-      const capture = executions.captureOpenClawAgentDatabaseExecution;
-      let execution: ReturnType<typeof capture> | undefined;
-      vi.spyOn(executions, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-        (...args) => {
-          execution = capture(...args);
+      const capture = executions.captureOpenClawAgentDatabaseExecutionAsync;
+      let execution: Awaited<ReturnType<typeof capture>> | undefined;
+      vi.spyOn(executions, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+        async (...args) => {
+          execution = await capture(...args);
           return execution;
         },
       );
@@ -366,10 +443,7 @@ it.each(["stale", "newer-write", "rebound-owner"])(
           if (scenario === "rebound-owner") {
             withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () => {
               noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
-              setRuntimeAuthProfileStoreSnapshot(
-                makeStore({ selected: "synthetic-rebound" }),
-                agentDir,
-              );
+              setSnapshot(makeStore({ selected: "synthetic-rebound" }), agentDir);
             });
           }
           if (!execution) {
@@ -387,9 +461,9 @@ it.each(["stale", "newer-write", "rebound-owner"])(
         credential(scenario === "newer-write" ? "synthetic-newer" : "synthetic-committed"),
       );
       if (scenario === "newer-write") {
-        expect(
-          loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false }).profiles.selected,
-        ).toEqual(credential("synthetic-newer"));
+        expect(loadStore(agentDir, { syncExternalCli: false }).profiles.selected).toEqual(
+          credential("synthetic-newer"),
+        );
       } else if (scenario === "rebound-owner") {
         expect(snapshot(agentDir)?.profiles.selected).toEqual(credential("synthetic-rebound"));
       } else {
@@ -457,9 +531,7 @@ it.each([
       }
       expect(readPersistedStore(agentDir)?.profiles).toEqual(expected);
       if (outcome === "interrupted") {
-        expect(
-          loadAuthProfileStoreForRuntime(derivedDir, { syncExternalCli: false }).profiles,
-        ).toEqual(expected);
+        expect(loadStore(derivedDir, { syncExternalCli: false }).profiles).toEqual(expected);
       } else {
         expect(snapshot(agentDir)?.profiles).toEqual(expected);
         if (target === "shared") {
@@ -481,8 +553,8 @@ it("does not retain inherited order when a native rotation overtakes state publi
     seedInherited(shared, local, agentDir);
     const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
     let rotated = false;
-    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((options) => {
-      const reader = prepare(options);
+    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(async (options) => {
+      const reader = await prepare(options);
       return {
         ...reader,
         async read() {
@@ -499,7 +571,7 @@ it("does not retain inherited order when a native rotation overtakes state publi
     });
     await update({ order: ["selected", "third", "other"] }, undefined, true);
     expect(rotated).toBe(true);
-    const published = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
+    const published = loadStore(agentDir, { syncExternalCli: false });
     expect(published.order).toEqual({ fixture: ["selected", "third", "other"] });
     expect(published.profiles.selected).toEqual(local.profiles.selected);
   });
@@ -571,7 +643,7 @@ it.each(["before-callback", "in-callback", "commit"] as const)(
         return true;
       });
       await expect(
-        updateAuthProfileStoreWithLock({
+        updateStore({
           profileId: authProfileId,
           updater,
           assertCurrent() {

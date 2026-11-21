@@ -3,11 +3,6 @@ import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { normalizeEnvVarKey } from "./host-env-security.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
-type ContainerEnvFile = {
-  path: string;
-  cleanup: () => Promise<void>;
-};
-
 export function getContainerEnvFileEntryIssue(
   key: string,
   value: string,
@@ -21,7 +16,10 @@ export function getContainerEnvFileEntryIssue(
   return value.includes("\0") ? "nul" : undefined;
 }
 
-function serializeContainerEnv(env: Readonly<Record<string, string>>): string {
+/** Stages engine environment values outside process arguments until the caller-owned cleanup. */
+export async function createContainerEnvFile(
+  env: Readonly<Record<string, string>>,
+): Promise<{ path: string; cleanup: () => Promise<void> }> {
   let content = "";
   const entries = Object.entries(env).toSorted(([left], [right]) => left.localeCompare(right));
   for (const [key, value] of entries) {
@@ -41,14 +39,6 @@ function serializeContainerEnv(env: Readonly<Record<string, string>>): string {
     }
     content += `${key}=${value}\n`;
   }
-  return content;
-}
-
-/** Stages engine environment values outside process arguments until the caller-owned cleanup. */
-export async function createContainerEnvFile(
-  env: Readonly<Record<string, string>>,
-): Promise<ContainerEnvFile> {
-  const content = serializeContainerEnv(env);
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-container-env-",
@@ -57,7 +47,8 @@ export async function createContainerEnvFile(
   });
 
   try {
-    const filePath = await workspace.write("container.env", content);
+    // The engine consumes this scratch file before cleanup; no restart reuses it.
+    const filePath = await workspace.store.write("container.env", content, { durable: false });
     return {
       path: filePath,
       cleanup: async () => {

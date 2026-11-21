@@ -17,10 +17,12 @@ import {
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { gitCoauthorOrganizationPolicy } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -30,6 +32,7 @@ import { recordSessionParticipant } from "../config/sessions/session-accessor.sq
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.test-support.js";
 import { syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import * as publicationExecutor from "./github-publication-executor.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
@@ -39,8 +42,9 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
+// mock-isolation: Synthetic checkpoints isolate publication from real repository and session state.
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 
 function createPerson(accountId: number, login: string) {
@@ -82,8 +86,100 @@ const creditRejected = {
   nextAction: expect.stringMatching(/credit/i),
 };
 
+type RecordEffect = NonNullable<
+  Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
+>;
+
+function afterEffect(
+  surface: "local" | "repository",
+  observe: (...args: Parameters<RecordEffect>) => void,
+) {
+  const wrap =
+    (
+      record: (...args: Parameters<RecordEffect>) => void | Promise<void>,
+    ): ((...args: Parameters<RecordEffect>) => Promise<void>) =>
+    async (effect, observed) => {
+      await record(effect, observed);
+      observe(effect, observed);
+    };
+  const executeLocal = publicationExecutor.executeGitHubPublication;
+  const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
+  const intercepted =
+    surface === "local"
+      ? vi.spyOn(publicationExecutor, "executeGitHubPublication").mockImplementation((params) =>
+          executeLocal({
+            ...params,
+            recordEffect: wrap((effect, observed) => params.recordEffect?.(effect, observed)),
+          }),
+        )
+      : vi
+          .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
+          .mockImplementation((params) =>
+            executeRepository({
+              ...params,
+              execution: {
+                ...params.execution,
+                recordEffect: wrap((effect, observed) =>
+                  params.execution.recordEffect(effect, observed),
+                ),
+              },
+            }),
+          );
+  onTestFinished(() => intercepted.mockRestore());
+}
+
 describe("Gateway GitHub publication attribution", () => {
   installGitHubPublicationTestHarness();
+
+  it.each([false, true])(
+    "keeps only independently verified mentions with organization trailers (linked=%s)",
+    async (linked) => {
+      await persistPublicationTestSession();
+      const original = getRuntimeConfig();
+      const mapping = { nameHeader: "x-credit-name", emailHeader: "x-credit-email" };
+      const config = {
+        ...original,
+        gateway: {
+          ...original.gateway,
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: { userHeader: "x-auth-subject", gitCoauthor: mapping },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      onTestFinished(() => setRuntimeConfigSnapshot(original));
+      const person = linked ? createPerson(7, "alice") : ensureProfileForEmail("oidc:credit-only");
+      participate(person.id);
+      expect(
+        setUserPreferences(
+          person.id,
+          {
+            "git.coauthor.organization": {
+              name: "Alice Organization",
+              email: "work@example.test",
+              policy: gitCoauthorOrganizationPolicy("x-auth-subject", mapping),
+            },
+            [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+          },
+          { trustedProxyGitCoauthor: true },
+        ).ok,
+      ).toBe(true);
+      await useRealAttribution();
+      const coordinator = createGitHubPublicationCoordinator();
+      const result = await coordinator.requestForSessionV2(
+        publicationRequest("organization-mentions"),
+      );
+      expect(result.status).toBe("published");
+      const message = commandCalls.find(({ argv }) => argv.includes("commit-tree"))?.input;
+      expect(message).toContain("Co-authored-by: Alice Organization <work@example.test>");
+      if (linked) {
+        expect(message).toContain("Worked on by:\n- @alice");
+      } else {
+        expect(message).not.toContain("Worked on by:");
+      }
+    },
+  );
 
   it("emits a Git-recognized coauthor trailer even when the title contains the exact credit", async () => {
     await persistPublicationTestSession();
@@ -154,45 +250,11 @@ describe("Gateway GitHub publication attribution", () => {
         return result;
       });
       if (boundary !== "preparation") {
-        type RecordEffect = NonNullable<
-          Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
-        >;
-        const revokeAfter =
-          (record: RecordEffect) =>
-          async (effect: Parameters<RecordEffect>[0], observed?: Parameters<RecordEffect>[1]) => {
-            await record(effect, observed);
-            if (effect === boundary && observed === undefined) {
-              revokeCredit();
-            }
-          };
-        const executeLocal = publicationExecutor.executeGitHubPublication;
-        const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
-        const intercepted =
-          surface === "local"
-            ? vi
-                .spyOn(publicationExecutor, "executeGitHubPublication")
-                .mockImplementation((params) =>
-                  executeLocal({
-                    ...params,
-                    recordEffect: revokeAfter((effect, observed) =>
-                      params.recordEffect?.(effect, observed),
-                    ),
-                  }),
-                )
-            : vi
-                .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
-                .mockImplementation((params) =>
-                  executeRepository({
-                    ...params,
-                    execution: {
-                      ...params.execution,
-                      recordEffect: revokeAfter((effect, observed) =>
-                        params.execution.recordEffect(effect, observed),
-                      ),
-                    },
-                  }),
-                );
-        onTestFinished(() => intercepted.mockRestore());
+        afterEffect(surface, (effect, observed) => {
+          if (effect === boundary && observed === undefined) {
+            revokeCredit();
+          }
+        });
       }
       const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
       const result = await coordinator.requestForSessionV2(
@@ -283,6 +345,7 @@ describe("Gateway GitHub publication attribution", () => {
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
       cfg: config,
+      projectRequester: { kind: "internal" },
       requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey: childKey,
@@ -411,42 +474,11 @@ describe("Gateway GitHub publication attribution", () => {
         change();
       }
     };
-    if (repository) {
-      const execute = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
-      const intercepted = vi
-        .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
-        .mockImplementation((params) =>
-          execute({
-            ...params,
-            execution: {
-              ...params.execution,
-              recordEffect: async (effect, observed) => {
-                await params.execution.recordEffect(effect, observed);
-                if (effect === "pull_request" && observed === undefined) {
-                  onEffect();
-                }
-              },
-            },
-          }),
-        );
-      onTestFinished(() => intercepted.mockRestore());
-    } else {
-      const execute = publicationExecutor.executeGitHubPublication;
-      const intercepted = vi
-        .spyOn(publicationExecutor, "executeGitHubPublication")
-        .mockImplementation((params) =>
-          execute({
-            ...params,
-            recordEffect: async (effect, observed) => {
-              await params.recordEffect?.(effect, observed);
-              if (effect === "pull_request" && observed === undefined) {
-                onEffect();
-              }
-            },
-          }),
-        );
-      onTestFinished(() => intercepted.mockRestore());
-    }
+    afterEffect(surface, (effect, observed) => {
+      if (effect === "pull_request" && observed === undefined) {
+        onEffect();
+      }
+    });
     const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
     const result = await coordinator.requestForSessionV2({
       agentId: "main",

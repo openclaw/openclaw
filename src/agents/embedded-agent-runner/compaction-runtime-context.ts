@@ -1,3 +1,4 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import {
   asFiniteNumber,
   floorPositiveFiniteNumber,
@@ -208,9 +209,7 @@ function hasBareConfiguredModelForProvider(params: {
       return true;
     }
   }
-  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(
-    ([key]) => normalizeLowercaseStringOrEmpty(key) === providerKey,
-  )?.[1];
+  const configuredProvider = findNormalizedProviderValue(params.cfg.models?.providers, providerKey);
   return (configuredProvider?.models ?? []).some(
     (entry) => normalizeLowercaseStringOrEmpty(entry?.id ?? "") === modelKey,
   );

@@ -39,7 +39,7 @@ export type SqliteNativeCommand =
       type: "copy.run";
       pathname: string;
       mode: "sync" | "async";
-      stagingRoot?: string;
+      stagingRoot: string;
       expectedSourceIdentity?: DatabaseFileIdentity;
       launch: SqliteNativeCopyLaunch;
     };

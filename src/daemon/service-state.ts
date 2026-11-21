@@ -1,6 +1,6 @@
 /** Shared native service-state inspection with one caller-owned deadline and binding. */
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { resolveGatewayProfileSuffix } from "./constants.js";
+import { isGatewayServiceEnv, resolveGatewayProfileSuffix } from "./constants.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { readStartupEntryState } from "./schtasks-runtime.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
@@ -30,6 +30,7 @@ import type {
 import { getGatewayServiceUpdateNativeCommand } from "./service-update-authority.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { findSystemdGatewayInstallation } from "./systemd-scope.js";
+import { isSystemdNotBooted } from "./systemd-unavailable.js";
 import { readSystemdServiceExecStart } from "./systemd.js";
 
 class ServiceInspectionDeadlineError extends ServiceInspectionError {
@@ -136,6 +137,42 @@ export async function readGatewayServiceState(
       }
       return await readGatewayServiceStateWithBinding(service, args, inspectionDeadline);
     } catch (error) {
+      if (
+        service.readCommand === readSystemdServiceExecStart &&
+        args.requireEffective &&
+        args.requireLoadedCommand &&
+        !args.systemdReadBinding &&
+        error instanceof ServiceInspectionError &&
+        error.reason === "service-manager-unavailable" &&
+        !isGatewayServiceEnv(baseEnv) &&
+        !baseEnv.DBUS_SESSION_BUS_ADDRESS &&
+        !baseEnv.DBUS_SYSTEM_BUS_ADDRESS &&
+        !baseEnv.SUDO_USER
+      ) {
+        assertServiceInspectionFallbackAllowed(error);
+        // Missing executables or a failed user bus never prove absence. On a
+        // host that did not boot systemd, unit names and load paths cannot make
+        // a native owner live; publication still checks foreground locks/ports.
+        if (await isSystemdNotBooted()) {
+          if (inspectionDeadline !== undefined && budget.now() >= inspectionDeadline) {
+            throw new ServiceInspectionDeadlineError("systemd boot probe");
+          }
+          runServiceInspectionGuard(() => args.validateEnvBeforeStatusRead?.(baseEnv));
+          return {
+            inspectionReason: "service-manager-unavailable",
+            installed: false,
+            loadState: { status: "not-loaded" },
+            running: false,
+            env: baseEnv,
+            command: null,
+            runtime: {
+              status: "stopped",
+              missingUnit: true,
+              inspectionReason: "service-manager-unavailable",
+            },
+          };
+        }
+      }
       if (args.requireEffective || !(error instanceof ServiceInspectionDeadlineError)) {
         throw error;
       }
@@ -198,11 +235,15 @@ async function readGatewayServiceStateWithBinding(
   const managerAbsent = absent && service.readCommand === readSystemdServiceExecStart;
   systemdReadBinding?.verify();
   let commandInspection: GatewayServiceCommandInspection | undefined;
+  let effectiveExecutable: string | undefined;
   let command: GatewayServiceCommandConfig | null = null;
   if (!absent) {
     const scheduledTask = service.readCommand === readScheduledTaskCommand;
     const readOptions = {
       timeoutMs: remainingTimeoutMs("effective service command"),
+      onEffectiveExecutable: (executable: string) => {
+        effectiveExecutable = executable;
+      },
       ...(scheduledTask ? { requireLoaded: true } : {}),
       ...(systemdReadTarget ? { systemdReadTarget } : {}),
     };
@@ -394,5 +435,12 @@ async function readGatewayServiceStateWithBinding(
     }
     return deadlineDiagnosticState(state, error);
   }
-  return state;
+  // Later failed or expired inspection cannot promote an earlier executable observation.
+  return command &&
+    commandInspection?.kind !== "unavailable" &&
+    loadState.status !== "unknown" &&
+    runtime?.status !== "unknown" &&
+    effectiveExecutable
+    ? { ...state, effectiveExecutable }
+    : state;
 }

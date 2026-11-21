@@ -4,39 +4,59 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import * as stateDatabase from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
+let { clearPluginDoctorContractRegistryCache } =
+  await import("../plugins/doctor-contract-registry.test-fixtures.js");
+let { writePersistedInstalledPluginIndex } =
+  await import("../plugins/installed-plugin-index-store-write.js");
+let { EMPTY_LEGACY_SESSION_SURFACES } = await import("../plugins/legacy-session-surfaces.types.js");
+let pluginSetupModule = await import("../plugins/plugin-setup-module.js");
+let { closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db-lifecycle.js");
+let { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+let stateDatabase = await import("../state/openclaw-state-db.js");
+let { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+let { withStateMigrationBackupForTest } =
+  await import("../state/openclaw-state-schema.test-support.js");
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import {
-  readDeferredPluginMigrations,
-  recordDeferredPluginMigrations,
-} from "./deferred-plugin-migrations.js";
-import {
-  expectBlockedTailInPlanOrder,
-  expectPlanReceiptDescriptorsToMatch,
-} from "./state-migrations.caller-mode.test-helpers.js";
-import {
-  detectLegacyStateMigrations,
-  runLegacyStateMigrations,
-} from "./state-migrations.doctor.js";
-import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
-import {
-  autoMigrateLegacyPluginDoctorState,
-  runPostSessionPluginDoctorStateRepairs,
-} from "./state-migrations.plugin-doctor.js";
-import {
-  byId,
-  createMigrationFixture,
-  writeFixtureFile,
-} from "./state-migrations.shard-fixture.test-support.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
+let { readDeferredPluginMigrations, recordDeferredPluginMigrations } =
+  await import("./deferred-plugin-migrations.js");
+let { expectBlockedTailInPlanOrder, expectPlanReceiptDescriptorsToMatch } =
+  await import("./state-migrations.caller-mode.test-helpers.js");
+let { detectLegacyStateMigrations, runLegacyStateMigrations } =
+  await import("./state-migrations.doctor.js");
+let { throwIfDoctorStateMigrationRefused } = await import("./state-migrations.messages.js");
+let { autoMigrateLegacyPluginDoctorState, runPostSessionPluginDoctorStateRepairs } =
+  await import("./state-migrations.plugin-doctor.js");
+let { byId, createMigrationFixture, writeFixtureFile } =
+  await import("./state-migrations.shard-fixture.test-support.js");
+
+async function reloadStateDirFixtureGraph() {
+  await closeOpenClawAgentDatabasesAsync();
+  await stateDatabase.closeOpenClawStateDatabaseAsync();
+  vi.resetModules();
+  ({ clearPluginDoctorContractRegistryCache } =
+    await import("../plugins/doctor-contract-registry.test-fixtures.js"));
+  ({ writePersistedInstalledPluginIndex } =
+    await import("../plugins/installed-plugin-index-store-write.js"));
+  ({ EMPTY_LEGACY_SESSION_SURFACES } = await import("../plugins/legacy-session-surfaces.types.js"));
+  pluginSetupModule = await import("../plugins/plugin-setup-module.js");
+  ({ closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db-lifecycle.js"));
+  ({ closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js"));
+  stateDatabase = await import("../state/openclaw-state-db.js");
+  ({ resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js"));
+  ({ withStateMigrationBackupForTest } =
+    await import("../state/openclaw-state-schema.test-support.js"));
+  ({ readDeferredPluginMigrations, recordDeferredPluginMigrations } =
+    await import("./deferred-plugin-migrations.js"));
+  ({ expectBlockedTailInPlanOrder, expectPlanReceiptDescriptorsToMatch } =
+    await import("./state-migrations.caller-mode.test-helpers.js"));
+  ({ detectLegacyStateMigrations, runLegacyStateMigrations } =
+    await import("./state-migrations.doctor.js"));
+  ({ throwIfDoctorStateMigrationRefused } = await import("./state-migrations.messages.js"));
+  ({ autoMigrateLegacyPluginDoctorState, runPostSessionPluginDoctorStateRepairs } =
+    await import("./state-migrations.plugin-doctor.js"));
+  ({ byId, createMigrationFixture, writeFixtureFile } =
+    await import("./state-migrations.shard-fixture.test-support.js"));
+}
 
 function writeJson(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value) + "\n");
@@ -117,7 +137,6 @@ async function makeFixture() {
 }
 
 afterEach(async () => {
-  resetAutoMigrateLegacyStateDirForTest();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await stateDatabase.closeOpenClawStateDatabaseAsync();
@@ -128,12 +147,14 @@ afterEach(async () => {
 
 describe("legacy state migration caller plugin execution", () => {
   const orderedIds = ["first-action", "second-action"];
+  const loadFailure = "Doctor contract initialization failed";
   it.each([
     ["reordered", orderedIds, orderedIds.toReversed(), ["second-action"], true],
     ["missing", ["first-action"], [], [], true],
     ["matching", orderedIds, orderedIds, ["second-action"], false],
+    ["unavailable", ["first-action"], null, [], false],
   ] as const)(
-    "validates %s runtime exports against the immutable manifest order",
+    "handles %s Doctor contracts with immutable manifest actions",
     async (_name, manifestIds, runtimeIds, pendingIds, refused) => {
       const fixture = await makeFixture();
       const candidateRoot = path.join(fixture.root, "surprise-candidate");
@@ -154,7 +175,8 @@ describe("legacy state migration caller plugin execution", () => {
       );
       fs.writeFileSync(
         path.join(pluginRoot, "doctor-contract-api.ts"),
-        `import fs from "node:fs";
+        runtimeIds
+          ? `import fs from "node:fs";
 export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
   id,
   label: id,
@@ -164,7 +186,8 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
     return { changes: [id + " migrated"], warnings: [] };
   },
 }));
-`,
+`
+          : `throw new Error(${JSON.stringify(loadFailure)});\n`,
       );
       fixture.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
 
@@ -184,8 +207,39 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
         refusal: { code: "blocked-by-prior-refusal" },
       });
 
-      const result = await fixture.migrate({});
+      const cfg: OpenClawConfig = runtimeIds ? {} : { agents: { entries: { main: {} } } };
+      const legacyAgentFile = path.join(fixture.stateDir, "agent", "settings.json");
+      if (!runtimeIds) {
+        writeJson(fixture.configPath, cfg);
+        writeFixtureFile(legacyAgentFile, "{}\n");
+      }
+      const result = await fixture.migrate(cfg);
 
+      if (!runtimeIds) {
+        expect(byId(result.stepReceipts, "plugin-doctor-state")).toMatchObject({
+          source: plannedSources,
+          outcome: "warning",
+          warnings: [`Deferred state migrations for plugin "surprise-owner": ${loadFailure}`],
+        });
+        expect(result.requiredPluginIds).toContain("surprise-owner");
+        expect(result.deferredPluginMigrations).toEqual([
+          {
+            pluginId: "surprise-owner",
+            requiresStateMigration: true,
+            reason: loadFailure,
+            command: "openclaw update repair",
+          },
+        ]);
+        expect(result.completedPluginIds ?? []).not.toContain("surprise-owner");
+        expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
+        for (const id of ["sessions", "acp-session-metadata", "agent-dir"]) {
+          expect(expectDefined(byId(result.stepReceipts, id), id).refusal).toBeUndefined();
+        }
+        expect(byId(result.stepReceipts, "agent-dir")?.outcome).toBe("completed");
+        expect(fs.existsSync(legacyAgentFile)).toBe(false);
+        expect(fs.existsSync(mutationPath)).toBe(false);
+        return;
+      }
       if (!refused) {
         expect(byId(result.stepReceipts, "plugin-doctor-state")).toMatchObject({
           source: plannedSources,
@@ -303,6 +357,61 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
     });
   });
 
+  it("persists a contract failure first discovered in post-session repair and settles it on retry", async () => {
+    const fixture = await makeFixture();
+    fixture.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    const pluginId = "post-session-owner";
+    const pluginRoot = path.join(fixture.root, pluginId);
+    const source = path.join(fixture.stateDir, "pending-plugin-state");
+    writeFixtureFile(source, "retained input");
+    writePlugin(pluginRoot, pluginId, [
+      [
+        "post-session",
+        source,
+        "migrated plugin state",
+        { phase: "after-session-repair", pending: "present", remove: true },
+      ],
+    ]);
+    const cfg = pluginConfig(pluginId, pluginRoot, { enabled: true, config: { retention: true } });
+    writeJson(fixture.configPath, cfg);
+    const contract = path.join(pluginRoot, "doctor-contract-api.cjs");
+    const restored = fs.readFileSync(contract);
+    fs.writeFileSync(contract, `throw new Error(${JSON.stringify(loadFailure)});\n`);
+    const params = {
+      config: cfg,
+      env: fixture.env,
+      maintenanceAuthority: { assertCurrent() {} },
+      plannedActions: [{ pluginId, id: "post-session" }],
+    };
+
+    expect(readDeferredPluginMigrations({ env: fixture.env })).toEqual([]);
+    await expect(runPostSessionPluginDoctorStateRepairs(params)).resolves.toMatchObject({
+      changes: [],
+      warnings: [expect.stringContaining(loadFailure)],
+      warningDisposition: "recoverable",
+    });
+    expect(readDeferredPluginMigrations({ env: fixture.env })).toEqual([
+      {
+        pluginId,
+        reason: loadFailure,
+        command: "openclaw update repair",
+        requiresStateMigration: true,
+        configPaths: [["plugins", "entries", pluginId, "config"]],
+      },
+    ]);
+    expect(fs.readFileSync(source, "utf8")).toBe("retained input");
+
+    fs.writeFileSync(contract, restored);
+    clearPluginDoctorContractRegistryCache();
+    await expect(runPostSessionPluginDoctorStateRepairs(params)).resolves.toMatchObject({
+      changes: ["migrated plugin state"],
+      completedPluginIds: [pluginId],
+      warnings: [],
+    });
+    expect(fs.existsSync(source)).toBe(false);
+    expect(readDeferredPluginMigrations({ env: fixture.env })).toEqual([]);
+  });
+
   it.each([
     // legacy root, install index, phase, direct entry, old schema, ordinary-only
     [true, true, undefined, false, false, false],
@@ -313,6 +422,9 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
   ] as const)(
     "discovers live actions: legacy=%s indexed=%s phase=%s direct=%s old-schema=%s ordinary-only=%s",
     async (legacyRoot, fromInstallIndex, phase, direct, legacySchema, excludeDoctorOnly) => {
+      if (legacyRoot) {
+        await reloadStateDirFixtureGraph();
+      }
       const fixture = await makeFixture();
       // This execution fixture has no candidate package. Its config-root plugin directory
       // must contain only the live owner, not makeFixture's copied-plan bundled tree.

@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, globSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, writeFileSync } from "node:fs";
 import path, { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
@@ -10,8 +9,8 @@ import {
   listExtensionTestFilesForRoots,
   splitExtensionTestJobTargets,
 } from "../../scripts/lib/extension-test-plan.mts";
+import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { codexExtensionTestRoots } from "../vitest/vitest.extension-codex-paths.mjs";
 import { createExtensionVitestConfig } from "../vitest/vitest.extension-config.ts";
 import { createExtensionDatabaseWorkersVitestConfig } from "../vitest/vitest.extension-database-workers.config.ts";
@@ -24,7 +23,6 @@ import {
   readWorkflow,
 } from "./plugin-prerelease.test-support.js";
 
-const testNodeExecPath = resolveTestNodeExecPath();
 const fixtures = createPrereleaseFixtures();
 const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
 const databaseConfig = "test/vitest/vitest.extension-database-workers.config.ts";
@@ -52,32 +50,17 @@ function listRunnableExtensionTestFiles(worker = false, extensionId = "telegram"
 }
 
 function runPluginPrereleaseManifest(cwd = process.cwd(), fullReleaseValidation = false) {
-  const manifestStep = findStep(readWorkflow().jobs.preflight, "Build plugin prerelease manifest");
-  const source = expectDefined(
-    manifestStep?.run?.match(
-      /node --import tsx --input-type=module <<'EOF'\n([\s\S]*?)\nEOF/u,
-    )?.[1],
-    "plugin prerelease manifest source",
-  );
-  const root = fixtures.make("openclaw-plugin-prerelease-telegram-shards-");
-  const outputPath = join(root, "github-output");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    EXPECTED_SHA: "",
-    FULL_RELEASE_VALIDATION: String(fullReleaseValidation),
-    GITHUB_OUTPUT: outputPath,
-    OPENCLAW_CI_TEST_RUNTIME_POLICY: "",
-  };
-  delete env.OPENCLAW_VITEST_INCLUDE_FILE;
-  const result = spawnSync(testNodeExecPath, ["--import", "tsx", "--input-type=module"], {
+  const { result, output } = fixtures.manifest(
+    "workflow_dispatch",
+    "",
     cwd,
-    encoding: "utf8",
-    env,
-    input: source,
-  });
+    fullReleaseValidation,
+    "all",
+  );
   expect(result.status, result.stderr).toBe(0);
-  const output = parseManifestOutputs(readFileSync(outputPath, "utf8"));
-  return { include: parseExtensionMatrix(output.plugin_prerelease_extension_matrix) };
+  return {
+    include: parseExtensionMatrix(parseManifestOutputs(output).plugin_prerelease_extension_matrix),
+  };
 }
 
 describe("plugin prerelease Telegram extension shards", () => {
@@ -199,6 +182,20 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       expect(row).toMatchObject({ requires_bun: false, test_runtime_policy: "node" });
     }
     const telegramRows = fileRows("telegram");
+    for (const row of [...codexRows, ...telegramRows]) {
+      expect(row.pretest_build_mode).toBe(
+        resolveVitestPretestBuildMode([
+          { configs: [row.vitest_config], includePatterns: row.includePatterns },
+        ]),
+      );
+    }
+    expect(
+      telegramRows.find((row) =>
+        row.includePatterns.includes(
+          "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+        ),
+      )?.pretest_build_mode,
+    ).toBe("runtime");
     const allFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
     const telegramFiles = [
       ...listRunnableExtensionTestFiles(),
@@ -271,6 +268,12 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       OPENCLAW_EXTENSION_TASK: "${{ matrix.task }}",
       OPENCLAW_EXTENSION_VITEST_CONFIG: "${{ matrix.vitest_config }}",
     });
+    const buildStep = findStep(extensionJob, "Build extension test runtime");
+    expect(buildStep).toMatchObject({
+      if: "matrix.pretest_build_mode != null",
+      run: "pnpm build qaRuntime",
+    });
+    expect(extensionJob.steps.indexOf(buildStep)).toBeLessThan(extensionJob.steps.indexOf(runStep));
     expect(runStep?.run).toContain("extension-file-shard)");
     expect(runStep?.run).toContain("OPENCLAW_TEST_PROJECTS_PARALLEL=2");
     expect(runStep?.run).toContain('OPENCLAW_VITEST_INCLUDE_FILE="$include_file"');

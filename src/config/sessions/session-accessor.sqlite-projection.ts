@@ -1,16 +1,19 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  deferOpenClawAgentPostCommitPublication,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { applyMemorySessionEntryCleanup } from "./session-accessor.memory-cleanup.js";
-import {
-  prunePublishedSessionArchivesByRetention,
-  publishSessionStateArchives,
-} from "./session-accessor.sqlite-archive-store.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { withNativeSessionCommitContext } from "./session-accessor.sqlite-commit-context.js";
@@ -96,6 +99,19 @@ export async function applySessionEntryLifecycleMutation(
   const execution = reclamationOptions
     ? captureOpenClawAgentDatabaseExecution(reclamationOptions)
     : undefined;
+  const notifyNativeCommit = (database: OpenClawAgentDatabase) => {
+    if (!params.onLifecycleCommitted) {
+      return;
+    }
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    const source: AgentDatabaseExecutionFileIdentity = {
+      kind: "file",
+      physicalIdentity: identity.identity,
+      birthtime: identity.birthtime,
+      nativeLocation: identity.canonicalPath,
+    };
+    deferOpenClawAgentPostCommitPublication(database, () => params.onLifecycleCommitted?.(source));
+  };
   try {
     let artifactCleanupError: unknown;
     const captureArtifactCleanupError = (error: unknown): void => {
@@ -179,6 +195,7 @@ export async function applySessionEntryLifecycleMutation(
               ? undefined
               : await prepareSessionMaintenancePreservation(params.storePath, {
                   native: !reclamationOptions,
+                  env: resolved.env,
                 });
             try {
               if (reclamationOptions) {
@@ -202,11 +219,12 @@ export async function applySessionEntryLifecycleMutation(
                 };
                 const assertPreservationCurrent = (
                   plans?: readonly SessionEntryMaintenancePlan[],
+                  operation?: RetainedWorkerTransactionAdmission,
                 ) => {
                   if (maintenance?.preservation && preparedPreservation) {
                     assertMaintenancePreservationCompatible(
                       maintenance.preservation,
-                      preparedPreservation.capture(),
+                      preparedPreservation.capture(operation),
                       plans,
                     );
                   }
@@ -224,8 +242,8 @@ export async function applySessionEntryLifecycleMutation(
                       assertPrepared: () => {
                         preparedPreservation?.capture();
                       },
-                      assertCandidate: (candidate) => {
-                        assertPreservationCurrent(candidate.result.maintenancePlans);
+                      assertCandidate: (candidate, operation) => {
+                        assertPreservationCurrent(candidate.result.maintenancePlans, operation);
                         params.beforeCommitInTransaction?.();
                       },
                       onLifecycleCommitted: params.onLifecycleCommitted,
@@ -243,14 +261,15 @@ export async function applySessionEntryLifecycleMutation(
                   );
                 }
                 const result = await runSqliteSessionReclamation({
-                  assertCommitAllowed: () => {
+                  assertCommitAllowed: (operation) => {
                     assertCurrent();
-                    assertPreservationCurrent();
+                    assertPreservationCurrent(undefined, operation);
                     params.beforeCommitInTransaction?.();
                   },
-                  onWorkerResult: (completed) => {
+                  onInProcessCommit: notifyNativeCommit,
+                  onWorkerResult: (completed, _identity, fileIdentity) => {
                     if (completed.kind === "lifecycle-projection-commit") {
-                      params.onLifecycleCommitted?.();
+                      params.onLifecycleCommitted?.(fileIdentity);
                     }
                   },
                   plan: {
@@ -322,9 +341,7 @@ export async function applySessionEntryLifecycleMutation(
           params.commitGuard?.();
           params.beforeCommitInTransaction?.();
           assertSourceCurrent?.();
-          if (params.onLifecycleCommitted) {
-            deferOpenClawAgentPostCommitPublication(transactionDb, params.onLifecycleCommitted);
-          }
+          notifyNativeCommit(transactionDb);
           const result = commitProjectedSessionEntryLifecycleMutationInDatabase(transactionDb, {
             projected,
             removalPlans,
@@ -411,24 +428,6 @@ export async function applySessionEntryLifecycleMutation(
     const archivedTranscriptDirectories = uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
     ).toSorted();
-    if (archivedTranscriptDirectories.length > 0 && params.cleanupArchivedTranscripts) {
-      try {
-        const { cleanupArchivedSessionTranscripts } =
-          await import("../../gateway/session-archive.runtime.js");
-        await cleanupArchivedSessionTranscripts({
-          directories: archivedTranscriptDirectories,
-          rules: params.cleanupArchivedTranscripts.rules,
-          nowMs: params.cleanupArchivedTranscripts.nowMs,
-        });
-        await prunePublishedSessionArchivesByRetention({
-          scope: resolved,
-          rules: params.cleanupArchivedTranscripts.rules,
-          nowMs: params.cleanupArchivedTranscripts.nowMs,
-        });
-      } catch (error) {
-        captureArtifactCleanupError(error);
-      }
-    }
     return {
       beforeCount: committed.beforeCount,
       removedEntries: committed.removedSessionKeys.length,

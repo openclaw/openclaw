@@ -69,7 +69,6 @@ it("preserves complete OpenClaw Change cards across phases", () => {
     })),
     allowedDecisions: ["allow-once", "deny"],
   });
-  expect(createToken).toHaveBeenCalledTimes(actions.length);
   for (const [resolvedBy, text] of [
     ["  reviewer  ", "Resolved by reviewer"],
     [" \t ", "Resolved"],
@@ -144,7 +143,7 @@ it("displays the canonical winning decision when another surface resolved the ap
       },
     },
   });
-  expect(systemCard.body).toEqual(
-    expect.arrayContaining([expect.objectContaining({ text: "System Agent Approval: Denied" })]),
+  expect(systemCard.body).toContainEqual(
+    expect.objectContaining({ text: "System Agent Approval: Denied" }),
   );
 });

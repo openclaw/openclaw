@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
@@ -10,7 +9,6 @@ import {
   appendTranscriptMessageSync,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
-  replaceSessionEntry,
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -25,10 +23,17 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
+import { sessionManagerReadInitialContext } from "../sessions/session-manager-current-turn.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
-import { useTranscriptRewriteTempDirs } from "./transcript-rewrite.test-support.js";
-const tempDirs = useTranscriptRewriteTempDirs(afterEach);
+import {
+  appendMessages,
+  asAppendMessage,
+  createTextContent,
+  useTranscriptRewriteTargets,
+} from "./transcript-rewrite.test-support.js";
+const persistedTarget = useTranscriptRewriteTargets(afterEach);
 
 function rewrite(sessionManager: SessionManager, entryId: string, message: AgentMessage) {
   return rewriteTranscriptEntriesInSessionManager({
@@ -39,33 +44,11 @@ function rewrite(sessionManager: SessionManager, entryId: string, message: Agent
 
 const boundedOptions = { maxBytes: 64_000, maxEvents: 20 };
 
-type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
-
-function asAppendMessage(message: unknown): AppendMessage {
-  return message as AppendMessage;
-}
-
 function getBranchMessages(sessionManager: SessionManager): AgentMessage[] {
   return sessionManager
     .getBranch()
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message);
-}
-
-function appendMessages(sessionManager: SessionManager, messages: AppendMessage[]): string[] {
-  return messages.map((message) => sessionManager.appendMessage(message));
-}
-
-async function persistedTarget(sessionId: string) {
-  const directory = tempDirs.make(`openclaw-${sessionId}-`);
-  const target = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(directory, "sessions.json"),
-  };
-  await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
-  return { directory, target };
 }
 
 function assistant(text: string, timestamp: number) {
@@ -84,10 +67,6 @@ async function expectReaderContexts(
   ]) {
     expect(reader.buildSessionContext()).toEqual(expected);
   }
-}
-
-function createTextContent(text: string) {
-  return [{ type: "text" as const, text }];
 }
 
 function appendReadExchange(manager: SessionManager, text: string) {
@@ -142,6 +121,43 @@ function findAssistant(sessionManager: SessionManager, text: string) {
 }
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
+  it("shares sealed history during rewrite and detaches only writable SDK exposure", async () => {
+    const { directory, target } = await persistedTarget("sealed-rewrite");
+    const seed = await SessionManager.openAsync(target, directory);
+    const first = expectDefined(
+      await seed.appendMessageAsync(toolResult("read", "unchanged", 1)),
+      "first seed entry",
+    );
+    const last = expectDefined(
+      await seed.appendMessageAsync(toolResult("read", "replace", 2)),
+      "last seed entry",
+    );
+    const manager = await SessionManager.openAsync(target);
+    const original = manager[sessionManagerReadTranscriptBranch]()[0];
+    if (original?.type !== "message" || original.message.role !== "toolResult") {
+      throw new Error("Missing sealed history");
+    }
+    const message = original.message;
+    const context = await manager[sessionManagerReadInitialContext]();
+    const before = JSON.stringify(context);
+    await rewrite(manager, last, toolResult("read", "replacement", 2));
+    const retained = manager[sessionManagerReadTranscriptBranch]()[0];
+    expect(retained?.type === "message" && retained.message).toBe(message);
+    expect(() => {
+      message.content.push({ type: "text", text: "shared mutation" });
+    }).toThrow(TypeError);
+    const writable = manager.getEntry(first);
+    if (writable?.type !== "message" || writable.message.role !== "toolResult") {
+      throw new Error("Missing writable SDK message");
+    }
+    writable.message.content.push({ type: "text", text: "SDK mutation" });
+    expect(JSON.stringify(context)).toBe(before);
+    expect((await SessionManager.openAsync(target)).buildSessionContext().messages).toMatchObject([
+      { content: [{ text: "unchanged" }] },
+      { content: [{ text: "replacement" }] },
+    ]);
+  });
+
   it.each([
     { collected: false, excludeFromContext: false },
     { collected: true, excludeFromContext: true },
@@ -256,7 +272,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
           originalRows,
         );
         expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
-        receipt.finish("cancelled");
+        receipt.finish("cancelled", "failed");
         expect(() => receipt.run(() => {})).toThrow("ownership ended");
         expect(
           await withSessionPendingInputPersistence(receipt, () =>
@@ -264,7 +280,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
           ),
         ).toMatchObject({ appended: false, messageId: currentEntryId });
       } finally {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
     },
   );

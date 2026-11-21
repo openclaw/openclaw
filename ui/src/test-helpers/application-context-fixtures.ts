@@ -27,6 +27,7 @@ const unavailableMentionsCapability = {
 
 const emptySidebarAttentionStore = {
   entries: [],
+  refreshOpenClawId: () => undefined,
   activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,
   subscribe: () => () => undefined,
@@ -40,8 +41,10 @@ export function normalizeApplicationContext(value: ApplicationContext): Applicat
   return value;
 }
 
-export function createApplicationGateway(
-  initial: ApplicationGatewaySnapshot = {
+export function createApplicationGatewaySnapshot(
+  overrides: Partial<ApplicationGatewaySnapshot> = {},
+): ApplicationGatewaySnapshot {
+  return {
     client: null,
     phase: "stopped",
     offlineStable: false,
@@ -51,7 +54,12 @@ export function createApplicationGateway(
     sessionKey: "",
     lastError: null,
     lastErrorCode: null,
-  },
+    ...overrides,
+  };
+}
+
+export function createApplicationGateway(
+  initial: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot(),
 ) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
@@ -69,16 +77,11 @@ export function createApplicationGateway(
   } as unknown as ApplicationGateway;
   return {
     gateway,
-    publishEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
+    publishEvent: (event: GatewayEventFrame) =>
+      Array.from(eventListeners).forEach((listener) => listener(event)),
     publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      listeners.forEach((listener) => listener(snapshot));
     },
   };
 }
@@ -97,9 +100,7 @@ export function createNavigationPreferencesFixture(): ApplicationContext["naviga
     },
     update(patch) {
       snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      listeners.forEach((listener) => listener(snapshot));
     },
     subscribe: (listener) => registerListener(listeners, listener),
   };

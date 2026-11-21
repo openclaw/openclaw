@@ -1,18 +1,44 @@
 import { WebAPIRateLimitedError } from "@slack/web-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createTestPluginServiceScheduler,
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPresenceStore } from "../../../test-support/presence-store.js";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 import {
   createSlackPresenceMonitor,
   hasSlackPresenceEventsEnabled,
   SLACK_PRESENCE_REQUEST_TIMEOUT_MS,
 } from "./presence-monitor.js";
+
+type PresenceSystem = Parameters<typeof createSlackPresenceMonitor>[0]["system"];
+const observedTransition = [
+  "Slack presence event:",
+  'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
+  "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+];
+
+function createReceipt(accepted = true): ReturnType<PresenceSystem["enqueueSessionEvent"]> {
+  return {
+    id: "presence",
+    cancel: () => false,
+    accepted: Promise.resolve(accepted ? { ok: true } : { ok: false, error: "session replaced" }),
+    settled: Promise.resolve({
+      status: accepted ? "completed" : "failed",
+      executionStarted: accepted,
+      delivered: accepted,
+      ...(!accepted ? { error: "session replaced" } : {}),
+    }),
+  };
+}
+
+function createCaptureTarget() {
+  return vi.fn(createPluginRuntimeMock().system.captureSessionEventTarget);
+}
 
 const presenceFixtures = new Set<ReturnType<typeof createSlackPresenceMonitor>>();
 afterEach(async () => {
@@ -21,26 +47,27 @@ afterEach(async () => {
 });
 
 function createPresenceFixture(
-  params: Partial<Omit<Parameters<typeof createSlackPresenceMonitor>[0], "scheduler">> & {
+  params: Partial<Parameters<typeof createSlackPresenceMonitor>[0]> & {
     clock?: ReturnType<typeof createGatewaySchedulerClock>;
     getPresence?: ReturnType<typeof presenceSequence>;
+    enqueue?: ReturnType<typeof vi.fn<PresenceSystem["enqueueSessionEvent"]>>;
+    captureTarget?: ReturnType<typeof createCaptureTarget>;
   } = {},
 ) {
   const {
     clock = createGatewaySchedulerClock(),
     getPresence = presenceSequence("away", "active"),
+    enqueue = vi.fn<PresenceSystem["enqueueSessionEvent"]>(() => createReceipt()),
+    captureTarget = createCaptureTarget(),
+    scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)),
     ...options
   } = params;
-  const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
-  const enqueue = vi.fn((..._args: unknown[]) => true);
-  const wake = vi.fn();
   const cooldownStore = createCooldownStore();
   const monitor = createSlackPresenceMonitor({
     accountId: "default",
     accountConfig: { mode: "auto" },
     cooldownStore,
-    enqueue,
-    wake,
+    system: { enqueueSessionEvent: enqueue, captureSessionEventTarget: captureTarget },
     resolveClient: () => ({ getPresence }),
     ...options,
     scheduler,
@@ -50,10 +77,16 @@ function createPresenceFixture(
   return {
     ...monitor,
     enqueue,
-    wake,
+    captureTarget,
     cooldownStore,
     getPresence,
     advancePoll: () => Promise.resolve(clock.wake()),
+    pollAt: async (...times: number[]) => {
+      for (const time of times) {
+        clock.setTime(time);
+        await clock.wake();
+      }
+    },
   };
 }
 
@@ -66,30 +99,30 @@ function presenceSequence(...samples: string[]) {
 }
 
 function createCooldownStore() {
-  const values = new Map<string, number>();
   return {
-    register: async (key, value) => void values.set(key, value),
-    registerIfAbsent: async (key, value) => {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
-    lookup: async (key) => values.get(key),
-    consume: async (key) => {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: async (key) => values.delete(key),
-    deleteIfEqual: async (key, expected) => values.get(key) === expected && values.delete(key),
+    ...createPresenceStore(),
     entries: async () => [],
-    clear: async () => values.clear(),
-  } satisfies PluginStateKeyedStore<number>;
+  };
 }
 
-function createPrepared(params: {
+function seedPresence(
+  monitor: ReturnType<typeof createPresenceFixture>,
+  prepared = createPrepared({ userId: "U123" }),
+) {
+  monitor.observe(prepared);
+  return monitor.advancePoll();
+}
+
+function createPrepared({
+  userId,
+  teamId,
+  channelId = "D123",
+  channelType = "im",
+  threadId,
+  mode,
+  prompt,
+  sessionKey = `agent:main:slack:channel:${channelId}`,
+}: {
   userId: string;
   teamId?: string;
   channelId?: string;
@@ -99,31 +132,16 @@ function createPrepared(params: {
   prompt?: string;
   sessionKey?: string;
 }): PreparedSlackMessage {
-  const channelId = params.channelId ?? "D123";
-  const channelType = params.channelType ?? "im";
   return {
     ctx: { isRuntimePolicyCurrent: () => true },
-    message: {
-      type: "message",
-      user: params.userId,
-      channel: channelId,
-      channel_type: channelType,
-    },
-    ...(params.teamId ? { eventScope: { teamId: params.teamId, client: {} as never } } : {}),
-    route: {
-      agentId: "main",
-      accountId: "default",
-      sessionKey: params.sessionKey ?? `agent:main:slack:channel:${channelId}`,
-    },
+    message: { type: "message", user: userId, channel: channelId, channel_type: channelType },
+    ...(teamId ? { eventScope: { teamId, client: {} as never } } : {}),
+    route: { agentId: "main", accountId: "default", sessionKey },
     channelConfig:
-      params.mode || params.prompt !== undefined
-        ? {
-            allowed: true,
-            requireMention: false,
-            presenceEvents: { mode: params.mode, prompt: params.prompt },
-          }
+      mode || prompt !== undefined
+        ? { allowed: true, requireMention: false, presenceEvents: { mode, prompt } }
         : null,
-    ctxPayload: { MessageThreadId: params.threadId },
+    ctxPayload: { MessageThreadId: threadId },
     isDirectMessage: channelType === "im",
   } as PreparedSlackMessage;
 }
@@ -134,19 +152,10 @@ describe("Slack presence monitor", () => {
     const scheduler = createTestPluginServiceScheduler();
     const response = createDeferred<{ presence: string }>();
     const getPresence = vi.fn().mockReturnValue(response.promise);
-    const enqueue = vi.fn(() => true);
-    const monitor = createSlackPresenceMonitor({
-      scheduler,
-      accountId: "default",
-      accountConfig: { mode: "auto" },
-      resolveClient: () => ({ getPresence }),
-      cooldownStore: createCooldownStore(),
-      enqueue,
-      wake: vi.fn(),
-    });
+    const enqueue = vi.fn<PresenceSystem["enqueueSessionEvent"]>(() => createReceipt());
+    const monitor = createPresenceFixture({ scheduler, getPresence, enqueue });
     try {
       monitor.observe(createPrepared({ userId: "U123" }));
-      monitor.start();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(getPresence).toHaveBeenCalledOnce();
       const stopped = vi.fn();
@@ -176,8 +185,7 @@ describe("Slack presence monitor", () => {
     const { enqueue, cooldownStore } = monitor;
     const prepared = createPrepared({ userId: "U123" });
     prepared.ctx.isRuntimePolicyCurrent = () => current;
-    monitor.observe(prepared);
-    await monitor.advancePoll();
+    await seedPresence(monitor, prepared);
     const pending = monitor.advancePoll();
     current = false;
     response.resolve({ presence: "active" });
@@ -207,58 +215,44 @@ describe("Slack presence monitor", () => {
         clock,
         accountConfig: { mode: "auto", prompt: "Account guidance" },
       });
-      monitor.observe(createPrepared({ userId: "U123", mode: "auto", prompt }));
-      await monitor.advancePoll();
-      clock.setTime(7_500);
-      await monitor.advancePoll();
+      await seedPresence(monitor, createPrepared({ userId: "U123", mode: "auto", prompt }));
+      await monitor.pollAt(7_500);
       expect(monitor.enqueue.mock.calls[0]?.[0]).toBe(
-        [
-          "Slack presence event:",
-          'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
-          "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
-          ...(prompt ? [prompt] : []),
-        ].join("\n"),
+        [...observedTransition, ...(prompt ? [prompt] : [])].join("\n"),
       );
     },
   );
 
-  it("seeds the first sample and wakes only on away-to-active", async () => {
+  it("seeds the first sample and submits only on away-to-active", async () => {
     const clock = createGatewaySchedulerClock(1_000);
     const getPresence = presenceSequence("active", "away", "away", "active", "away", "active");
     const monitor = createPresenceFixture({ clock, getPresence });
-    const { enqueue, wake } = monitor;
+    const { enqueue } = monitor;
     monitor.observe(createPrepared({ userId: "U123" }));
 
     await monitor.advancePoll();
-    clock.setTime(2_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(2_000);
     expect(enqueue).not.toHaveBeenCalled();
 
-    clock.setTime(4_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(4_000);
     expect(enqueue).not.toHaveBeenCalled();
 
-    clock.setTime(7_500);
-    await monitor.advancePoll();
+    await monitor.pollAt(7_500);
     expect(enqueue).toHaveBeenCalledExactlyOnceWith(
       [
-        "Slack presence event:",
-        'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
-        "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+        ...observedTransition,
         "Before greeting, retrieve relevant memory and wiki context for this immutable user_id, including a known timezone when available. Use their local time; if their timezone is unknown, do not guess.",
         "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
       ].join("\n"),
-      expect.objectContaining({ agentId: "main", sessionKey: "agent:main:slack:channel:D123" }),
       expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:slack:channel:D123",
         deliveryContext: { channel: "slack", to: "user:U123", accountId: "default" },
       }),
     );
-    expect(wake).toHaveBeenCalledOnce();
+    expect(monitor.captureTarget).toHaveBeenCalledOnce();
 
-    clock.setTime(8_000);
-    await monitor.advancePoll();
-    clock.setTime(9_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(8_000, 9_000);
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
@@ -286,8 +280,9 @@ describe("Slack presence monitor", () => {
 
     expect(monitor.enqueue).toHaveBeenCalledWith(
       expect.stringContaining('channel_id="CNEW"'),
-      expect.objectContaining({ agentId: "main", sessionKey: "session:new" }),
       expect.objectContaining({
+        agentId: "main",
+        sessionKey: "session:new",
         deliveryContext: expect.objectContaining({
           to: "channel:CNEW",
           threadId: "2.000",
@@ -319,8 +314,8 @@ describe("Slack presence monitor", () => {
       expect(resolveClient).toHaveBeenCalledWith(teamId);
       expect(monitor.enqueue).toHaveBeenCalledWith(
         expect.stringContaining(`team_id="${teamId}"`),
-        expect.objectContaining({ agentId: "main" }),
         expect.objectContaining({
+          agentId: "main",
           deliveryContext: expect.objectContaining({ to: `team:${teamId}:user:U12345678` }),
         }),
       );
@@ -346,34 +341,42 @@ describe("Slack presence monitor", () => {
     expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "UDIRECT" });
   });
 
-  it("times out a stalled presence request and polls the next user", async () => {
-    vi.useFakeTimers();
-    const stalled = createDeferred<{ presence: string }>();
-    let polling: Promise<void> | undefined;
-    try {
-      const getPresence = vi
-        .fn()
-        .mockReturnValueOnce(stalled.promise)
-        .mockResolvedValueOnce({ presence: "away" });
-      const monitor = createPresenceFixture({ getPresence });
-      monitor.observe(createPrepared({ userId: "U1", channelId: "D1" }));
-      monitor.observe(createPrepared({ userId: "U2", channelId: "D2" }));
-
-      polling = monitor.advancePoll();
-      const pollSettled = vi.fn();
-      void polling.then(pollSettled);
-      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
-      expect(pollSettled).toHaveBeenCalledOnce();
-      await polling;
-
-      expect(getPresence).toHaveBeenNthCalledWith(1, { user: "U1" });
-      expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U2" });
-    } finally {
-      stalled.resolve({ presence: "away" });
-      await polling;
-      vi.useRealTimers();
-    }
-  });
+  it.each(["continue", "stop"] as const)(
+    "bounds a stalled request when the poll must %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const stalled = createDeferred<{ presence: string }>();
+      let polling: Promise<void> | undefined;
+      try {
+        const getPresence = vi
+          .fn()
+          .mockReturnValueOnce(stalled.promise)
+          .mockResolvedValueOnce({ presence: "away" });
+        const monitor = createPresenceFixture({ getPresence });
+        monitor.observe(createPrepared({ userId: "U1", channelId: "D1" }));
+        if (action === "continue") {
+          monitor.observe(createPrepared({ userId: "U2", channelId: "D2" }));
+        }
+        polling = monitor.advancePoll();
+        const stopping = action === "stop" ? monitor.stop() : undefined;
+        const settled = vi.fn();
+        void (stopping ?? polling).then(settled);
+        await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
+        expect(settled).toHaveBeenCalledOnce();
+        await Promise.all([polling, stopping]);
+        expect(getPresence).toHaveBeenNthCalledWith(1, { user: "U1" });
+        if (action === "continue") {
+          expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U2" });
+        } else {
+          expect(getPresence).toHaveBeenCalledOnce();
+        }
+      } finally {
+        stalled.resolve({ presence: "away" });
+        await polling;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("honors Slack Retry-After without skipping the unpolled page", async () => {
     const clock = createGatewaySchedulerClock(1_000);
@@ -393,12 +396,10 @@ describe("Slack presence monitor", () => {
     await monitor.advancePoll();
     expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "U0001" });
 
-    clock.setTime(120_999);
-    await monitor.advancePoll();
+    await monitor.pollAt(120_999);
     expect(getPresence).toHaveBeenCalledTimes(1);
 
-    clock.setTime(121_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(121_000);
     expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U0001" });
     expect(getPresence).toHaveBeenNthCalledWith(3, { user: "U0002" });
     expect(getPresence).toHaveBeenCalledTimes(46);
@@ -407,32 +408,7 @@ describe("Slack presence monitor", () => {
     expect(getPresence).toHaveBeenNthCalledWith(47, { user: "U0046" });
   });
 
-  it("bounds stop while a presence request is stalled", async () => {
-    vi.useFakeTimers();
-    const stalled = createDeferred<{ ok: boolean; presence: string }>();
-    let polling: Promise<void> | undefined;
-    try {
-      const getPresence = vi.fn(() => stalled.promise);
-      const monitor = createPresenceFixture({ getPresence });
-      monitor.observe(createPrepared({ userId: "U1" }));
-
-      polling = monitor.advancePoll();
-      const stopping = monitor.stop();
-      const stopSettled = vi.fn();
-      void stopping.then(stopSettled);
-      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
-      expect(stopSettled).toHaveBeenCalledOnce();
-      await Promise.all([polling, stopping]);
-
-      expect(getPresence).toHaveBeenCalledOnce();
-    } finally {
-      stalled.resolve({ ok: true, presence: "away" });
-      await polling;
-      vi.useRealTimers();
-    }
-  });
-
-  it.each(["publish", "stop", "ineligible", "expired", "replaced"] as const)(
+  it.each(["retarget", "stop", "ineligible", "expired", "replaced"] as const)(
     "waits for cooldown persistence and drains cleanup when %s",
     async (outcome) => {
       const reservation = createDeferred<boolean>();
@@ -457,20 +433,24 @@ describe("Slack presence monitor", () => {
         await cleanup.promise;
         return await deleteIfEqual(key, expected);
       };
-      const enqueue = vi.fn(() => outcome !== "replaced");
+      const enqueue = vi.fn<PresenceSystem["enqueueSessionEvent"]>(() =>
+        createReceipt(outcome !== "replaced"),
+      );
       const clock = createGatewaySchedulerClock(1_000);
       const monitor = createPresenceFixture({
         clock,
         cooldownStore,
         enqueue,
       });
-      const { wake } = monitor;
-      monitor.observe(createPrepared({ userId: "U123" }));
-      await monitor.advancePoll();
+      const { captureTarget } = monitor;
+      await seedPresence(monitor);
       const polling = monitor.advancePoll();
       await reservationStarted.promise;
       expect(enqueue).not.toHaveBeenCalled();
-      expect(wake).not.toHaveBeenCalled();
+      expect(captureTarget).toHaveBeenCalledExactlyOnceWith(
+        "main",
+        "agent:main:slack:channel:D123",
+      );
       await monitor.advancePoll();
       expect(monitor.getPresence).toHaveBeenCalledTimes(2);
       let stopping: Promise<void> | undefined;
@@ -485,43 +465,31 @@ describe("Slack presence monitor", () => {
         }
       } else if (outcome === "expired") {
         clock.setTime(1_000 + 24 * 60 * 60 * 1_000);
-      } else if (outcome === "publish") {
+      } else if (outcome === "retarget") {
         clock.setTime(1_001);
         monitor.observe(
           createPrepared({ userId: "U123", channelId: "DNEW", sessionKey: "session:new" }),
         );
       }
       reservation.resolve(true);
-      if (outcome !== "publish") {
-        await cleanupStarted.promise;
-        stopping ??= monitor.stop().then(() => {
-          stopSettled = true;
-        });
-        await Promise.resolve();
-        expect(stopSettled).toBe(false);
-        expect(wake).not.toHaveBeenCalled();
-        if (outcome === "replaced") {
-          await cooldownStore.register("default:workspace:U123", 1_001);
-        }
-        cleanup.resolve(true);
+      await cleanupStarted.promise;
+      stopping ??= monitor.stop().then(() => {
+        stopSettled = true;
+      });
+      await Promise.resolve();
+      expect(stopSettled).toBe(false);
+      if (outcome === "replaced") {
+        await cooldownStore.register("default:workspace:U123", 1_001);
       }
+      cleanup.resolve(true);
       await polling;
       await stopping;
-      if (outcome === "publish") {
-        expect(enqueue).toHaveBeenCalledWith(
-          expect.stringContaining('channel_id="DNEW"'),
-          expect.objectContaining({ sessionKey: "session:new" }),
-          expect.anything(),
-        );
-        expect(wake).toHaveBeenCalledOnce();
-      } else {
-        expect(stopSettled).toBe(true);
-        expect(enqueue).toHaveBeenCalledTimes(outcome === "replaced" ? 1 : 0);
-        expect(await cooldownStore.lookup("default:workspace:U123")).toBe(
-          outcome === "replaced" ? 1_001 : undefined,
-        );
-        expect(wake).not.toHaveBeenCalled();
-      }
+      expect(stopSettled).toBe(true);
+      expect(enqueue).toHaveBeenCalledTimes(outcome === "replaced" ? 1 : 0);
+      expect(await cooldownStore.lookup("default:workspace:U123")).toBe(
+        outcome === "replaced" ? 1_001 : undefined,
+      );
+      expect(captureTarget).toHaveBeenCalledOnce();
     },
   );
 
@@ -530,30 +498,86 @@ describe("Slack presence monitor", () => {
     cooldownStore.registerIfAbsent = vi.fn().mockRejectedValue(new Error("storage unavailable"));
     const error = vi.fn();
     const monitor = createPresenceFixture({ cooldownStore, error });
-    const { enqueue, wake } = monitor;
-    monitor.observe(createPrepared({ userId: "U123" }));
-    await monitor.advancePoll();
+    const { enqueue } = monitor;
+    await seedPresence(monitor);
     await monitor.advancePoll();
     expect(enqueue).not.toHaveBeenCalled();
-    expect(wake).not.toHaveBeenCalled();
+    expect(monitor.captureTarget).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith(expect.stringContaining("cooldown persistence failed"));
   });
 
-  it("quiesces an in-flight poll before stop returns", async () => {
-    const active = createDeferred<{ presence: string }>();
-    const getPresence = vi
-      .fn()
-      .mockResolvedValueOnce({ presence: "away" })
-      .mockReturnValueOnce(active.promise);
-    const monitor = createPresenceFixture({ getPresence });
-    monitor.observe(createPrepared({ userId: "U123" }));
-    await monitor.advancePoll();
+  it.each(["stop", "policy", "retarget", "capture-refused"] as const)(
+    "does not reserve or submit after target capture when %s",
+    async (outcome) => {
+      const captured =
+        createDeferred<Awaited<ReturnType<PresenceSystem["captureSessionEventTarget"]>>>();
+      const started = createDeferred<void>();
+      const captureTarget = createCaptureTarget().mockImplementationOnce(() => {
+        started.resolve();
+        return captured.promise;
+      });
+      const clock = createGatewaySchedulerClock(1_000);
+      const monitor = createPresenceFixture({ clock, captureTarget });
+      let current = true;
+      const prepared = createPrepared({ userId: "U123" });
+      prepared.ctx.isRuntimePolicyCurrent = () => current;
+      await seedPresence(monitor, prepared);
+      const polling = monitor.advancePoll();
+      await started.promise;
+      let stopping: Promise<void> | undefined;
+      if (outcome === "stop") {
+        stopping = monitor.stop();
+      } else if (outcome === "policy") {
+        current = false;
+      } else if (outcome === "retarget") {
+        clock.setTime(1_001);
+        monitor.observe(createPrepared({ userId: "U123", channelId: "DNEW", sessionKey: "new" }));
+      }
+      if (outcome === "capture-refused") {
+        captured.reject(new Error("runtime retired"));
+      } else {
+        captured.resolve(await createCaptureTarget()("main", prepared.route.sessionKey));
+      }
+      await polling;
+      await stopping;
+      expect(monitor.enqueue).not.toHaveBeenCalled();
+      expect(await monitor.cooldownStore.lookup("default:workspace:U123")).toBeUndefined();
+    },
+  );
 
+  it("carries account cancellation through acceptance and reports failed settlement", async () => {
+    const accepted =
+      createDeferred<Awaited<ReturnType<PresenceSystem["enqueueSessionEvent"]>["accepted"]>>();
+    const settled =
+      createDeferred<Awaited<ReturnType<PresenceSystem["enqueueSessionEvent"]>["settled"]>>();
+    const enqueued = createDeferred<void>();
+    const enqueue = vi.fn<PresenceSystem["enqueueSessionEvent"]>(() => {
+      enqueued.resolve();
+      return {
+        id: "presence",
+        cancel: () => false,
+        accepted: accepted.promise,
+        settled: settled.promise,
+      };
+    });
+    const error = vi.fn();
+    const monitor = createPresenceFixture({ enqueue, error });
+    await seedPresence(monitor);
     const polling = monitor.advancePoll();
+    await enqueued.promise;
+    const options = enqueue.mock.calls[0]?.[1];
+    expect(options?.expectedTarget).toBe(await monitor.captureTarget.mock.results[0]?.value);
+    expect(options?.createIfMissing).toBeUndefined();
+    expect(options?.abortSignal?.aborted).toBe(false);
     const stopping = monitor.stop();
-    active.resolve({ presence: "active" });
-    await Promise.all([polling, stopping]);
-
-    expect(monitor.enqueue).not.toHaveBeenCalled();
+    expect(options?.abortSignal?.aborted).toBe(true);
+    accepted.resolve({ ok: true });
+    await polling;
+    await stopping;
+    settled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
+    await settled.promise;
+    await Promise.resolve();
+    expect(error).toHaveBeenCalledWith("slack presence follow-up cancelled: cancelled");
+    expect(await monitor.cooldownStore.lookup("default:workspace:U123")).toBeDefined();
   });
 });

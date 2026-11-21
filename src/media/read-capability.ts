@@ -1,6 +1,9 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+} from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveManagedMediaRoot } from "../agents/sandbox-paths.js";
 import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
@@ -13,7 +16,11 @@ import type { OpenResult } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveConfigDir } from "../utils.js";
 import { createBoundedOutboundMediaReadFile, readOutboundMediaFile } from "./bounded-read-file.js";
-import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
+import {
+  resolveOutboundMediaAccessForConfig,
+  type OutboundMediaAccess,
+  type OutboundMediaReadFile,
+} from "./load-options.js";
 import { openLocalMediaFile, readLocalMediaFile } from "./local-media-access.js";
 import {
   getAgentScopedMediaLocalRoots,
@@ -38,38 +45,6 @@ type OutboundHostMediaPolicyContext = {
   requesterSenderUsername?: string | null;
   requesterSenderE164?: string | null;
 };
-
-function isAgentScopedMediaReadAllowedByToolPolicy(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-  } & OutboundHostMediaPolicyContext,
-): boolean {
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: params.accountId,
-    senderId: params.requesterSenderId,
-    senderName: params.requesterSenderName,
-    senderUsername: params.requesterSenderUsername,
-    senderE164: params.requesterSenderE164,
-  });
-  const senderPolicy = resolveSenderToolPolicy({
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    messageProvider: params.messageProvider,
-    senderId: params.requesterSenderId,
-    senderName: params.requesterSenderName,
-    senderUsername: params.requesterSenderUsername,
-    senderE164: params.requesterSenderE164,
-  });
-  return isToolAllowedByPolicies("read", [groupPolicy, senderPolicy]);
-}
 
 function getManagedMediaLocalRoots(mediaSources?: readonly string[]): readonly string[] {
   const roots = new Set([path.join(resolveConfigDir(), "media", "outbound")]);
@@ -137,14 +112,52 @@ function resolveAgentScopedMediaAccess(
   includeHostOpener: boolean,
 ): HostOutboundMediaAccess {
   if (params.allowHostWorkspace === false) {
-    return { localRoots: getManagedMediaLocalRoots(params.mediaSources) };
+    return {
+      ...resolveOutboundMediaAccessForConfig(params.cfg),
+      localRoots: getManagedMediaLocalRoots(params.mediaSources),
+    };
   }
   const resolvedWorkspaceDir =
     params.workspaceDir ??
     params.mediaAccess?.workspaceDir ??
     params.workspaceMediaAccess?.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
-  const mediaReadAllowed = isAgentScopedMediaReadAllowedByToolPolicy(params);
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    messageProvider: params.messageProvider,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    accountId: params.accountId,
+    senderId: params.requesterSenderId,
+    senderName: params.requesterSenderName,
+    senderUsername: params.requesterSenderUsername,
+    senderE164: params.requesterSenderE164,
+  });
+  const senderPolicy = resolveSenderToolPolicy({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    messageProvider: params.messageProvider,
+    senderId: params.requesterSenderId,
+    senderName: params.requesterSenderName,
+    senderUsername: params.requesterSenderUsername,
+    senderE164: params.requesterSenderE164,
+  });
+  const { globalPolicy, agentPolicy } = resolveEffectiveToolPolicy({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  // Denied readers must lose workspace roots as well as callbacks: loaders can
+  // otherwise fall back to native reads from those roots.
+  const mediaReadAllowed = isToolAllowedByPolicies("read", [
+    globalPolicy,
+    agentPolicy,
+    groupPolicy,
+    senderPolicy,
+  ]);
   const registeredMedia = resolvedWorkspaceDir
     ? captureAgentWorkspaceOutboundMedia(resolvedWorkspaceDir)
     : undefined;
@@ -238,6 +251,7 @@ function resolveAgentScopedMediaAccess(
     ? createWorkspaceAwareMediaReadFile(params.workspaceMediaAccess, registeredReadFile)
     : undefined;
   const mediaAccess: OutboundMediaAccess = {
+    ...resolveOutboundMediaAccessForConfig(params.cfg),
     ...(localRoots.length ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
     ...(resolvedWorkspaceDir ? { workspaceDir: resolvedWorkspaceDir } : {}),

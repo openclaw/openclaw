@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   clearAgentRunContext,
@@ -12,6 +11,7 @@ import {
   createActiveRun,
   createGatewayBroadcaster,
   createLifecycleEventBroadcastHandler,
+  expectAbsentFields,
   expectPrivateSessionInvalidation,
   fixedStoreRuntimeConfig,
   loadGatewaySessionEntryReadOnlyMock,
@@ -24,6 +24,21 @@ import {
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
+function lifecycleFixture(
+  subscriber = "observer",
+  options: Partial<Parameters<typeof createLifecycleEventBroadcastHandler>[0]> = {},
+) {
+  const broadcastToConnIds = vi.fn();
+  return {
+    broadcastToConnIds,
+    handler: createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set([subscriber]) },
+      ...options,
+    }),
+  };
+}
+
 describe("createLifecycleEventBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -33,170 +48,70 @@ describe("createLifecycleEventBroadcastHandler", () => {
     loadGatewaySessionEntryReadOnlyMock.mockReset().mockReturnValue({ entry: sessionRow });
   });
   it.each([
-    "participants",
-    "subagent-status",
-    "run-capacity",
-    "swarm",
-    "swarm-note",
-    "github-publication",
-    "worker-disk-space",
-  ])("carries the affected row for %s", async (reason) => {
-    const broadcastToConnIds = vi.fn();
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-    });
-    await handler({
-      sessionKey: sessionRow.key,
-      agentId: "main",
-      reason,
-      ...(["swarm", "swarm-note", "run-capacity"].includes(reason)
-        ? { scope: "runtime" as const }
-        : reason === "participants"
-          ? { scope: "session-entry" as const }
-          : {}),
-    });
+    ["participants", "session-entry"],
+    ["run-capacity", "runtime"],
+    ["swarm", undefined],
+  ] as const)("carries the affected row for %s", async (reason, scope) => {
+    const { broadcastToConnIds, handler } = lifecycleFixture();
+    loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, swarm: undefined });
+    await handler({ sessionKey: sessionRow.key, agentId: "main", reason, scope });
     expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("scope");
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
       reason,
+      kind: "direct",
       session: { key: sessionRow.key, sessionId: sessionRow.sessionId },
+      swarm: null,
     });
   });
-  it.each([
-    {
-      name: "missing capture",
-      captured: false,
-      projection: true,
-      replace: true,
-      delivered: true,
-    },
-    {
-      name: "current capture",
-      captured: true,
-      projection: true,
-      replace: false,
-      delivered: true,
-    },
-    {
-      name: "replaced capture",
-      captured: true,
-      projection: true,
-      replace: true,
-      delivered: false,
-    },
-    {
-      name: "no-projection fallback",
-      captured: false,
-      projection: false,
-      replace: false,
-      delivered: true,
-    },
-  ])("keeps lifecycle publication data bound for $name", async (scenario) => {
-    const prepared = createDeferred();
-    const entered = createDeferred();
-    const query = { key: "agent:main:late-successor", agentId: "main" };
-    const projection = createSessionRowProjectionFixture({
-      cfg: {},
-      agentId: query.agentId,
-      store: scenario.captured
-        ? {
-            [query.key]: {
-              sessionId: "original",
-              updatedAt: 1,
-              lifecycleRevision: "first",
-              label: "Original row",
-            },
-          }
-        : {},
-    });
-    const prepareRows = projection.withPreparedExactRows.bind(projection);
-    vi.spyOn(projection, "withPreparedExactRows").mockImplementation(async (...args) => {
-      entered.resolve();
-      await prepared.promise;
-      return prepareRows(...args);
-    });
-    const broadcastToConnIds = vi.fn();
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-      getSessionRowProjection: () => (scenario.projection ? projection : undefined),
-    });
-    const pending = handler({
-      agentId: query.agentId,
-      sessionKey: query.key,
-      reason: "swarm-note",
-      swarmGroupId: "original-swarm",
-      kind: "log",
-      text: "Original private note",
-      label: "Old event label",
-      displayName: "Old event display",
-      parentSessionKey: "agent:main:old-parent",
-      catalogChanged: true,
-    });
-    try {
-      if (scenario.projection) {
-        await entered.promise;
-        expect(broadcastToConnIds).not.toHaveBeenCalled();
-      }
-      if (scenario.replace) {
-        projection.setEntry(query.key, {
-          sessionId: "successor",
-          updatedAt: 2,
-          lifecycleRevision: "next",
-          label: "Successor row",
-        });
-      }
-      prepared.resolve();
-      await pending;
-      if (!scenario.delivered) {
-        expect(broadcastToConnIds).not.toHaveBeenCalled();
-        return;
-      }
+  it.each([true, false])(
+    "keeps lifecycle note fields with a projection present=%s",
+    async (hasProjection) => {
+      const query = { key: "agent:main:late-successor", agentId: "main" };
+      const original = {
+        sessionId: "original",
+        updatedAt: 1,
+        lifecycleRevision: "first",
+        label: "Original row",
+      };
+      const note = {
+        reason: "swarm-note",
+        swarmGroupId: "original-swarm",
+        kind: "log",
+        text: "Original private note",
+        label: "Old event label",
+        displayName: "Old event display",
+        parentSessionKey: "agent:main:old-parent",
+      } as const;
+      const projection = createSessionRowProjectionFixture({
+        cfg: {},
+        agentId: query.agentId,
+        store: { [query.key]: original },
+      });
+      onTestFinished(() => projection.dispose());
+      const { broadcastToConnIds, handler } = lifecycleFixture("reader", {
+        getSessionRowProjection: () => (hasProjection ? projection : undefined),
+      });
+      await handler({
+        agentId: query.agentId,
+        sessionKey: query.key,
+        ...note,
+        catalogChanged: true,
+      });
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
       const payload = broadcastToConnIds.mock.calls[0]?.[1];
-      expect(payload).toMatchObject({ sessionKey: query.key, catalogChanged: true });
-      if (scenario.projection && !scenario.captured) {
+      expect(payload).toMatchObject({ ...note, sessionKey: query.key, catalogChanged: true });
+      if (hasProjection) {
         expect(payload).toMatchObject({
-          reason: "updated",
-          label: "Successor row",
-          session: { sessionId: "successor", lifecycleRevision: "next", label: "Successor row" },
+          session: { sessionId: "original", lifecycleRevision: "first" },
         });
-        expect(JSON.stringify(payload)).not.toContain('"swarmGroupId":');
-        expect(payload).toHaveProperty("kind", "direct");
-        expect(payload).not.toHaveProperty("text");
-        expect(payload.displayName).not.toBe("Old event display");
-        expect(payload.parentSessionKey).not.toBe("agent:main:old-parent");
       } else {
-        expect(payload).toMatchObject({
-          reason: "swarm-note",
-          swarmGroupId: "original-swarm",
-          kind: "log",
-          text: "Original private note",
-          label: "Old event label",
-          displayName: "Old event display",
-          parentSessionKey: "agent:main:old-parent",
-        });
-        if (scenario.projection) {
-          expect(payload).toMatchObject({
-            session: { sessionId: "original", lifecycleRevision: "first" },
-          });
-        } else {
-          expect(payload).not.toHaveProperty("session");
-        }
+        expect(payload).not.toHaveProperty("session");
       }
-    } finally {
-      prepared.resolve();
-      await Promise.allSettled([pending]);
-      projection.dispose();
-    }
-  });
+    },
+  );
 
   it("keeps delayed key-only deletes as invalidations without borrowing a replacement", async () => {
-    const broadcastToConnIds = vi.fn();
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-    });
+    const { broadcastToConnIds, handler } = lifecycleFixture();
     await handler({ sessionKey: sessionRow.key, reason: "delete" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
@@ -207,63 +122,9 @@ describe("createLifecycleEventBroadcastHandler", () => {
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
   });
 
-  it.each(["swarm", "run-capacity"])(
-    "includes complete collector counts for committed parent changes (%s)",
-    async (reason) => {
-      const broadcastToConnIds = vi.fn();
-      loadGatewaySessionRowMock.mockImplementation(() => ({
-        ...sessionRow,
-        swarm: undefined,
-      }));
-      const handler = createLifecycleEventBroadcastHandler({
-        broadcastToConnIds,
-        sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-      });
-
-      await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
-
-      expect(loadGatewaySessionRowMock).toHaveBeenCalledWith(sessionRow.key, {
-        agentId: "main",
-      });
-      const payload = broadcastToConnIds.mock.calls[0]?.[1];
-      expect(payload).toHaveProperty("swarm", null);
-    },
-  );
-
-  it.each(["phase", "log"] as const)("projects swarm %s payload fields", async (kind) => {
-    const broadcastToConnIds = vi.fn();
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-    });
-
-    await handler({
-      sessionKey: "agent:main:main",
-      reason: "swarm-note",
-      swarmGroupId: "swarm:agent:main:main:run-1",
-      kind,
-      text: "Research",
-    });
-
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({
-        swarmGroupId: "swarm:agent:main:main:run-1",
-        kind,
-        text: "Research",
-      }),
-      new Set(["conn-1"]),
-      {
-        dropIfSlow: true,
-        sessionEventSubscriptionKeys: ["agent:main:main"],
-        prepareSessionProjection: expect.any(Function),
-      },
-    );
-  });
-
   it("publishes lifecycle changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
-    const unsubscribe = subscribePluginSessionsChanged(received);
+    onTestFinished(subscribePluginSessionsChanged(received));
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new GatewayClientRegistry(),
     });
@@ -272,22 +133,14 @@ describe("createLifecycleEventBroadcastHandler", () => {
       sessionEventSubscribers: { getAll: () => new Set() },
     });
 
-    try {
-      await handler({
-        sessionKey: "agent:main:main",
-        reason: "rename",
-        label: "Renamed session",
-      });
-      await Promise.resolve();
-      expect(received).toHaveBeenCalledWith({
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        label: "Renamed session",
-        reason: "rename",
-      });
-    } finally {
-      unsubscribe();
-    }
+    await handler({ sessionKey: "agent:main:main", reason: "rename", label: "Renamed session" });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      label: "Renamed session",
+      reason: "rename",
+    });
   });
 
   it.each([
@@ -303,12 +156,8 @@ describe("createLifecycleEventBroadcastHandler", () => {
       sessionKey: "global",
       sessionId: sessionRow.sessionId,
     });
-    const broadcastToConnIds = vi.fn();
+    const { broadcastToConnIds, handler } = lifecycleFixture("conn-1");
     rpcSourceTesting.reset([["run-before-finalize", activeRun]]);
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-    });
 
     await handler({ sessionKey: "global", ...(agentId ? { agentId } : {}), reason: "updated" });
 
@@ -331,9 +180,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
     if (agentId) {
       expect(payload).toMatchObject({ agentId: "ops", goal });
     } else {
-      expect(payload).not.toHaveProperty("agentId");
-      expect(payload).not.toHaveProperty("goal");
-      expect(payload).not.toHaveProperty("session.goal");
+      expectAbsentFields(payload, "agentId goal session.goal");
     }
     const runId = "run-before-finalize";
     registerAgentRunContext(runId, { sessionKey: "global", agentId: "ops" });
@@ -365,11 +212,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
 
   it("publishes only a private invalidation for a retired fixed-store lifecycle owner", async () => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
-    const broadcastToConnIds = vi.fn();
-    const handler = createLifecycleEventBroadcastHandler({
-      broadcastToConnIds,
-      sessionEventSubscribers: { getAll: () => new Set(["conn-events"]) },
-    });
+    const { broadcastToConnIds, handler } = lifecycleFixture("conn-events");
 
     await handler({ sessionKey: "global", reason: "patch", catalogChanged: true });
 

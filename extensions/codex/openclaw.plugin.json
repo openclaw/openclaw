@@ -19,6 +19,30 @@
       "disposition": "regenerable",
       "scope": "agent",
       "relativePath": "codex-home/.tmp/bundled-marketplaces"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/logs_2.sqlite",
+      "profile": "local-companion"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/logs_2.sqlite-wal",
+      "profile": "local-companion"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/logs_2.sqlite-shm",
+      "profile": "local-companion"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/logs_2.sqlite-journal",
+      "profile": "local-companion"
     }
   ],
   "doctorContract": {
@@ -300,6 +324,11 @@
                 "pluginName": {
                   "type": "string"
                 },
+                "read_only": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Expose only app tools explicitly marked read-only. Unknown and disabled tools are denied."
+                },
                 "allow_destructive_actions": {
                   "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }]
                 }
@@ -365,6 +394,7 @@
             "type": "string",
             "enum": ["agent", "user"]
           },
+          "workerHostedCloud": { "type": "boolean" },
           "command": { "type": "string" },
           "args": {
             "oneOf": [
@@ -377,6 +407,7 @@
           },
           "url": { "type": "string" },
           "authToken": { "type": ["string", "object"] },
+          "tlsPeerCertificate": { "type": "string", "minLength": 1, "maxLength": 16384 },
           "headers": {
             "type": "object",
             "additionalProperties": { "type": ["string", "object"] }
@@ -400,10 +431,6 @@
           "codeModeOnly": {
             "type": "boolean",
             "default": false
-          },
-          "loopDetectionPreToolUseRelay": {
-            "type": "boolean",
-            "default": true
           },
           "requestTimeoutMs": {
             "type": "number",
@@ -429,11 +456,6 @@
             "additionalProperties": false,
             "properties": {
               "mode": { "type": "string", "enum": ["auto", "off"], "default": "auto" },
-              "model": {
-                "type": "string",
-                "minLength": 1,
-                "default": "gpt-daybreak-blue-latest"
-              },
               "cooloffMs": { "type": "number", "minimum": 1, "default": 600000 }
             }
           },
@@ -660,8 +682,8 @@
       "advanced": true
     },
     "supervision.allowRawTranscripts": {
-      "label": "Allow Raw Transcript Tools",
-      "help": "Allow supervision agent tools, including turn-inclusive codex_threads reads, to expose full transcripts and transcript previews.",
+      "label": "Allow Raw Chat History Tools",
+      "help": "Allow supervision agent tools, including turn-inclusive codex_threads reads, to expose full chat history and chat previews.",
       "advanced": true
     },
     "supervision.allowWriteControls": {
@@ -729,11 +751,6 @@
     "appServer.codeModeOnly": {
       "label": "Code Mode Only",
       "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
-      "advanced": true
-    },
-    "appServer.loopDetectionPreToolUseRelay": {
-      "label": "Loop Detection Pre-tool Relay",
-      "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

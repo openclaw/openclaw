@@ -1,5 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents, buildFailedResponseEvents } from "./mock-openai-events.js";
+import { hasToolOutput } from "./mock-openai-input.js";
 import { buildToolCallEventsWithArgs } from "./mock-openai-tooling.js";
 
 const QA_CRON_REPAIR_PROMPT_RE = /Cron failure repair QA check/i;
@@ -29,7 +30,7 @@ export function planCronFailureRepairTurn(
     }
     return buildAssistantEvents(QA_CRON_REPAIR_OWNER_MARKER);
   }
-  const wrote = input.some((item) => item.type === "function_call_output");
+  const wrote = hasToolOutput(input);
   return wrote
     ? buildAssistantEvents(`Fixed the sync step file. ${QA_CRON_REPAIR_FIXED_MARKER}`)
     : buildToolCallEventsWithArgs("write", {

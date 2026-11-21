@@ -1,7 +1,7 @@
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
-import type { NextcloudTalkInboundAttachment } from "./types.js";
+import type { NextcloudTalkInboundAttachment, NextcloudTalkInboundQuote } from "./types.js";
 
 export const NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION = 1;
 
@@ -45,6 +45,61 @@ export function requiredString(value: unknown, field: string): string {
     return value.trim();
   }
   throw new NextcloudTalkWebhookPayloadError(`Nextcloud Talk webhook is missing ${field}.`);
+}
+
+/** Read one optional signed parent without rejecting an otherwise valid current message. */
+export function parseNextcloudTalkQuotedReply(
+  envelope: Record<string, unknown>,
+): NextcloudTalkInboundQuote | undefined {
+  const object = isRecord(envelope.object) ? envelope.object : null;
+  const quote = isRecord(object?.inReplyTo) ? object.inReplyTo : null;
+  const actor = isRecord(quote?.actor) ? quote.actor : null;
+  const parent = isRecord(quote?.object) ? quote.object : null;
+  if (
+    quote?.type !== "Note" ||
+    actor?.type !== "Person" ||
+    typeof actor.id !== "string" ||
+    !actor.id.trim() ||
+    typeof actor.name !== "string" ||
+    parent?.type !== "Note" ||
+    typeof parent.id !== "string" ||
+    !parent.id.trim() ||
+    typeof parent.content !== "string"
+  ) {
+    return undefined;
+  }
+
+  let body = parent.content;
+  let structured: unknown;
+  try {
+    structured = JSON.parse(body);
+  } catch {
+    // Plain text is supported alongside Talk's JSON-encoded rich strings.
+  }
+  if (isRecord(structured)) {
+    const parameters: Record<string, unknown> | undefined = isRecord(structured.parameters)
+      ? structured.parameters
+      : Array.isArray(structured.parameters) && structured.parameters.length === 0
+        ? {}
+        : undefined;
+    if (typeof structured.message !== "string" || !parameters) {
+      return undefined;
+    }
+    body = structured.message.replace(/\{([^{}]+)\}/gu, (placeholder, key: string) => {
+      const parameter = Object.hasOwn(parameters, key) ? parameters[key] : undefined;
+      return isRecord(parameter) && typeof parameter.name === "string"
+        ? parameter.name
+        : placeholder;
+    });
+  } else if (Array.isArray(structured)) {
+    return undefined;
+  }
+  return {
+    id: parent.id.trim(),
+    senderId: actor.id.trim(),
+    senderName: actor.name,
+    body,
+  };
 }
 
 export type ParsedNextcloudTalkFileShare = {

@@ -5,11 +5,11 @@ import { runGitReadOperation } from "../infra/git-read-cache.js";
 import type { GitCheckoutDiffInput } from "../infra/git-read-operations.js";
 
 export async function loadCheckoutDiff(
-  params: GitCheckoutDiffInput & { sessionKey: string },
+  params: GitCheckoutDiffInput & { sessionKey: string; poll?: boolean },
   diffTiming?: DiffReadTiming,
 ): Promise<SessionsDiffResult> {
-  const { sessionKey, ...input } = params;
-  const diff = await runGitReadOperation({ type: "checkout.diff", input }, { diffTiming });
+  const { sessionKey, poll, ...input } = params;
+  const diff = await runGitReadOperation({ type: "checkout.diff", input }, { diffTiming, poll });
   return { ...diff, sessionKey };
 }
 

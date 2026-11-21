@@ -252,11 +252,10 @@ export async function retireLegacyInboundDedupeSqliteRows(storageRootDir: string
 export async function importInboundDedupeMarkersToIngress(params: {
   context: PluginDoctorStateMigrationContext;
   markers: Iterable<LegacyInboundDedupeMarker>;
-  now?: number;
 }): Promise<{ imported: number; total: number }> {
   const openQueue = resolveMatrixIngressQueueOpener(params.context);
   const queues = new Map<string, ReturnType<typeof openQueue>>();
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const newestByKey = new Map<string, LegacyInboundDedupeMarker>();
   for (const marker of params.markers) {
     const accountId = marker.accountId.trim() || "default";

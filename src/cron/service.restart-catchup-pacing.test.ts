@@ -22,6 +22,74 @@ type RestartCase = {
 };
 
 describe("CronService restart catch-up with dynamic cadence", () => {
+  it.each([
+    "Session target preparation outlived its attempt: admitted run authority is no longer active",
+    "temporary timeout",
+  ])("retries a failed paced check across restart: %s", async (error) => {
+    const { storePath } = await makeStorePath();
+    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>();
+    runIsolatedAgentJob
+      .mockResolvedValueOnce({ status: "ok", nextCheck: { delayMs: PACED_DELAY } })
+      .mockResolvedValueOnce({ status: "error", error })
+      .mockResolvedValueOnce({ status: "error", error })
+      .mockResolvedValue({ status: "ok" });
+    const createService = () =>
+      new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        enqueueSystemEvent: vi.fn(),
+        runIsolatedAgentJob,
+      });
+    const original = createService();
+    const restarted = createService();
+    try {
+      await original.start();
+      const job = await original.add({
+        name: "paced daily check",
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC", staggerMs: 0 },
+        pacing: { min: "15m", max: "4h" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "Check the reminder" },
+        delivery: { mode: "none" },
+      });
+      vi.setSystemTime(FIRST_RUN_AT);
+      await original.run(job.id, "due");
+      vi.setSystemTime(FIRST_RUN_AT + PACED_DELAY);
+      await original.run(job.id, "due");
+      const firstRetryAtMs = FIRST_RUN_AT + PACED_DELAY + 30_000;
+      expect((await original.readJob(job.id))?.state).toMatchObject({
+        lastRunStatus: "error",
+        nextRunAtMs: firstRetryAtMs,
+        pacedNextRunAtMs: firstRetryAtMs,
+      });
+      original.stop();
+      vi.setSystemTime(firstRetryAtMs - 1_000);
+      await restarted.start();
+      expect((await restarted.readJob(job.id))?.state.nextRunAtMs).toBe(firstRetryAtMs);
+      vi.setSystemTime(firstRetryAtMs);
+      await restarted.run(job.id, "due");
+      const secondRetryAtMs = firstRetryAtMs + 60_000;
+      expect((await restarted.readJob(job.id))?.state).toMatchObject({
+        nextRunAtMs: secondRetryAtMs,
+        pacedNextRunAtMs: secondRetryAtMs,
+      });
+      vi.setSystemTime(secondRetryAtMs);
+      await restarted.run(job.id, "due");
+      const completed = await restarted.readJob(job.id);
+      expect(completed?.state.nextRunAtMs).toBe(FIRST_RUN_AT + 24 * 60 * MINUTE);
+      expect(completed?.state.pacedNextRunAtMs).toBeUndefined();
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
+    } finally {
+      original.stop();
+      restarted.stop();
+    }
+  });
+
   it.each<RestartCase>([
     {
       label: "a paced cron deadline during a failed force run's backoff",
@@ -52,7 +120,6 @@ describe("CronService restart catch-up with dynamic cadence", () => {
         cronEnabled: true,
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
       });
     const original = createService();
@@ -146,7 +213,6 @@ function commandService(
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     runCommandJob,
   });

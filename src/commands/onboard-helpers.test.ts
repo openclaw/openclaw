@@ -26,6 +26,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const localProbe = { url: "ws://127.0.0.1:18789" };
 const remoteUrl = "wss://gateway.example.com:18789";
 const probeAuth = { token: undefined, password: undefined };
+const probeFailure = (error: string, code: string, gatewayReached = false) => ({
+  ok: false,
+  error,
+  gatewayReached,
+  connectErrorDetails: { code },
+});
 
 const mocks = vi.hoisted(() => ({
   removeAgentSessions: vi.fn(async () => {}),
@@ -110,6 +116,18 @@ function expectedTrashSourcePath(targetPath: string): string {
   return path.join(fs.realpathSync(path.dirname(targetPath)), path.basename(targetPath));
 }
 
+function expectNoResetEffects() {
+  expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+  expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+}
+
+function openWindowsUrl(url: string) {
+  vi.stubEnv("VITEST", "");
+  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("SystemRoot", "C:\\Windows");
+  return withMockedPlatform("win32", () => openUrl(url));
+}
+
 function resetFixture(profile?: string) {
   const homeDir = tempDirs.make("openclaw-reset-");
   const stateDir = path.join(homeDir, profile ? `.openclaw-${profile}` : ".openclaw");
@@ -141,8 +159,6 @@ describe("handleReset", () => {
     const { homeDir, stateDir, configPath, run } = resetFixture();
     const migrationDir = path.join(stateDir, "migration");
     const migrationAlias = path.join(homeDir, "migration-alias");
-    const lockSidecar = path.join(migrationDir, "onboarding.lock-target.lock");
-    const lockSidecarViaAlias = path.join(migrationAlias, "onboarding.lock-target.lock");
     fs.mkdirSync(migrationDir, { recursive: true });
     fs.writeFileSync(configPath, "{}\n");
     fs.symlinkSync(migrationDir, migrationAlias, process.platform === "win32" ? "junction" : "dir");
@@ -152,16 +168,15 @@ describe("handleReset", () => {
       stateDir,
       migrationDir,
       migrationAlias,
-      lockSidecar,
-      lockSidecarViaAlias,
+      path.join(migrationDir, "onboarding.lock-target.lock"),
+      path.join(migrationAlias, "onboarding.lock-target.lock"),
     ]) {
       await expect(run("full", workspaceDir)).rejects.toThrow(
         "overlaps the active onboarding lock directory",
       );
     }
 
-    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+    expectNoResetEffects();
   });
 
   it("uses active profile paths for destructive reset targets", async () => {
@@ -172,16 +187,13 @@ describe("handleReset", () => {
       fs.mkdirSync(path.join(stateDir, "agents", agent, "sessions"), { recursive: true });
     }
     fs.mkdirSync(defaultCredentialsDir, { recursive: true });
-    const expectedTrashedPaths = [configPath, credentialsDir, workspaceDir].map(
-      expectedTrashSourcePath,
-    );
-    const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);
-
     await run();
 
     const trashedPaths = mocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
-    expect(trashedPaths).toEqual(expectedTrashedPaths);
-    expect(trashedPaths).not.toContain(expectedDefaultCredentialsDir);
+    expect(trashedPaths).toEqual(
+      [configPath, credentialsDir, workspaceDir].map(expectedTrashSourcePath),
+    );
+    expect(trashedPaths).not.toContain(expectedTrashSourcePath(defaultCredentialsDir));
     expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
@@ -204,8 +216,7 @@ describe("handleReset", () => {
     mocks.removeAgentSessions.mockRejectedValueOnce(inspectError);
     await expect(run("full", workspaceDir)).rejects.toBe(inspectError);
 
-    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+    expectNoResetEffects();
   });
 
   it("fails closed after attempting workspace state cleanup when retired state remains", async () => {
@@ -256,36 +267,22 @@ describe("handleReset", () => {
 
 describe("openUrl", () => {
   it("passes OAuth URLs to Windows FileProtocolHandler without cmd parsing", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "");
-    vi.stubEnv("SystemRoot", "C:\\Windows");
-    vi.stubEnv("NODE_ENV", "development");
-    const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
-
     const url =
       "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&response_type=code&redirect_uri=http%3A%2F%2Flocalhost";
-
-    await withMockedPlatform("win32", async () => {
-      const ok = await openUrl(url);
-      expect(ok).toBe(true);
-
-      expect(mocks.runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
-        [rundll32, "url.dll,FileProtocolHandler", url],
-        { timeoutMs: 5_000 },
-      );
-    });
+    expect(await openWindowsUrl(url)).toBe(true);
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+      [
+        path.win32.join("C:\\Windows", "System32", "rundll32.exe"),
+        "url.dll,FileProtocolHandler",
+        url,
+      ],
+      { timeoutMs: 5_000 },
+    );
   });
 
   it("does not pass non-http URLs to the OS browser handler", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "development");
-
-    await withMockedPlatform("win32", async () => {
-      const ok = await openUrl("file://C:/Users/test/secrets.txt");
-
-      expect(ok).toBe(false);
-      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    });
+    expect(await openWindowsUrl("file://C:/Users/test/secrets.txt")).toBe(false);
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 });
 
@@ -330,7 +327,7 @@ describe("waitForGatewayReachable", () => {
     });
 
     const result = await waitForGatewayReachable({
-      url: "ws://127.0.0.1:18789",
+      ...localProbe,
       deadlineMs: 5,
       pollMs: Number.MAX_SAFE_INTEGER,
       probeTimeoutMs: 1,
@@ -417,38 +414,29 @@ it.each([
 describe("probeGatewayReachable", () => {
   it("forwards remote trust through polling", async () => {
     mocks.probeGateway.mockResolvedValueOnce({ ok: true, configSnapshot: null });
-    const config: OpenClawConfig = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-          edgeAuth: { "X-Edge-Auth": "test-secret" },
-          tlsFingerprint: "ab".repeat(32),
+    const options = {
+      url: remoteUrl,
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: remoteUrl,
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
+            tlsFingerprint: "ab".repeat(32),
+          },
         },
-      },
+      } satisfies OpenClawConfig,
+      originScopedDeviceAuth: true,
     };
-
-    await expect(
-      waitForGatewayReachable({
-        url: "wss://gateway.example",
-        config,
-        originScopedDeviceAuth: true,
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "wss://gateway.example",
-        config,
-        originScopedDeviceAuth: true,
-      }),
-    );
+    await expect(waitForGatewayReachable(options)).resolves.toEqual({ ok: true });
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining(options));
   });
 
   it("bounds thrown probe errors without splitting UTF-16", async () => {
     const detail = `${"x".repeat(118)}…`;
     mocks.probeGateway.mockRejectedValue(new Error(`${"x".repeat(118)}🚀tail\nignored`));
     expect(await probeGatewayReachable(localProbe)).toEqual({ ok: false, detail });
-    expect(await probeGatewayConfiguredModel(localProbe)).toEqual({ kind: "unreachable", detail });
+    expect(await probeGatewayConfiguredModel(localProbe)).toBe("unreachable");
   });
 
   it.each([
@@ -487,16 +475,13 @@ describe("probeGatewayReachable", () => {
         configSnapshot: { valid: true, config: { gateway: { mode: "local" } } },
       });
 
-    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toEqual({ kind: "configured" });
+    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toBe("configured");
     await expect(
       probeGatewayConfiguredModel({
         ...localProbe,
         originScopedDeviceAuth: true,
       }),
-    ).resolves.toEqual({
-      kind: "missing-configured-model",
-      detail: "Gateway default agent has no configured model",
-    });
+    ).resolves.toBe("missing-configured-model");
     expect(mocks.probeGateway).toHaveBeenLastCalledWith(
       expect.objectContaining({ detailLevel: "config", originScopedDeviceAuth: true }),
     );
@@ -505,22 +490,13 @@ describe("probeGatewayReachable", () => {
   it.each([
     [
       "typed pairing failure",
-      {
-        ok: false,
-        gatewayReached: true,
-        error: "device pairing required",
-        connectErrorDetails: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
-      },
-      { kind: "reachable-unverified", detail: "device pairing required" },
+      probeFailure("device pairing required", ConnectErrorDetailCodes.PAIRING_REQUIRED, true),
+      "reachable-unverified",
     ],
     [
       "unrecognized connect error",
-      {
-        ok: false,
-        error: "foreign protocol error",
-        connectErrorDetails: { code: "NOT_AN_OPENCLAW_CONNECT_ERROR" },
-      },
-      { kind: "unreachable", detail: "foreign protocol error" },
+      probeFailure("foreign protocol error", "NOT_AN_OPENCLAW_CONNECT_ERROR"),
+      "unreachable",
     ],
     [
       "config without handshake evidence",
@@ -533,16 +509,12 @@ describe("probeGatewayReachable", () => {
           config: { agents: { defaults: { model: "openai/foreign-model" } } },
         },
       },
-      { kind: "unreachable" },
+      "unreachable",
     ],
     [
       "invalid config",
-      {
-        ok: true,
-        gatewayReached: true,
-        configSnapshot: { valid: false },
-      },
-      { kind: "reachable-unverified", detail: "Gateway returned an invalid config snapshot" },
+      { ok: true, gatewayReached: true, configSnapshot: { valid: false } },
+      "reachable-unverified",
     ],
   ])("classifies %s", async (_name, result, expected) => {
     mocks.probeGateway.mockResolvedValueOnce(result);

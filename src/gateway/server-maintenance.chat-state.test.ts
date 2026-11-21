@@ -17,22 +17,11 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 }));
 
 const ABORTED_RUN_TTL_MS = 60 * 60_000;
-const assistantScope = {
-  itemId: "assistant-1",
-  prefix: "",
-  boundaryNewlines: 0,
-  separatorLength: 0,
-};
-
 async function createScenario() {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
   const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-  const deps = {
-    ...createGatewayMaintenanceStateForTest(),
-    runWorktreeGc: async () => undefined,
-    runManagedOutgoingMediaGc: async () => undefined,
-  };
+  const deps = createGatewayMaintenanceStateForTest();
   let timers: ReturnType<typeof startGatewayMaintenanceTimers> | undefined;
   return {
     ...deps,
@@ -52,18 +41,8 @@ function seedStaleRunBuffers(deps: MaintenanceTimerDeps, runId: string, aborted 
   const now = Date.now();
   vi.setSystemTime(Date.now() - ABORTED_RUN_TTL_MS - 1);
   deps.chatRunState.updateBuffer(runId, { delta: "buffer" });
-  deps.chatRunState.takeBufferDelta(runId, "buffer");
-  Object.assign(deps.chatRunState.getOrCreate(runId), {
-    buffer: "buffer",
-    rawBuffer: "buffer",
-    deltaSentAt: Date.now(),
-    assistantScope: { ...assistantScope },
-  });
   if (aborted) {
-    const run = deps.chatRunState.getOrCreate(runId);
-    run.abortMarker = createChatAbortMarker(Date.now());
-    const payload = { runId, seq: 1, stream: "assistant" as const, ts: now, data: {} };
-    run.agentText = { assistant: { lastSentAt: Date.now(), bufferedEvent: { payload } } };
+    deps.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker(Date.now());
   }
   vi.setSystemTime(now);
 }
@@ -74,16 +53,15 @@ describe("gateway chat-state maintenance", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["progress", "registration", "aborted", "recent"] as const)(
+  it.each(["progress", "aborted", "recent"] as const)(
     "sweeps abandoned records while retaining recent activity (%s)",
     async (kind) => {
       await using deps = await createScenario();
       const now = Date.now();
       const runId = `orphan-${kind}`;
       vi.setSystemTime(Date.now() - ABORTED_RUN_TTL_MS - 1);
-      if (kind === "registration") {
+      if (kind === "progress") {
         deps.chatRunState.registry.add(runId, { sessionKey: "main", clientRunId: runId });
-      } else if (kind === "progress") {
         deps.chatRunState.recordProgressEvent(runId, {
           runId,
           seq: 1,
@@ -117,84 +95,51 @@ describe("gateway chat-state maintenance", () => {
       await using deps = await createScenario();
       const runId = `live-${kind}`;
       seedStaleRunBuffers(deps, runId);
-      const handle = createEmbeddedRunHandle({ runId });
-      const claim =
-        kind === "execution"
-          ? claimAgentRunContext(
-              runId,
-              { sessionKey: "main" },
-              { trackOwner: true, ownsContext: true, protectFromSweep: true },
-            )
-          : undefined;
-      if (kind === "embedded") {
+      let release: () => void;
+      if (kind === "execution") {
+        const claim = claimAgentRunContext(
+          runId,
+          { sessionKey: "main" },
+          { trackOwner: true, ownsContext: true, protectFromSweep: true },
+        );
+        release = () => releaseAgentRunContext(runId, claim);
+      } else if (kind === "embedded") {
+        const handle = createEmbeddedRunHandle({ runId });
         setActiveEmbeddedRun("maintenance-session", handle, "main");
-      }
-      const source =
-        kind === "queued" || kind === "preparing"
-          ? createRpcSourceForTest(
-              {},
-              {
-                phase: kind === "queued" ? "waiting" : "preparing",
-                sessionId: "maintenance-session",
-                sessionKey: "main",
-              },
-            )
-          : undefined;
-      if (source) {
+        release = () => clearActiveEmbeddedRun("maintenance-session", handle, "main");
+      } else {
+        const source = createRpcSourceForTest(
+          {},
+          {
+            phase: kind === "queued" ? "waiting" : "preparing",
+            sessionId: "maintenance-session",
+            sessionKey: "main",
+          },
+        );
         rpcSourceTesting.set(runId, source);
+        release = () => retireSessionControllerInput(source.input);
       }
-      const release = () => {
-        releaseAgentRunContext(runId, claim);
-        if (source) {
-          retireSessionControllerInput(source.input);
-        }
-        if (kind === "embedded") {
-          clearActiveEmbeddedRun("maintenance-session", handle, "main");
-        }
-      };
       using _ = { [Symbol.dispose]: release };
       deps.start();
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(deps.chatRunState.runs.get(runId)).toMatchObject({
-        buffer: "buffer",
-        rawBuffer: "buffer",
-        display: expect.any(Object),
-        deltaSentAt: expect.any(Number),
-        assistantScope,
-      });
+      expect(deps.chatRunState.resolveBuffer(runId).text).toBe("buffer");
       release();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(deps.chatRunState.runs.has(runId)).toBe(false);
     },
   );
-  it("prunes idle tool-event recipients while preserving grace and registered run state", async () => {
+  it("prunes idle recipients on a timer without removing registered runs", async () => {
     await using deps = await createScenario();
     const { toolEventRecipients, registry, runs } = deps.chatRunState;
     toolEventRecipients.add("active-expired", "conn-active");
     toolEventRecipients.add("registered-expired", "conn-registered");
     registry.add("registered-expired", { sessionKey: "session-1", clientRunId: "client-1" });
 
-    await vi.advanceTimersByTimeAsync(9 * 60_000 + 2_000);
     deps.start();
-    await vi.advanceTimersByTimeAsync(27_000);
-    toolEventRecipients.add("finalized-expired", "conn-final");
-    toolEventRecipients.markFinal("finalized-expired");
-    toolEventRecipients.add("recent", "conn-recent");
-    await vi.advanceTimersByTimeAsync(2_000);
-    toolEventRecipients.add("finalized-grace", "conn-grace");
-    toolEventRecipients.markFinal("finalized-grace");
-
-    // The aligned tick at minute ten falls between the two finalization deadlines.
-    await vi.advanceTimersByTimeAsync(29_000);
+    // Grace boundaries are covered by server-chat-state.test.ts; exercise the periodic owner here.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(runs.has("active-expired")).toBe(false);
-    expect(runs.has("finalized-expired")).toBe(false);
     expect(runs.get("registered-expired")?.toolRecipient).toBeUndefined();
     expect(registry.peek("registered-expired")?.clientRunId).toBe("client-1");
-    expect(toolEventRecipients.get("finalized-grace")).toEqual(new Set(["conn-grace"]));
-    expect(toolEventRecipients.get("recent")).toEqual(new Set(["conn-recent"]));
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(runs.has("finalized-grace")).toBe(false);
-    expect(runs.has("recent")).toBe(true);
   });
 });

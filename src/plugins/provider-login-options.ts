@@ -69,40 +69,43 @@ export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMeta
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {
-  return choices
-    .filter(isEligible)
-    .toSorted(
-      (a, b) =>
-        compareProviderAuthChoiceGroups(
-          { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
-          { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
-        ) ||
-        (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
-        Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
-        a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
-        a.choiceId.localeCompare(b.choiceId),
-    )
-    .flatMap((choice): ProviderLoginOption[] => {
-      const kind = loginKind(choice);
-      if (!kind) {
-        return [];
-      }
-      return [
-        {
-          id: formatProviderLoginChoiceRef(choice),
-          brandId: choice.providerId,
-          label: choice.choiceLabel,
-          hint: choice.choiceHint,
-          groupLabel: choice.groupLabel,
-          icon: choice.icon,
-          website: choice.website,
-          docsUrl: choice.docsUrl,
-          kind,
-          featured: choice.onboardingFeatured === true,
-          ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
-        },
-      ];
-    });
+  return (
+    choices
+      .filter(isEligible)
+      // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
+      .sort(
+        (a, b) =>
+          compareProviderAuthChoiceGroups(
+            { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
+            { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
+          ) ||
+          (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
+          Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
+          a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
+          a.choiceId.localeCompare(b.choiceId),
+      )
+      .flatMap((choice): ProviderLoginOption[] => {
+        const kind = loginKind(choice);
+        if (!kind) {
+          return [];
+        }
+        return [
+          {
+            id: formatProviderLoginChoiceRef(choice),
+            brandId: choice.providerId,
+            label: choice.choiceLabel,
+            hint: choice.choiceHint,
+            groupLabel: choice.groupLabel,
+            icon: choice.icon,
+            website: choice.website,
+            docsUrl: choice.docsUrl,
+            kind,
+            featured: choice.onboardingFeatured === true,
+            ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
+          },
+        ];
+      })
+  );
 }
 
 export function formatProviderLoginChoiceRef(
@@ -171,7 +174,8 @@ export function resolveProviderChannelLoginChoice(
     }
     return {
       status: "providers",
-      providers: [...providers.values()].toSorted(
+      // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private array.
+      providers: [...providers.values()].sort(
         (a, b) =>
           a.label.localeCompare(b.label, "en") ||
           formatProviderOAuthLoginRef(a).localeCompare(formatProviderOAuthLoginRef(b)),

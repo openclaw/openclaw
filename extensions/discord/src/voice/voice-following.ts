@@ -170,12 +170,28 @@ export class DiscordVoiceFollowing {
         );
       }
       if (existing && wasFollowedVoiceSession && !this.hasFollowedUserInChannel(existing)) {
-        await this.handoffToAnotherFollowedUserOrLeave({
-          guildId,
-          userId,
-          existing,
-          reason: channelId ? "joined non-allowed channel" : "disconnected",
-        });
+        const reason = channelId ? "joined non-allowed channel" : "disconnected";
+        const target = this.resolveFollowedUserHandoffTarget(guildId, existing.channelId);
+        if (target) {
+          logger.info(
+            `discord voice: followed user ${reason} guild=${guildId} user=${userId}; moving to remaining followed user channel=${target.channelId}`,
+          );
+          const result = await this.params.join(target, { preserveFollowState: true });
+          if (result.ok) {
+            this.followedVoiceGuilds.add(guildId);
+          } else {
+            logger.warn(
+              `discord voice: failed to hand off followed user session guild=${guildId} channel=${target.channelId}: ${result.message}`,
+            );
+            this.clearFollowedGuild(guildId);
+            await this.params.leave({ guildId });
+          }
+          return;
+        }
+        logger.info(
+          `discord voice: followed user ${reason} guild=${guildId} user=${userId}; leaving channel=${existing.channelId}`,
+        );
+        await this.params.leave({ guildId });
       } else if (
         !channelId &&
         !existing &&
@@ -358,35 +374,6 @@ export class DiscordVoiceFollowing {
       }
     }
     return null;
-  }
-
-  private async handoffToAnotherFollowedUserOrLeave(params: {
-    guildId: string;
-    userId: string;
-    existing: VoiceChannelResidency;
-    reason: string;
-  }): Promise<void> {
-    const target = this.resolveFollowedUserHandoffTarget(params.guildId, params.existing.channelId);
-    if (target) {
-      logger.info(
-        `discord voice: followed user ${params.reason} guild=${params.guildId} user=${params.userId}; moving to remaining followed user channel=${target.channelId}`,
-      );
-      const result = await this.params.join(target, { preserveFollowState: true });
-      if (result.ok) {
-        this.followedVoiceGuilds.add(params.guildId);
-      } else {
-        logger.warn(
-          `discord voice: failed to hand off followed user session guild=${params.guildId} channel=${target.channelId}: ${result.message}`,
-        );
-        this.clearFollowedGuild(params.guildId);
-        await this.params.leave({ guildId: params.guildId });
-      }
-      return;
-    }
-    logger.info(
-      `discord voice: followed user ${params.reason} guild=${params.guildId} user=${params.userId}; leaving channel=${params.existing.channelId}`,
-    );
-    await this.params.leave({ guildId: params.guildId });
   }
 
   private async disconnectStaleFollowedBotVoiceState(params: {

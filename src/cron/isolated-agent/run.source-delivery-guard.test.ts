@@ -1,28 +1,21 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentRunContext,
   getAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
-import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
 
 const { resolveCronDeliveryPlan } =
   await vi.importActual<typeof import("../delivery-plan.js")>("../delivery-plan.js");
 const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
-const runTurn = ({
-  job,
-  ...overrides
-}: {
-  job?: Record<string, unknown>;
-  [key: string]: unknown;
-}) =>
+const runTurn = (job: Record<string, unknown>, cfg: OpenClawConfig = {}) =>
   runCronIsolatedAgentTurn(
-    makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) }),
+    makeIsolatedAgentParamsFixture({ cfg, job: makeIsolatedAgentJobFixture(job) }),
   );
 
 describe("cron source delivery policy", () => {
@@ -66,13 +59,11 @@ describe("cron source delivery policy", () => {
       return embeddedRun(params);
     });
     const result = await runTurn({
-      job: { delivery: { mode: row.mode, channel: "messagechat", to: "123" } },
+      delivery: { mode: row.mode, channel: "messagechat", to: "123" },
     });
     expect(result.status, result.error).toBe("ok");
     expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(harness.runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      sourceReplyDeliveryMode: undefined,
-      terminalReplyExpectation: "optional",
       disableMessageTool: row.disabled,
       forceMessageTool: false,
       requireExplicitMessageTarget: row.explicitTarget,
@@ -84,21 +75,28 @@ describe("cron source delivery policy", () => {
     });
   });
 
-  it("rejects required message-tool delivery when the runtime cannot expose the tool", () => {
-    const sourceDelivery = resolveCronSourceDeliveryPlan({
-      deliveryPlan: { source: "delivery", mode: "announce", requested: true },
-      resolvedDelivery: { channel: "messagechat", to: "123" },
+  it("executes a DM-blocked automation and records intentional nondelivery without sending", async () => {
+    const { dispatchCronDelivery } =
+      await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js");
+    harness.dispatchCronDeliveryMock.mockImplementationOnce(dispatchCronDelivery);
+    harness.resolveDeliveryTargetMock.mockResolvedValue({
+      ok: false,
+      channel: "none",
+      mode: "explicit",
+      error: new Error("Owner delivery unavailable (dm-blocked)"),
+      deliverySuppressionReason: "channel_transform",
     });
-    sourceDelivery.sourceReplyDeliveryMode = "message_tool_only";
-    expect(() =>
-      finalizeCronPromptForResolvedTools({
-        prompt: "send a message",
-        messageToolAvailable: false,
-        deliveryRequested: true,
-        resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
-        sourceDelivery,
-      }),
-    ).toThrow("Cron source delivery requires the message tool");
+    const result = await runTurn({
+      delivery: { mode: "announce", target: "owner", directPolicy: "block" },
+    });
+    expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(harness.runEmbeddedAgentMock.mock.calls[0]?.[0].disableMessageTool).toBe(true);
+    expect(result).toMatchObject({
+      status: "ok",
+      delivered: false,
+      deliverySuppressionReason: "channel_transform",
+    });
+    expect(result.deliveryError).toBeUndefined();
   });
 
   it("honors an explicit OpenClaw runtime override during cron execution", async () => {
@@ -114,16 +112,14 @@ describe("cron source delivery policy", () => {
         }),
       }),
     );
-    const result = await runTurn({
-      cfg: {
+    const result = await runTurn(
+      { payload: { kind: "agentTurn", message: "run an Ultra task", thinking: "ultra" } },
+      {
         agents: {
           defaults: { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } } },
         },
       },
-      job: {
-        payload: { kind: "agentTurn", message: "run an Ultra task", thinking: "ultra" },
-      },
-    });
+    );
     expect(result.status).toBe("ok");
     expect(harness.runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       provider: "openai",

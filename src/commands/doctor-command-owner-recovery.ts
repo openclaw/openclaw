@@ -3,8 +3,11 @@ import JSON5 from "json5";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { CONFIG_BACKUP_COUNT } from "../config/backup-rotation.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { createCommandOwnerChannelResolver } from "./doctor-command-owner.js";
+import {
+  resolveLegacyHeartbeatAgents,
+  resolveLegacyHeartbeatIntervalMs,
+} from "./doctor-heartbeat-legacy.js";
 import {
   containsAuthoredInclude,
   readDoctorConfigBackup,
@@ -30,10 +33,10 @@ export function recoverCommandOwnerTargetKinds(params: {
   const owners = config.commands?.ownerAllowFrom;
   if (
     !owners?.length ||
-    !resolveHeartbeatAgents(config).some(
+    !resolveLegacyHeartbeatAgents(config).some(
       ({ heartbeat }) =>
         (heartbeat?.target === undefined || heartbeat.target === "owner") &&
-        resolveHeartbeatIntervalMs(config, undefined, heartbeat),
+        resolveLegacyHeartbeatIntervalMs(config, undefined, heartbeat),
     )
   ) {
     return result;

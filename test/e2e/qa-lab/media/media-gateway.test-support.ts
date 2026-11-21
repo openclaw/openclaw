@@ -8,7 +8,7 @@ import {
   startQaMockOpenAiServer,
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runCleanups, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
@@ -28,22 +28,7 @@ export async function readMockRequests(baseUrl: string, after?: number) {
 
 export function useMediaGateway() {
   const cleanups: Array<() => Promise<void>> = [];
-  afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "media gateway cleanup failed");
-    }
-  });
+  afterEach(() => runCleanups(cleanups, "media gateway cleanup failed"));
   return {
     track(cleanup: () => Promise<void>) {
       cleanups.push(cleanup);

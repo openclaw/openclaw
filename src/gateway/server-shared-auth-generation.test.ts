@@ -72,6 +72,22 @@ function claimGeneration(state: GenerationState, generation: string | undefined)
   return expectDefined(state.claim(state.capture(), generation), "generation ownership claim");
 }
 
+function writeGeneration(
+  state: GenerationState,
+  generation: string | undefined,
+  nextConfig: OpenClawConfig = { gateway: { reload: { mode: "off" } } },
+  clients: AuthClient[] = [],
+  previous?: OpenClawConfig,
+) {
+  enforceSharedGatewaySessionGenerationForConfigWrite({
+    state,
+    nextConfig,
+    resolveRuntimeSnapshotGeneration: () => generation,
+    clients,
+    ...(previous ? { transition: { previous, next: nextConfig } } : {}),
+  });
+}
+
 afterEach(clearSecretsRuntimeSnapshot);
 
 it.each([
@@ -123,13 +139,7 @@ it("revokes only the removed proxy identity, including retained disconnected sou
   const next = proxyConfig({ allowUsers: ["retained@example.test"] });
   const nextGeneration = sharedGeneration(next);
 
-  enforceSharedGatewaySessionGenerationForConfigWrite({
-    state,
-    nextConfig: next,
-    resolveRuntimeSnapshotGeneration: () => nextGeneration,
-    clients: [retained],
-    transition: { previous: initial, next },
-  });
+  writeGeneration(state, nextGeneration, next, [retained], initial);
 
   expect(retained.sourceInvalidated).toBeFalsy();
   expect(retainedSource.aborted).toBe(false);
@@ -189,13 +199,7 @@ it("revokes a rotated local proxy password without revoking the proxy identity",
 
   expect(state.finalize(claimGeneration(state, generation), transition)).toBe(true);
   expect(detachedFallbackSource.aborted).toBe(true);
-  enforceSharedGatewaySessionGenerationForConfigWrite({
-    state,
-    nextConfig: next,
-    resolveRuntimeSnapshotGeneration: () => generation,
-    clients: [retained, fallback],
-    transition,
-  });
+  writeGeneration(state, generation, next, [retained, fallback], initial);
   expect(fallback.sourceInvalidated).toBe(true);
   expect(fallback.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
   expect(fallbackInvalidated).toHaveBeenCalledOnce();
@@ -221,12 +225,7 @@ it.each([
     expect(getActiveSecretsRuntimeSnapshotRevision()).toBeGreaterThan(publishedRevision);
   }
   if (newer) {
-    enforceSharedGatewaySessionGenerationForConfigWrite({
-      state,
-      nextConfig: { gateway: { reload: { mode: "off" } } },
-      resolveRuntimeSnapshotGeneration: () => newer,
-      clients: [],
-    });
+    writeGeneration(state, newer);
   }
   expect(state.finalize(ownership)).toBe(newer === null);
   expect(state).toMatchObject({ current: newer ?? claimed, required: newer });
@@ -235,12 +234,7 @@ it.each([
 it("rejects a stale restart marker after a newer config write", () => {
   const state = generationState("generation-a");
   const restartOwnership = state.capture();
-  enforceSharedGatewaySessionGenerationForConfigWrite({
-    state,
-    nextConfig: { gateway: { reload: { mode: "off" } } },
-    resolveRuntimeSnapshotGeneration: () => "generation-b",
-    clients: [],
-  });
+  writeGeneration(state, "generation-b");
 
   expect(state.setRequired(restartOwnership, "generation-a")).toBeNull();
   expect(state).toMatchObject({ current: "generation-b", required: "generation-b" });

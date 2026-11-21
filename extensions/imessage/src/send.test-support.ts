@@ -1,6 +1,13 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
+
+export function createSendConfig(
+  imessage: NonNullable<NonNullable<OpenClawConfig["channels"]>["imessage"]>,
+) {
+  return { channels: { imessage } };
+}
 
 export function createClient(result: Record<string, unknown>): IMessageRpcClient {
   return {

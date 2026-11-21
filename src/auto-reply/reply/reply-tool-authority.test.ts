@@ -127,8 +127,6 @@ it("keeps same-requester steering independent of session personal-context reassi
       ...run,
       run: { ...run.run, senderId: participantId, bootstrapUserProfileId: participantId },
     };
-    // An owner reassignment can update the next turn's bootstrap selection,
-    // but it is not a permission change and must not rewrite the active turn.
     expect(await fingerprintFor(incoming)).toBe(fingerprint);
     for (const options of [
       {
@@ -300,20 +298,19 @@ it.each([
       let config: OpenClawConfig = withModelPolicy
         ? {
             agents: { defaults: { model: defaultModel } },
-            gateway: { roles: { definitions: { writer } } },
+            gateway: { roles: { default: "writer", definitions: { writer } } },
           }
         : {};
       const context = { getRuntimeConfig: () => config };
-      const originalClient = createOperatorClient({ profileId, scopes, caps: ["ui-commands"] });
-      const reconnectedClient = createOperatorClient({
-        profileId,
-        scopes,
-        caps: ["ui-commands"],
-      });
+      const clientFor = (id = profileId) =>
+        createOperatorClient({ profileId: id, scopes, caps: ["ui-commands"] });
+      const originalClient = clientFor();
+      const reconnectedClient = clientFor();
       reconnectedClient.connId = "reconnected-browser";
       const originalRevocation = new AbortController();
       const reconnectedRevocation = new AbortController();
       const cleanups: Array<() => void> = [];
+      let transportCurrent = true;
       const capture = async (
         client: typeof originalClient,
         signal: AbortSignal,
@@ -323,7 +320,7 @@ it.each([
         const caller = captureGatewayDeviceRevocation(
           context,
           { deviceId: "same-device", role: "operator" },
-          () => !signal.aborted,
+          () => transportCurrent && !signal.aborted,
           undefined,
           {
             dependencies: { client, context, authPolicyGeneration: "same-policy" },
@@ -388,13 +385,17 @@ it.each([
             gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
           }),
         ).resolves.toEqual({ status: "accepted" });
-        // An unrelated config publication must not change the effective model ceiling.
         config = { ...config };
         await expect(inject()).resolves.toEqual(
           grant === undefined ? rejected : { status: "accepted" },
         );
+        transportCurrent = false;
+        await expect(inject()).resolves.toEqual(
+          grant === undefined ? rejected : { status: "accepted" },
+        );
+        transportCurrent = true;
         const otherAuthority = await capture(
-          createOperatorClient({ profileId: otherProfileId, scopes, caps: ["ui-commands"] }),
+          clientFor(otherProfileId),
           new AbortController().signal,
           grant,
         );
@@ -404,7 +405,7 @@ it.each([
             gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId },
           }),
         ).resolves.toEqual(rejected);
-        const acceptedMessages = grant === undefined ? 1 : 2;
+        const acceptedMessages = grant === undefined ? 1 : 3;
         expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
         expect(queueMessage).toHaveBeenLastCalledWith(
           "change strategy",
@@ -532,8 +533,6 @@ it("projects inbound authority without forwarding a changed approval destination
     { gatewayUiCommandTarget: undefined },
     { toolBindings: { browser: { clientId: "different-browser" } } },
     { permissionMode: "guarded" },
-    { forceRestartSafeTools: true },
-    { forceCodeModeTools: true },
   ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
     await expect(inject({ ...overlay, ...restricted })).resolves.toMatchObject(rejected);
     expect(queueMessage).toHaveBeenCalledOnce();

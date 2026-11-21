@@ -14,11 +14,10 @@ type Mode = (typeof modes)[number];
 
 async function runMode(stateDir: string, mode: Mode) {
   process.stderr.write(`Doctor custody case: ${mode}\n`);
-  process.env.HOME = stateDir;
-  process.env.USERPROFILE = stateDir;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  for (const key of ["HOME", "USERPROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_HOME"]) {
+    process.env[key] = stateDir;
+  }
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
-  process.env.OPENCLAW_HOME = stateDir;
 
   const pluginId = `doctor-custody-fixture-${mode}`;
   const pluginDir = path.join(stateDir, "plugin");
@@ -132,14 +131,13 @@ if (
 ) {
   throw new Error("Expected isolated state directory and custody case");
 }
-const selectedModes = requestedMode === "all" ? modes : [requestedMode as Mode];
+const all = requestedMode === "all";
+const selectedModes = all ? modes : [requestedMode as Mode];
 const reports = [];
 for (const mode of selectedModes) {
-  reports.push(
-    await runMode(requestedMode === "all" ? path.join(stateRoot, mode) : stateRoot, mode),
-  );
+  reports.push(await runMode(all ? path.join(stateRoot, mode) : stateRoot, mode));
 }
-process.stdout.write(JSON.stringify(requestedMode === "all" ? reports : reports[0]) + "\n", () => {
+process.stdout.write(JSON.stringify(all ? reports : reports[0]) + "\n", () => {
   // A retained inspection has no retryable release handle; ending its owner releases OS custody.
   process.exit(0);
 });

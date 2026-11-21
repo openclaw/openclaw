@@ -14,14 +14,12 @@ export async function loadResolvedModelPickerRuntime() {
 export async function resolveProviderPluginSetupOptions(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<WizardSelectOption[]> {
   const runtime = await loadResolvedModelPickerRuntime();
   return runtime
     .resolveProviderModelPickerEntries({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
     })
     .map(({ value, label, hint }) => Object.assign({ value, label }, hint ? { hint } : undefined))
     .toSorted(
@@ -36,7 +34,6 @@ export async function maybeHandleProviderPluginSelection(params: {
   prompter: WizardPrompter;
   agentDir?: string;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   runtime?: RuntimeEnv;
 }): Promise<{ model?: string; config?: OpenClawConfig } | null> {
   let pluginResolution: string | null = null;
@@ -48,7 +45,6 @@ export async function maybeHandleProviderPluginSelection(params: {
     pluginProviders = resolvePluginProviders({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       mode: "setup",
     });
     pluginResolution = pluginProviders.some(
@@ -77,7 +73,6 @@ export async function maybeHandleProviderPluginSelection(params: {
     pluginProviders = resolvePluginProviders({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       mode: "setup",
     });
   }
@@ -91,7 +86,6 @@ export async function maybeHandleProviderPluginSelection(params: {
             {
               config: params.cfg,
               workspaceDir: params.workspaceDir,
-              env: params.env,
               pluginId: provider.pluginId,
               includeUntrustedWorkspacePlugins: false,
             },
@@ -100,7 +94,6 @@ export async function maybeHandleProviderPluginSelection(params: {
     manifestChoice: resolveManifestProviderAuthChoice(pluginResolution, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       includeUntrustedWorkspacePlugins: false,
     }),
   });
@@ -133,7 +126,6 @@ export async function maybeHandleProviderPluginSelection(params: {
       prompter: params.prompter,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      env: params.env,
     });
   }
   return { model: applied.defaultModel, config: applied.config };

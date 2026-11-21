@@ -1,4 +1,6 @@
-import { expect, it } from "vitest";
+import * as ts from "typescript/ast";
+import { API, Checker } from "typescript/sync";
+import { expect, it, vi } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
 const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
@@ -37,8 +39,18 @@ function expectLive(result: Inspection, ...files: string[]) {
   }
 }
 
+function expectViolations(result: Inspection, ...messages: (string | RegExp)[]) {
+  expect(result.violations).toEqual(
+    messages.map((message) =>
+      typeof message === "string"
+        ? expect.stringContaining(message)
+        : expect.stringMatching(message),
+    ),
+  );
+}
+
 function expectClosed(result: Inspection, file?: string, names: string[] = []) {
-  expect(result.violations).toEqual([]);
+  expectViolations(result);
   expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
   if (file) {
     expect(result.operations.get(file)).toEqual(new Set(names));
@@ -47,7 +59,7 @@ function expectClosed(result: Inspection, file?: string, names: string[] = []) {
 
 function expectConsumerRejected(result: Inspection, ...files: string[]) {
   expectLive(result, ...files);
-  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+  expectViolations(result, "src/consumer.ts:");
 }
 const legacy = `
 /** @deprecated Use the worker API; removal follows a stable deprecation window. */
@@ -129,9 +141,7 @@ it.each([
   ],
 ])("rejects a bundled %s without allowing it to hide the live operation", (_name, consumer) => {
   const result = inspectBarrel(consumer);
-  expect(result.violations).toEqual([
-    expect.stringMatching(/src\/consumer.ts:\d+:\d+: bundled runtime reference/),
-  ]);
+  expectViolations(result, /src\/consumer.ts:\d+:\d+: bundled runtime reference/);
   expect(result.operations.has(legacyFile)).toBe(false);
   expect(result.operations.get(secondFile)).toEqual(new Set([second]));
 });
@@ -145,13 +155,12 @@ it("checks same-file calls and propagates reachability through reviewed wrappers
     function bundled() { return ${second}(); }`,
   );
   expect(result.operations.size).toBe(0);
-  expect(result.violations).toEqual([
-    expect.stringContaining("extensions/plugin/runtime.ts:"),
-    expect.stringContaining(`${legacyFile}:`),
-    expect.stringContaining(
-      `${legacyFile}:${first}: reviewed compatibility operation is reachable`,
-    ),
-  ]);
+  expectViolations(
+    result,
+    "extensions/plugin/runtime.ts:",
+    `${legacyFile}:`,
+    `${legacyFile}:${first}: reviewed compatibility operation is reachable`,
+  );
 });
 
 it("permits a deprecated API only from an exact reviewed one-shot entry", () => {
@@ -182,9 +191,7 @@ it("permits a deprecated API only from an exact reviewed one-shot entry", () => 
     ["src/flows/unreviewed.ts", doctor],
     [doctorFile, doctor.replace(`return ${first}()`, `return () => ${first}()`)],
   ] as const) {
-    expect(inspectDoctor(file, source).violations).toEqual([
-      expect.stringContaining("bundled runtime reference"),
-    ]);
+    expectViolations(inspectDoctor(file, source), "bundled runtime reference");
   }
 });
 
@@ -303,19 +310,20 @@ const legacyStore = `
   export declare const runtime: { openSyncKeyedStore<T>(): Store<T> };
 `;
 
+function inspectStore(consumer: string) {
+  return kernelResult(legacyStore, consumer, pluginStateLegacyFile);
+}
+
 it.each([
   ["Required factory", "createSyncKeyedStore<number>()"],
   ["runtime contract", "runtime.openSyncKeyedStore<number>()"],
 ])("guards every legacy store member through the %s", (_label, factory) => {
   for (const escape of [false, true]) {
-    const result = inspectKernel({
-      [pluginStateLegacyFile]: legacyStore,
-      "src/consumer.ts": `
+    const result = inspectStore(`
         import { createSyncKeyedStore, runtime } from './plugin-state/plugin-state-store.legacy.js';
         const store = ${factory};
         ${legacyStoreMethods.map((name) => (escape ? `retain(store.${name});` : `store.${name}(1);`)).join("\n")}
-      `,
-    });
+      `);
     expect(result.operations.has(kernelFile)).toBe(false);
     expect(result.violations).toHaveLength(legacyStoreMethods.length);
     for (const name of legacyStoreMethods) {
@@ -326,34 +334,155 @@ it.each([
   }
 });
 
-it("rejects shorthand method escapes from typed receivers and parameters", () => {
-  const result = inspectKernel({
-    [pluginStateLegacyFile]: legacyStore,
-    "src/consumer.ts": `
-      import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
-      const { consume } = createSyncKeyedStore<number>();
-      consume(1);
-      export function receive({ clear }: Store<number>) { retain(clear); }
-    `,
-  });
-  expect(result.violations).toEqual([
-    expect.stringContaining("createSyncKeyedStore.consume"),
-    expect.stringContaining("createSyncKeyedStore.clear"),
-  ]);
-  expect(result.operations.has(kernelFile)).toBe(false);
+it("batches shorthand receiver types while rejecting typed receiver and parameter escapes", () => {
+  const batches = vi.spyOn(API.prototype, "batch");
+  const queries: ts.Node[] = [];
+  const facts = new Map<string, Readonly<Record<string, string | number>>>();
+  const symbolNodes: ts.Node[] = [];
+  const descriptor = Object.getOwnPropertyDescriptor(Checker.prototype, "getTypeAtLocation")!;
+  const symbolDescriptor = Object.getOwnPropertyDescriptor(
+    Checker.prototype,
+    "getSymbolAtLocation",
+  )!;
+  try {
+    Object.defineProperty(Checker.prototype, "getSymbolAtLocation", {
+      ...symbolDescriptor,
+      get(this: Checker) {
+        const query: Checker["getSymbolAtLocation"] = symbolDescriptor.get!.call(this);
+        const observed = Object.assign(
+          ((input: ts.Node | readonly ts.Node[]) => {
+            symbolNodes.push(...(Array.isArray(input) ? input : [input as ts.Node]));
+            return Array.isArray(input) ? query(input) : query(input as ts.Node);
+          }) as Checker["getSymbolAtLocation"],
+          { gen: query.gen.bind(query) },
+        );
+        Object.defineProperty(this, "getSymbolAtLocation", { configurable: true, value: observed });
+        return observed;
+      },
+    });
+    Object.defineProperty(Checker.prototype, "getTypeAtLocation", {
+      ...descriptor,
+      get(this: Checker) {
+        const query: Checker["getTypeAtLocation"] = descriptor.get!.call(this);
+        const record = (input: ts.Node | readonly ts.Node[]) => {
+          const nodes = Array.isArray(input) ? input : [input as ts.Node];
+          queries.push(...nodes.filter(ts.isObjectBindingPattern));
+        };
+        const observed = Object.assign(
+          ((input: ts.Node | readonly ts.Node[]) => {
+            record(input);
+            return Array.isArray(input) ? query(input) : query(input as ts.Node);
+          }) as Checker["getTypeAtLocation"],
+          {
+            *gen(input: ts.Node | readonly ts.Node[]) {
+              record(input);
+              return yield* Array.isArray(input) ? query.gen(input) : query.gen(input as ts.Node);
+            },
+          },
+        );
+        // The compiler getter installs a callable on the instance; observe that path too.
+        Object.defineProperty(this, "getTypeAtLocation", { configurable: true, value: observed });
+        return observed;
+      },
+    });
+    const consumers = Array.from({ length: 337 }, (_, index) => `src/consumer-${index}.ts`);
+    const result = inspectDatabaseWorkerBoundaries(
+      process.cwd(),
+      new Map([
+        [kernelFile, kernel],
+        [pluginStateLegacyFile, legacyStore],
+        [
+          "src/consumer.ts",
+          `import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
+          const { lookupMany, consume, clear } = createSyncKeyedStore<number>();
+          consume(1);
+          export function receive({ lookupMany, consume, clear }: Store<number>) {
+            retain(lookupMany, consume, clear);
+          }`,
+        ],
+        ...consumers.map((file): [string, string] => [
+          file,
+          `import type { Store } from './plugin-state/plugin-state-store.legacy.js';
+          export function receive({ lookupMany, consume, clear }: Store<number>) {
+            retain(lookupMany, consume, clear);
+          }`,
+        ]),
+        [
+          "src/unrelated.ts",
+          `export function unrelated({ consume, clear }: { consume: () => void; clear: () => void }) {
+            consume(); clear();
+          }
+          export function missing({ lookupMany }: {}) { lookupMany(); }`,
+        ],
+      ]),
+      undefined,
+      undefined,
+      false,
+      (phase, observed) => {
+        if (observed) {
+          facts.set(phase, observed);
+        }
+      },
+    );
+    const methods = legacyStoreMethods.map((name) => `createSyncKeyedStore.${name}`);
+    expect(result.violations).toHaveLength((consumers.length + 2) * methods.length);
+    for (const file of ["src/consumer.ts", ...consumers]) {
+      for (const method of methods) {
+        expect(result.violations).toContainEqual(
+          expect.stringMatching(new RegExp(`^${file.replaceAll(".", "\\.")}:.*${method}$`)),
+        );
+      }
+    }
+    expect(result.operations.has(kernelFile)).toBe(false);
+    expect(queries).toHaveLength(consumers.length + 4);
+    expect(new Set(queries).size).toBe(queries.length);
+    const members = queries
+      .filter(ts.isObjectBindingPattern)
+      .flatMap((pattern) =>
+        pattern.elements.flatMap((element) => (element.name ? [element.name] : [])),
+      );
+    expect(members).toHaveLength((consumers.length + 2) * methods.length + 3);
+    const memberNodes = new Set<ts.Node>(members);
+    const unresolved = symbolNodes.filter((node) => memberNodes.has(node));
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]?.getText()).toBe("lookupMany");
+    expect(unresolved[0]?.getSourceFile().fileName).toMatch(/unrelated\.ts$/);
+    const before = facts.get("binding-forwarding")!;
+    const after = facts.get("reference-prefetch")!;
+    const complete = facts.get("graph-classification")!;
+    expect(before.timingSample).toBe("current");
+    expect(after.timingSample).toBe("current");
+    expect(complete.timingSample).toBe("current");
+    const referenceRequests = Number(after.requestCount) - Number(before.requestCount);
+    console.info(
+      "database member query work",
+      JSON.stringify({
+        patterns: queries.length,
+        members: members.length,
+        referenceRequests,
+        complete,
+      }),
+    );
+    // A growing multi-file inventory must not require a round trip per receiver/member.
+    expect(referenceRequests).toBeLessThan(consumers.length);
+    expect(
+      batches.mock.calls.every((generators: readonly unknown[]) => generators.length <= 256),
+    ).toBe(true);
+  } finally {
+    batches.mockRestore();
+    Object.defineProperty(Checker.prototype, "getTypeAtLocation", descriptor);
+    Object.defineProperty(Checker.prototype, "getSymbolAtLocation", symbolDescriptor);
+  }
 });
 
 it("keeps scalar authority and unguarded projection reads independent of guarded store members", () => {
-  const result = inspectKernel({
-    [pluginStateLegacyFile]: legacyStore,
-    "src/consumer.ts": `
+  const result = inspectStore(`
       import { createSyncKeyedStore } from './plugin-state/plugin-state-store.legacy.js';
       const store = createSyncKeyedStore<number>();
       const { lookup } = store;
       lookup();
       store.entries();
-    `,
-  });
+    `);
   expectClosed(
     result,
     pluginStateLegacyFile,
@@ -421,7 +550,7 @@ it.each(["openclaw/plugin-sdk", "@openclaw/plugin-sdk"])(
       "src/plugin-sdk/index.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
       "src/consumer.ts": `import { oldQuery } from '${specifier}'; oldQuery();`,
     });
-    expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+    expectViolations(result, "src/consumer.ts:");
   },
 );
 
@@ -533,23 +662,14 @@ it.each([
 });
 
 it.each<[string, string, Record<string, string>]>([
-  [
-    "escaped arrow property",
+  ...[
+    ["arrow", "read: () => readKernel()"],
+    ["function", "read: function () { return readKernel(); }"],
+  ].map(([kind, read]): [string, string, Record<string, string>] => [
+    `escaped ${kind} property`,
     secondFile,
-    {
-      [secondFile]: receiverOwner("read: () => readKernel()", "start() { register(this.read); }"),
-    },
-  ],
-  [
-    "escaped function property",
-    secondFile,
-    {
-      [secondFile]: receiverOwner(
-        "read: function () { return readKernel(); }",
-        "start() { register(this.read); }",
-      ),
-    },
-  ],
+    { [secondFile]: receiverOwner(read, "start() { register(this.read); }") },
+  ]),
   [
     "unregistered nondeprecated factory",
     "src/receiver.ts",
@@ -617,7 +737,7 @@ it("rejects a deprecated factory reached through a live receiver method", () => 
   });
   expectLive(result, kernelFile, "src/receiver.ts", legacyFile);
   expect(result.operations.get(secondFile)).toEqual(new Set([second]));
-  expect(result.violations).toEqual([expect.stringContaining(`${legacyFile}:${first}:`)]);
+  expectViolations(result, `${legacyFile}:${first}:`);
 });
 
 it("records SQL inside a closed receiver method as compatibility-only", () => {
@@ -639,7 +759,7 @@ it("rejects a reviewed API escaped by a discovered helper", () => {
       export function helper() { register(${first}); }`,
   });
   expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining("src/helper.ts:")]);
+  expectViolations(result, "src/helper.ts:");
 });
 
 it("records direct call locations but excludes nested callback SQL", () => {
@@ -671,55 +791,179 @@ export function ${first}() { return selectResolvedUserProfile(); }`,
   expect(result.callLocations.get(profileFile)).toEqual(new Set(["1:53", "3:10", "3:48"]));
 });
 
-it.each(["readPluginState", "writePluginState"])(
+it.each([
+  ["readPluginState", true],
+  ["writePluginState", true],
+  ["runSqliteDeferredTransactionSync", false],
+  ["runSqliteReadSnapshotSync", false],
+] as const)(
   "follows inline callbacks through %s but keeps escaped callbacks live",
-  (scope) => {
-    const pluginStateFile = "src/plugin-state/plugin-state-store.sqlite.ts";
-    const inspectCallback = (callback: string) =>
-      inspect(
-        {
-          [pluginStateFile]: `import { readKernel } from '../session-kernel.js';
-function ${scope}(operation, message, callback) { return callback(); }
-export function accessPluginState() {
-  return ${scope}('lookup', 'failed', ${callback});
-}`,
-          [kernelFile]: kernel,
-        },
-        `import { accessPluginState } from '../plugin-state/plugin-state-store.sqlite.js';
-/** @deprecated Use workers. */
-export function ${first}() { return accessPluginState(); }`,
-      );
-
-    const inline = inspectCallback("() => readKernel()");
-    expectClosed(inline);
-
-    const escaped = inspectCallback("() => () => readKernel()");
-    expect(escaped.operations.has(kernelFile)).toBe(false);
-  },
-);
-
-it.each(["runSqliteDeferredTransactionSync", "runSqliteReadSnapshotSync"])(
-  "follows inline callbacks through %s but keeps escaped callbacks live",
-  (scope) => {
+  (scope, plugin) => {
     const transactionFile = "src/infra/sqlite-transaction.ts";
-    const inspectCallback = (callback: string) =>
+    const pluginStateFile = "src/plugin-state/plugin-state-store.sqlite.ts";
+    const entryFile = plugin ? pluginStateFile : "src/transaction-reader.ts";
+    const entry = plugin ? "accessPluginState" : "read";
+    const inspectCallback = (callback: string, otherArgument = plugin ? "'failed'" : "db") =>
       inspect(
         {
-          [transactionFile]: `export function ${scope}(db, callback) { return callback(); }`,
           [kernelFile]: kernel,
-          "src/transaction-reader.ts": `import { ${scope} } from './infra/sqlite-transaction.js';
+          ...(!plugin && {
+            [transactionFile]: `export function ${scope}(db, callback) { return callback(); }`,
+          }),
+          [entryFile]: plugin
+            ? `import { readKernel } from '../session-kernel.js';
+function ${scope}(operation, message, callback) { return callback(); }
+export function accessPluginState() { return ${scope}('lookup', ${otherArgument}, ${callback}); }`
+            : `const { ${scope}: enterScope } = await import('./infra/sqlite-transaction.js');
 import { readKernel } from './session-kernel.js';
-export function read() { return ${scope}(db, ${callback}); }`,
+export function read() { return enterScope(${otherArgument}, ${callback}); }`,
         },
-        `import { read } from '../transaction-reader.js';
+        `import { ${entry} } from '../${entryFile.slice(4).replace(/\.ts$/, ".js")}';
 /** @deprecated Use workers. */
-export function ${first}() { return read(); }`,
+export function ${first}() { return ${entry}(); }`,
       );
 
-    expectClosed(inspectCallback("() => readKernel()"));
+    const callback = "() => { readKernel(); readKernel(); return readKernel(); }";
+    expectClosed(inspectCallback(callback));
+    const misplaced = inspectCallback(callback, "() => readKernel()");
+    expect(misplaced.operations.has(kernelFile)).toBe(false);
+    expect(misplaced.callLocations.get(entryFile)?.size).toBe(plugin ? 5 : 4);
     expect(inspectCallback("() => () => readKernel()").operations.has(kernelFile)).toBe(false);
   },
 );
+
+it("reuses raw compiler symbols across graph phases without freezing forwarded bindings", () => {
+  const counts = new Map<ts.Node, number>();
+  const batches: (readonly ts.Node[])[] = [];
+  const unresolved = new Set<ts.Node>();
+  const descriptor = Object.getOwnPropertyDescriptor(Checker.prototype, "getSymbolAtLocation")!;
+  try {
+    Object.defineProperty(Checker.prototype, "getSymbolAtLocation", {
+      ...descriptor,
+      get(this: Checker) {
+        const query: Checker["getSymbolAtLocation"] = descriptor.get!.call(this);
+        const observed = Object.assign(
+          ((input: ts.Node | readonly ts.Node[]) => {
+            const nodes = Array.isArray(input) ? input : [input as ts.Node];
+            batches.push(nodes);
+            const result = Array.isArray(input) ? query(input) : query(input as ts.Node);
+            const symbols = Array.isArray(result) ? result : [result];
+            for (const [index, node] of nodes.entries()) {
+              counts.set(node, (counts.get(node) ?? 0) + 1);
+              if (!symbols[index]) {
+                unresolved.add(node);
+              }
+            }
+            return result;
+          }) as Checker["getSymbolAtLocation"],
+          { gen: query.gen.bind(query) },
+        );
+        // The real getter installs its method on the instance; retain that contract.
+        Object.defineProperty(this, "getSymbolAtLocation", { configurable: true, value: observed });
+        return observed;
+      },
+    });
+    const scan = (body: string, observer?: InspectOptions[5]) =>
+      inspectDatabaseWorkerBoundaries(
+        process.cwd(),
+        new Map(
+          Object.entries({
+            [kernelFile]: kernel,
+            "src/infra/sqlite-transaction.ts":
+              "export function runSqliteReadSnapshotSync(db, callback) { return callback(); }",
+            "src/transaction-reader.ts": `const { runSqliteReadSnapshotSync: enterScope } = await import('./infra/sqlite-transaction.js');
+import { readKernel } from './session-kernel.js';
+export function read() { return enterScope(db, () => { ${body} }); }`,
+            [legacyFile]: `import { read } from '../transaction-reader.js';
+/** @deprecated Use workers. */
+export function ${first}() { return read(); }`,
+          }),
+        ),
+        undefined,
+        undefined,
+        false,
+        observer,
+      );
+    const phases: string[] = [];
+    expectClosed(
+      scan("readKernel(); return readKernel();", (phase) => {
+        phases.push(phase);
+        throw new Error("observer failed");
+      }),
+    );
+    expect(phases).toEqual([
+      "inputs",
+      "project",
+      "sources-registration",
+      "closure-expansion",
+      "binding-forwarding",
+      "reference-prefetch",
+      "caller-classification",
+      "graph-classification",
+      "close",
+    ]);
+    expect(scan("readKernel(); missing(() => ({ readKernel }));").operations.has(kernelFile)).toBe(
+      false,
+    );
+    expect(
+      [...counts.keys()].some(
+        (node) => node.parent && ts.isShorthandPropertyAssignment(node.parent),
+      ),
+    ).toBe(false);
+    expect(
+      [...counts.keys()].filter((node) => node.getText() === "readKernel").length,
+    ).toBeGreaterThan(1);
+    expect([...unresolved].some((node) => node.getText() === "missing")).toBe(true);
+    const consumers = Array.from({ length: 257 }, (_, index) => `src/reader-${index}.ts`);
+    const result = inspectDatabaseWorkerBoundaries(
+      process.cwd(),
+      new Map([
+        [legacyFile, legacy],
+        ...consumers.map((file): [string, string] => [
+          file,
+          `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js'; ${first}(); missing.${first}();`,
+        ]),
+      ]),
+      undefined,
+      undefined,
+      false,
+    );
+    expect(result.violations).toHaveLength(consumers.length);
+    const credentialResult = inspectSources({
+      "src/state/user-model-accounts.ts": "export function connectUserModelAccount() {}",
+      "src/credential-consumer.ts": `
+        const accounts = await import('./state/user-model-accounts.js');
+        accounts.connectUserModelAccount();
+      `,
+    });
+    expect(credentialResult.violations).toEqual([
+      expect.stringContaining("unreviewed personal credential writer reference"),
+    ]);
+    expect(batches.every((nodes) => nodes.length <= 256)).toBe(true);
+    expect(
+      batches.some(
+        (nodes) =>
+          new Set(
+            nodes
+              .filter(ts.isPropertyAccessExpression)
+              .map((node) => node.getSourceFile().fileName),
+          ).size > 1,
+      ),
+    ).toBe(true);
+    expect([...counts.values()]).toEqual([...counts.values()].map(() => 1));
+    expect(
+      inspectStore(`declare const store: {}; const { consume } = store; consume(1);`).violations,
+    ).toEqual([]);
+    expect(
+      [...counts.keys()].filter(
+        (node) =>
+          ts.isIdentifier(node) && node.text === "consume" && ts.isBindingElement(node.parent),
+      ),
+    ).toHaveLength(1);
+  } finally {
+    Object.defineProperty(Checker.prototype, "getSymbolAtLocation", descriptor);
+  }
+});
 
 it("does not confuse a nested function path with a live top-level namesake", () => {
   const result = inspect({

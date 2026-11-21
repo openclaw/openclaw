@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -12,6 +12,7 @@ import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { withCommandPluginMetadata } from "../config-validation.js";
@@ -20,38 +21,19 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigForWrite } from "./shared.js";
 
-type ChannelsRemoveOptions = {
-  agent?: string;
-  channel?: string;
-  account?: string;
-  delete?: boolean;
-};
-
-function formatAccountRemovalErrorMessage(params: {
-  channel: ChatChannel;
-  kind: "unknown-account" | "nothing-to-remove";
-  accountId: string;
-  requestedAccount: string | undefined;
-  accountIds: readonly string[];
-}): string {
-  const label = channelLabel(params.channel);
-  const inspect = `Run ${formatCliCommand(`openclaw channels status --channel ${params.channel}`)} to inspect configured accounts.`;
-  const known = params.accountIds.length ? ` Known accounts: ${params.accountIds.join(", ")}.` : "";
-  if (params.kind === "nothing-to-remove") {
-    return `${label} account "${params.accountId}" has no configuration to delete.${known} ${inspect}`;
-  }
-  if (!params.requestedAccount) {
-    return `${label} has no ${DEFAULT_ACCOUNT_ID} account to remove.${known} Name an account with ${formatCliCommand("--account <id>")}. ${inspect}`;
-  }
-  return `${label} has no account "${params.requestedAccount}" to remove.${known} ${inspect}`;
-}
-
 /** Disable or delete a channel account, stopping gateway runtime state before mutation. */
 export async function channelsRemoveCommand(
-  opts: ChannelsRemoveOptions,
+  opts: {
+    agent?: string;
+    channel?: string;
+    account?: string;
+    delete?: boolean;
+  },
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   parseAccountSelector(opts.account);
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
@@ -75,7 +57,7 @@ export async function channelsRemoveCommand(
 
       if (useWizard && prompter) {
         await prompter.intro("Remove channel account");
-        const readOnlyPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+        const readOnlyPlugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
           includeSetupFallbackPlugins: true,
         });
         const selectedChannel = await prompter.select({
@@ -110,19 +92,7 @@ export async function channelsRemoveCommand(
         return;
       }
 
-      if (useWizard || !deleteConfig) {
-        const confirm = prompter ?? createClackPrompter();
-        const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
-        const ok = await confirm.confirm({
-          message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
-          initialValue: true,
-        });
-        if (!ok) {
-          await prompter?.outro("Cancelled.");
-          return;
-        }
-      }
-
+      // Resolve the channel before asking anything, so an unknown id fails instead of prompting.
       const shouldResolveInstallablePlugin = Boolean(lookupChannel || channel);
       const resolvedPluginState = shouldResolveInstallablePlugin
         ? await (async () => {
@@ -153,6 +123,17 @@ export async function channelsRemoveCommand(
         runtime.exit(1);
         return;
       }
+      if (useWizard || !deleteConfig) {
+        const confirm = prompter ?? createClackPrompter();
+        const ok = await confirm.confirm({
+          message: `Disable ${channelLabel(resolvedChannel)} account "${accountId}"? (keeps config)`,
+          initialValue: true,
+        });
+        if (!ok) {
+          await prompter?.outro("Cancelled.");
+          return;
+        }
+      }
       const removal = await applyChannelAccountRemoval({
         cfg,
         plugin,
@@ -177,24 +158,37 @@ export async function channelsRemoveCommand(
               mode: GATEWAY_CLIENT_MODES.BACKEND,
               clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
               deviceIdentity: null,
+              signal,
             });
           } catch (error) {
+            signal?.throwIfAborted();
             runtime.log(
               `Could not stop running ${channelLabel(resolvedChannel)} account "${accountId}" before removing it: ${formatErrorMessage(error)}`,
             );
           }
+          signal?.throwIfAborted();
         },
       });
       if (!removal.ok) {
         runtime.error(
           removal.error.kind !== "unsupported-action"
-            ? formatAccountRemovalErrorMessage({
-                channel: resolvedChannel,
-                kind: removal.error.kind,
-                accountId,
-                requestedAccount: useWizard ? accountId : normalizeOptionalString(opts.account),
-                accountIds: removal.error.accountIds,
-              })
+            ? (() => {
+                const kind = removal.error.kind;
+                const requestedAccount = useWizard
+                  ? accountId
+                  : normalizeOptionalString(opts.account);
+                const accountIds = removal.error.accountIds;
+                const label = channelLabel(resolvedChannel);
+                const inspect = `Run ${formatCliCommand(`openclaw channels status --channel ${resolvedChannel}`)} to inspect configured accounts.`;
+                const known = accountIds.length ? ` Known accounts: ${accountIds.join(", ")}.` : "";
+                if (kind === "nothing-to-remove") {
+                  return `${label} account "${accountId}" has no configuration to delete.${known} ${inspect}`;
+                }
+                if (!requestedAccount) {
+                  return `${label} has no ${DEFAULT_ACCOUNT_ID} account to remove.${known} Name an account with ${formatCliCommand("--account <id>")}. ${inspect}`;
+                }
+                return `${label} has no account "${requestedAccount}" to remove.${known} ${inspect}`;
+              })()
             : removal.error.action === "delete"
               ? `${formatUnsupportedChannelActionMessage({ channel: resolvedChannel, action: "delete" })} Use ${formatCliCommand("openclaw channels remove --channel " + resolvedChannel)} to disable it without deleting config.`
               : `${formatUnsupportedChannelActionMessage({ channel: resolvedChannel, action: "disable" })} Use ${formatCliCommand("openclaw channels remove --channel " + resolvedChannel + " --delete")} only if you want to remove config.`,

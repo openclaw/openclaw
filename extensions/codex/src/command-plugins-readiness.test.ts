@@ -9,7 +9,13 @@ import { handleCodexSubcommand } from "./command-handlers.js";
 import { createCodexCommandHost } from "./command-host.test-support.js";
 import type { CodexPluginsManagementIO } from "./command-plugin-config.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
-import { fakeCtx as ctx, presentationButtons } from "./command-plugins-management.test-support.js";
+import {
+  buttonCommands,
+  fakeCtx as ctx,
+  pluginCatalog,
+  pluginSummary,
+  presentationButtons,
+} from "./command-plugins-management.test-support.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 import * as commandRuntime from "./command-plugins-runtime.js";
 
@@ -65,15 +71,12 @@ function fixture(
   const pluginName = options.catalog ? `notes@${marketplaceName}` : "notes";
   const entry = { marketplaceName, pluginName, enabled: !options.disabled };
   const current = { enabled: true, plugins: { notes: entry } };
-  const summary: v2.PluginSummary = {
-    id: `notes@${marketplaceName}`,
+  const summary = pluginSummary("notes", marketplaceName, {
     name: "Notes",
     installed: true,
     enabled: true,
-    availability: "AVAILABLE",
-    installPolicy: "AVAILABLE",
     ...(options.catalog ? { remotePluginId: "plugins~Plugin_test_notes" } : {}),
-  };
+  });
   const apps: v2.AppSummary[] = Array.from({ length: options.appCount ?? 1 }, (_, index) => ({
     id: `app-${index}`,
     name: `App ${index}`,
@@ -108,11 +111,11 @@ function fixture(
         options.catalog?.kind === "curated"
           ? !kinds
           : kinds?.some((kind) => kind === options.catalog?.kind);
-      return {
-        marketplaces: included ? [{ name: marketplaceName, plugins: [summary] }] : [],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      };
+      const catalog = pluginCatalog([summary], marketplaceName);
+      if (!included) {
+        catalog.marketplaces = [];
+      }
+      return catalog;
     },
     "plugin/read": {
       plugin: { summary: { ...summary, ...options.detailPolicy }, apps, mcpServers: [] },
@@ -280,15 +283,7 @@ describe("Codex plugin status command", () => {
     const first = await test.status();
     const next = await test.status(["notes@company-tools", "2"]);
     expectText(first.text, ["page 1/2"], ["Open App 5 in ChatGPT", "another-agent-app"]);
-    expect(first.presentation?.blocks).toContainEqual({
-      type: "buttons",
-      buttons: [
-        {
-          label: "More apps",
-          action: { type: "command", command: "/codex plugins status notes@company-tools 2" },
-        },
-      ],
-    });
+    expect(buttonCommands(first)).toContain("/codex plugins status notes@company-tools 2");
     expectText(next.text, ["Open App 6 in ChatGPT"], ["Private app"]);
   });
 

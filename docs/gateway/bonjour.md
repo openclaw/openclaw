@@ -76,13 +76,13 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 | ----------------------------- | ------------------------------------------------------------------------------ |
 | `role=gateway`                | Always.                                                                        |
 | `displayName=<friendly name>` | Always.                                                                        |
-| `lanHost=<hostname>.local`    | Always.                                                                        |
+| `lanHost=<hostname>.local`    | LAN mDNS only; omitted from wide-area DNS-SD.                                  |
 | `gatewayPort=<port>`          | Always (gateway WS + HTTP).                                                    |
 | `transport=gateway`           | Always.                                                                        |
 | `gatewayTls=1`                | Only when TLS is enabled.                                                      |
 | `gatewayTlsSha256=<sha256>`   | Only when TLS is enabled and a fingerprint is available.                       |
 | `gatewayDirectReachable=1`    | Only when the gateway is directly reachable (not only via a relay/proxy path). |
-| `tailnetDns=<magicdns>`       | mDNS full mode only; optional hint when Tailnet is available.                  |
+| `tailnetDns=<magicdns>`       | When resolved: LAN mDNS in full mode; wide-area DNS-SD in every mode.          |
 | `sshPort=<port>`              | Full mode only; omitted in minimal and off modes.                              |
 | `cliPath=<path>`              | Full mode only; omitted in minimal and off modes.                              |
 
@@ -120,6 +120,9 @@ The gateway writes a rolling log file (printed on startup as `gateway log file: 
 
 OpenClaw starts each Bonjour service once and leaves checking, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-check messages are suppressed so they cannot flood the gateway log, as are transient `ENODEV` MDNS socket warnings that occur when a network interface (for example a short-lived Docker bridge) is removed between the responder's interface polls.
 
+Ciao diagnostics use the Bonjour plugin logger. These noise filters apply only to
+that responder's messages; they do not replace or filter the process console.
+
 When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution.
 
 Bonjour uses the system hostname for the advertised `.local` host when it's a valid DNS label. If the system hostname contains spaces, underscores, or another invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set `OPENCLAW_MDNS_HOSTNAME=<name>` before starting the gateway when you need an explicit host label.
@@ -140,18 +143,23 @@ Enable it explicitly when same-LAN auto-discovery is useful on Linux, Windows, o
 openclaw plugins enable bonjour
 ```
 
-When enabled, Bonjour uses `discovery.mdns.mode` to decide how much TXT metadata to publish; the same mode controls optional TXT hints in wide-area DNS-SD records. Modes:
+When enabled, Bonjour uses `discovery.mdns.mode` to control LAN mDNS advertising:
 
-| Mode                | Behavior                                                                                                                                 |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.                                                                            |
-| `full`              | Adds `sshPort`, `cliPath`, `tailnetDns` — use when clients need those hints.                                                             |
-| `off`               | Suppresses LAN multicast without changing plugin enablement; wide-area DNS-SD can still publish when `discovery.wideArea.domain` is set. |
+| Mode                | LAN mDNS behavior                                              |
+| ------------------- | -------------------------------------------------------------- |
+| `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.  |
+| `full`              | Adds `sshPort` and available `cliPath` and `tailnetDns` hints. |
+| `off`               | Suppresses LAN multicast without changing plugin enablement.   |
+
+Configured wide-area DNS-SD publishes independently of LAN advertising. The mode
+gates only its `sshPort` and `cliPath` hints: both require `full`. A resolved
+`tailnetDns` hint remains in wide-area records in `minimal`, `full`, and `off` modes.
 
 Mode changes hot-apply without restarting the Gateway or disconnecting clients.
 The discovery owner stops the prior advertisements before publishing the new
-mode. Reducing disclosure also updates TXT hints in any configured wide-area
-DNS-SD zone. Changing the mode does not enable a disabled Bonjour plugin.
+mode. Leaving `full` removes SSH/CLI hints from any configured wide-area DNS-SD
+zone; a resolved `tailnetDns` hint remains. Changing the mode does not enable a
+disabled Bonjour plugin.
 
 ## When to disable Bonjour
 
@@ -234,7 +242,7 @@ Bonjour/DNS-SD often escapes bytes in service instance names as decimal `\DDD` s
 | `discovery.mdns.mode`                                | `off` \| `minimal` (default) \| `full` — see modes above.                         |
 | `gateway.bind`                                       | Controls the gateway bind mode in `~/.openclaw/openclaw.json`.                    |
 | `OPENCLAW_SSH_PORT`                                  | Overrides the SSH port when `sshPort` is advertised (full mode).                  |
-| `OPENCLAW_TAILNET_DNS`                               | Publishes a MagicDNS hint in TXT when mDNS full mode is enabled.                  |
+| `OPENCLAW_TAILNET_DNS`                               | Overrides `tailnetDns` in LAN full mode and every wide-area mode.                 |
 | `OPENCLAW_CLI_PATH`                                  | Overrides the advertised CLI path (full mode).                                    |
 
 macOS hosts auto-start the bundled LAN discovery plugin by default. When the Bonjour plugin is enabled and `OPENCLAW_DISABLE_BONJOUR` is unset, Bonjour advertises on normal hosts and auto-disables inside detected containers (Docker, Fly.io machines, and common container runtimes).

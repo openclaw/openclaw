@@ -1,6 +1,9 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import { loadDiscordThreadBindingsManagerModule } from "./channel.loaders.js";
+import {
+  loadDiscordConversationForkModule,
+  loadDiscordThreadBindingsManagerModule,
+} from "./channel.loaders.js";
 import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingIdleTimeoutBySessionKeyAsync,
@@ -26,6 +29,8 @@ function toConversationLifecycleBinding(binding: {
 export const discordConversationBindings: NonNullable<
   ChannelPlugin<ResolvedDiscordAccount>["conversationBindings"]
 > = {
+  prepareFork: async (params) =>
+    (await loadDiscordConversationForkModule()).prepareDiscordConversationFork(params),
   supportsCurrentConversationBinding: true,
   bindingStore: "adapter",
   defaultTopLevelPlacement,

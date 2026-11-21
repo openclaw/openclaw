@@ -11,12 +11,14 @@ import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-preparation.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveBackupConfigCapture } from "./backup-config-capture.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
@@ -44,6 +46,7 @@ import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "./update-capture-privacy-marker.js";
+import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { canonicalEntryPath } from "./update-recovery-path.js";
@@ -118,6 +121,8 @@ export function captureUpdateRecoveryBaseline(params: {
   timeoutMs?: number;
   acquisition?: UpdateRecoveryCaptureAcquisition;
   fullIntegrityCheck?: boolean;
+  /** Standalone Doctor retains live custody separately from its capture deadline. */
+  discardIncompleteOnFailure?: { assertCurrent: () => void };
 }) {
   // Sealed helpers consume retained evidence; the installed CLI owns fresh capture.
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
@@ -199,6 +204,8 @@ export function captureUpdateRecoveryBaseline(params: {
         stateDir,
         warnings,
         requireLocalResources: true,
+        assertCurrent,
+        signal: params.signal,
         ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
           ? {
               manifestRegistry: (
@@ -237,8 +244,9 @@ export function captureUpdateRecoveryBaseline(params: {
       );
       const space = tryReadDiskSpace(store);
       if (space && space.availableBytes < requiredBytes) {
-        throw new Error(
+        throw new UpdateCaptureSpaceError(
           `Original update capture needs ${formatDiskSpaceBytes(requiredBytes)} near ${store}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free space on this volume, then retry; original state has not been changed.`,
+          { requiredBytes, availableBytes: space.availableBytes },
         );
       }
       if (!space) {
@@ -435,6 +443,7 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       // Database acquisition used this volume first; reserve remaining payload and metadata now.
       checkPayloadCapacity();
+      const filePayloads: string[] = [];
       for (const [pathname, before] of files) {
         assertCurrent();
         await pin.assertCurrent();
@@ -457,9 +466,10 @@ export function captureUpdateRecoveryBaseline(params: {
           throw new Error(`Original update file changed before capture: ${pathname}`);
         }
         assertCurrent();
-        await using output = await fs.open(path.join(directory, archivePath), "wx+", 0o600);
+        const payloadPath = path.join(directory, archivePath);
+        await using output = await fs.open(payloadPath, "wx+", 0o600);
         await copyFileHandle(handle, output, { assertBeforeMutation: assertCurrent });
-        await output.sync();
+        filePayloads.push(payloadPath);
         const content = await sha256File(output);
         if (
           content.digest !== sha256 ||
@@ -477,6 +487,21 @@ export function captureUpdateRecoveryBaseline(params: {
           mode: Number(before.mode & 0o777n),
         });
       }
+      // Plugin trees hold thousands of small files (#201251). Serial fsyncs each wait for
+      // their own journal commit; concurrent ones share commits. The manifest still seals last.
+      // Let in-flight syncs settle before failing so cleanup never races open handles.
+      const synced = await runTasksWithConcurrency({
+        tasks: filePayloads.map((payloadPath) => async () => {
+          await using payload = await fs.open(payloadPath, "r+");
+          await payload.sync();
+        }),
+        limit: 32,
+        errorMode: "stop",
+      });
+      if (synced.hasError) {
+        throw synced.firstError;
+      }
+      assertCurrent();
       await configCapture.revalidate();
       assertCurrent();
       const boundedWarnings = warnings.slice(0, 32).map((warning) => ({
@@ -496,7 +521,11 @@ export function captureUpdateRecoveryBaseline(params: {
         creator,
         drivers,
         createdAt,
-        roots: [...roots].filter((pathname) => !rehearsal?.excludes(pathname)).toSorted(),
+        // A declared SQLite sidecar root is captured through its database image, like
+        // sidecars found inside directory roots; it has no entry of its own.
+        roots: [...roots]
+          .filter((pathname) => !sidecars.has(pathname) && !rehearsal?.excludes(pathname))
+          .toSorted(),
         excludedRoots: [
           ...new Set([
             ...(rehearsal?.paths ?? []),
@@ -559,7 +588,26 @@ export function captureUpdateRecoveryBaseline(params: {
         diagnostics: { databaseWarnings: [...capacityWarnings, ...databases.warnings] },
       };
     } catch (cause) {
-      throw new Error(`Original update capture failed; evidence retained at ${directory}`, {
+      let outcome = `evidence retained at ${directory}`;
+      const discard = params.discardIncompleteOnFailure;
+      if (discard && !hasCommandProcessCleanupError(cause)) {
+        try {
+          // A final name can mean publication completed before its acknowledgement failed.
+          if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
+            await pin.assertCurrent();
+            discard.assertCurrent();
+            await fs.rm(directory, { recursive: true });
+            outcome = `incomplete copy removed from ${directory}`;
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [cause, cleanupError],
+            `Original update capture failed; incomplete copy cleanup failed; ${outcome}`,
+            { cause: cleanupError },
+          );
+        }
+      }
+      throw new Error(`Original update capture failed; ${outcome}`, {
         cause,
       });
     } finally {

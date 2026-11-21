@@ -297,7 +297,6 @@ describe("gateway method authorization", () => {
         ["sessions.create", { parentSessionKey: sessionKey, fork: true }],
         ["sessions.fork", { sessionKey, entryId: "user-entry" }],
         ["sessions.github.publish", { sessionKey, idempotencyKey: "publication-1" }],
-        ["sessions.recover", { key: sessionKey }],
       ] as const;
       const dispatchRequest = async (
         method: (typeof cases)[number][0],

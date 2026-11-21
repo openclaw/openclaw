@@ -25,6 +25,7 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const sendCardFeishuMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1", chatId: "c1" })));
 const dedupMocks = vi.hoisted(() => ({
   claimUnprocessedFeishuMessage: vi.fn<typeof FeishuDedupModule.claimUnprocessedFeishuMessage>(),
   warmupDedupFromPluginState: vi.fn(async () => 0),
@@ -50,6 +51,11 @@ vi.mock("./thread-bindings.js", () => ({
 vi.mock("./dedup.js", async () => ({
   ...(await vi.importActual<typeof FeishuDedupModule>("./dedup.js")),
   ...dedupMocks,
+}));
+
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  sendCardFeishu: sendCardFeishuMock,
 }));
 
 function buildConfig(): ClawdbotConfig {
@@ -117,6 +123,7 @@ const vcEnvelope = {
 beforeEach(() => {
   vi.clearAllMocks();
   handleFeishuMessageMock.mockReset().mockResolvedValue(undefined);
+  sendCardFeishuMock.mockReset().mockResolvedValue({ messageId: "m1", chatId: "c1" });
   feishuDedupeState.guard = createChannelReplayGuard<string | null | undefined>({
     dedupe: { ttlMs: 24 * 60 * 60 * 1000, memoryMaxSize: 1000 },
     buildReplayKey: (key) => key,
@@ -149,7 +156,7 @@ function createHandler(options?: {
   });
 }
 
-function startMonitor(vcAutoJoin?: boolean) {
+function startMonitor(vcAutoJoin?: boolean, runtime = createRuntimeSpies()) {
   const started = createDeferred<void>();
   const finish = createDeferred<void>();
   monitorWebSocketMock.mockImplementationOnce(async () => {
@@ -162,6 +169,7 @@ function startMonitor(vcAutoJoin?: boolean) {
     botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
     fireAndForget: false,
     channelRuntime: buildChannelRuntime(),
+    runtime,
   });
   return { started: started.promise, finish: finish.resolve, monitor };
 }
@@ -207,7 +215,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
   });
 });
 
-describe("monitorSingleAccount VC event registration", () => {
+describe("monitorSingleAccount synthetic event registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
@@ -218,6 +226,56 @@ describe("monitorSingleAccount VC event registration", () => {
         state: { openChannelIngressQueue: createFeishuTestIngressQueue },
       }),
     );
+  });
+
+  const menuEnvelope = (eventKey: string, timestamp: string) => ({
+    schema: "2.0",
+    header: { event_type: "application.bot.menu_v6" },
+    event: {
+      event_key: eventKey,
+      timestamp,
+      operator: { operator_id: { open_id: "ou_user1", user_id: "user_1", union_id: "union_1" } },
+    },
+  });
+
+  it("falls back to the legacy /menu synthetic message path for unrelated bot menu keys", async () => {
+    const { started, finish, monitor } = startMonitor();
+    try {
+      await started;
+      await dispatcher.invoke(menuEnvelope("custom-key", "1700000000002"));
+
+      expect(handleFeishuMessageMock).toHaveBeenCalledOnce();
+      expect(handleFeishuMessageMock.mock.calls[0]?.[0]).toMatchObject({
+        botOpenId: "ou_bot",
+        event: { message: { content: '{"text":"/menu custom-key"}' } },
+      });
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      finish();
+      await monitor;
+    }
+  });
+
+  it("reports a fallback failure without reopening the committed menu event", async () => {
+    const runtime = createRuntimeSpies();
+    const { started, finish, monitor } = startMonitor(undefined, runtime);
+    const event = menuEnvelope("quick-actions", "1700000000004");
+    sendCardFeishuMock.mockRejectedValueOnce(new Error("launcher unavailable"));
+    handleFeishuMessageMock.mockRejectedValueOnce(new Error("fallback failed"));
+    try {
+      await started;
+      await dispatcher.invoke(event);
+      expect(runtime.error).toHaveBeenCalledWith(
+        "feishu[default]: error handling bot menu event: Error: fallback failed",
+      );
+      await dispatcher.invoke(event);
+
+      expect(sendCardFeishuMock).toHaveBeenCalledOnce();
+      expect(handleFeishuMessageMock).toHaveBeenCalledOnce();
+    } finally {
+      finish();
+      await monitor;
+    }
   });
 
   it("keeps meeting invitations inert until the live account opts in", async () => {

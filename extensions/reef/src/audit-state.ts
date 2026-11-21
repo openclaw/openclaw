@@ -14,7 +14,11 @@ import {
   type ReefAuditHeadRecord,
   type ReefAuditStateRecord,
 } from "./audit-state-format.js";
-import type { ReefAuditOperationConfig, ReefAuditOperations } from "./audit-state-operation.js";
+import type {
+  ReefAuditAppendEvent,
+  ReefAuditOperationConfig,
+  ReefAuditOperations,
+} from "./audit-state-operation.js";
 
 export {
   REEF_AUDIT_NAMESPACE,
@@ -33,6 +37,10 @@ export {
   type ReefAuditStateRecord,
 } from "./audit-state-format.js";
 
+export interface ReefAuditStore extends AuditStore {
+  appendEvents(events: readonly ReefAuditAppendEvent[]): Promise<AuditEntry[]>;
+}
+
 export type ReefAuditOperationState = {
   head: PluginStateKeyedStore<ReefAuditHeadRecord, 2>;
   migration: PluginStateKeyedStore<{ pending: true }, 2>;
@@ -46,7 +54,7 @@ const auditOperationHandler = {
   exportName: "executeReefAuditOperation",
 };
 
-class ReefSqliteAuditStore implements AuditStore {
+class ReefSqliteAuditStore implements ReefAuditStore {
   readonly operationState: ReefAuditOperationState;
   readonly #operation: PluginStateOperation<ReefAuditOperations>;
   readonly #config: ReefAuditOperationConfig;
@@ -91,14 +99,17 @@ class ReefSqliteAuditStore implements AuditStore {
     payload: unknown,
     ts = Math.floor(Date.now() / 1000),
   ): Promise<AuditEntry> {
-    const event = { type, payload: structuredClone(payload), ts };
+    return (await this.appendEvents([{ type, payload, ts }]))[0]!;
+  }
+
+  async appendEvents(events: readonly ReefAuditAppendEvent[]): Promise<AuditEntry[]> {
     // Submit before yielding: the shared owner preserves FIFO across audit handles.
     const result = await this.#operation.execute(
-      { type: "append", input: { ...this.#config, events: [event] } },
+      { type: "append", input: { ...this.#config, events: structuredClone(events) } },
       { writeStores: [this.#config.head, this.#config.entries] },
     );
     // A lost acknowledgement propagates; accepted writes are never replayed.
-    return result.value[0]!;
+    return result.value;
   }
 
   async entries(): Promise<AuditEntry[]> {
@@ -122,7 +133,7 @@ export function openReefAuditStore(
   auditKey: Uint8Array,
   maxEntries?: number,
   authoritySignal?: AbortSignal,
-): AuditStore {
+): ReefAuditStore {
   const head = runtime.state.openKeyedStoreV2<ReefAuditHeadRecord>({
     namespace: REEF_AUDIT_HEAD_NAMESPACE,
     maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,

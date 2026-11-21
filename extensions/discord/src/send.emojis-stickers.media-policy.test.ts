@@ -1,4 +1,3 @@
-// Discord tests cover sender-scoped media policy on guild asset uploads.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -22,6 +21,15 @@ describe("guild asset uploads enforce the sender-scoped media policy", () => {
   let allowedFile: string;
   let deniedFile: string;
 
+  const options = (rest: ReturnType<typeof makeDiscordRest>["rest"]) => ({
+    cfg,
+    rest,
+    token: "tok",
+    mediaLocalRoots: [senderRoot],
+  });
+  const asset = (mediaUrl: string) => ({ guildId: "g1", name: "blob", mediaUrl });
+  const sticker = (mediaUrl: string) => ({ ...asset(mediaUrl), description: "sticker", tags: "x" });
+
   beforeAll(async () => {
     // The denied source lives under a default media root, so only the sender-scoped
     // policy can keep it out of the outbound upload.
@@ -44,57 +52,35 @@ describe("guild asset uploads enforce the sender-scoped media policy", () => {
 
   it("rejects an emoji source outside the sender roots without issuing a request", async () => {
     const { rest, postMock } = makeDiscordRest();
-    await expect(
-      uploadEmojiDiscord(
-        { guildId: "g1", name: "denied_blob", mediaUrl: deniedFile },
-        { cfg, rest, token: "tok", mediaLocalRoots: [senderRoot] },
-      ),
-    ).rejects.toThrow(/not under an allowed directory/i);
+    await expect(uploadEmojiDiscord(asset(deniedFile), options(rest))).rejects.toThrow(
+      /not under an allowed directory/i,
+    );
     expect(postMock).not.toHaveBeenCalled();
   });
 
   it("uploads an emoji source inside the sender roots", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "e1" });
-    await uploadEmojiDiscord(
-      { guildId: "g1", name: "allowed_blob", mediaUrl: allowedFile, roleIds: ["r1"] },
-      { cfg, rest, token: "tok", mediaLocalRoots: [senderRoot] },
-    );
+    await uploadEmojiDiscord({ ...asset(allowedFile), roleIds: ["r1"] }, options(rest));
     const body = requestBody(postMock as unknown as MockCallSource);
-    expect(body.image).toBe(`data:image/png;base64,${PNG_BYTES.toString("base64")}`);
-    expect(body.roles).toEqual(["r1"]);
+    expect(body).toMatchObject({
+      image: `data:image/png;base64,${PNG_BYTES.toString("base64")}`,
+      roles: ["r1"],
+    });
   });
 
   it("rejects a sticker source outside the sender roots without issuing a request", async () => {
     const { rest, postMock } = makeDiscordRest();
-    await expect(
-      uploadStickerDiscord(
-        {
-          guildId: "g1",
-          name: "denied_blob",
-          description: "denied",
-          tags: "x",
-          mediaUrl: deniedFile,
-        },
-        { cfg, rest, token: "tok", mediaLocalRoots: [senderRoot] },
-      ),
-    ).rejects.toThrow(/not under an allowed directory/i);
+    await expect(uploadStickerDiscord(sticker(deniedFile), options(rest))).rejects.toThrow(
+      /not under an allowed directory/i,
+    );
     expect(postMock).not.toHaveBeenCalled();
   });
 
   it("uploads a sticker source inside the sender roots", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "s1" });
-    await uploadStickerDiscord(
-      {
-        guildId: "g1",
-        name: "allowed_blob",
-        description: "allowed",
-        tags: "x",
-        mediaUrl: allowedFile,
-      },
-      { cfg, rest, token: "tok", mediaLocalRoots: [senderRoot] },
-    );
+    await uploadStickerDiscord(sticker(allowedFile), options(rest));
     const body = requestBody(postMock as unknown as MockCallSource);
     const files = body.files as Array<{ data: Buffer }>;
     expect(files[0]?.data).toEqual(PNG_BYTES);

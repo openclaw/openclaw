@@ -7,12 +7,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import deepinfraPlugin from "./index.js";
 
 const fetchMock = vi.fn<typeof fetch>();
+const defaultBaseUrl = "https://api.deepinfra.com/v1/openai";
+const defaultModel = "BAAI/bge-m3";
+const defaultIdentity = { provider: "deepinfra", model: defaultModel };
+const firstVector = [1, 0];
+const vectors = [firstVector, [0, 1]];
+const embeddingResponse = (values: number[][]) =>
+  Response.json({
+    data: values.map((embedding, index) => ({ index, embedding })).toReversed(),
+  });
+function expectEmbeddingRequest(model: string, input: string[]) {
+  expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+    `${defaultBaseUrl}/embeddings`,
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ model, input }) }),
+  );
+}
 
-async function createProvider(options: EmbeddingProviderCreateOptions) {
+type Remote = NonNullable<EmbeddingProviderCreateOptions["remote"]>;
+async function createProvider(remote: Remote = {}, model = defaultModel) {
   const captured = createCapturedPluginRegistration();
   deepinfraPlugin.register(captured.api);
-  const adapter = requireRegisteredProvider(captured.embeddingProviders, "deepinfra");
-  const result = await adapter.create(options);
+  const result = await requireRegisteredProvider(captured.embeddingProviders, "deepinfra").create({
+    config: {},
+    model,
+    remote: { apiKey: "fixture-key", ...remote },
+  });
   if (!result.provider) {
     throw new Error("DeepInfra embedding provider missing");
   }
@@ -21,19 +40,12 @@ async function createProvider(options: EmbeddingProviderCreateOptions) {
 
 describe("DeepInfra generic embedding adapter", () => {
   beforeEach(() => {
-    fetchMock
-      .mockReset()
-      .mockResolvedValue(Response.json({ data: [{ index: 0, embedding: [1, 0] }] }));
+    fetchMock.mockReset().mockResolvedValue(embeddingResponse([firstVector]));
     vi.stubGlobal("fetch", fetchMock);
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
-    for (const name of [
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-    ]) {
+    for (const name of "HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy".split(
+      " ",
+    )) {
       vi.stubEnv(name, undefined);
     }
   });
@@ -43,135 +55,75 @@ describe("DeepInfra generic embedding adapter", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([undefined, "https://API.DEEPINFRA.COM:443/v1/openai/"])(
-    "preserves the exact existing default identity for %s",
-    async (baseUrl) => {
-      const result = await createProvider({
-        config: {},
-        model: "BAAI/bge-m3",
-        remote: { apiKey: "fixture-default-key", ...(baseUrl ? { baseUrl } : {}) },
-      });
-
-      expect(result.runtime?.cacheKeyData).toEqual({
+  it.each([
+    [undefined, defaultModel, undefined, defaultIdentity],
+    ["https://API.DEEPINFRA.COM:443/v1/openai/", defaultModel, undefined, defaultIdentity],
+    [
+      defaultBaseUrl,
+      "deepinfra/custom-model",
+      { "x-deployment": "tenant-a" },
+      {
         provider: "deepinfra",
-        model: "BAAI/bge-m3",
+        model: "custom-model",
+        baseUrl: defaultBaseUrl,
+        headers: [["x-deployment", "tenant-a"]],
+      },
+    ],
+  ] as const)(
+    "preserves routing and runtime identity for %s (%s)",
+    async (baseUrl, model, headers, cacheKeyData) => {
+      const result = await createProvider({ baseUrl, headers }, model);
+      expect(result.runtime).toEqual({ id: "deepinfra", cacheKeyData });
+      await expect(result.provider.embed({ text: "doc" })).resolves.toEqual(firstVector);
+      expectEmbeddingRequest(cacheKeyData.model, ["doc"]);
+      expect(Object.fromEntries(new Headers(fetchMock.mock.calls[0]?.[1]?.headers))).toMatchObject({
+        authorization: "Bearer fixture-key",
+        ...headers,
       });
     },
   );
 
-  it("creates the configured model and preserves routing and runtime identity", async () => {
-    const options = {
-      config: {},
-      agentDir: "/tmp/openclaw-agent",
-      provider: "deepinfra",
-      remote: {
-        baseUrl: "https://api.deepinfra.com/v1/openai",
-        apiKey: "fixture-key",
-        headers: { "x-deployment": "tenant-a" },
-      },
-      model: "deepinfra/custom-model",
-      inputType: "semantic",
-      queryInputType: "query",
-      documentInputType: "document",
-      dimensions: 1024,
-      taskType: "SEMANTIC_SIMILARITY",
-    };
-    const result = await createProvider(options);
-    await expect(result.provider.embed({ text: "synthetic document" })).resolves.toEqual([1, 0]);
-    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      "https://api.deepinfra.com/v1/openai/embeddings",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ model: "custom-model", input: ["synthetic document"] }),
-      }),
-    );
-    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("authorization")).toBe("Bearer fixture-key");
-    expect(headers.get("x-deployment")).toBe("tenant-a");
-    expect(result.runtime).toEqual({
-      id: "deepinfra",
-      cacheKeyData: {
-        provider: "deepinfra",
-        model: "custom-model",
-        baseUrl: "https://api.deepinfra.com/v1/openai",
-        headers: [["x-deployment", "tenant-a"]],
-      },
-    });
-  });
-
   it("keeps multiple query inputs in one request and returns vectors in input order", async () => {
-    fetchMock.mockResolvedValueOnce(
-      Response.json({
-        data: [
-          { index: 1, embedding: [0, 1] },
-          { index: 0, embedding: [1, 0] },
-        ],
-      }),
-    );
-    const { provider } = await createProvider({
-      config: {},
-      model: "BAAI/bge-m3",
-      remote: { apiKey: "fixture-key" },
-    });
+    fetchMock.mockResolvedValueOnce(embeddingResponse(vectors));
+    const { provider } = await createProvider();
     await expect(
       provider.embedBatch(["first query", "second query"], { inputType: "query" }),
-    ).resolves.toEqual([
-      [1, 0],
-      [0, 1],
-    ]);
-    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      "https://api.deepinfra.com/v1/openai/embeddings",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ model: "BAAI/bge-m3", input: ["first query", "second query"] }),
-      }),
-    );
+    ).resolves.toEqual(vectors);
+    expectEmbeddingRequest(defaultModel, ["first query", "second query"]);
   });
 
   it("partitions endpoints and tenants while excluding rotated credentials", async () => {
-    const baseUrl = "https://deepinfra-region-a.example.test/v1/openai";
-    const createForTenant = async (
-      tenant: string,
-      endpoint = baseUrl,
-      apiKey = "fixture-deepinfra-key-before",
-      headers: Record<string, string> = {},
-    ) =>
-      await createProvider({
-        config: {},
-        model: "BAAI/bge-m3",
-        remote: {
-          baseUrl: endpoint,
-          apiKey,
-          headers: { "x-deployment": "deployment-a", "X-Tenant": tenant, ...headers },
+    const baseUrl = "https://region-a.example.test/v1/openai";
+    const createForTenant = async (tenant = "tenant-a", endpoint = baseUrl, rotated = false) => {
+      const phase = rotated ? "after" : "before";
+      return await createProvider({
+        baseUrl: endpoint,
+        apiKey: `fixture-deepinfra-key-${phase}`,
+        headers: {
+          "x-deployment": "deployment-a",
+          "X-Tenant": tenant,
+          version: "tenant-api-v1",
+          [rotated ? "x-aPI-kEY" : "X-Api-Key"]: `fixture-proxy-key-${phase}`,
+          [rotated ? "Api-Key" : "api-key"]: `fixture-azure-key-${phase}`,
         },
       });
-
-    const first = await createForTenant("tenant-a", baseUrl, "fixture-deepinfra-key-before", {
-      "X-Api-Key": "fixture-proxy-key-before",
-      "api-key": "fixture-azure-key-before",
-      version: "tenant-api-v1",
-    });
-    const rotated = await createForTenant("tenant-a", baseUrl, "fixture-deepinfra-key-after", {
-      version: "tenant-api-v1",
-      "Api-Key": "fixture-azure-key-after",
-      "x-aPI-kEY": "fixture-proxy-key-after",
-    });
+    };
+    const first = await createForTenant();
+    const rotated = await createForTenant("tenant-a", baseUrl, true);
     const otherTenant = await createForTenant("tenant-b");
-    const otherEndpoint = await createForTenant(
-      "tenant-a",
-      "https://deepinfra-region-b.example.test/v1/openai",
-    );
+    const otherEndpoint = await createForTenant("tenant-a", "https://b.test/v1/openai");
     await first.provider.embed("tenant document");
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`${baseUrl}/embeddings`, expect.any(Object));
-    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("authorization")).toBe("Bearer fixture-deepinfra-key-before");
-    expect(headers.get("x-api-key")).toBe("fixture-proxy-key-before");
-    expect(headers.get("api-key")).toBe("fixture-azure-key-before");
-    expect(headers.get("x-deployment")).toBe("deployment-a");
-    expect(headers.get("x-tenant")).toBe("tenant-a");
+    expect(Object.fromEntries(new Headers(fetchMock.mock.calls[0]?.[1]?.headers))).toMatchObject({
+      authorization: "Bearer fixture-deepinfra-key-before",
+      "x-api-key": "fixture-proxy-key-before",
+      "api-key": "fixture-azure-key-before",
+      "x-deployment": "deployment-a",
+      "x-tenant": "tenant-a",
+    });
     expect(first.runtime?.cacheKeyData).toMatchObject({
       provider: "deepinfra",
-      model: "BAAI/bge-m3",
+      model: defaultModel,
       baseUrl,
       headers: expect.arrayContaining([
         ["x-deployment", "deployment-a"],

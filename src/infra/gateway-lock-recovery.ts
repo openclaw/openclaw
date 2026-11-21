@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
@@ -13,6 +14,11 @@ import {
   inspectGatewayRecoveryLease,
   removeGatewayRecoveryLease,
 } from "./gateway-lock-recovery-lease.js";
+import {
+  assertPostgresGatewayRecoveryMutationSupported,
+  inspectPostgresGatewayRecovery,
+  recoverPostgresGatewayLease,
+} from "./gateway-lock-recovery-postgres.js";
 import { resolveGatewayLockPaths, resolveGatewayOwnerStatus } from "./gateway-lock.js";
 import { decodeGatewayOwnerLease } from "./gateway-owner-lease.read.js";
 import { defaultPayload } from "./gateway-state-owner-record.js";
@@ -63,9 +69,12 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
     observed: readObservedFile(pathname),
   }));
   const databasePath = resolveOpenClawStateSqlitePath(env);
-  const lease = await inspectGatewayRecoveryLease(databasePath);
+  const postgres = isStatePostgres()
+    ? await inspectPostgresGatewayRecovery(databasePath)
+    : undefined;
+  const lease = postgres ? postgres.lease : await inspectGatewayRecoveryLease(databasePath);
   const confirmation = createHash("sha256")
-    .update(JSON.stringify({ databasePath, files, lease }))
+    .update(JSON.stringify({ databasePath, files, lease, postgres }))
     .digest("hex");
   const holders = files.flatMap(({ observed }) =>
     observed
@@ -76,41 +85,55 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
   );
   if (lease) {
     holders.push(
-      `SQLite Gateway owner lease: ${describeGatewayLockHolder(decodeGatewayOwnerLease(lease) ?? {}, undefined, "unknown")}`,
+      `${postgres ? "PostgreSQL" : "SQLite"} Gateway owner lease: ${describeGatewayLockHolder(decodeGatewayOwnerLease(lease) ?? {}, undefined, "unknown")}`,
     );
   }
-  return { databasePath, files, lease, confirmation, holders, present: holders.length > 0 };
+  return {
+    databasePath,
+    files,
+    lease,
+    postgres,
+    confirmation,
+    holders,
+    present: holders.length > 0,
+  };
 }
 
 /** Explicit operator confirmation is bound to file identity, bytes, heartbeat and lease facts. */
-export async function recoverGatewayLock(options: {
-  env?: NodeJS.ProcessEnv;
-  confirmation: string;
-}) {
-  const inspection = await inspectGatewayLockRecovery(options);
+export async function recoverGatewayLock(options: { confirmation: string }) {
+  const inspection = await inspectGatewayLockRecovery();
   if (inspection.confirmation !== options.confirmation) {
     throw new Error(
       "Gateway lock or heartbeat changed since inspection; run `openclaw gateway recover-lock` again.",
     );
+  }
+  if (inspection.postgres) {
+    assertPostgresGatewayRecoveryMutationSupported(inspection.postgres);
   }
   if (!inspection.present) {
     return { recovered: false, removed: 0 };
   }
   assertGatewayRecoveryLeaseNotLive(inspection.lease);
   for (const { observed } of inspection.files) {
+    if (!observed?.holder) {
+      continue;
+    }
+    const status = await resolveGatewayOwnerStatus(
+      observed.holder.pid,
+      observed.holder,
+      process.platform,
+      {
+        lockPath: observed.path,
+      },
+    );
     if (
-      observed?.holder &&
-      (await resolveGatewayOwnerStatus(
-        observed.holder.pid,
-        observed.holder,
-        process.platform,
-        undefined,
-        undefined,
-        { lockPath: observed.path },
-      )) === "alive"
+      status === "alive" ||
+      (status !== "dead" &&
+        process.platform === "win32" &&
+        observed.holder.processNamespace === undefined)
     ) {
       throw new Error(
-        `Gateway holder ${observed.holder.pid} is still live; stop it before recovering its lock.`,
+        `Gateway holder ${observed.holder.pid} ${status === "alive" ? "is still live" : "could not be verified dead"}; stop it before recovering its lock.`,
       );
     }
   }
@@ -149,9 +172,17 @@ export async function recoverGatewayLock(options: {
       payload,
     });
     custody = acquiredCustody;
-    acquiredCustody.run(() =>
-      removeGatewayRecoveryLease(inspection.databasePath, inspection.lease, acquiredCustody),
-    );
+    if (inspection.postgres) {
+      await recoverPostgresGatewayLease(
+        inspection.databasePath,
+        inspection.postgres,
+        acquiredCustody,
+      );
+    } else {
+      acquiredCustody.run(() =>
+        removeGatewayRecoveryLease(inspection.databasePath, inspection.lease, acquiredCustody),
+      );
+    }
   } catch (error) {
     errors.push(error);
   }

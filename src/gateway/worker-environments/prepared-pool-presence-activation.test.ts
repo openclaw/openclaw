@@ -5,11 +5,12 @@ import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.
 import {
   PREPARATION_KEY,
   PROJECT_KEY,
+  PRESENCE_REPOSITORY as repository,
+  presenceDemand,
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 describe("activation demand overlapping presence admission", () => {
   const fixture = usePreparedPoolFixture();
@@ -22,28 +23,7 @@ describe("activation demand overlapping presence admission", () => {
   ] as const)(
     "uses only $activation activation while presence admission is $failure",
     async ({ failure, activation }) => {
-      const repository: RepositoryWorkerProjectSnapshot = {
-        key: PROJECT_KEY,
-        baseCommit: "d".repeat(40),
-        source: {
-          kind: "repository",
-          url: "https://github.com/acme/private-repo.git",
-          repositoryId: "R_acme_private_repo",
-          owner: {
-            agent: { agentId: "main", provenance: null },
-            identity: { source: "anonymous" },
-          },
-        },
-      };
-      let demand: PreparedPoolPresenceDemand | undefined = {
-        revision: 1,
-        profileId: "development",
-        requestedRef: "main",
-        preparationKey: PREPARATION_KEY,
-        project: repository,
-        lastPresentAtMs: 1_000,
-        retireAtMs: null,
-      };
+      let demand: PreparedPoolPresenceDemand | undefined = presenceDemand();
       fixture.developmentProfile.readyWorkers = 2;
       const seedPresenceReserve = (id: string, preparationKey = PREPARATION_KEY) =>
         fixture.seed(id, {
@@ -65,10 +45,8 @@ describe("activation demand overlapping presence admission", () => {
       await fixture.attach(
         await fixture.ready(await fixture.seed("other-source", { projectKey: otherKey })),
       );
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const { entered, release } = fixture.gate();
       const otherProgressed = createDeferredCore();
-      fixture.releases.push(() => release.resolve());
       const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>(async (_profileId, options) => {
         if (options.repository) {
           entered.resolve();

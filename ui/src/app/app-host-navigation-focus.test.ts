@@ -2,10 +2,10 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createConnectedShellOwner as createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
 import {
   handleNavDrawerKeydown,
   NAV_DRAWER_TOGGLE_REGISTRATION,
-  navDrawerFocusableElements,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
 import { registerRouteElement, RouteElements, type RouteElementEvent } from "./route-elements.ts";
@@ -16,11 +16,8 @@ function keydown(init: KeyboardEventInit) {
   return new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
 }
 
-it.each([
-  { open: false, via: "direct" },
-  { open: true, via: "direct" },
-  { open: true, via: "shortcut" },
-])("restores drawer focus only when it was open ($open, $via)", ({ open, via }) => {
+it.each(["closed", "direct", "shortcut", "new-session"])("restores drawer focus via %s", (via) => {
+  const open = via !== "closed";
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
   const shell = createShellOwner();
@@ -33,7 +30,14 @@ it.each([
   composer.focus();
   Object.assign(shell, { navDrawerOpen: open, navDrawerTrigger: open ? trigger : null });
   onTestFinished(() => shell.element.remove());
-  if (via === "shortcut") {
+  if (via === "new-session") {
+    trigger.focus();
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
+    shell.runtime = runtime;
+    vi.spyOn(runtime.context, "navigate").mockImplementation(() => composer.focus());
+    shell.shellNavigation.openNewSession("main");
+  } else if (via === "shortcut") {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
     const mac = navigator.platform.startsWith("Mac");
     const event = keydown({ key: "b", code: "KeyB", ctrlKey: !mac, metaKey: mac });
@@ -44,7 +48,8 @@ it.each([
   for (const frame of frames) {
     frame(0);
   }
-  expect(document.activeElement).toBe(open ? trigger : composer);
+  expect(document.activeElement).toBe(open && via !== "new-session" ? trigger : composer);
+  expect(shell.navDrawerOpen).toBe(false);
 });
 
 it("wraps Tab across composed drawer controls using the modal focus order", () => {
@@ -61,7 +66,6 @@ it("wraps Tab across composed drawer controls using the modal focus order", () =
   drawer.addEventListener("keydown", (event) => handleNavDrawerKeydown(host, event));
   document.body.append(drawer);
   onTestFinished(() => drawer.remove());
-  expect(navDrawerFocusableElements(drawer)).toEqual([first, last]);
   for (const [from, to, shiftKey, root] of [
     [last, first, false, document],
     [first, last, true, shadow],
@@ -74,14 +78,13 @@ it("wraps Tab across composed drawer controls using the modal focus order", () =
   }
 });
 it("selects live registered drawer toggles in visible DOM order", () => {
-  const root = document.createElement("main");
+  const root = document.body.appendChild(document.createElement("main"));
   const elements = new RouteElements();
   root.addEventListener("openclaw-route-element", (event) =>
     elements.register(event as RouteElementEvent),
   );
   const topbar = root.appendChild(document.createElement("button"));
   const chat = root.appendChild(document.createElement("button"));
-  document.body.append(root);
   let topbarVisible = true;
   Object.defineProperty(topbar, "checkVisibility", { value: () => topbarVisible });
   Object.defineProperty(chat, "checkVisibility", { value: () => true });

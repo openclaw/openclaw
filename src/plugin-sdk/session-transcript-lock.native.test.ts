@@ -9,10 +9,8 @@ import {
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
-import {
-  appendTranscriptMessageSync,
-  withTranscriptWriteLock,
-} from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { withTranscriptWriteLock } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import type {
   LockedTranscriptMessageAppendOptions,
   SessionTranscriptWriteLockAccessorContext,

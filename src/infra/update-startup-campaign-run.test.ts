@@ -67,6 +67,25 @@ vi.mock("./restart.js", async (importOriginal) => ({
 }));
 
 const campaigns = new Set<UpdateCampaignController>();
+const successor = {
+  kind: "managed-update-handoff",
+  handoffId: "auto-handoff-id",
+  installRoot: "/opt/openclaw",
+};
+
+function runAdmittedUpdate(runId: string, log = { info: vi.fn() }) {
+  return runAutoUpdateCommand(
+    {
+      runId,
+      channel: "beta",
+      mode: "npm",
+      root: "/opt/openclaw",
+      timeoutMs: 1_000,
+      restartDrainTimeoutMs: undefined,
+    },
+    log,
+  );
+}
 
 function doctorFacts(message: string) {
   return [{ check: "doctor", code: "doctor-failed", message }];
@@ -141,25 +160,15 @@ describe("automatic campaign handoff failure", () => {
   it("records the refusal in the failed phase even when later diagnostics are unavailable", async () => {
     const reason = "update-recovery-pending";
     const message = "Package publication recovery permissions are unsafe: activation mode 0750.";
-    const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+    const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
     start.mockImplementationOnce(async () => {
       await failWorkerWrite("diagnostic ledger is read-only", true);
       throw new UpdatePreMutationError(reason, message);
     });
-    const outcome = await runAutoUpdateCommand(
-      {
-        runId: run.runId,
-        channel: "beta",
-        mode: "npm",
-        root: "/opt/openclaw",
-        timeoutMs: 1_000,
-        restartDrainTimeoutMs: undefined,
-      },
-      { info: vi.fn() },
-    );
+    const outcome = await runAdmittedUpdate(runId);
     expect(outcome).toMatchObject({ status: "failed", result: { reason } });
     expect(outcome).toHaveProperty("message", expect.stringContaining(`${reason}: ${message}`));
-    finishUpdateRun(run.runId, { status: "failed", reason });
+    finishUpdateRun(runId, { status: "failed", reason });
     const recorded = expectDefined(listUpdateRuns()[0], "failed automatic update run");
     expect(recorded.steps).toContainEqual(
       expect.objectContaining({
@@ -182,75 +191,83 @@ describe("automatic campaign handoff failure", () => {
     "different check",
     "different detail",
     "transient metadata",
-  ] as const)(
-    "backs off only identical candidate Doctor failures across restart: %s",
-    async (resume) => {
-      const log = { info: vi.fn() };
-      const step: UpdateStepResult = {
-        name: "candidate-doctor",
-        command: "doctor",
-        cwd: "/private/candidate",
-        durationMs: 10,
-        exitCode: 1,
-        stderrTail: "Plugin dependency is outside the temporary update copy: chromium-bidi",
-      };
-      const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
-        status: "failed",
-        message: "Candidate Doctor failed.",
-        result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
-      };
-      const runAuto = vi.fn<AutoUpdateRunner>(async () => structuredClone(outcome));
-      const attempt = async (version = "2.0.0-beta.1") => {
-        const campaign = createApplyingCampaign(version);
-        try {
-          return await runBetaCampaign({ version, log, campaign, runAuto });
-        } finally {
-          campaign.clear();
-        }
-      };
-      if (resume === "transient metadata") {
-        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Abc123 (5ms)");
+    "rolled back",
+  ] as const)("backs off only identical activation failures across restart: %s", async (resume) => {
+    const log = { info: vi.fn() };
+    const step: UpdateStepResult = {
+      name: "openclaw doctor",
+      command: "doctor",
+      cwd: "/private/candidate",
+      durationMs: 10,
+      exitCode: 1,
+      stderrTail: "Plugin dependency is unavailable: chromium-bidi",
+    };
+    const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
+      status: "failed",
+      message: "Doctor failed after activation.",
+      result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
+    };
+    const runAuto = vi.fn<AutoUpdateRunner>(async ({ runId }) => {
+      if (resume === "rolled back") {
+        // The updater's terminal owner records a restored previous release as rolled-back.
+        finishUpdateRun(runId, {
+          status: "rolled-back",
+          reason: outcome.result.reason,
+          diagnostics: outcome.result,
+        });
       }
-      await attempt();
-      if (resume === "different reason") {
-        outcome.result.reason = "candidate-checks-timeout";
-      } else if (resume === "different check") {
-        step.name = "candidate-doctor-lint";
-      } else if (resume === "different detail") {
-        step.stderrTail = "A different dependency is unavailable: kerberos";
-      } else if (resume === "transient metadata") {
-        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Def456 (19ms)");
+      return structuredClone(outcome);
+    });
+    const attempt = async (version = "2.0.0-beta.1") => {
+      const campaign = createApplyingCampaign(version);
+      try {
+        return await runBetaCampaign({ version, log, campaign, runAuto });
+      } finally {
+        campaign.clear();
       }
-      await attempt();
-      expect(runAuto).toHaveBeenCalledTimes(2);
-      const failures = listUpdateRuns();
-      expect(failures).toHaveLength(2);
-      await closeStateDatabaseForTest();
-      await attempt();
-      if (resume.startsWith("different")) {
-        expect(runAuto).toHaveBeenCalledTimes(3);
-        return;
-      }
-      expect(runAuto).toHaveBeenCalledTimes(2);
-      expect(listUpdateRuns()).toHaveLength(2);
-      expect(log.info).toHaveBeenCalledWith(
-        expect.stringContaining("Automatic updates paused after repeated candidate-doctor failure"),
-        expect.objectContaining({
-          version: "2.0.0-beta.1",
-          runIds: failures.map((run) => run.runId),
-          nextAction: expect.stringContaining("openclaw update"),
-        }),
-      );
-      if (resume === "manual update") {
-        const manual = createUpdateRun({ trigger: "cli" });
-        finishUpdateRun(manual.runId, { status: "failed", reason: "doctor-failed" });
-      }
-      await attempt(resume === "new candidate" ? "2.0.0-beta.2" : undefined);
-      expect(runAuto).toHaveBeenCalledTimes(
-        resume === "new candidate" || resume === "manual update" ? 3 : 2,
-      );
-    },
-  );
+    };
+    if (resume === "transient metadata") {
+      step.failureFacts = doctorFacts("Check failed (5ms)");
+    }
+    await attempt();
+    if (resume === "different reason") {
+      outcome.result.reason = "candidate-checks-timeout";
+    } else if (resume === "different check") {
+      step.name = "activated-gateway-startup";
+    } else if (resume === "different detail") {
+      step.stderrTail = "A different dependency is unavailable: kerberos";
+    } else if (resume === "transient metadata") {
+      step.failureFacts = doctorFacts("Check failed (19ms)");
+    }
+    await attempt();
+    expect(runAuto).toHaveBeenCalledTimes(2);
+    const failures = listUpdateRuns();
+    expect(failures).toHaveLength(2);
+    await closeStateDatabaseForTest();
+    await attempt();
+    if (resume.startsWith("different")) {
+      expect(runAuto).toHaveBeenCalledTimes(3);
+      return;
+    }
+    expect(runAuto).toHaveBeenCalledTimes(2);
+    expect(listUpdateRuns()).toHaveLength(2);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Automatic updates paused after repeated activation failure"),
+      expect.objectContaining({
+        version: "2.0.0-beta.1",
+        runIds: failures.map((run) => run.runId),
+        nextAction: expect.stringContaining("openclaw update"),
+      }),
+    );
+    if (resume === "manual update") {
+      const manual = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(manual.runId, { status: "failed", reason: "doctor-failed" });
+    }
+    await attempt(resume === "new candidate" ? "2.0.0-beta.2" : undefined);
+    expect(runAuto).toHaveBeenCalledTimes(
+      resume === "new candidate" || resume === "manual update" ? 3 : 2,
+    );
+  });
 
   it("does not clear a replacement campaign after sentinel settlement", async () => {
     const campaign = createApplyingCampaign();
@@ -302,7 +319,7 @@ describe("automatic campaign handoff failure", () => {
   it.each(["state", "diagnostics"] as const)(
     "cancels a rejected transfer when %s persistence fails",
     async (failure) => {
-      const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+      const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
       const log = { info: vi.fn() };
       cancel.mockResolvedValueOnce("restored-in-process");
       transfer.mockImplementationOnce(async () => {
@@ -310,22 +327,8 @@ describe("automatic campaign handoff failure", () => {
         throw new Error("pipe closed");
       });
 
-      const outcome = await runAutoUpdateCommand(
-        {
-          runId: run.runId,
-          channel: "beta",
-          mode: "npm",
-          root: "/opt/openclaw",
-          timeoutMs: 1_000,
-          restartDrainTimeoutMs: undefined,
-        },
-        log,
-      );
-      expect(cancel).toHaveBeenCalledExactlyOnceWith({
-        kind: "managed-update-handoff",
-        handoffId: "auto-handoff-id",
-        installRoot: "/opt/openclaw",
-      });
+      const outcome = await runAdmittedUpdate(runId, log);
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
       expect(outcome).toMatchObject({
         status: "failed",
         result: {
@@ -399,11 +402,7 @@ describe("automatic campaign handoff failure", () => {
           failureFacts: matchingObject({ code: "Error" }),
         }),
       );
-      expect(cancel).toHaveBeenCalledExactlyOnceWith({
-        kind: "managed-update-handoff",
-        handoffId: "auto-handoff-id",
-        installRoot: "/opt/openclaw",
-      });
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
       expect(restart).not.toHaveBeenCalled();
       const run = expectDefined(listUpdateRuns()[0], "finished campaign run");
       expect(run).toMatchObject({

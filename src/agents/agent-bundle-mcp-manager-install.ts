@@ -104,14 +104,18 @@ export function createSessionMcpRuntimeManagerInstall(
   /** Install under the runtime-key queue shared by acquisition and disposal. */
   const getOrCreateRuntimeEntry = async (
     params: RuntimeEntryParams,
+    config: ReturnType<typeof loadSessionMcpConfig>,
   ): Promise<SessionMcpRuntime> => {
-    const config = loadSessionMcpConfig({ ...params, logDiagnostics: false });
     const nextFingerprint = requesterRuntimeFingerprint(
       config.fingerprint,
       params.requesterConnect,
     );
     const hasServers = Object.keys(config.loaded.mcpServers).length > 0;
-    const { runtimeKey, configReloadAtAdmission, ...runtimeParams } = params;
+    const { runtimeKey, configReloadAtAdmission, ...input } = params;
+    const runtimeParams = {
+      ...input,
+      lastListedCatalogByServerIdentity: store.lastListedCatalogByServerIdentity,
+    };
     const catalogBinding = {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -196,7 +200,10 @@ export function createSessionMcpRuntimeManagerInstall(
     },
   ): Promise<SessionMcpRuntime> => {
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
-    const runtime = await getOrCreateRuntimeEntry(params);
+    const runtime = await getOrCreateRuntimeEntry(
+      params,
+      loadSessionMcpConfig({ ...params, logDiagnostics: false }),
+    );
     if (store.runtimesBySessionId.get(params.runtimeKey) === runtime) {
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
         connectionHash,

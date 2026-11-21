@@ -1,14 +1,13 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
-import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
+// mock-isolation: Supply transcript rows without real session state; the adjacent SQLite suite covers persistence.
 vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(),
+  readRecentUserAssistantTurnsForSession: vi.fn(),
 }));
 
 const readRecent = vi.mocked(readRecentUserAssistantTextForSession);
@@ -23,10 +22,6 @@ function transcriptPair(question: string, reply: string) {
 function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
     Body: "continue",
-    RawBody: "continue",
-    CommandBody: "continue",
-    From: "slack:channel:C1",
-    To: "channel:C1",
     SessionKey: "agent:main:slack:channel:c1",
     AgentId: "main",
     Provider: "slack",
@@ -43,44 +38,51 @@ function chatWindow(messages: object[], overrides: Partial<WindowEntry> = {}) {
 }
 
 describe("session transcript inbound context", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
   beforeEach(() => {
     readRecent.mockReset();
   });
 
-  async function merged(overrides: Partial<FinalizedMsgContext> = {}, agentId = "main") {
+  async function merged(
+    overrides: Partial<FinalizedMsgContext> = {},
+    agentId = "main",
+    recordSessionKey?: string,
+  ) {
     const ctx = context(overrides);
     await mergeSessionTranscriptContext({
       agentId,
       ctx,
-      sessionKey: ctx.SessionKey!,
+      sessionKey: recordSessionKey ?? ctx.SessionKey!,
       storePath: "/tmp/sessions.json",
     });
     return ctx;
   }
 
-  async function runTurn(ctx: FinalizedMsgContext, channel = "slack", render?: () => string) {
-    let prompt = "";
-    await runPreparedChannelTurn({
-      channel,
-      routeSessionKey: ctx.SessionKey!,
-      storePath: path.join(tempDirs.make("openclaw-session-transcript-context-"), "sessions.json"),
-      ctxPayload: ctx,
-      recordInboundSession: vi.fn(async () => undefined),
-      runDispatch: vi.fn(async () => {
-        prompt = render?.() ?? "";
-        return { queuedFinal: false };
-      }),
-    });
-    return prompt;
-  }
-
-  it("restores Slack assistant context when the live window is empty after restart", async () => {
+  it("does not repeat turns the running session already replays in flat history", async () => {
     readRecent.mockResolvedValue(transcriptPair("deploy at noon", "remind at 11:50"));
-    const ctx = context();
-    await runTurn(ctx);
+    const live = [{ messageId: "m2", sender: "Bob", body: "unseen side note", timestamp: 3_000 }];
+    for (const SessionTranscriptContext of [
+      { historyLimit: 3 },
+      { historyLimit: 3, historyKind: "pending" as const },
+    ]) {
+      const empty = await merged({ SessionTranscriptContext });
+      expect(empty.InboundHistory).toBeUndefined();
+      const pending = await merged({ SessionTranscriptContext, InboundHistory: [...live] });
+      expect(pending.InboundHistory).toEqual(live);
+      const prompt = buildInboundUserContextPrefix(pending);
+      expect(prompt).toContain("unseen side note");
+      expect(prompt).not.toContain("deploy at noon");
+      expect(prompt).not.toContain("remind at 11:50");
+    }
+    expect(readRecent).not.toHaveBeenCalled();
+  });
 
+  it("restores another session's transcript turns when the record session differs", async () => {
+    readRecent.mockResolvedValue(transcriptPair("deploy at noon", "remind at 11:50"));
+    const ctx = await merged({}, "main", "agent:main:slack:channel:c1:thread:1");
+
+    expect(readRecent.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: "agent:main:slack:channel:c1:thread:1",
+    });
     expect(ctx.InboundHistory).toEqual([
       { messageId: "session:u1", sender: "User", body: "deploy at noon", timestamp: 1_000 },
       { messageId: "session:a1", sender: "Assistant", body: "remind at 11:50", timestamp: 2_000 },
@@ -89,7 +91,7 @@ describe("session transcript inbound context", () => {
 
   it("renders the configured native window without restoring stale transcript content", async () => {
     readRecent.mockResolvedValue([{ role: "user", text: "deleted platform message" }]);
-    const ctx = context({
+    const ctx = await merged({
       ChatType: "channel",
       SessionTranscriptContext: { historyLimit: 50, historyKind: "recent" },
       InboundHistory: Array.from({ length: 55 }, (_, index) => ({
@@ -98,7 +100,7 @@ describe("session transcript inbound context", () => {
         timestamp: index,
       })),
     });
-    const prompt = await runTurn(ctx, "slack", () => buildInboundUserContextPrefix(ctx));
+    const prompt = buildInboundUserContextPrefix(ctx);
     expect(prompt.match(/native-line-\d{2}/g)).toEqual(
       Array.from({ length: 50 }, (_, index) => `native-line-${String(index + 5).padStart(2, "0")}`),
     );
@@ -123,12 +125,16 @@ describe("session transcript inbound context", () => {
 
   it("dedupes the canonical turn against the live window and merges chronologically", async () => {
     readRecent.mockResolvedValue(transcriptPair("cached user turn", "canonical reply"));
-    const ctx = await merged({
-      InboundHistory: [
-        { sender: "Alice", body: "cached user turn", timestamp: 1_000, messageId: "m1" },
-        { sender: "Alice", body: "new live turn", timestamp: 3_000, messageId: "m2" },
-      ],
-    });
+    const ctx = await merged(
+      {
+        InboundHistory: [
+          { sender: "Alice", body: "cached user turn", timestamp: 1_000, messageId: "m1" },
+          { sender: "Alice", body: "new live turn", timestamp: 3_000, messageId: "m2" },
+        ],
+      },
+      "main",
+      "agent:main:slack:channel:c1:thread:1",
+    );
 
     expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
       "cached user turn",
@@ -162,6 +168,7 @@ describe("session transcript inbound context", () => {
     });
 
     expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeCronDirectDeliveryContext");
+    expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeMessageToolSourceReplies");
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "session",
       payload: {
@@ -189,13 +196,13 @@ describe("session transcript inbound context", () => {
     });
   });
 
-  it("preserves a provider-owned thread window while enriching a populated session prompt", async () => {
+  it("preserves a provider-owned thread window without repeating replayed turns", async () => {
     readRecent.mockResolvedValue(transcriptPair("canonical question", "canonical reply"));
     const graphMessages = [
       { message_id: "graph-parent", sender: "Parent", body: "Graph parent" },
       { message_id: "graph-reply", sender: "Teammate", body: "Graph reply" },
     ];
-    const ctx = context({
+    const ctx = await merged({
       ChatType: "channel",
       InboundHistory: [
         { messageId: "pending", sender: "Pending", body: "pending backlog", timestamp: 3_000 },
@@ -208,21 +215,18 @@ describe("session transcript inbound context", () => {
       }),
     });
 
-    const prompt = await runTurn(ctx, "msteams", () =>
-      buildInboundUserContextPrefix(ctx, { timezone: "UTC" }),
-    );
+    const prompt = buildInboundUserContextPrefix(ctx, { timezone: "UTC" });
 
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "msteams",
       payload: expect.objectContaining({ messages: graphMessages }),
     });
-    expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
-      "canonical reply",
-      "pending backlog",
-    ]);
-    for (const text of ["Graph parent", "Graph reply", "canonical reply", "pending backlog"]) {
+    expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual(["pending backlog"]);
+    for (const text of ["Graph parent", "Graph reply", "pending backlog"]) {
       expect(prompt).toContain(text);
     }
+    expect(prompt).not.toContain("canonical question");
+    expect(prompt).not.toContain("canonical reply");
   });
 
   it("fails closed for an unscoped session key without a routed agent owner", async () => {

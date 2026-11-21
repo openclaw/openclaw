@@ -3,8 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+import { readJson, writeExecutable } from "./upgrade-survivor-shard.test-support.js";
 
 const PUBLISHED_RUNNER_PATH = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/upgrade-survivor/config-parking.mjs");
@@ -30,8 +29,7 @@ function makeFixture(prefix: string) {
     root,
     bin,
     read: (...parts: string[]) => readFileSync(path.join(root, ...parts), "utf8"),
-    executable: (name: string, script: string) =>
-      writeFileSync(path.join(bin, name), script, { mode: 0o755 }),
+    executable: (name: string, script: string) => writeExecutable(path.join(bin, name), script),
   };
 }
 

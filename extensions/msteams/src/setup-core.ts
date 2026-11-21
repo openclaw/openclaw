@@ -34,38 +34,8 @@ type MSTeamsSetupInput = {
   useEnv?: boolean;
 };
 
-function applySecretAuthCredentials(
-  patch: MSTeamsSetupAccountConfig,
-  existing: MSTeamsSetupAccountConfig,
-): MSTeamsSetupAccountConfig {
-  return {
-    ...patch,
-    authType: "secret",
-    ...(existing.certificatePath !== undefined ? { certificatePath: undefined } : {}),
-    ...(existing.certificateThumbprint !== undefined ? { certificateThumbprint: undefined } : {}),
-    ...(existing.useManagedIdentity !== undefined ? { useManagedIdentity: undefined } : {}),
-    ...(existing.managedIdentityClientId !== undefined
-      ? { managedIdentityClientId: undefined }
-      : {}),
-  };
-}
-
 function resolveSetupAccountId(cfg: OpenClawConfig, accountId?: string | null): string {
   return normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
-}
-
-function resolveRawMSTeamsAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): MSTeamsSetupAccountConfig {
-  const normalized = normalizeAccountId(accountId);
-  const msteams = cfg.channels?.msteams ?? {};
-  if (normalized === DEFAULT_ACCOUNT_ID) {
-    const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
-    return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? msteams;
-  }
-  const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
-  return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? {};
 }
 
 function resolveCredentialsForSetup(cfg: OpenClawConfig, accountId: string) {
@@ -217,7 +187,10 @@ export const msteamsSetupAdapter: ChannelSetupAdapter<MSTeamsSetupInput> = {
     const appId = input.appId;
     const appPassword = input.appPassword;
     const tenantId = input.tenantId;
-    const existing = resolveRawMSTeamsAccountConfig(cfg, resolvedAccountId);
+    const msteams = cfg.channels?.msteams ?? {};
+    const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, resolvedAccountId);
+    const rawAccount = rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined;
+    const existing = rawAccount ?? (resolvedAccountId === DEFAULT_ACCOUNT_ID ? msteams : {});
     const patch: MSTeamsSetupAccountConfig = {};
     if (appId?.trim()) {
       patch.appId = appId.trim();
@@ -235,8 +208,19 @@ export const msteamsSetupAdapter: ChannelSetupAdapter<MSTeamsSetupInput> = {
     const replacesWithSecretAuth = Boolean(
       appId?.trim() && appPassword?.trim() && (tenantId?.trim() || inheritedTenantId),
     );
-    const credentialPatch = replacesWithSecretAuth
-      ? applySecretAuthCredentials(patch, existing)
+    const credentialPatch: MSTeamsSetupAccountConfig = replacesWithSecretAuth
+      ? {
+          ...patch,
+          authType: "secret",
+          ...(existing.certificatePath !== undefined ? { certificatePath: undefined } : {}),
+          ...(existing.certificateThumbprint !== undefined
+            ? { certificateThumbprint: undefined }
+            : {}),
+          ...(existing.useManagedIdentity !== undefined ? { useManagedIdentity: undefined } : {}),
+          ...(existing.managedIdentityClientId !== undefined
+            ? { managedIdentityClientId: undefined }
+            : {}),
+        }
       : patch;
     return patchMSTeamsAccountConfig({
       cfg: input.useEnv && !replacesWithSecretAuth ? selectMSTeamsEnvironmentCredentials(cfg) : cfg,
@@ -303,19 +287,6 @@ async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
   };
 }
 
-async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
-  await prompter.note(
-    [
-      t("wizard.msteams.helpAzureBot"),
-      t("wizard.msteams.helpClientSecret"),
-      t("wizard.msteams.helpWebhook"),
-      t("wizard.msteams.helpEnvTip"),
-      t("wizard.channels.docs", { link: formatDocsLink("/channels/msteams", "msteams") }),
-    ].join("\n"),
-    t("wizard.msteams.credentialsTitle"),
-  );
-}
-
 export function createMSTeamsSetupWizardBase() {
   const credentials: ChannelSetupWizard["credentials"] = [];
   return {
@@ -357,7 +328,16 @@ export function createMSTeamsSetupWizardBase() {
       let next: OpenClawConfig = cfg;
 
       if (!resolved && !hasConfigCreds) {
-        await noteMSTeamsCredentialHelp(prompter);
+        await prompter.note(
+          [
+            t("wizard.msteams.helpAzureBot"),
+            t("wizard.msteams.helpClientSecret"),
+            t("wizard.msteams.helpWebhook"),
+            t("wizard.msteams.helpEnvTip"),
+            t("wizard.channels.docs", { link: formatDocsLink("/channels/msteams", "msteams") }),
+          ].join("\n"),
+          t("wizard.msteams.credentialsTitle"),
+        );
       }
 
       const keep =

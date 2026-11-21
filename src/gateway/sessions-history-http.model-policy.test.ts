@@ -1,6 +1,9 @@
-import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -10,13 +13,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  emitSessionTranscriptUpdate,
-  onInternalSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import * as profileAuthority from "../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -28,8 +25,8 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayHttpServer } from "./server-http.js";
-import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as historyState from "./session-history-state.js";
+import { appendHistoryMessage, historyStream } from "./sessions-history-http-read.test-support.js";
 
 const readerEmail = "history-reader@example.test";
 const staffEmail = "history-staff@example.test";
@@ -100,12 +97,11 @@ describe("HTTP historical model disclosure", () => {
   let server: ReturnType<typeof createGatewayHttpServer>;
   let current: OpenClawConfig;
   let committed: OpenClawConfig;
-  let port: number;
+  let url: string;
   let readerId: string;
   let releaseProfileCatalog: (() => void) | undefined;
   let sequence = 0;
   let scope: { agentId: string; sessionKey: string; sessionId: string };
-  const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
 
   const publishConfig = (next: OpenClawConfig, commit = true) => {
     current = next;
@@ -141,13 +137,7 @@ describe("HTTP historical model disclosure", () => {
       getGatewayRequestContext: () => context,
       httpRequestLifetime: context,
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected HTTP fixture listener");
-    }
-    port = address.port;
+    url = await listenLoopback(server);
   });
 
   beforeEach(async () => {
@@ -173,19 +163,12 @@ describe("HTTP historical model disclosure", () => {
     }
   });
 
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await Promise.all([...readers].map(async (reader) => await reader.cancel()));
-    readers.clear();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   afterAll(async () => {
     try {
-      server?.closeAllConnections();
       if (server) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(server);
       }
     } finally {
       releaseProfileCatalog?.();
@@ -208,7 +191,7 @@ describe("HTTP historical model disclosure", () => {
       headers.accept = "text/event-stream";
     }
     const response = await fetch(
-      `http://127.0.0.1:${port}/sessions/${encodeURIComponent(scope.sessionKey)}/history${params.query ?? ""}`,
+      `${url}/sessions/${encodeURIComponent(scope.sessionKey)}/history${params.query ?? ""}`,
       { headers },
     );
     expect(response.status).toBe(200);
@@ -216,17 +199,7 @@ describe("HTTP historical model disclosure", () => {
   }
 
   async function openStream(params: Parameters<typeof requestHistory>[0] = {}) {
-    const response = await requestHistory({ ...params, sse: true });
-    const reader = expectDefined(response.body?.getReader(), "SSE reader");
-    readers.add(reader);
-    const buffer = { buffer: "" };
-    return {
-      async next(event = "history") {
-        const result = await readSseEvent(reader, buffer);
-        expect(result.event).toBe(event);
-        return result.data;
-      },
-    };
+    return historyStream(await requestHistory({ ...params, sse: true }));
   }
 
   const jsonHistory = (params?: Parameters<typeof requestHistory>[0]) =>
@@ -246,7 +219,7 @@ describe("HTTP historical model disclosure", () => {
   }
 
   async function append(text: string, updateMode: "inline" | "file-only" = "inline") {
-    const result = await appendExactAssistantMessageToSessionTranscript({
+    const result = await appendHistoryMessage({
       ...scope,
       updateMode,
       message: makeAgentAssistantMessage({
@@ -254,9 +227,6 @@ describe("HTTP historical model disclosure", () => {
         content: [{ type: "text", text }],
       }),
     });
-    if (!result.ok) {
-      throw new Error(result.reason);
-    }
     return result.messageId;
   }
 
@@ -264,17 +234,10 @@ describe("HTTP historical model disclosure", () => {
     const saved = await loadTranscriptEvents(scope);
     const json = await jsonHistory();
     const rows = expectRestrictedSnapshot(json, 4);
-    const stream = await openStream();
+    await using stream = await openStream();
     expect(await stream.next()).toEqual(json);
 
-    const updates: InternalSessionTranscriptUpdate[] = [];
-    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-    let id: string;
-    try {
-      id = await append("inline private model reply");
-    } finally {
-      unsubscribe();
-    }
+    const id = await append("inline private model reply");
     const inline = await stream.next("message");
     expect(inline).toMatchObject({
       messageId: id,
@@ -282,19 +245,10 @@ describe("HTTP historical model disclosure", () => {
       message: { __openclaw: { id, seq: 5 } },
     });
     expectPrivateText(record(inline).message, "inline private model reply");
-    const stored = await loadTranscriptEvents(scope);
-    emitSessionTranscriptUpdate(
-      expectDefined(
-        updates.find((candidate) => candidate.messageId === id),
-        "committed inline update",
-      ),
-    );
-    const repeatedRows = expectRestrictedSnapshot(await stream.next(), 5);
-    expectPrivateText(repeatedRows[4], "inline private model reply");
-    expect(await loadTranscriptEvents(scope)).toEqual(stored);
     await append("refresh private model reply", "file-only");
     const refreshedRows = expectRestrictedSnapshot(await stream.next(), 6);
     expect(refreshedRows.slice(0, 4)).toEqual(rows);
+    expectPrivateText(refreshedRows[4], "inline private model reply");
 
     const persisted = await loadTranscriptEvents(scope);
     expect(persisted.slice(0, saved.length)).toEqual(saved);
@@ -312,13 +266,12 @@ describe("HTTP historical model disclosure", () => {
     async (kind) => {
       publishConfig(config(["example/*"]));
       const fromSnapshot = vi.spyOn(historyState.SessionHistorySseState, "fromSnapshot");
-      const stream = kind === "refresh SSE" ? await openStream() : undefined;
+      await using stream = kind === "refresh SSE" ? await openStream() : undefined;
       if (stream) {
         expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
       }
       const { entered, release, hold } = heldRead();
       if (stream) {
-        expect(fromSnapshot).toHaveBeenCalledTimes(1);
         const streamState = expectDefined(
           fromSnapshot.mock.results.find((result) => result.type === "return")?.value,
           "SSE history state",
@@ -335,7 +288,10 @@ describe("HTTP historical model disclosure", () => {
         ? append("held refresh reply", "file-only").then(() => stream.next())
         : kind === "JSON"
           ? jsonHistory()
-          : openStream().then((opened) => opened.next());
+          : (async () => {
+              await using opened = await openStream();
+              return await opened.next();
+            })();
       try {
         await awaitGateBeforeSettlement(entered.promise, pending, "History read not held");
         publishConfig(config());
@@ -350,7 +306,7 @@ describe("HTTP historical model disclosure", () => {
 
   it("uses a policy committed during final current-profile acquisition", async () => {
     publishConfig(config(["example/*"]));
-    const stream = await openStream();
+    await using stream = await openStream();
     expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
     publishConfig(config(), false);
     const { entered, release, hold } = heldRead();
@@ -374,7 +330,7 @@ describe("HTTP historical model disclosure", () => {
   });
 
   it("keeps committed restriction during tentative widening, then publishes committed widening", async () => {
-    const stream = await openStream();
+    await using stream = await openStream();
     expectRestrictedSnapshot(await stream.next(), 4);
     publishConfig(config(["example/*"]), false);
     expectRestrictedSnapshot(await jsonHistory(), 4);
@@ -390,7 +346,13 @@ describe("HTTP historical model disclosure", () => {
     next.gateway = { ...next.gateway, auth: { mode: "token", token: secret } };
     publishConfig(next);
     expect(messages(await jsonHistory({ owner: true }), 4)[0]).toMatchObject(historical);
-    const stream = await openStream({ owner: true });
+    await using stream = await openStream({ owner: true });
     expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
+    const text = "bearer sse update";
+    const id = await append(text);
+    expect(await stream.next("message")).toMatchObject({
+      messageSeq: 5,
+      message: { ...historical, content: [{ text }], __openclaw: { id, seq: 5 } },
+    });
   });
 });

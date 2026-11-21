@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AgentSelectionRequiredError, listAgentIds } from "../../agents/agent-scope-config.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   classifySessionKeyShape,
   normalizeAgentId,
@@ -10,12 +11,17 @@ import {
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfigSnapshot } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequences,
@@ -33,11 +39,12 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
@@ -182,7 +189,21 @@ export async function persistSessionTranscriptTurn(
   if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
     throw new Error("Cannot mutate a session turn without an expected session id");
   }
-  const target = await prepareTranscriptTurnTarget(scope, options.config);
+  const fixedMessages =
+    options.messages.length > 0 &&
+    options.messages.every(
+      (append) =>
+        !append.shouldAppend &&
+        !append.shouldAppendInTransaction &&
+        !append.workerPreparation &&
+        !append.preparation &&
+        !append.prepareMessageAfterIdempotencyCheck &&
+        !append.beforeFreshMessageCommit,
+    );
+  const target = await prepareTranscriptTurnTarget(scope, options.config, {
+    deferRuntimeTarget: fixedMessages,
+    reuseResidentEntry: fixedMessages,
+  });
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: target.sessionKey })
     : undefined;
@@ -195,7 +216,7 @@ export async function persistSessionTranscriptTurn(
   // scopes (no entry) keep the legacy append — the guarded transaction
   // requires a persisted row to validate. (#119221)
   if (
-    target.selectedSessionId != null &&
+    (target.resolveRuntimeTarget || target.selectedSessionId != null) &&
     target.storePath &&
     target.sessionKey &&
     target.sessionId
@@ -220,11 +241,10 @@ export async function persistSessionTranscriptTurn(
     },
     () => appendTranscriptTurnMessages(target, options),
   );
-  const appendedCount = appendedMessages.filter((message) => message.appended).length;
   let sessionEntry = previousSessionEntry;
   if (
     options.touchSessionEntry === true &&
-    appendedCount > 0 &&
+    appendedMessages.some((message) => message.appended) &&
     target.storePath &&
     target.sessionKey &&
     target.sessionId
@@ -258,7 +278,6 @@ export async function persistSessionTranscriptTurn(
   });
 
   return {
-    appendedCount,
     messages: appendedMessages,
     sessionEntry,
   };
@@ -351,17 +370,16 @@ async function persistExpectedSessionTranscriptTurn(
       return result;
     }
   }
+  using phase = observeDiagnosticsTimelinePhases("persist.transcript.target");
   const onCommittedSource = captureSessionTranscriptSourcePublication({
     ...scope,
     sessionId: expectedSessionId,
   });
   const { selectedSessionId, selectedLifecycleRevision, resolveRuntimeTarget, ...prepared } =
     preparedTarget ??
-    (await prepareTranscriptTurnTarget(
-      { ...scope, sessionId: expectedSessionId },
-      options.config,
-      !options.messages.some((append) => append.shouldAppend),
-    ));
+    (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config, {
+      deferRuntimeTarget: !options.messages.some((append) => append.shouldAppend),
+    }));
   let target = prepared;
   const ownerScope = { ...target, sessionKey: requestedSessionKey ?? target.sessionKey };
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
@@ -369,6 +387,7 @@ async function persistExpectedSessionTranscriptTurn(
     sessionKey: ownerScope.sessionKey,
     sessionTarget: ownerScope,
   });
+  phase.mark("persist.transcript.commit");
   const turn = await runWithOwnedSessionTranscriptWrite(
     {
       sessionFile: target.sessionKey,
@@ -418,7 +437,6 @@ async function persistExpectedSessionTranscriptTurn(
 
   if (turn.rejectedReason === "session-rebound") {
     return {
-      appendedCount: 0,
       messages: [],
       rejectedReason: "session-rebound",
       sessionEntry: turn.sessionEntry,
@@ -427,6 +445,7 @@ async function persistExpectedSessionTranscriptTurn(
 
   // The requested key remains the caller's live update route; the resolved
   // target above is the distinct physical SQLite owner.
+  phase.mark("persist.transcript.publication");
   await publishTranscriptTurnUpdate({
     target:
       requestedSessionKey === target.sessionKey
@@ -445,7 +464,6 @@ async function persistExpectedSessionTranscriptTurn(
   return {
     sessionTurnMutationResult: turn.sessionTurnMutationResult,
     predicateSkipped: turn.predicateSkipped,
-    appendedCount: turn.appendedMessages.filter((message) => message.appended).length,
     messages: turn.appendedMessages,
     sessionEntry: turn.sessionEntry ?? scope.sessionEntry,
   };
@@ -456,7 +474,7 @@ async function prepareTranscriptTurnTarget(
     sessionStore?: Record<string, SessionEntry>;
   },
   config?: OpenClawConfig,
-  deferRuntimeTarget = false,
+  preparation: { deferRuntimeTarget?: boolean; reuseResidentEntry?: boolean } = {},
 ) {
   const sessionKey = scope.sessionKey?.trim();
   if (!sessionKey || !scope.sessionId) {
@@ -508,13 +526,31 @@ async function prepareTranscriptTurnTarget(
     sessionKey,
     storePath,
   });
-  if (deferRuntimeTarget && (await getSessionInputActor(binding, true))) {
-    return {
-      ...binding,
-      selectedSessionId: undefined,
-      selectedLifecycleRevision: undefined,
-      resolveRuntimeTarget: true as const,
-    };
+  if (preparation.deferRuntimeTarget) {
+    const actor = await getSessionInputActor(binding, true);
+    const database =
+      !actor && preparation.reuseResidentEntry
+        ? toDatabaseOptions(resolveSqliteTranscriptScope(binding))
+        : undefined;
+    const retained =
+      database &&
+      readRetainedSessionEntryFacts(
+        {
+          agentId: database.agentId,
+          path: database.path ?? resolveOpenClawAgentSqlitePath(database),
+        },
+        { sessionKeys: [binding.sessionKey], projection: "full" },
+      );
+    // A current entry proves persisted admission, not window ownership. The
+    // writer resolves that window from its first locked read; mirrors keep the reader.
+    if (actor || retained?.entries[0]?.entry.sessionId === binding.sessionId) {
+      return {
+        ...binding,
+        selectedSessionId: undefined,
+        selectedLifecycleRevision: undefined,
+        resolveRuntimeTarget: true as const,
+      };
+    }
   }
   const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, effectiveConfig, {
     keyFormat: "agent-qualified",

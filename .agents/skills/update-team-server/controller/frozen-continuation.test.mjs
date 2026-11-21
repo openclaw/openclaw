@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -49,6 +49,12 @@ function fixture(t, fault = "", sourceState = 17, targetState = sourceState, sou
   f.manifest = join(f.candidate, "deployment.json");
   f.digest = hash(readFileSync(f.manifest));
   f.args = ["--continue-frozen-release", target, f.digest, f.sha, String(f.pid), f.start];
+  if (fault.startsWith("config-")) {
+    const config = JSON.parse(readFileSync(f.config));
+    config.plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay = false;
+    if (fault === "config-invalid") config.syntheticInvalid = true;
+    writeFileSync(f.config, JSON.stringify(config));
+  }
   f.before = {
     config: readFileSync(f.config), database: readFileSync(f.databasePath),
     agent: readFileSync(f.agentDatabasePath), manifest: readFileSync(f.manifest),
@@ -63,7 +69,11 @@ case "\${2:-}" in
       is-active) printf 'inactive\\n'; exit 3 ;;
     esac ;;
 esac
-if [[ ${quote(fault)} == activation-failed && "$1" == start && "$2" == openclaw-gateway.service && ! -e ${quote(join(f.state, "candidate-start-failed"))} ]]; then
+if [[ ${quote(fault)} == config-* && "$1" == stop && "$2" == openclaw-gateway.service ]]; then
+  ${quote(process.execPath)} -e ${quote(`const fs=require('node:fs');const cfg=JSON.parse(fs.readFileSync(${JSON.stringify(f.config)}));if(!Object.hasOwn(cfg.plugins.entries.codex.config.appServer,'loopDetectionPreToolUseRelay'))throw Error('config published before managed stop');`)}
+  printf 'fixture.config-retained-before-stop\\n' >>${quote(f.eventlog)}
+fi
+if [[ (${quote(fault)} == activation-failed || ${quote(fault)} == config-activation-failed) && "$1" == start && "$2" == openclaw-gateway.service && ! -e ${quote(join(f.state, "candidate-start-failed"))} ]]; then
   [[ -f ${quote(f.permit)} ]] || { printf 'candidate start lacked its published permit\\n' >&2; exit 73; }
   : >${quote(join(f.state, "candidate-start-failed"))}
   printf 'service.system.start\\nfixture.candidate-start-failed\\n' >>${quote(f.eventlog)}
@@ -170,7 +180,7 @@ const args=process.argv.slice(2),command=args[0],journal=${JSON.stringify(f.jour
 const event=value=>fs.appendFileSync(${JSON.stringify(f.eventlog)},value+'\\n');
 if(command==='journal-create'&&${JSON.stringify(fault)}==='before-journal') {event('fixture.before-journal');process.exit(73);}
 // Non-consuming generation checks must leave a piped verification payload for its actual proof.
-const result=cp.spawnSync(process.execPath,[${JSON.stringify(f.library)},...args],{stdio:['inherit','pipe','pipe'],encoding:'utf8',env:process.env});
+const result=cp.spawnSync(process.execPath,[${JSON.stringify(f.library)},...args],{stdio:['inherit','pipe','pipe','ignore','ignore','ignore','ignore','ignore','ignore',9],encoding:'utf8',env:process.env});
 if(result.error)throw result.error;
 if(result.status===0&&((command==='compatibility'&&${JSON.stringify(fault)}==='manifest-at-compatibility')||
   (command==='journal-create'&&${JSON.stringify(fault)}==='manifest-after-journal'))) {
@@ -186,12 +196,19 @@ if(command==='journal-create'&&result.status===0) {
   event('fixture.ordinary-journal-created');
   if(${JSON.stringify(fault)}==='after-journal')process.exit(73);
 }
+if(command==='compatibility'&&result.status===0&&${JSON.stringify(fault)}==='generation-at-compatibility') {
+  const file=${JSON.stringify(join(f.root, "proc", String(f.pid), "stat"))};
+  const stat=fs.readFileSync(file,'utf8'),split=stat.lastIndexOf(') ')+2;
+  const fields=stat.slice(split).trim().split(/\\s+/);
+  fields[19]='2220';fs.writeFileSync(file,stat.slice(0,split)+fields.join(' ')+'\\n');
+  event('fixture.generation-changed-after-compatibility');
+}
 if(command==='session-preservation-witness'&&result.status===0&&${JSON.stringify(fault)}==='instance-before-preparation')
   fs.writeFileSync(${JSON.stringify(join(f.state, "frozen-replacement-instance"))},'1');
 process.stdout.write(result.stdout);process.stderr.write(result.stderr);process.exit(result.status??1);
 `);
   f.env.OPENCLAW_TEAM_RELEASE_LIB = proxy;
-  if (fault === "instance" || fault === "instance-at-journal") {
+  if (fault === "instance") {
     const cli = join(f.initial, "dist/index.js");
     const source = readFileSync(cli, "utf8");
     const original = 'const pid=Number(read("pid"));emit({pid,processInstanceId:"fixture-instance-"+pid});';
@@ -199,7 +216,7 @@ process.stdout.write(result.stdout);process.stderr.write(result.stderr);process.
     replaceSealedFile(cli, source.replace(original, `
 const pid=Number(read("pid")),count=present("instance-reads")?Number(read("instance-reads")):0;
 put("instance-reads",count+1);
-emit({pid,processInstanceId:count>=${fault === "instance" ? 1 : 3}?'changed-with-identical-pid-and-ticks':'fixture-instance-'+pid});`));
+emit({pid,processInstanceId:count>=1?'changed-with-identical-pid-and-ticks':'fixture-instance-'+pid});`));
   }
   if (fault === "instance-before-preparation") {
     const cli = join(f.initial, "dist/index.js"), source = readFileSync(cli, "utf8");
@@ -228,6 +245,10 @@ for (const [sourceState, targetState, sourceAgent, targetAgent, offlineDoctor = 
 ]) test(`continues the sealed cut through native update (${sourceState}/${sourceAgent} → ${targetState}/${targetAgent}${offlineDoctor ? "; offline Doctor repair" : ""})`, t => {
   const f = fixture(t, "", sourceState, targetState, sourceAgent, targetAgent, offlineDoctor);
   if (offlineDoctor) f.args.push("--offline-doctor-repair", "--interrupt-after-drain");
+  // An earlier rolled-back transaction is settled; this deployment keeps only its own root.
+  const earlier = join(f.runtime, ".openclaw-update", `update-${f.sha}-${randomUUID()}`);
+  mkdirSync(join(earlier, "native.databases"), { recursive: true });
+  writeFileSync(join(earlier, "native.receipt.json"), JSON.stringify({ schemaVersion: 1, status: "restored" }));
   const result = runOwner(f, f.args);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
@@ -309,6 +330,44 @@ test("continues the original same-schema sealed cut through ordinary activation 
     assert.deepEqual(readFileSync(file), f.before[name], name);
 });
 
+for (const fault of ["config-retired", "config-activation-failed"]) test(`same-schema ${fault} applies config contracts only after managed stop`, t => {
+  const f = fixture(t, fault, 19, 19);
+  f.ownerTimeoutMs = 180_000;
+  const result = runOwner(f, f.args), log = events(f);
+  assert.ifError(result.error);
+  if (fault === "config-retired") assert.equal(result.status, 0, result.stderr);
+  assert.match(log, /config\.project[\s\S]*fixture\.config-retained-before-stop[\s\S]*service\.system\.stop/);
+  assert.doesNotMatch(log, /native\.update\.|gateway doctor/);
+  assert.deepEqual(readFileSync(f.databasePath), f.before.database);
+  assert.deepEqual(readFileSync(f.agentDatabasePath), f.before.agent);
+  if (fault === "config-retired") {
+    assert.match(result.stdout, /SUCCESS sha=/);
+    assert.equal(readlinkSync(join(f.serving, "current")), f.candidate);
+    assert.equal(Object.hasOwn(JSON.parse(readFileSync(f.config)).plugins.entries.codex.config.appServer, "loopDetectionPreToolUseRelay"), false);
+  } else {
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, /ROLLED_BACK/);
+    assert.equal(readlinkSync(join(f.serving, "current")), f.initial);
+    assert.deepEqual(readFileSync(f.config), f.before.config);
+    assert.match(log, /fixture\.candidate-start-failed[\s\S]*service\.system\.restart/);
+  }
+  assert.equal(existsSync(f.journal), false);
+  const plans = readdirSync(join(f.serving, "journal")).filter(name => /^config-contract-[a-f\d-]{36}\.json$/.test(name));
+  assert.equal(plans.length, 1);
+  const receipt = JSON.parse(readFileSync(join(f.serving, "journal", plans[0])));
+  assert.deepEqual(receipt.changedPaths, ["plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay"]);
+  assert.equal(receipt.originalBytes, f.before.config.toString("utf8"));
+  const applied = JSON.parse(readFileSync(join(f.serving, "journal", plans[0].replace(/\.json$/, ".applied.json"))));
+  assert.equal(applied.kind, "candidate-config-contract-applied");
+  assert.deepEqual(applied.changedPaths, receipt.changedPaths);
+});
+
+test("same-schema config contract admission refuses a genuinely invalid config without stopping", t => {
+  const f = fixture(t, "config-invalid", 19, 19);
+  unchanged(f, runOwner(f, f.args), /fixture config invalid/);
+  assert.match(events(f), /config\.project/);
+});
+
 for (const fault of ["instance-before-preparation", "manifest-at-compatibility", "manifest-after-journal"]) test(`same-schema continuation refuses late ${fault} drift without stopping`, t => {
   const f = fixture(t, fault, 19, 19), result = runOwner(f, f.args);
   assert.ifError(result.error);
@@ -342,12 +401,15 @@ for (const fault of ["timer", "ancestry", "instance", "manifest-swap"]) test(`re
   unchanged(f, runOwner(f, f.args), fault === "timer" ? /disabled inactive/ : fault === "ancestry" ? /official main history/ : fault === "manifest-swap" ? /frozen release identity changed/ : /process instance changed/);
 });
 
-test("does not recapture a replacement process instance while constructing the journal", t => {
-  const f = fixture(t, "instance-at-journal"), result = runOwner(f, f.args);
+test("refuses a replacement process generation after compatibility without publishing the journal", t => {
+  const f = fixture(t, "generation-at-compatibility"), result = runOwner(f, f.args);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /process instance changed/);
+  assert.match(result.stderr, /process generation changed/);
+  assert.match(events(f), /fixture\.generation-changed-after-compatibility/);
   assert.equal(existsSync(f.journal), false);
   assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)\n|fixture\.ordinary-journal-created/);
+  assert.equal(readlinkSync(join(f.serving, "current")), f.initial);
+  assert.deepEqual(readFileSync(f.config), f.before.config);
   assert.deepEqual(readFileSync(f.databasePath), f.before.database);
 });
 

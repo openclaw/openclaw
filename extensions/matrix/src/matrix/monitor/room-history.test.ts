@@ -18,6 +18,10 @@ function createTracker(...limits: Parameters<typeof createRoomHistoryTracker>) {
         tracker.reservePending(AGENT, roomId, entry(body, messageId), thread),
       prepare: (body: string, messageId?: string, thread?: string, slot?: ReservedHistorySlot) =>
         tracker.prepareTrigger(AGENT, roomId, 100, entry(body, messageId), thread, slot),
+      history: (body: string, messageId?: string, thread?: string, slot?: ReservedHistorySlot) =>
+        tracker
+          .prepareTrigger(AGENT, roomId, 100, entry(body, messageId), thread, slot)
+          .history.map(({ body: entryBody }) => entryBody),
       consume: (snapshot: { snapshotIdx: number }, messageId?: string, thread?: string) =>
         tracker.consumeHistory(AGENT, roomId, snapshot, messageId, thread),
       finalize: (slot: ReservedHistorySlot, body: string, messageId?: string) =>
@@ -39,8 +43,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     tracker.consume(snap2);
     tracker.consume(snap1);
     tracker.record("msg4");
-    const snap3 = tracker.prepare("trigger3");
-    expect(snap3.history.map((entryValue) => entryValue.body)).toEqual(["msg4"]);
+    expect(tracker.history("trigger3")).toEqual(["msg4"]);
   });
 
   it("reserved pending slots are finalized in arrival order", () => {
@@ -48,8 +51,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     const reserved = tracker.reserve("audio placeholder", "$audio");
     tracker.record("after", "$after");
     tracker.finalize(reserved, "audio final", "$audio");
-    const prepared = tracker.prepare("trigger");
-    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["audio final", "after"]);
+    expect(tracker.history("trigger")).toEqual(["audio final", "after"]);
   });
 
   it("discarded reserved slots do not leak into later history", () => {
@@ -57,8 +59,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     const reserved = tracker.reserve("blocked audio", "$blocked");
     tracker.discard(reserved);
     tracker.record("after", "$after");
-    const prepared = tracker.prepare("trigger", "$trigger");
-    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["after"]);
+    expect(tracker.history("trigger", "$trigger")).toEqual(["after"]);
   });
 
   it("reserved triggers use the arrival-time watermark even if a later trigger consumes history", () => {
@@ -67,8 +68,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     const reserved = tracker.reserve("audio placeholder", "$audio");
     const later = tracker.prepare("later trigger", "$later");
     tracker.consume(later, "$later");
-    const prepared = tracker.prepare("audio trigger", "$audio", undefined, reserved);
-    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["before"]);
+    expect(tracker.history("audio trigger", "$audio", undefined, reserved)).toEqual(["before"]);
   });
 
   it("does not let later triggers consume unfinalized reserved slots", () => {
@@ -77,8 +77,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     const later = tracker.prepare("later trigger", "$later");
     tracker.consume(later, "$later");
     tracker.finalize(reserved, "audio transcript", "$audio");
-    const followUp = tracker.prepare("follow up", "$follow-up");
-    expect(followUp.history.map((entryValue) => entryValue.body)).toEqual(["audio transcript"]);
+    expect(tracker.history("follow up", "$follow-up")).toEqual(["audio transcript"]);
   });
 
   it("reserved trigger retries discard the extra placeholder slot", () => {
@@ -90,8 +89,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     const retried = tracker.prepare("audio trigger", "$audio", undefined, retryReserved);
     tracker.consume(retried, "$audio");
     expect(retried.snapshotIdx).toBe(firstPrepared.snapshotIdx);
-    const followUp = tracker.prepare("follow up");
-    expect(followUp.history).toHaveLength(0);
+    expect(tracker.history("follow up")).toEqual([]);
   });
 
   it("advances watermarks independently per thread", () => {
@@ -100,10 +98,8 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     tracker.record("thread-b-1", undefined, "$thread-b");
     const snapA = tracker.prepare("trigger-a", undefined, "$thread-a");
     tracker.consume(snapA, undefined, "$thread-a");
-    const followUpA = tracker.prepare("follow-up-a", undefined, "$thread-a");
-    const followUpB = tracker.prepare("follow-up-b", undefined, "$thread-b");
-    expect(followUpA.history).toHaveLength(0);
-    expect(followUpB.history.map((entryValue) => entryValue.body)).toEqual(["thread-b-1"]);
+    expect(tracker.history("follow-up-a", undefined, "$thread-a")).toEqual([]);
+    expect(tracker.history("follow-up-b", undefined, "$thread-b")).toEqual(["thread-b-1"]);
   });
 
   it("reserved thread triggers keep the thread arrival-order history window", () => {
@@ -113,8 +109,9 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     const reserved = tracker.reserve("audio placeholder", "$audio", "$thread");
     tracker.record("thread-after", undefined, "$thread");
     tracker.record("main-after");
-    const prepared = tracker.prepare("audio trigger", "$audio", "$thread", reserved);
-    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["thread-before"]);
+    expect(tracker.history("audio trigger", "$audio", "$thread", reserved)).toEqual([
+      "thread-before",
+    ]);
   });
 
   it("refreshes watermark recency before capped-map eviction", () => {
@@ -135,9 +132,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     const snap3 = room3.prepare("trigger in room3");
     room3.consume(snap3);
     room1.record("new msg in room1");
-    const room1History = room1.prepare("next trigger").history;
-    expect(room1History).toHaveLength(1);
-    expect(room1History[0]?.body).toBe("new msg in room1");
+    expect(room1.history("next trigger")).toEqual(["new msg in room1"]);
   });
 
   it("refreshes prepared-trigger recency before capped eviction on retry hits", () => {
@@ -172,9 +167,7 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
         room1.consume(prepared, "$trigger");
       }
       room1.record("new msg in room1");
-      expect(room1.prepare("new trigger").history.map(({ body }) => body)).toEqual([
-        "new msg in room1",
-      ]);
+      expect(room1.history("new trigger")).toEqual(["new msg in room1"]);
     },
   );
 });

@@ -10,7 +10,11 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { buildChannelKeyCandidates } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
-import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
+import {
+  mergeSlackAccountConfig,
+  resolveDefaultSlackAccountId,
+  type ResolvedSlackAccount,
+} from "./accounts.js";
 import { getSlackChannelPolicyKeys } from "./channel-policy-state.js";
 import { getSlackInstallationKind } from "./installation-identity-state.js";
 
@@ -19,6 +23,24 @@ type SlackChannelPolicyEntry = {
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
+
+export function hasPotentialSlackNamedPolicy(params: {
+  channels: ResolvedSlackAccount["config"]["channels"];
+  allowNameMatching?: boolean;
+  decision: "allow" | "deny";
+}): boolean {
+  if (params.allowNameMatching !== true) {
+    return false;
+  }
+  return Object.entries(params.channels ?? {}).some(([key, entry]) => {
+    if (entry == null || key === "*") {
+      return false;
+    }
+    const named = !/^(?:channel:)?[CDG][A-Z0-9]+$/i.test(key);
+    const entryAllows = entry.enabled !== false;
+    return named && (params.decision === "allow" ? entryAllows : !entryAllows);
+  });
+}
 
 export function buildSlackChannelIdCandidates(
   channelId: string | null | undefined,

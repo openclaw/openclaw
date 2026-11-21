@@ -157,7 +157,7 @@ function modelContent(block: ContentBlock): ContentBlock {
   const { _meta: _presentation, ...content } = block;
   if (content.type === "resource") {
     const { _meta: _resourcePresentation, ...resource } = content.resource;
-    return { ...content, resource };
+    content.resource = resource;
   }
   return content;
 }
@@ -238,12 +238,10 @@ export function leaseMcpAppModelContextForTurn(params: {
       ? { structuredContent: snapshot.structuredContent }
       : {}),
   }));
-  const input = projectMcpAppModelContextInput(modelContext);
   let committed = false;
   return {
     // Harness adapters consume these as conversation input, including native image blocks.
     modelContext,
-    ...input,
     assertCurrent: () => {
       params.runtime.assertOwnerCurrent?.();
       if (

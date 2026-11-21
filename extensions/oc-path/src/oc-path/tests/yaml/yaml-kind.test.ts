@@ -1,99 +1,77 @@
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
+import { findOcPaths } from "../../find.js";
 import { parseOcPath } from "../../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 import { resolveOcPath, setOcPath } from "../../universal.js";
 import { insertYamlOcPath, setYamlOcPath } from "../../yaml/edit.js";
 import { parseYaml } from "../../yaml/parse.js";
 
-const LOBSTER = "name: inbox-triage\nsteps:\n  - id: fetch\n  - id: classify\n";
+const LOBSTER = "name: &name inbox-triage\nalias: *name\nsteps:\n  - id: fetch\n  - id: classify\n";
 const MALFORMED = "key: value\n  bad indent: oops\n";
 const path = (address: string) => parseOcPath(`oc://workflow.yaml/${address}`);
 const set = (raw: string, address: string, value: string) =>
   setOcPath(parseYaml(raw), path(address), value);
+const error = (reason: string) => expect.objectContaining({ reason });
+const timestampSpelling = new Date("2001-12-15T00:00:00Z").toString();
+const timestampRow = "2001-12-15: original";
+const stringRow = `${JSON.stringify(timestampSpelling)}: untouched`;
 
-describe("YAML numeric source preservation", () => {
+describe("YAML", () => {
   it.each([
     { operation: "leaf replacement", address: "name", value: "updated" },
     { operation: "map insertion", address: "options/+enabled", value: "true" },
     { operation: "sequence append", address: "items/+", value: "2" },
     { operation: "indexed insertion", address: "items/+0", value: "2" },
-  ])("preserves untouched numeric sources during $operation", ({ address, value }) => {
+  ])("preserves BOM, CRLF and numeric sources during $operation", ({ address, value }) => {
     const before =
-      "id: 9007199254740993\nratio: 1.0000000000000001\nname: old\n" +
-      "options: {}\nitems: [9007199254740995]\n";
+      "\uFEFFid: 9007199254740993\r\nratio: 1.0000000000000001\r\nname: old\r\n" +
+      "options: {}\r\nitems: [9007199254740995]\r\n";
     const ast = parseYaml(before);
     const result = setOcPath(ast, path(address), value);
 
-    expect(result.raw).toContain("id: 9007199254740993\n");
-    expect(result.raw).toContain("ratio: 1.0000000000000001\n");
+    expect(result.raw.startsWith("\uFEFFid: 9007199254740993\r\n")).toBe(true);
+    expect(result.raw).toContain("ratio: 1.0000000000000001\r\n");
     expect(result.raw).toContain("9007199254740995");
     expect(typeof parseYaml(result.raw).doc.get("id")).toBe("number");
     expect(ast.raw).toBe(before);
   });
 
-  it("replaces the selected numeric source even when its rounded value is unchanged", () => {
-    const result = set(
-      "untouched: 9007199254740993\nselected: 1.0000000000000001\n",
-      "selected",
-      "1",
-    );
-    expect(result.raw).toBe("untouched: 9007199254740993\nselected: 1\n");
+  it("replaces the selected numeric source and keeps an unterminated source unterminated", () => {
+    const raw = "untouched: 9007199254740993\nselected: 1.0000000000000001\n";
+    expect(set(raw, "selected", "1").raw).toBe("untouched: 9007199254740993\nselected: 1\n");
+    expect(set("name: old", "name", "new").raw).toBe("name: new");
+    expect(parseYaml(set("name: old", "name", "new\n\n").raw).doc.get("name")).toBe("new\n\n");
+    expect(set("count: 5\n", "count", "42").raw).toContain("count: 42");
   });
-});
-
-describe("setYamlOcPath — direct", () => {
-  it("reports unresolved for missing path", () => {
-    const ast = parseYaml(LOBSTER);
-    expect(() => setYamlOcPath(ast, path("missing"), "x")).toThrow(
-      expect.objectContaining({ reason: "unresolved" }),
-    );
-  });
-
-  it("reports parse-error before editing a malformed document", () => {
-    expect(() => setYamlOcPath(parseYaml(MALFORMED), path("key"), "new-value")).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+  it.each([
+    [LOBSTER, "missing", "unresolved"],
+    [MALFORMED, "key", "parse-error"],
+    ["items: []\n", "items/$last", "unresolved"],
+  ])("rejects direct edits of %s at %s: %s", (raw, address, reason) => {
+    expect(() => setYamlOcPath(parseYaml(raw), path(address), "x")).toThrow(error(reason));
   });
 
   it("reports parse-error before inserting into a malformed document", () => {
-    expect(() =>
-      insertYamlOcPath(
-        parseYaml(MALFORMED),
-        parseOcPath("oc://workflow.yaml"),
-        { kind: "keyed", key: "next" },
-        "x",
-      ),
-    ).toThrow(expect.objectContaining({ reason: "parse-error" }));
+    const ast = parseYaml(MALFORMED);
+    const root = parseOcPath("oc://workflow.yaml");
+    const insert = () => insertYamlOcPath(ast, root, { kind: "keyed", key: "next" }, "x");
+    expect(insert).toThrow(error("parse-error"));
   });
-});
 
-describe("setYamlOcPath — positional tokens", () => {
   it.each([
     [LOBSTER, "steps/$first/id", "fetch-renamed", "id: fetch-renamed"],
     [LOBSTER, "steps/$last/id", "classify-renamed", "id: classify-renamed"],
+    [LOBSTER, "alias", "renamed", "alias: renamed"],
     ["config:\n  a: 1\n  b: 2\n  c: 3\n", "config/$first", 99, "a: 99"],
     ["config:\n  a: 1\n  b: 2\n  c: 3\n", "config/$last", 99, "c: 99"],
   ])("edits %s at %s", (raw, address, value, expected) => {
     expect(setYamlOcPath(parseYaml(raw), path(address), value).raw).toContain(expected);
   });
 
-  it("reports unresolved for $last against an empty seq", () => {
-    expect(() => setYamlOcPath(parseYaml("items: []\n"), path("items/$last"), "x")).toThrow(
-      expect.objectContaining({ reason: "unresolved" }),
-    );
+  it.each(["x.yaml", "x.yml", "x.lobster"])("infers YAML for %s", (file) => {
+    expect(inferKind(file)).toBe("yaml");
   });
-});
-
-describe("inferKind — yaml extensions", () => {
-  it("maps .yaml / .yml / .lobster to yaml", () => {
-    expect(inferKind("workflow.yaml")).toBe("yaml");
-    expect(inferKind("config.yml")).toBe("yaml");
-    expect(inferKind("inbox-triage.lobster")).toBe("yaml");
-  });
-});
-
-describe("universal verbs — yaml dispatch", () => {
   it.each([
     { text: "1", key: 1 },
     { text: "true", key: true },
@@ -103,10 +81,12 @@ describe("universal verbs — yaml dispatch", () => {
     const written = parseYaml(result.raw).doc;
     expect(written.get(key)).toBe("updated");
     expect(written.get("untouched")).toBe("keep");
+    expect(() => set(`${text}: old\n`, `+${text}`, "new")).toThrow(error("unresolved"));
   });
 
   it.each([
     [LOBSTER, "name", { kind: "leaf", valueText: "inbox-triage", leafType: "string" }],
+    [LOBSTER, "alias", { kind: "leaf", valueText: "inbox-triage", leafType: "string" }],
     [LOBSTER, "steps.0", { kind: "node", descriptor: "yaml-map" }],
     ["name: inbox\n", "+owner", { kind: "insertion-point", container: "yaml-map" }],
     ["- a\n", "+", { kind: "insertion-point", container: "yaml-seq" }],
@@ -118,29 +98,37 @@ describe("universal verbs — yaml dispatch", () => {
     expect(resolveOcPath(parseYaml("hello\n"), path("+"))).toBeNull();
   });
 
-  it("setOcPath coerces numeric string to number for number leaf", () => {
-    expect(set("count: 5\n", "count", "42").raw).toContain("count: 42");
+  it.each([
+    ["count: 5\n", "count", "abc", "parse-error"],
+    ["config:\n  a: 1\n", "config/+a", "99", "unresolved"],
+    ["config:\n  false: old\n", "config/+false", "new", "unresolved"],
+  ])("rejects universal edits of %s at %s", (raw, address, value, reason) => {
+    expect(() => set(raw, address, value)).toThrow(error(reason));
   });
 
-  it("setOcPath reports parse-error for invalid coercion", () => {
-    expect(() => set("count: 5\n", "count", "abc")).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+  it.each([
+    [[timestampRow], "original"],
+    [[timestampRow, stringRow], "original"],
+    [[stringRow, timestampRow], "untouched"],
+  ] as const)("does not redirect edits after cloning: %s", (rows, valueText) => {
+    const raw = `%YAML 1.1\n---\n${rows.join("\n")}\n`;
+    const ast = parseYaml(raw);
+    const targetPath = parseOcPath(`oc://x.yaml/${JSON.stringify(timestampSpelling)}`);
+    expect(resolveOcPath(ast, targetPath)).toMatchObject({ valueText, line: 3 });
+    if (valueText === "untouched") {
+      const result = setOcPath(ast, targetPath, "updated");
+      expect(result.raw).toBe(raw.replace(": untouched", ": updated"));
+    } else {
+      expect(() => setOcPath(ast, targetPath, "updated")).toThrow(error("unresolved"));
+    }
+    expect(ast.raw).toBe(raw);
   });
-});
 
-describe("universal verbs — yaml insertion", () => {
   it.each([
     ["items: []\n", "items/+", '"a"', "items: [ a ]"],
-    ["config:\n  a: 1\n", "config/+b", "2", "b: 2"],
+    ["true: old\n", "+false", "new", '"false": new'],
   ])("inserts into %s at %s", (raw, address, value, expected) => {
     expect(set(raw, address, value).raw).toContain(expected);
-  });
-
-  it("rejects duplicate map key on insertion", () => {
-    expect(() => set("config:\n  a: 1\n", "config/+a", "99")).toThrow(
-      expect.objectContaining({ reason: "unresolved" }),
-    );
   });
 
   it.each([
@@ -150,5 +138,10 @@ describe("universal verbs — yaml insertion", () => {
     ["items: []\n", "items/+", `{"${REDACTED_SENTINEL}":"2"}`],
   ])("rejects sentinel-bearing YAML before raw emit: %s at %s", (raw, address, value) => {
     expect(() => set(raw, address, value)).toThrow(OcEmitSentinelError);
+  });
+  it("stops recursive alias cycles without dropping the first edge", () => {
+    const ast = parseYaml("root: &root\n  label: ok\n  self: *root\n");
+    const matches = findOcPaths(ast, path("**/label"));
+    expect(matches.map(({ path: p }) => p.section)).toEqual(["root", "root.self"]);
   });
 });

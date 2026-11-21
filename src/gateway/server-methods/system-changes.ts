@@ -9,11 +9,18 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CONFIG_AUDIT_SCOPE, type ConfigAuditRecord } from "../../config/io.audit.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../../infra/cli-root-options.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSqliteAuditRecordReader } from "../../infra/sqlite-audit-record-store.async.js";
 import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-record.kernel.js";
-import { SYSTEM_AGENT_AUDIT_SCOPE, type SystemAgentAuditEntry } from "../../system-agent/audit.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
+import type { UserProfileRoleChange } from "../../state/user-profile-writes.js";
+import {
+  appendSystemAgentAuditEntry,
+  SYSTEM_AGENT_AUDIT_SCOPE,
+  type SystemAgentAuditEntry,
+} from "../../system-agent/audit.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 const DEFAULT_CHANGE_LIMIT = 50;
@@ -29,6 +36,46 @@ const CONFIG_WRITE_PREFIXES = new Map<SystemChangeEntry["source"], string>([
   ["system-agent", "OpenClaw updated configuration"],
   ["cli", "CLI updated configuration"],
 ]);
+
+const ROLE_ASSIGNMENT_OPERATION = "users.setRole";
+
+/**
+ * Records one committed `users.setRole` transition in the shared change history.
+ * The role already committed, so a failed record only warns and never fails the request.
+ */
+export async function recordRoleAssignmentChange(
+  change: UserProfileRoleChange,
+  client: GatewayClient | null,
+  log: Pick<SubsystemLogger, "warn">,
+): Promise<void> {
+  // Keep only the most specific requester identifier; never link profile and device.
+  const profileId =
+    client?.internal?.operatorRunAuthority?.profileId ??
+    client?.authenticatedUserProfile?.profileId;
+  const deviceId = client?.connect?.device?.id;
+  const actor = profileId
+    ? { kind: "profile", id: profileId }
+    : deviceId
+      ? { kind: "device", id: deviceId }
+      : { kind: "client", id: client?.connect?.client?.id ?? "unknown" };
+  const by = `${actor.kind} ${actor.id}`;
+  // Role names are free-form; JSON quoting keeps embedded quotes and newlines unambiguous.
+  const from = change.previousRole === null ? "no role" : JSON.stringify(change.previousRole);
+  try {
+    await appendSystemAgentAuditEntry({
+      operation: ROLE_ASSIGNMENT_OPERATION,
+      summary:
+        change.role === null
+          ? `Role for profile ${change.profileId} cleared (was ${from}) by ${by}`
+          : `Role for profile ${change.profileId} changed from ${from} to ${JSON.stringify(change.role)} by ${by}`,
+      details: { ...change, actor },
+    });
+  } catch (error) {
+    log.warn(
+      `users.setRole committed, but its change-history record failed: ${formatErrorMessage(error)}`,
+    );
+  }
+}
 
 type PendingCollapse = {
   transition: string;
@@ -163,7 +210,8 @@ function toSystemAgentCandidate(
       id: `${SYSTEM_AGENT_AUDIT_SCOPE}:${record.sequence}`,
       at: parseDateStringTimestampMs(record.value.timestamp) ?? record.createdAt,
       kind: "operation",
-      source: "system-agent",
+      // Role assignments arrive through the Gateway admin API; v4 has no narrower source.
+      source: record.value.operation === ROLE_ASSIGNMENT_OPERATION ? "config-rpc" : "system-agent",
       summary: record.value.summary,
     },
     transition: transitionKey(record.value.configHashBefore, record.value.configHashAfter),
@@ -354,75 +402,6 @@ function consumePendingCollapse(pending: PendingCollapse[], candidate: ChangeCan
   return true;
 }
 
-function mergeCandidates(params: {
-  systemCandidates: ChangeCandidate[];
-  configCandidates: ChangeCandidate[];
-  pendingCollapse: readonly PendingCollapse[];
-  limit: number;
-}): {
-  entries: ChangeCandidate[];
-  systemBefore?: number;
-  configBefore?: number;
-  pendingCollapse: PendingCollapse[];
-  hasBufferedSystemEntries: boolean;
-  hasBufferedConfigEntries: boolean;
-} {
-  let systemIndex = 0;
-  let configIndex = 0;
-  let systemBefore: number | undefined;
-  let configBefore: number | undefined;
-  const pendingCollapse = [...params.pendingCollapse];
-  const entries: ChangeCandidate[] = [];
-
-  while (true) {
-    const system = params.systemCandidates[systemIndex];
-    const config = params.configCandidates[configIndex];
-    const next =
-      system && config
-        ? compareCandidates(system, config) <= 0
-          ? system
-          : config
-        : (system ?? config);
-    if (!next) {
-      break;
-    }
-
-    if (next === config && consumePendingCollapse(pendingCollapse, config)) {
-      configBefore = config.position.sequence;
-      configIndex += 1;
-      continue;
-    }
-    if (entries.length >= params.limit) {
-      break;
-    }
-
-    entries.push(next);
-    if (next === system) {
-      systemBefore = system.position.sequence;
-      systemIndex += 1;
-      if (system.pendingCollapse) {
-        pendingCollapse.push(system.pendingCollapse);
-        // Dropped markers can reveal duplicate config rows, never hide newer history.
-        if (pendingCollapse.length > MAX_PENDING_COLLAPSES) {
-          pendingCollapse.shift();
-        }
-      }
-    } else {
-      configBefore = config!.position.sequence;
-      configIndex += 1;
-    }
-  }
-
-  return {
-    entries,
-    systemBefore,
-    configBefore,
-    pendingCollapse,
-    hasBufferedSystemEntries: systemIndex < params.systemCandidates.length,
-    hasBufferedConfigEntries: configIndex < params.configCandidates.length,
-  };
-}
-
 async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number> {
   const sequence = (await latest({ limit: 1 }))[0]?.sequence;
   return sequence === undefined ? 0 : sequence + 1;
@@ -430,25 +409,16 @@ async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number
 
 export async function listSystemChanges(
   params: SystemChangesListParams,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    systemStore?: AuditStore<SystemAgentAuditEntry>;
-    configStore?: AuditStore<ConfigAuditRecord>;
-  } = {},
 ): Promise<SystemChangesListResult> {
-  const env = options.env ?? process.env;
-  const systemStore =
-    options.systemStore ??
-    createSqliteAuditRecordReader<SystemAgentAuditEntry>({
-      scope: SYSTEM_AGENT_AUDIT_SCOPE,
-      env,
-    });
-  const configStore =
-    options.configStore ??
-    createSqliteAuditRecordReader<ConfigAuditRecord>({
-      scope: CONFIG_AUDIT_SCOPE,
-      env,
-    });
+  const env = process.env;
+  const systemStore: AuditStore<SystemAgentAuditEntry> = createSqliteAuditRecordReader({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    env,
+  });
+  const configStore: AuditStore<ConfigAuditRecord> = createSqliteAuditRecordReader({
+    scope: CONFIG_AUDIT_SCOPE,
+    env,
+  });
   const cursor = params.beforeCursor
     ? decodeCursor(params.beforeCursor)
     : {
@@ -497,23 +467,64 @@ export async function listSystemChanges(
       operation.entry.changedPaths = [...write.entry.changedPaths];
     }
   }
-  const merged = mergeCandidates({
-    systemCandidates,
-    configCandidates,
-    pendingCollapse: cursor.pendingCollapse ?? [],
-    limit,
-  });
+  let systemIndex = 0;
+  let configIndex = 0;
+  let systemBefore: number | undefined;
+  let configBefore: number | undefined;
+  const collapseMarkers = [...(cursor.pendingCollapse ?? [])];
+  const entries: ChangeCandidate[] = [];
+
+  while (true) {
+    const system = systemCandidates[systemIndex];
+    const config = configCandidates[configIndex];
+    const next =
+      system && config
+        ? compareCandidates(system, config) <= 0
+          ? system
+          : config
+        : (system ?? config);
+    if (!next) {
+      break;
+    }
+
+    if (next === config && consumePendingCollapse(collapseMarkers, config)) {
+      configBefore = config.position.sequence;
+      configIndex += 1;
+      continue;
+    }
+    if (entries.length >= limit) {
+      break;
+    }
+
+    entries.push(next);
+    if (next === system) {
+      systemBefore = system.position.sequence;
+      systemIndex += 1;
+      if (system.pendingCollapse) {
+        collapseMarkers.push(system.pendingCollapse);
+        // Dropped markers can reveal duplicate config rows, never hide newer history.
+        if (collapseMarkers.length > MAX_PENDING_COLLAPSES) {
+          collapseMarkers.shift();
+        }
+      }
+    } else {
+      configBefore = config!.position.sequence;
+      configIndex += 1;
+    }
+  }
+
+  const hasBufferedSystemEntries = systemIndex < systemCandidates.length;
+  const hasBufferedConfigEntries = configIndex < configCandidates.length;
   // Payload timestamps can move backwards, so only discard markers after every
   // remaining config record has passed the cursor and none was a partner.
-  const pendingCollapse =
-    configScan.exhausted && !merged.hasBufferedConfigEntries ? [] : merged.pendingCollapse;
+  const pendingCollapse = configScan.exhausted && !hasBufferedConfigEntries ? [] : collapseMarkers;
   const next = {
     ...cursor,
-    systemAgentBefore: merged.hasBufferedSystemEntries
-      ? (merged.systemBefore ?? cursor.systemAgentBefore)
+    systemAgentBefore: hasBufferedSystemEntries
+      ? (systemBefore ?? cursor.systemAgentBefore)
       : systemScan.nextBeforeSequence,
-    configBefore: merged.hasBufferedConfigEntries
-      ? (merged.configBefore ?? cursor.configBefore)
+    configBefore: hasBufferedConfigEntries
+      ? (configBefore ?? cursor.configBefore)
       : configScan.nextBeforeSequence,
   };
   if (pendingCollapse.length > 0) {
@@ -522,8 +533,8 @@ export async function listSystemChanges(
     delete next.pendingCollapse;
   }
   const hasMore =
-    merged.hasBufferedSystemEntries ||
-    merged.hasBufferedConfigEntries ||
+    hasBufferedSystemEntries ||
+    hasBufferedConfigEntries ||
     pendingCollapse.length > 0 ||
     !systemScan.exhausted ||
     !configScan.exhausted;
@@ -531,10 +542,8 @@ export async function listSystemChanges(
     next.systemAgentBefore !== cursor.systemAgentBefore ||
     next.configBefore !== cursor.configBefore;
   return {
-    entries: merged.entries.map((candidate) => candidate.entry),
-    ...(hasMore && (merged.entries.length > 0 || scanAdvanced)
-      ? { nextCursor: encodeCursor(next) }
-      : {}),
+    entries: entries.map((candidate) => candidate.entry),
+    ...(hasMore && (entries.length > 0 || scanAdvanced) ? { nextCursor: encodeCursor(next) } : {}),
   };
 }
 

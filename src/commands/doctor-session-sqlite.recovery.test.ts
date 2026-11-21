@@ -51,11 +51,8 @@ describe("runDoctorSessionSqlite", () => {
         fs.writeFileSync(store.storePath, "{}\n");
       }
       const scope = {
-        agentId: "main",
-        env: store.env,
-        sessionId: "session-1",
+        ...sessionScope(store),
         sessionKey: state === "unindexed" ? "agent:main:recovered:session-1" : "agent:main:main",
-        storePath: store.storePath,
       };
       if (state === "prefix" || state === "complete") {
         const prefix = path.join(store.tempDir, "prefix.jsonl");
@@ -292,18 +289,15 @@ describe("runDoctorSessionSqlite", () => {
     const original = fs.readFileSync(store.transcriptPath);
 
     await importSqliteSessionRows({
-      agentId: "token-supersecret",
-      env: store.env,
-      sessionKey: "agent:main:main",
-      storePath: store.storePath,
+      ...sessionScope(store, "token-supersecret"),
       entry: { sessionId: "session-1", updatedAt: 2000 },
       readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1", true),
     });
 
     const report = await importLegacyStore(store);
     const inspect = await runStoreDoctor(store, "inspect");
-    expect(report.totals.issues).toBe(1);
     expect(report.totals).toMatchObject({
+      issues: 1,
       archivedTranscriptFiles: 2,
       archivedUnreferencedJsonlFiles: 1,
       importedEntries: 1,
@@ -335,15 +329,7 @@ describe("runDoctorSessionSqlite", () => {
 
   it("reports malformed selected legacy transcripts during validation", async () => {
     const store = createLegacyStore({ transcriptLines: ['{"type":"session"}', "{bad"] });
-    await upsertEntry(
-      {
-        agentId: "main",
-        env: store.env,
-        sessionKey: "agent:main:main",
-        storePath: store.storePath,
-      },
-      { sessionId: "session-1", updatedAt: 2000 },
-    );
+    await upsertEntry(sessionScope(store), { sessionId: "session-1", updatedAt: 2000 });
 
     const report = await runStoreDoctor(store, "validate");
 

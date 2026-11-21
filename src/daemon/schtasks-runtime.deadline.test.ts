@@ -5,6 +5,7 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { readScheduledTaskRuntime, resolveFallbackRuntime } from "./schtasks-runtime.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
+import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 
 type NativeResult = Pick<SpawnSyncReturns<string>, "stdout" | "stderr" | "status" | "error">;
 const native = vi.hoisted(() =>
@@ -78,6 +79,30 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each([false, true])(
+  "carries StartupEntry executable only before deadline expiry=%s",
+  async (expired) => {
+    const startup = "C:\\Startup\\gateway.cmd";
+    const script = "C:\\service\\gateway.cmd";
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) =>
+      Buffer.from(
+        pathname === startup
+          ? `@echo off\r\nstart "" /min C:\\Windows\\System32\\cmd.exe /d /c "${script}"\r\n`
+          : `@echo off\r\n"C:\\node.exe" "C:\\openclaw\\entry.js" gateway run --port 18789\r\n`,
+      ),
+    );
+    processElapsed = expired ? 101 : 1;
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: {},
+      windowsStartupEntry: startup,
+      timeoutMs: 100,
+    });
+    expect(state.effectiveExecutable).toBe(expired ? undefined : "C:\\node.exe");
+    expect(state.command?.programArguments).toEqual(command("gateway").programArguments);
+    expect(state.runtime?.status).toBe(expired ? "unknown" : "stopped");
+  },
+);
 
 it.each(["gateway", "node"] as const)("ignores PID 0 for %s", async (kind) => {
   processOutput = snapshot({ ProcessId: 0, CommandLine: null });

@@ -40,7 +40,7 @@ suite.define(() => {
       await side.getByText(sideAnswer, { exact: true }).waitFor();
       const pending = side.locator(".chat-session-rail__exchange--pending");
       const failed = side.locator(".chat-session-rail__exchange--error");
-      const questionSelector = ".chat-session-rail__question";
+      const questionSelector = ".chat-group.user .chat-bubble";
       const composer =
         entry === "composer"
           ? side.getByRole("textbox")

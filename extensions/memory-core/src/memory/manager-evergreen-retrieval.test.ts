@@ -11,26 +11,22 @@ const { DatabaseSync } = requireNodeSqlite();
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function readIndex(dbPath: string) {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return {
-      chunks: db
-        .prepare(
-          "SELECT id, path, source, hash, text, embedding, updated_at FROM memory_index_chunks ORDER BY id",
-        )
-        .all(),
-      sources: db
-        .prepare(
-          "SELECT path, source, hash, mtime, size FROM memory_index_sources ORDER BY path, source",
-        )
-        .all(),
-      identity: db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-        .get(),
-    };
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(dbPath, { readOnly: true });
+  return {
+    chunks: db
+      .prepare(
+        "SELECT id, path, source, hash, text, embedding, updated_at FROM memory_index_chunks ORDER BY id",
+      )
+      .all(),
+    sources: db
+      .prepare(
+        "SELECT path, source, hash, mtime, size FROM memory_index_sources ORDER BY path, source",
+      )
+      .all(),
+    identity: db
+      .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+      .get(),
+  };
 }
 
 // The public engine always enables hybrid search. Set its resolved input only

@@ -17,12 +17,8 @@ describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
     to?: string;
     currentGraphChannelId?: string;
   }) {
-    const resolve = msteamsPlugin.threading?.resolveAutoThreadId;
-    if (!resolve) {
-      throw new Error("msteams threading.resolveAutoThreadId unavailable");
-    }
-    return resolve({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
+    return autoThread({
+      cfg: params.cfg ?? {},
       accountId: params.accountId,
       to: params.to ?? "conversation:19:channel@thread.tacv2",
       toolContext: {
@@ -35,36 +31,16 @@ describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
     });
   }
 
-  it("returns undefined for a global top-level reply style", () => {
-    expect(
-      resolveAutoThreadId({
-        cfg: { channels: { msteams: { replyStyle: "top-level" } } } as OpenClawConfig,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("honors a named account top-level reply style", () => {
-    expect(
-      resolveAutoThreadId({
-        accountId: "ops",
-        cfg: {
-          channels: {
-            msteams: {
-              replyStyle: "thread",
-              accounts: { ops: { replyStyle: "top-level" } },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined when requireMention defaults the reply style to top-level", () => {
-    expect(
-      resolveAutoThreadId({
-        cfg: { channels: { msteams: { requireMention: false } } } as OpenClawConfig,
-      }),
-    ).toBeUndefined();
+  it.each([
+    ["global reply style", { replyStyle: "top-level" }, undefined],
+    [
+      "named account override",
+      { replyStyle: "thread", accounts: { ops: { replyStyle: "top-level" } } },
+      "ops",
+    ],
+    ["requireMention default", { requireMention: false }, undefined],
+  ] as const)("does not auto-thread under top-level %s", (_name, msteams, accountId) => {
+    expect(resolveAutoThreadId({ accountId, cfg: { channels: { msteams } } })).toBeUndefined();
   });
 
   it("honors team and channel reply style overrides", () => {

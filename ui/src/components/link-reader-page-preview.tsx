@@ -2,21 +2,19 @@ import { Show } from "solid-js";
 import type { ControlUiLinkPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createPreviewRenderer } from "./link-reader-preview-root.ts";
+import { createPreviewRenderer } from "./link-reader-preview-root.tsx";
 import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import "../styles/link-hovercard.css";
 
-type PagePreview = {
+const renderPageContent = createPreviewRenderer<{
   href: string;
   fallbackTitle: string;
   preview: ControlUiLinkPreview;
   failedImages: ReadonlySet<string>;
   failed: (src: string) => void;
   position: () => void;
-};
-
-const renderPageContent = createPreviewRenderer<PagePreview>(
+}>(
   (props) => {
     const host = () => new URL(props.value.href).host;
     const title = () => props.value.preview.title || props.value.fallbackTitle || host();

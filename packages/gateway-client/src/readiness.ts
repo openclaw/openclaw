@@ -25,27 +25,24 @@ export type GatewayClientStartReadinessOptions = {
   signal?: AbortSignal;
 };
 
-function resolveGatewayClientStartReadinessTimeoutMs(
-  options: GatewayClientStartReadinessOptions = {},
-): number {
-  if (typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)) {
-    return options.timeoutMs;
-  }
-  const clientOptions = options.clientOptions ?? {};
-  return resolveConnectChallengeTimeoutMs(clientOptions.connectChallengeTimeoutMs, {
-    env: clientOptions.env,
-    configuredTimeoutMs: clientOptions.preauthHandshakeTimeoutMs,
-  });
-}
-
 /** Starts a gateway client only after the supplied readiness probe succeeds. */
 export async function startGatewayClientWithReadinessWait(
   waitForReady: EventLoopReadyWaiter,
   client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},
 ): Promise<EventLoopReadyResult> {
+  let maxWaitMs: number;
+  if (typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)) {
+    maxWaitMs = options.timeoutMs;
+  } else {
+    const clientOptions = options.clientOptions ?? {};
+    maxWaitMs = resolveConnectChallengeTimeoutMs(clientOptions.connectChallengeTimeoutMs, {
+      env: clientOptions.env,
+      configuredTimeoutMs: clientOptions.preauthHandshakeTimeoutMs,
+    });
+  }
   const readiness = await waitForReady({
-    maxWaitMs: resolveGatewayClientStartReadinessTimeoutMs(options),
+    maxWaitMs,
     signal: options.signal,
   });
   if (readiness.ready && !readiness.aborted && options.signal?.aborted !== true) {

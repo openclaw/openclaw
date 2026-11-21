@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, vi } from "vitest";
 import {
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
   type SqliteTransactionOptions,
 } from "../../infra/sqlite-transaction.js";
 import {
@@ -35,6 +36,10 @@ import type {
   SessionActorPhase,
   SessionActorPhaseResults,
 } from "./session-actor-contract.js";
+import {
+  restoreSessionActorCommittedOutcome,
+  type SessionActorEntryReference,
+} from "./session-actor-receipt.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
@@ -74,13 +79,14 @@ export function sessionActorFileTarget(
 
 export function seedSessionActorOutcomeTransferEntry(
   fixture: Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">,
+  bytes = SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024,
 ): void {
   // Transfer coverage needs a genuinely oversized result, not copied history indexes.
   runSqliteImmediateTransactionSync(fixture.database.db, () =>
     writeSessionEntry(fixture.database, fixture.scope.sessionKey, {
       sessionId: fixture.scope.sessionId,
       updatedAt: 1,
-      skillsSnapshot: { prompt: "s".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024), skills: [] },
+      skillsSnapshot: { prompt: "s".repeat(bytes), skills: [] },
     }),
   );
 }
@@ -102,6 +108,7 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     transactions: number;
   } = { transactions: 0 };
   let commitFacts: unknown;
+  let admissionReference: SessionActorEntryReference | undefined;
   let transferredOutcome: unknown;
   let outcomeTransfer: ReturnType<typeof createSqliteWorkerTransferCollector> | undefined;
   let lastReply: SessionActorOperations["session.actor.patch"]["output"] | undefined;
@@ -111,6 +118,14 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     admit(stage, facts) {
       hooks.admit?.(stage, facts);
       if (
+        stage === "transaction" &&
+        isRecord(facts) &&
+        isRecord(facts.snapshot) &&
+        "writeToken" in facts.snapshot
+      ) {
+        admissionReference = structuredClone(facts.snapshot) as SessionActorEntryReference;
+      }
+      if (
         isRecord(facts) &&
         isRecord(facts.publication) &&
         facts.publication.kind === "session-actor-outcome"
@@ -118,14 +133,17 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
         outcomeTransfer?.accept(facts.publication.transfer);
       }
     },
-    writeTransaction(operationLabel, _owner, write, diagnosticContext) {
+    writeTransaction(operationLabel, _owner, write, diagnosticContext, singleStatement) {
       hooks.transactions += 1;
-      const result = runSqliteImmediateTransactionSync(database.db, () => write(database), {
-        ...hooks.transactionOptions,
-        operationLabel,
-        diagnosticContext,
-        withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
-      });
+      const result =
+        singleStatement && !hooks.withCommit && !hooks.transactionOptions
+          ? runSqliteSingleStatementSync(database.db, () => write(database))
+          : runSqliteImmediateTransactionSync(database.db, () => write(database), {
+              ...hooks.transactionOptions,
+              operationLabel,
+              diagnosticContext,
+              withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
+            });
       hooks.afterTransaction?.();
       return result;
     },
@@ -172,6 +190,7 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     },
     mutate(command: Mutation): Outcome {
       commitFacts = undefined;
+      admissionReference = undefined;
       transferredOutcome = undefined;
       outcomeTransfer = createSqliteWorkerTransferCollector("outcome", (value) => {
         transferredOutcome = value;
@@ -193,7 +212,13 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
         "Actor acknowledgement has no native committed outcome",
       );
       // The worker's native receipt is the typed outcome; the command reply carries only failure.
-      const committed = evidence as Extract<Outcome, { kind: "committed" }>;
+      let committed = evidence as Extract<Outcome, { kind: "committed" }>;
+      if (admissionReference) {
+        committed = restoreSessionActorCommittedOutcome(
+          structuredClone(committed),
+          admissionReference,
+        );
+      }
       return value.failure ? { ...committed, failure: value.failure } : committed;
     },
     reply: () => lastReply,
@@ -229,10 +254,10 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
       database = reopen(context.options);
     },
     closeActor: () => actor.close(),
-    close() {
+    async close() {
       actor.close();
       wire.mockRestore();
-      admission.finish();
+      await admission.finish();
       port1.close();
       port2.close();
     },
@@ -254,7 +279,7 @@ export async function withActor(run: (fixture: Fixture) => void | Promise<void>)
     try {
       await run(fixture);
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 }

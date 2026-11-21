@@ -18,6 +18,10 @@ import {
   WorktreeCapacityContentionError,
   WORKTREE_CAPACITY_RESERVATION_SCOPE,
 } from "./capacity.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const roots = useWorktreeStateRoots();
@@ -71,39 +75,26 @@ function fixture() {
 it("releases off-thread disk debt after caller and schema admission end", async () => {
   const f = fixture();
   const caller = new AbortController();
-  await withSchema({ path: f.database.path }, () => {
-    const leaseContext = captureOpenClawStateWorkerContext({ env: f.env });
-    return stateLeases.withOpenClawStateLeaseAsync(
-      {
-        scope: WORKTREE_MUTATION_LEASE_SCOPE,
-        key: "retirement",
-        leaseMs: 60_000,
-        waitMs: 0,
-        heartbeat: "worker",
-      },
-      leaseContext,
-      async (lease) => {
-        const ended = await withSchema({ path: f.database.path }, async () => {
-          const context = captureOpenClawStateWorkerContext({ env: f.env });
-          const capacity = createWorktreeDiskAdmission({
-            env: f.env,
-            workerAuthority: {
-              leaseSet: { context: leaseContext, leases: [lease] },
-              assertCurrent: () => caller.signal.throwIfAborted(),
-            },
-            assertCurrent: () => caller.signal.throwIfAborted(),
-          });
-          await expectOffThread(() => reserve(capacity, f.root), true);
-          return { capacity, context };
+  const assertCurrent = () => caller.signal.throwIfAborted();
+  await withSchema({ path: f.database.path }, () =>
+    withWorktreeMutationLease({ env: f.env, id: "retirement" }, async (guard) => {
+      const ended = await withSchema({ path: f.database.path }, async () => {
+        const context = captureOpenClawStateWorkerContext({ env: f.env });
+        const capacity = createWorktreeDiskAdmission({
+          env: f.env,
+          workerAuthority: { ...guard.workerAuthority, assertCurrent },
+          assertCurrent,
         });
-        expect(f.debts()).toHaveLength(1);
-        caller.abort(new Error("caller cancelled"));
-        expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
-        await expectOffThread(() => ended.capacity.release());
-        expect(f.debts()).toEqual([]);
-      },
-    );
-  });
+        await expectOffThread(() => reserve(capacity, f.root), true);
+        return { capacity, context };
+      });
+      expect(f.debts()).toHaveLength(1);
+      caller.abort(new Error("caller cancelled"));
+      expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
+      await expectOffThread(() => ended.capacity.release());
+      expect(f.debts()).toEqual([]);
+    }),
+  );
 });
 
 it("rolls back disk admission on owner revocation at worker commit", async () => {
@@ -115,7 +106,6 @@ it("rolls back disk admission on owner revocation at worker commit", async () =>
       reserve(guard, f.root),
     ),
   ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-  expect(caller.signal.aborted).toBe(true);
   expect(f.debts()).toEqual([]);
 });
 
@@ -149,7 +139,6 @@ it.for(["parent", "child"] as const)(
         });
         try {
           await expect(reserve(capacity, f.root)).rejects.toMatchObject(lost);
-          expect(restoreClock).toBeDefined();
           expect(f.debts()).toEqual([]);
         } finally {
           restoreClock?.();
@@ -178,6 +167,64 @@ it("preserves typed capacity contention across the worker result boundary", asyn
   expect(f.debts()).toEqual([]);
 });
 
+it("settles completed byte debt on refusal without reserving refused increases", async () => {
+  const f = fixture();
+  useInProcessWorktreeCapacityTransport();
+  const GiB = 1024 ** 3;
+  const stats = fs.statfsSync(f.root);
+  let available = 100 * GiB;
+  vi.spyOn(fs, "statfsSync").mockImplementation(() =>
+    createWorktreeCapacityStatfs(stats, available),
+  );
+  await withWorktreeMutationLease({ env: f.env, id: "first" }, async (first) => {
+    await withWorktreeMutationLease({ env: f.env, id: "second" }, async (second) => {
+      await reserve(first, f.root, 1024 ** 2, false);
+      await reserve(second, f.root, 1024 ** 2, false);
+      available = 4 * GiB;
+      await expect(reserve(first, f.root, 0, false)).rejects.toBeInstanceOf(
+        WorktreeCapacityContentionError,
+      );
+      await expect(reserve(second, f.root, 0, false)).resolves.toBeUndefined();
+      await expect(reserve(first, f.root, 1, false)).rejects.toThrow(/disk space/i);
+      await expect(reserve(second, f.root, 0, false)).resolves.toBeUndefined();
+      expect(f.debts()).toHaveLength(2);
+    });
+  });
+  expect(f.debts()).toEqual([]);
+});
+
+it.for(["pending bytes", "stronger reserve"] as const)(
+  "waits on the peer contributing %s instead of an earlier debt-free peer",
+  async (blocking) => {
+    const f = fixture();
+    useInProcessWorktreeCapacityTransport();
+    const GiB = 1024 ** 3;
+    const stats = fs.statfsSync(f.root);
+    let available = 100 * GiB;
+    vi.spyOn(fs, "statfsSync").mockImplementation(() =>
+      createWorktreeCapacityStatfs(stats, available),
+    );
+    await withWorktreeMutationLease({ env: f.env, id: "planning" }, async (planning) => {
+      await reserve(planning, f.root, 0);
+      const [empty] = f.debts();
+      await withWorktreeMutationLease({ env: f.env, id: "blocking" }, async (writer) => {
+        await reserve(writer, f.root, blocking === "pending bytes" ? 1024 ** 2 : 0, false);
+        const held = f.debts().find((row) => row.lease_key !== empty?.lease_key);
+        available = blocking === "pending bytes" ? 4 * GiB : 2 * GiB;
+        await expect(
+          withWorktreeMutationLease({ env: f.env, id: "contender" }, (contender) =>
+            reserve(contender, f.root, 1, blocking === "stronger reserve"),
+          ),
+        ).rejects.toMatchObject({
+          name: WorktreeCapacityContentionError.name,
+          reservationKey: held?.lease_key,
+        });
+      });
+    });
+    expect(f.debts()).toEqual([]);
+  },
+);
+
 it.each([true, false])(
   "reclaims an exited disk reservation only with its recorded namespace (namespace: %s)",
   async (namespace) => {
@@ -185,7 +232,6 @@ it.each([true, false])(
     await withWorktreeMutationLease({ env: f.env, id: "abandoned" }, async (guard) => {
       await reserve(guard, f.root);
       const [held] = f.debts();
-      expect(held).toBeDefined();
       // Keep the production owner's recorded namespace; only its PID has exited.
       runOpenClawStateWriteTransaction(
         ({ db }) => {

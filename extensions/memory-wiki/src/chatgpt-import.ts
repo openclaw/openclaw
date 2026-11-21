@@ -7,7 +7,7 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readRegularFile, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   isRecord,
@@ -34,6 +34,8 @@ import {
 import { appendMemoryWikiLog } from "./log.js";
 import {
   decodeWikiPageUtf8,
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
   renderWikiMarkdown,
@@ -47,8 +49,6 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
   /\b(prefer|prefers|preference|want|wants|need|needs|avoid|avoids|hate|hates|love|loves|default to|should default to|always use|don't want|does not want|likes|dislikes)\b/i;
-const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
-const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 const MAX_ROLLBACK_RECREATE_ATTEMPTS = 32;
 
 const CHATGPT_RISK_RULES: Array<{ label: string; pattern: RegExp }> = [
@@ -111,10 +111,10 @@ async function loadConversations(exportInputPath: string): Promise<{
   conversations: Record<string, unknown>[];
 }> {
   const exportPath = path.resolve(exportInputPath);
-  const conversationsPath = exportPath.endsWith(".json")
-    ? exportPath
-    : path.join(exportPath, "conversations.json");
-  const raw = await fs.readFile(conversationsPath);
+  const conversationsPath = (await fs.stat(exportPath)).isDirectory()
+    ? path.join(exportPath, "conversations.json")
+    : exportPath;
+  const { buffer: raw } = await readRegularFile({ filePath: await fs.realpath(conversationsPath) });
   if (!isUtf8(raw)) {
     throw new Error(
       `ChatGPT conversations export must be valid UTF-8: ${conversationsPath}. Download a fresh ChatGPT export and retry the import.`,
@@ -143,25 +143,19 @@ function isoFromUnix(raw: unknown): string | undefined {
 
 function cleanMessageText(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (
-    (trimmed.includes("asset_pointer") ||
-      trimmed.includes("image_asset_pointer") ||
-      trimmed.includes("dalle") ||
-      trimmed.includes("file_service")) &&
-    trimmed.length > 40
-  ) {
-    return "";
-  }
-  if (
-    trimmed.startsWith("{") &&
-    trimmed.length > 80 &&
-    (trimmed.includes(":") || trimmed.includes("content_type"))
-  ) {
-    const textMatch = trimmed.match(/["']text["']\s*:\s*(["'])(.+?)\1/s);
-    return textMatch?.[2] ? normalizeWhitespace(textMatch[2]) : "";
+  if (trimmed.startsWith("{")) {
+    let part: Record<string, unknown> | null;
+    try {
+      part = asNullableRecord(JSON.parse(trimmed));
+    } catch {
+      return trimmed;
+    }
+    if (part?.content_type === "text" && typeof part.text === "string") {
+      return part.text.trim();
+    }
+    if (part?.content_type === "image_asset_pointer") {
+      return "";
+    }
   }
   return trimmed;
 }
@@ -591,7 +585,11 @@ export async function importChatGptConversations(params: {
       const rendered = renderConversationPage(record);
       const absolutePath = path.join(params.config.vault.path, record.pagePath);
       const existing = await readExistingWikiPage(
-        async () => decodeWikiPageUtf8(await fs.readFile(absolutePath), absolutePath),
+        async () =>
+          decodeWikiPageUtf8(
+            (await readRegularFile({ filePath: await fs.realpath(absolutePath) })).buffer,
+            absolutePath,
+          ),
         (error) => asNullableRecord(error)?.code === "ENOENT",
       );
       const stabilized = preserveExistingPageBlocks(rendered, existing);

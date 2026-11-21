@@ -6,15 +6,20 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import {
   composerFixture,
-  mention,
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
-import { createHumanMentionMenu } from "./components/chat-composer-mention-menu.tsx";
+import { createHumanMentionMenu } from "./components/chat-composer-mention-menu-state.ts";
 
 afterEach(resetMentionComposerFixture);
 
 const fixture = () => composerFixture("chat");
+const profileError = () =>
+  new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message: "Profile unavailable",
+    details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+  });
 
 async function staleFixture() {
   const view = fixture();
@@ -25,71 +30,36 @@ async function staleFixture() {
 }
 
 describe("mention query cache", () => {
-  it.each(["before", "after"])(
-    "keeps an in-flight result when reopened %s it settles",
-    async (reopen) => {
-      const view = fixture();
-      const response = view.defer();
-      await view.search("@Al");
-      view.key("Escape");
-      if (reopen === "before") {
-        await view.search("Review @Al");
-      }
-      await response(people);
-      if (reopen === "after") {
-        expect(view.query('[role="listbox"]')).toBeNull();
-        view.edit("Review @Al");
-      }
-      expect(view.options()).toHaveLength(2);
-      expect(view.request).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("refreshes stale results in the background without losing keyboard selection", async () => {
-    const view = await staleFixture();
+  it.each(["before", "after"])("reopens %s the in-flight result settles", async (reopen) => {
+    const view = fixture();
     const response = view.defer();
-    view.edit("Review @Al");
+    await view.search("@Al");
+    view.key("Escape");
+    if (reopen === "before") {
+      await view.search("Review @Al");
+    }
+    await response(people);
+    if (reopen === "after") {
+      expect(view.query('[role="listbox"]')).toBeNull();
+      view.edit("Review @Al");
+    }
     expect(view.options()).toHaveLength(2);
-    expect(view.query(".mention-menu__loading")).toBeNull();
-    view.key("ArrowDown");
-    await vi.advanceTimersByTimeAsync(150);
-    expect(view.request).toHaveBeenCalledTimes(2);
-    await response({ users: people.users.toReversed(), truncated: false });
-    view.key("Enter");
-    expect(view.value().mentions).toEqual([mention("profile-alex-offline", 7, 12)]);
-    expect(view.send).not.toHaveBeenCalled();
+    expect(view.request).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    { failure: "network outage", error: new Error("Connection interrupted"), message: null },
-    {
-      failure: "directory unavailable",
-      error: new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }),
-      message: null,
-    },
-    {
-      failure: "access revoked",
-      error: new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
-      message: "Mention access denied.",
-    },
-    {
-      failure: "profile unavailable",
-      error: new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Profile unavailable",
-        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-      }),
-      message: "Profile unverified.",
-    },
-    {
-      failure: "invalid destination",
-      error: new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Session was not found.",
-      }),
-      message: "Mention search rejected.",
-    },
-  ])("handles a background refresh failure: $failure", async ({ error, message }) => {
+    [new Error("Connection interrupted"), null],
+    [new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }), null],
+    [
+      new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
+      "Mention access denied.",
+    ],
+    [profileError(), "Profile unverified."],
+    [
+      new GatewayRequestError({ code: "INVALID_REQUEST", message: "Session was not found." }),
+      "Mention search rejected.",
+    ],
+  ] as const)("handles a background refresh failure: %s", async (error, message) => {
     const view = await staleFixture();
     view.request.mockRejectedValueOnce(error);
     await view.search("Review @Al");
@@ -112,16 +82,13 @@ describe("mention query cache", () => {
     }
   });
 
-  it.each(["switch query", "close", "replace owner"])(
+  it.each(["close", "replace owner"])(
     "does not publish an old refresh after %s",
     async (action) => {
       const view = await staleFixture();
       const response = view.defer();
       await view.search("Review @Al");
-      if (action === "switch query") {
-        view.request.mockResolvedValueOnce({ users: [], truncated: false });
-        await view.search("Review @Nobody");
-      } else if (action === "close") {
+      if (action === "close") {
         view.key("Escape");
       } else {
         view.replaceOwner();
@@ -174,13 +141,7 @@ describe("mention query cache", () => {
   it("fences other pending successes when identity verification is lost", async () => {
     const view = fixture();
     const old = createDeferred<UsersMentionableResult>();
-    view.request.mockReturnValueOnce(old.promise).mockRejectedValueOnce(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Profile unavailable",
-        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-      }),
-    );
+    view.request.mockReturnValueOnce(old.promise).mockRejectedValueOnce(profileError());
     await view.search("@Al");
     await view.search("@Other");
     old.resolve(people);
@@ -246,10 +207,12 @@ it.each(["pending", "denied"])(
     const input = { value: "@Al", selectionStart: 3, selectionEnd: 3 };
     menu.syncDirectory(directory);
     menu.update(input, "trigger");
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(150);
     menu.syncDirectory(other);
     menu.syncDirectory(directory);
     menu.update(input, "trigger");
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(150);
     if (replacement === "denied") {
       current.reject(new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }));

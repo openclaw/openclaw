@@ -80,8 +80,14 @@ function cleanupStorage(params: { registry?: unknown; failureStage?: CleanupFail
   return {
     local,
     session,
-    prepare: () => prepareRetiredCopilotState(chromeApi),
-    discard: () => discardRetiredCopilotState(chromeApi),
+    prepare: () => {
+      vi.stubGlobal("chrome", chromeApi);
+      return prepareRetiredCopilotState();
+    },
+    discard: () => {
+      vi.stubGlobal("chrome", chromeApi);
+      return discardRetiredCopilotState();
+    },
     retry: () => {
       failureStage = undefined;
     },
@@ -173,8 +179,8 @@ it.each(["current", "re-enabled"])(
       runtime: { connectNative: vi.fn(() => port) },
       storage: { local },
     };
+    vi.stubGlobal("chrome", chromeApi);
     const controller = createNativeBootstrapController({
-      chromeApi,
       getPairing: async () => null,
       applyPairing: vi.fn(),
     });
@@ -209,12 +215,14 @@ it.each(["current", "re-enabled"])(
 );
 
 function ensureChromeApi(script: EnsurePortScript | "disconnect") {
-  return { runtime: { connectNative: vi.fn(() => nativePort(script)), lastError: undefined } };
+  vi.stubGlobal("chrome", {
+    runtime: { connectNative: vi.fn(() => nativePort(script)), lastError: undefined },
+  });
 }
 
 describe("requestRelayEnsure", () => {
   it("settles the exact relay wake-up request after the native host answers", async () => {
-    const chromeApi = ensureChromeApi((request) => {
+    ensureChromeApi((request) => {
       expect(request).toEqual({
         v: 1,
         op: "ensure_relay",
@@ -223,12 +231,11 @@ describe("requestRelayEnsure", () => {
       });
       return { v: 1, ok: true, nonce: request.nonce, relay: "spawned" };
     });
-    await expect(requestRelayEnsure(20123, chromeApi)).resolves.toBeUndefined();
+    await expect(requestRelayEnsure(20123)).resolves.toBeUndefined();
   });
 
   it("reports native disconnection to the reconnect owner's failure handler", async () => {
-    await expect(requestRelayEnsure(20123, ensureChromeApi("disconnect"))).rejects.toThrow(
-      "Native messaging host disconnected.",
-    );
+    ensureChromeApi("disconnect");
+    await expect(requestRelayEnsure(20123)).rejects.toThrow("Native messaging host disconnected.");
   });
 });

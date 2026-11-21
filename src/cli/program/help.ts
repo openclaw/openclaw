@@ -129,7 +129,7 @@ export function configureProgramHelp(
     },
     writeErr: (str) => {
       const message = formatProgramHelpOutput(str);
-      process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
+      process.stderr.write(formatConsoleDiagnosticBlock({ message }));
     },
     outputError: (str, write) => {
       write(
@@ -166,6 +166,6 @@ export function configureProgramHelp(
       return "";
     }
     const docs = formatDocsLink("/cli", "docs.openclaw.ai/cli");
-    return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted("Docs:")} ${docs}\n`;
+    return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted("Docs:")} ${docs}\n${theme.muted("Support:")} https://community.openclaw.ai/\n`;
   });
 }

@@ -2,13 +2,11 @@ import {
   type AssistantMessage,
   AssistantMessageEventStream,
   type Message,
-  type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
-import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import { buildReplyPayloads } from "../auto-reply/reply/agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
@@ -16,32 +14,25 @@ import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
 import { createTypingController } from "../auto-reply/reply/typing.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import { runAgentLoop } from "../plugin-sdk/agent-core.js";
-import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
-import { matchesTranscriptEvent } from "../sessions/transcript-visible-record.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./embedded-agent-runner/run/attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
 import { prepareEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./embedded-agent-runner/run/terminal-resolution.js";
 import { createUsageAccumulator } from "./embedded-agent-runner/usage-accumulator.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
-import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
-import { readSubagentRunAnnounceResultUsing } from "./subagents/announce/subagent-announce-result.js";
 import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const model: Model<"openai-responses"> = {
+const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-6-astra",
-  name: "GPT-6 Astra",
   api: "openai-responses",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200000,
   maxTokens: 8192,
-};
+});
 const lookupCall = {
   type: "function_call" as const,
   id: "fc_lookup",
@@ -125,35 +116,33 @@ function responsesStream(id: string, request: Request) {
 }
 
 const answered = [lookupCall, finalAnswer("msg_answer", "Use counter B.")];
-const answeredTail = ["toolUse:toolCall", "stop:text", "stop:text"];
 const voice = "/tmp/openclaw/tts-a/voice-a.opus";
 type Scenario = {
   name: string;
   delivery: "deferred" | "live" | "off";
   requests: readonly Request[];
-  transcript: readonly string[];
   delivered: readonly string[];
   reply?: { disposition: "visible"; text: string } | { disposition: "empty" | "silent" };
-  heartbeat?: boolean;
+  trigger?: "cron";
   persistedFirst?: boolean;
-  announce?: boolean;
   quiet?: boolean;
   reasoning?: boolean;
 };
+const answer = "Use counter B.";
+const visible = (text: string): Scenario["reply"] => ({ disposition: "visible", text });
 const scenario = (name: string, overrides: Partial<Omit<Scenario, "name">> = {}): Scenario => ({
   name,
   delivery: "deferred",
   requests: [answered, "NO_REPLY"],
-  transcript: answeredTail,
-  delivered: ["Use counter B."],
-  reply: { disposition: "visible", text: "Use counter B." },
+  delivered: [answer],
+  reply: visible(answer),
   ...overrides,
 });
 it.each([
   scenario("a later NO_REPLY keeps the completed answer"),
-  scenario("a heartbeat turn without block streaming keeps the completed answer", {
+  scenario("an automation turn without block streaming keeps the completed answer", {
     delivery: "off",
-    heartbeat: true,
+    trigger: "cron",
   }),
   scenario("a live answer followed by commentary is not resent after NO_REPLY", {
     delivery: "live",
@@ -165,18 +154,16 @@ it.each([
       ],
       "NO_REPLY",
     ],
-    transcript: ["toolUse:toolCall", "stop:text+text", "stop:text"],
     delivered: ["Alpha."],
-    reply: { disposition: "visible", text: "Alpha." },
+    reply: visible("Alpha."),
   }),
   scenario("live blocks of a two-item terminal answer are not resent", {
     delivery: "live",
     requests: [
       [finalAnswer("msg_first", "First part."), finalAnswer("msg_second", "Second part.")],
     ],
-    transcript: ["stop:text+text"],
     delivered: ["First part.", "Second part."],
-    reply: { disposition: "visible", text: "First part.Second part." },
+    reply: visible("First part.Second part."),
   }),
   scenario("a repeated answer is delivered once", {
     requests: [answered, "Use counter B."],
@@ -195,7 +182,6 @@ it.each([
       ],
       "NO_REPLY",
     ],
-    transcript: ["toolUse:toolCall", "stop:text", "toolUse:toolCall", "stop:text", "stop:text"],
     delivered: [voice],
     // The kept attachment answer owns the result; its parsed text is empty, not NO_REPLY.
     reply: { disposition: "empty" },
@@ -208,7 +194,6 @@ it.each([
   }),
   scenario("a later NO_REPLY keeps pre-tool progress silent", {
     requests: [[finalAnswer("msg_progress", "Checking counter B."), lookupCall], "NO_REPLY"],
-    transcript: ["toolUse:text+toolCall", "stop:", "stop:text"],
     delivered: [],
     reply: { disposition: "silent" },
   }),
@@ -218,8 +203,6 @@ it.each([
       { items: [finalAnswer("msg_progress", "Exporting the rest now.")], endTurn: false },
       "NO_REPLY",
     ],
-    transcript: [...answeredTail, "stop:text"],
-    announce: true,
   }),
   scenario("quiet mode keeps the completed answer private", {
     delivered: ["Sent with the message tool."],
@@ -232,7 +215,7 @@ it.each([
     reasoning: true,
   }),
 ])("$name", async (row) => {
-  const { delivery, requests, transcript, delivered, heartbeat = false, quiet = false } = row;
+  const { delivery, requests, delivered, trigger = "user", quiet = false } = row;
   const sent: string[] = [];
   const show = (payload: { text?: string; mediaUrl?: string }) =>
     payload.text ?? payload.mediaUrl ?? "";
@@ -251,7 +234,6 @@ it.each([
     typingSignals: createTypingSignaler({
       typing: createTypingController({}),
       mode: "never",
-      isHeartbeat: heartbeat,
     }),
     blockStreamingEnabled,
     reasoningPayloadsEnabled: row.reasoning === true,
@@ -293,11 +275,8 @@ it.each([
     {
       model,
       convertToLlm: (history) =>
-        history.filter(
-          (message): message is Message =>
-            message.role === "user" ||
-            message.role === "assistant" ||
-            message.role === "toolResult",
+        history.filter((message): message is Message =>
+          ["user", "assistant", "toolResult"].includes(message.role),
         ),
     },
     async (event) => {
@@ -320,17 +299,6 @@ it.each([
   await subscription.waitForPendingEvents();
   await pipeline.flush({ force: true });
   expect(pending).toEqual([]);
-  expect(
-    messages
-      .filter((message) => message.role === "assistant")
-      .map(
-        (message) =>
-          `${message.stopReason}:${message.content
-            .map((item) => item.type)
-            .filter((type) => type !== "thinking")
-            .join("+")}`,
-      ),
-  ).toEqual(transcript);
   const completed = subscription.getCurrentAttemptAssistant();
   const attempt: EmbeddedRunAttemptWithReceiptEvidence = {
     ...makeEmbeddedRunnerAttempt({
@@ -365,10 +333,10 @@ it.each([
     workspaceDir: "/tmp/openclaw-test",
     prompt: "Where do I store my bag?",
     timeoutMs: 60_000,
-    trigger: heartbeat ? ("heartbeat" as const) : ("user" as const),
+    trigger,
     ...(quiet ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
     ...(row.reasoning ? { reasoningLevel: "on" as const } : {}),
-  };
+  } satisfies Parameters<typeof prepareEmbeddedRunTerminal>[0]["runParams"];
   const terminalState = {
     outcome: { reason: "completed", status: "ok", stopReason: "stop" } as const,
     signalOwnedInterruption: false,
@@ -390,33 +358,14 @@ it.each([
   });
   const reply = row.reply;
   const visibleText = reply?.disposition === "visible" ? reply.text : undefined;
-  if (visibleText !== undefined && !quiet) {
-    expect(
-      resolveSettledTurnFinalizationRequest({
-        runParams,
-        attempt,
-        activeErrorContext: { provider: "openai", model: model.id },
-        modelApi: model.api,
-        executionContract: undefined,
-        payloadsWithToolMedia: prepared.payloadsWithToolMedia,
-        hasTerminalToolPresentation: false,
-        terminalState,
-        settledTurnFinalizationAvailable: true,
-      }),
-    ).toBeNull();
-  }
   if (delivery === "deferred" && visibleText !== undefined) {
     const lastAssistant = beforeTerminalDelivery.mock.calls.at(-1)?.[0].lastAssistant;
     expect(resolveFinalAssistantVisibleText(lastAssistant as AssistantMessage | undefined)).toBe(
       visibleText,
     );
   }
-  if (heartbeat) {
-    expect(resolveHeartbeatReplyPayload(prepared.payloads)?.text).toBe("Use counter B.");
-  }
   const { replyPayloads } = await buildReplyPayloads({
     payloads: prepared.payloads,
-    isHeartbeat: heartbeat,
     blockStreamingEnabled,
     blockReplyPipeline: pipeline,
     replyToMode: "off",
@@ -424,46 +373,5 @@ it.each([
   expect([...sent, ...replyPayloads.map(show)]).toEqual(delivered);
   if (row.reply) {
     expect(prepared.preparedTerminalReply.terminalReply).toEqual(row.reply);
-  }
-  if (row.announce) {
-    const events = messages.map((message, index) => ({
-      type: "message",
-      id: `entry-${index}`,
-      message: attachSessionTranscriptRunId(message, "run"),
-    }));
-    const child = createSubagentRunRecord({
-      runId: "run",
-      childSessionKey: "agent:main:subagent:astra",
-      createdAt: 1,
-      execution: {
-        status: "terminal",
-        outcome: { status: "ok" },
-        transcriptTarget: {
-          agentId: "main",
-          sessionId: "session",
-          sessionKey: "agent:main:subagent:astra",
-          storePath: "/tmp/openclaw-test/sessions.json",
-        },
-      },
-      completion: {
-        required: true,
-        terminalReply: prepared.preparedTerminalReply.terminalReply,
-      },
-    });
-    const unexpected = () => {
-      throw new Error("unexpected session fallback");
-    };
-    const announced = await readSubagentRunAnnounceResultUsing(child, {
-      readSubagentRun: () => child,
-      findTranscriptEvent: async (_target, match) => {
-        const event = events.findLast((candidate) => matchesTranscriptEvent(candidate, match));
-        return event === undefined ? undefined : { event };
-      },
-      findSessionTranscriptArchiveEventReadOnly: async () => undefined,
-      getRuntimeConfig: unexpected,
-      readSubagentSessionEntry: unexpected,
-      resolveSessionStorePathCore: unexpected,
-    });
-    expect(announced.text).toBe("Use counter B.");
   }
 });

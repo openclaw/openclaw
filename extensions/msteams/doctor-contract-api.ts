@@ -3,6 +3,8 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   archiveLegacyStateSource,
+  decodeUtf8Input,
+  Utf8InputError,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
@@ -148,7 +150,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       let token: MSTeamsDelegatedTokens | null;
       try {
         token = normalizeMSTeamsDelegatedTokens(
-          JSON.parse(await fs.readFile(filePath, "utf8")) as unknown,
+          JSON.parse(
+            decodeUtf8Input(await fs.readFile(filePath), "Legacy Teams delegated token"),
+          ) as unknown,
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -157,7 +161,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         warnings.push(
           `Failed reading ${MSTEAMS_PLUGIN_ID} delegated OAuth token legacy source; left it in place`,
         );
-        return { changes, warnings };
+        return {
+          changes,
+          warnings,
+          ...(error instanceof Utf8InputError
+            ? { warningDisposition: "recoverable" as const }
+            : {}),
+        };
       }
       if (!token) {
         warnings.push(

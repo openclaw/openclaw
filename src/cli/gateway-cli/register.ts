@@ -3,10 +3,11 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
+import { isReadOnlyGatewayCliCall } from "../../gateway/cli-read-policy.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
-import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -17,6 +18,7 @@ import {
   resolveGatewayRpcOptionsWithLocalPort,
 } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
@@ -53,6 +55,24 @@ async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, para
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
   });
+}
+
+/** Ctrl+C owns the exit; a reply that lands after it must not be printed. */
+async function callGatewayReadOnlyCliUnlessAborted(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+): Promise<{ result: unknown } | undefined> {
+  const signal = getAsyncWorkSignal();
+  let result: unknown;
+  try {
+    result = await callGatewayReadOnlyCli(method, opts, params);
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
+  }
+  return signal?.aborted ? undefined : { result };
 }
 
 function parseGatewayCallParams(value = "{}"): unknown {
@@ -145,30 +165,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
-function renderSupportExportResult(
-  result: WriteDiagnosticSupportExportResult,
-  rich: boolean,
-): string[] {
-  return [
-    colorize(rich, theme.heading, "Diagnostics export"),
-    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
-    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
-    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
-    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
-  ];
-}
-
-function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -188,8 +184,8 @@ async function writeSupportExportFromCli(opts: {
   };
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
-    logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),
-    logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
+    logLimit: parseOptionalPositiveInteger(opts.logLines, "--log-lines", "."),
+    logMaxBytes: parseOptionalPositiveInteger(opts.logBytes, "--log-bytes", "."),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
       const { gatherDaemonStatus } = await import("../daemon-cli/status.gather.js");
@@ -201,8 +197,16 @@ async function writeSupportExportFromCli(opts: {
       });
     },
     readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
+    readGatewayCapabilities: async () =>
+      await callGatewayReadOnlyCli("diagnostics.capabilities", rpc),
   });
-  await printGatewayResult(opts.json, result, (rich) => renderSupportExportResult(result, rich));
+  await printGatewayResult(opts.json, result, (rich) => [
+    colorize(rich, theme.heading, "Diagnostics export"),
+    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
+    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
+    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
+    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
+  ]);
 }
 
 export function registerGatewayCli(program: Command) {
@@ -272,7 +276,17 @@ export function registerGatewayCli(program: Command) {
               : opts;
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
           const params = parseGatewayCallParams(String(opts.params ?? "{}"));
-          const result = await callGatewayReadOnlyCli(method, rpcOpts, params);
+          // Established read-only methods cancel their read on Ctrl+C and do not
+          // print a reply that lands after it. Generic calls can execute writes,
+          // so their settlement receipt is preserved during cleanup.
+          const abortable = isReadOnlyGatewayCliCall(method, params);
+          const reply = abortable
+            ? await callGatewayReadOnlyCliUnlessAborted(method, rpcOpts, params)
+            : { result: await callGatewayReadOnlyCli(method, rpcOpts, params) };
+          if (!reply) {
+            return;
+          }
+          const result = reply.result;
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -341,11 +355,15 @@ export function registerGatewayCli(program: Command) {
           if (agentId && opts.allAgents) {
             throw new Error("Use --agent or --all-agents, not both");
           }
-          const summary = (await callGatewayReadOnlyCli("usage.cost", rpcOpts, {
+          const reply = await callGatewayReadOnlyCliUnlessAborted("usage.cost", rpcOpts, {
             days,
             ...(agentId ? { agentId } : {}),
             ...(opts.allAgents ? { agentScope: "all" } : {}),
-          })) as CostUsageSummary;
+          });
+          if (!reply) {
+            return;
+          }
+          const summary = reply.result as CostUsageSummary;
           await printGatewayResult(rpcOpts.json, summary, async (rich) =>
             (await loadCostUsageRenderer()).renderGatewayCostUsageSummary(summary, days, rich),
           );
@@ -359,11 +377,15 @@ export function registerGatewayCli(program: Command) {
       .description("Fetch Gateway health")
       .action(
         gatewayAction(async (opts, command) => {
+          const signal = getAsyncWorkSignal();
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
           let result: unknown;
           try {
             result = await callGatewayReadOnlyCli("health", rpcOpts);
           } catch (error) {
+            if (signal?.aborted) {
+              return;
+            }
             const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } =
               await import("../../commands/health.js");
             const handled = await emitReachableGatewayAuthDiagnostic({
@@ -377,11 +399,15 @@ export function registerGatewayCli(program: Command) {
               password: rpcOpts.password,
               localPortOverride: rpcOpts.localPortOverride,
               json: Boolean(rpcOpts.json),
+              signal,
             });
             if (handled) {
               return;
             }
             throw error;
+          }
+          if (signal?.aborted) {
+            return;
           }
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
@@ -545,7 +571,7 @@ export function registerGatewayCli(program: Command) {
             return;
           }
 
-          const result = await callGatewayReadOnlyCli(
+          const reply = await callGatewayReadOnlyCliUnlessAborted(
             "diagnostics.stability",
             resolveGatewayRpcOptionsWithLocalPort(rpcOpts, command),
             {
@@ -554,8 +580,11 @@ export function registerGatewayCli(program: Command) {
               ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
             },
           );
-          await printGatewayResult(rpcOpts.json, result, (rich) =>
-            renderStabilitySummary(result as DiagnosticStabilitySnapshot, rich),
+          if (!reply) {
+            return;
+          }
+          await printGatewayResult(rpcOpts.json, reply.result, (rich) =>
+            renderStabilitySummary(reply.result as DiagnosticStabilitySnapshot, rich),
           );
         }, "Gateway stability failed"),
       ),

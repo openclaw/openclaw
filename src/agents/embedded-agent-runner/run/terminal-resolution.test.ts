@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
+import { resolveCronPayloadOutcome } from "../../../cron/isolated-agent/helpers.js";
+import { decodePostgresError } from "../../../infra/postgres-sync/protocol.js";
+import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
+import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createMediaGenerationOperation } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
@@ -9,6 +18,11 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { transformTransportMessages } from "../../transport-message-transform.js";
+import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -22,6 +36,7 @@ import {
   assistantAttempt,
   expectComplete,
   emptyAssistant,
+  compactionAssistantFixture,
   makeTerminalInput,
   resolveTerminal,
 } from "./terminal-resolution.test-support.js";
@@ -32,7 +47,7 @@ vi.mock("./auth-profile-success.js", () => ({
 }));
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+  "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.";
 
 function reasoningAssistant(id: string, thinking: string) {
   const thinkingSignature = JSON.stringify({ id, type: "reasoning" });
@@ -41,10 +56,278 @@ function reasoningAssistant(id: string, thinking: string) {
   });
 }
 
+function replaySafeTextInput(text: string) {
+  return {
+    assistant: textAssistant(text),
+    attemptOverrides: {
+      assistantTexts: [text],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    },
+    finalAssistantRawText: text,
+  };
+}
+
 describe("terminal resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGeneratedMediaTaskActivityForTests();
+  });
+
+  const finalPresentation: NonNullable<ReplyPayload["presentation"]> = {
+    title: "Result summary",
+    blocks: [{ type: "text", text: "Three checks passed." }],
+  };
+
+  it.each([false, true])(
+    "preserves final payload media and metadata when presentation is enabled=%s",
+    async (enabled) => {
+      const text = "All checks passed. Report attached.";
+      const first = { text: "The checks are complete." };
+      const last = setReplyPayloadMetadata(
+        { text, mediaUrls: ["https://example.invalid/report.pdf"], replyToId: "source-message" },
+        { assistantMessageIndex: 4, assistantTranscriptOwned: true, replyToIdExplicit: true },
+      );
+      const notice = setReplyPayloadMetadata({ text: "Host status" }, { hostNotice: true });
+      const resolved = await resolveTerminal({
+        assistant: textAssistant(text),
+        attemptOverrides: { finalPresentation: enabled ? finalPresentation : undefined },
+        payloadsWithToolMedia: [first, last, notice],
+      });
+
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toEqual([
+        first,
+        { ...last, ...(enabled ? { presentation: finalPresentation } : {}) },
+        notice,
+      ]);
+      expect(resolved.result.payloads?.[0]).toBe(first);
+      expect(resolved.result.payloads?.[2]).toBe(notice);
+      const delivered = resolved.result.payloads?.[1];
+      if (!delivered) {
+        throw new Error("Expected the ordinary final payload");
+      }
+      expect(getReplyPayloadMetadata(delivered)).toEqual({
+        assistantMessageIndex: 4,
+        assistantTranscriptOwned: true,
+        replyToIdExplicit: true,
+      });
+      expect(last).not.toHaveProperty("presentation");
+      expect(resolved.result.meta.terminalReply).toEqual({ disposition: "visible", text });
+    },
+  );
+
+  it.each([
+    { kind: "failed", source: "prompt", error: new Error("Provider failed") },
+    { kind: "aborted", source: "external" },
+    { kind: "timeout", phase: "prompt", source: "runtime" },
+  ] satisfies NonNullable<Parameters<typeof assistantAttempt>[1]>["terminal"][])(
+    "does not attach presentation to a $kind terminal outcome",
+    async (terminal) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("Partial answer."),
+        attemptOverrides: { terminal, finalPresentation },
+        payloadsWithToolMedia: [{ text: "Partial answer." }],
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ presentation: finalPresentation })]),
+      );
+    },
+  );
+
+  it.each([
+    { yieldDetected: true },
+    { didSendDeterministicApprovalPrompt: true },
+    { clientToolCalls: [{ name: "client_tool", params: {} }] },
+  ] satisfies NonNullable<Parameters<typeof assistantAttempt>[1]>[])(
+    "keeps presentation off non-ordinary terminal completion %j",
+    async (attemptOverrides) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("Waiting for the next step."),
+        attemptOverrides: { ...attemptOverrides, finalPresentation },
+        payloadsWithToolMedia: [{ text: "Waiting for the next step." }],
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ presentation: finalPresentation })]),
+      );
+    },
+  );
+
+  it.each(["", SILENT_REPLY_TOKEN])(
+    "does not turn absent or silent final text %j into presentation output",
+    async (text) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant(text),
+        attemptOverrides: { finalPresentation },
+        runParams: { terminalReplyExpectation: "optional" },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toBeUndefined();
+      expect(resolved.result.meta.terminalReply?.disposition).toBe(text ? "silent" : "empty");
+    },
+  );
+
+  it.each([false, true])(
+    "preserves unsent media=%s after the ordinary answer already streamed",
+    async (withMedia) => {
+      const text = "The streamed answer is complete.";
+      const assistant = textAssistant(text);
+      const mediaUrl = "https://example.invalid/report.pdf";
+      const attempt = assistantAttempt(assistant, {
+        assistantTexts: [text],
+        finalPresentation,
+        toolMediaUrls: withMedia ? [mediaUrl] : undefined,
+      });
+      const prepared = await prepareAttempt({
+        attempt,
+        currentAttemptCompletedAssistant: assistant,
+        replyDeliveryState: "delivered",
+        sourceReplyDeliveryState: "delivered",
+      });
+      expect(prepared.payloadsWithToolMedia).toEqual(
+        withMedia
+          ? [
+              {
+                mediaUrl,
+                mediaUrls: [mediaUrl],
+                audioAsVoice: undefined,
+                trustedLocalMedia: undefined,
+              },
+            ]
+          : [],
+      );
+
+      const resolved = await resolveTerminal({ attempt, prepared });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toEqual([
+        ...(prepared.payloadsWithToolMedia ?? []),
+        { presentation: finalPresentation },
+      ]);
+      if (withMedia) {
+        expect(resolved.result.payloads?.[0]).toBe(prepared.payloadsWithToolMedia?.[0]);
+      }
+      expect(resolved.result.meta.terminalReply).toEqual({ disposition: "visible", text });
+    },
+  );
+
+  it.each(
+    ["message-tool", "message-tool-only", "pending", "missing"].flatMap((delivery) =>
+      [false, true].map((withMedia) => ({ delivery, withMedia })),
+    ),
+  )(
+    "does not synthesize a presentation residual for $delivery delivery with media=$withMedia",
+    async ({ delivery, withMedia }) => {
+      const payloads = withMedia ? [{ mediaUrls: ["https://example.invalid/report.pdf"] }] : [];
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("An answer exists."),
+        attemptOverrides: {
+          finalPresentation,
+          ...(delivery === "message-tool" ? { didDeliverSourceReplyViaMessageTool: true } : {}),
+        },
+        replyDeliveryState: delivery === "missing" ? "missing" : "delivered",
+        payloadsWithToolMedia: payloads,
+        sourceReplyDeliveryState: delivery === "pending" ? "pending" : "delivered",
+        runParams: {
+          ...(delivery === "message-tool-only"
+            ? { sourceReplyDeliveryMode: "message_tool_only" }
+            : {}),
+          terminalReplyExpectation: "optional",
+        },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads ?? []).toEqual(payloads);
+    },
+  );
+
+  it.each([
+    { text: "Existing presentation", presentation: { blocks: [{ type: "text", text: "Owned" }] } },
+    { text: "Approval", channelData: { execApproval: { id: "approval-1" } } },
+    { text: "Legacy interaction", interactive: { blocks: [{ type: "text", text: "Owned" }] } },
+    { text: "Side answer", btw: { question: "Side question?" } },
+    { text: "Commentary", isCommentary: true },
+    { mediaUrls: ["https://example.invalid/tool-output.png"], presentation: finalPresentation },
+    { mediaUrls: ["https://example.invalid/tool-output.png"], isError: true },
+    setReplyPayloadMetadata(
+      { mediaUrls: ["https://example.invalid/tool-output.png"] },
+      { deliverDespiteSourceReplySuppression: true },
+    ),
+    setReplyPayloadMetadata({ text: "Earlier input" }, { precedingInputAnswer: true }),
+    setReplyPayloadMetadata(
+      { text: "Explicit tool reply" },
+      { sourceReplyTranscriptMirror: { sessionKey: "agent:main:test" } },
+    ),
+  ] satisfies ReplyPayload[])(
+    "does not retarget a protected or non-text payload %j",
+    async (payload) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("The ordinary answer."),
+        attemptOverrides: { finalPresentation },
+        payloadsWithToolMedia: [payload],
+        replyDeliveryState: "delivered",
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toEqual([payload]);
+      expect(resolved.result.payloads?.[0]).toBe(payload);
+    },
+  );
+
+  it("does not move presentation to earlier text when the final payload is already structured", async () => {
+    const payloads: ReplyPayload[] = [
+      { text: "Earlier text." },
+      { text: "Final answer.", presentation: { blocks: [{ type: "text", text: "Owned" }] } },
+    ];
+    const resolved = await resolveTerminal({
+      assistant: textAssistant("Final answer."),
+      attemptOverrides: { finalPresentation },
+      payloadsWithToolMedia: payloads,
+    });
+    expectComplete(resolved);
+    expect(resolved.result.payloads).toEqual(payloads);
+  });
+  it.each(["failed", "recovered", "cancelled"] as const)(
+    "retains observations only for the selected failed attempt (%s)",
+    async (selection) => {
+      const failed = selection === "failed";
+      const assistant = failed
+        ? emptyAssistant({ stopReason: "error", errorMessage: "synthetic failure" })
+        : textAssistant("Recovered answer");
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: !failed,
+        hasHookError: failed,
+      });
+      const resolved = await resolveTerminal({
+        assistant,
+        finalAssistantRawText: failed ? "" : "Recovered answer",
+        finalAssistantVisibleText: failed ? "" : "Recovered answer",
+        payloadsWithToolMedia: failed ? [] : [{ text: "Recovered answer" }],
+        attemptOverrides: {
+          agentTerminal,
+          terminal: failed
+            ? { kind: "failed", source: "prompt", error: new Error("synthetic failure") }
+            : selection === "cancelled"
+              ? { kind: "aborted", source: "external" }
+              : { kind: "ok" },
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.meta.agentTerminal).toBe(failed ? agentTerminal : undefined);
+    },
+  );
+
+  it("acknowledges an already-delivered input without empty-response recovery", async () => {
+    const resolved = await resolveTerminal({
+      assistant: undefined,
+      attemptOverrides: { inputAlreadyDelivered: true },
+      runParams: { terminalReplyExpectation: "result-required" },
+    });
+    expectComplete(resolved);
+    expect(resolved.result.payloads).toBeUndefined();
+    expect(resolved.result.meta.error).toBeUndefined();
+    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
   });
 
   it("completes an empty post-tool turn after committed media delivery", async () => {
@@ -102,7 +385,6 @@ describe("terminal resolution", () => {
       });
       expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
       expect(input.sessionPromptState.suppressNextUserMessagePersistence).toBe(false);
-      expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
       expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
       expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
       expect(onSuccessfulAuthProfile).not.toHaveBeenCalled();
@@ -122,6 +404,20 @@ describe("terminal resolution", () => {
     },
   );
 
+  it("preserves a returned saved-state conflict after partial output", async () => {
+    const assistant = textAssistant("Preparing delivery.");
+    assistant.stopReason = "error";
+    assistant.errorCode = "item_conflict";
+    assistant.errorMessage = "Saved conversation state rejected";
+    const resolved = await resolveTerminal({
+      assistant,
+      attemptOverrides: { assistantTexts: ["Preparing delivery."] },
+      runParams: { messageChannel: "internal" },
+    });
+    expectComplete(resolved);
+    expect(resolved.result.meta.error).toMatchObject({ code: "item_conflict" });
+  });
+
   it("keeps real internal provider failures visible", async () => {
     const resolved = await resolveTerminal({
       assistant: emptyAssistant({ stopReason: "error", errorMessage: "Authentication failed" }),
@@ -138,26 +434,86 @@ describe("terminal resolution", () => {
     expect(resolved.result.meta.suppressErrorNotice).not.toBe(true);
   });
 
-  it("keeps external cancellation ahead of a failed attempt during final result construction", async () => {
-    const assistant = emptyAssistant({ stopReason: "stop" });
-    const attempt = makeEmbeddedRunnerAttempt({
-      terminal: { kind: "failed", source: "prompt", error: new Error("Late provider failure") },
-      lastToolError: { toolName: "exec", error: "Tool execution aborted" },
-      currentAttemptAssistant: assistant,
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    });
-    const terminalState = resolveEmbeddedRunAttemptTerminalState({
-      attempt,
-      assistant,
-      abortSignal: AbortSignal.abort(),
-    });
-    const input = makeTerminalInput({ attempt, terminalState });
-    const resolved = await resolveEmbeddedRunTerminal(input);
-    expectComplete(resolved);
-    expect(resolved.result.meta).toMatchObject({ aborted: true, livenessState: "blocked" });
-    expect(resolved.result.meta.error).toBeUndefined();
-    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
-  });
+  it.each([
+    [new SqliteWorkerError("private rollback diagnostic", "unavailable"), "unavailable"],
+    [
+      new SqliteWorkerError("private native diagnostic", "outcome-unknown"),
+      "session_actor_reconciliation",
+    ],
+    [
+      decodePostgresError({ name: "error", message: "private native diagnostic", code: "57014" }),
+      "57014",
+    ],
+  ] as const)(
+    "preserves storage guidance through the terminal result and cron (%s)",
+    async (error, code) => {
+      const input = makeTerminalInput({
+        assistant: textAssistant("Completed-looking partial answer."),
+        attemptOverrides: {
+          terminal: { kind: "failed", source: "prompt", error },
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        },
+        payloadsWithToolMedia: [],
+      });
+      expect(classifyGatewayStorageFailure(error)).toBe(code);
+      const resolved = await resolveEmbeddedRunTerminal(input);
+      expectComplete(resolved);
+      expect(resolved.result.meta.error).toMatchObject({
+        kind: "incomplete_turn",
+        fallbackSafe: false,
+      });
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(resolved.result.payloads).toHaveLength(1);
+      expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
+      const cron = resolveCronPayloadOutcome({
+        payloads: resolved.result.payloads ?? [],
+        runLevelError: resolved.result.meta.error,
+        finalAssistantVisibleText: resolved.result.meta.finalAssistantVisibleText,
+        terminalReplyDisposition: resolved.result.meta.terminalReply?.disposition,
+      });
+      expect(cron.hasFatalErrorPayload).toBe(true);
+      for (const text of [
+        resolved.result.meta.error?.message,
+        ...(resolved.result.payloads ?? []).map((payload) => payload.text),
+        cron.summary,
+        cron.embeddedRunError,
+        ...cron.deliveryPayloads.map((p) => p.text),
+      ]) {
+        expect(text).toMatch(/check|reopen|retry/i);
+        expect(text).toMatch(code === "57014" ? /cancel/i : /confirm|saved/i);
+      }
+    },
+  );
+
+  it.each([
+    new Error("Late provider failure"),
+    decodePostgresError({ name: "error", message: "Late database cancellation", code: "57014" }),
+  ])(
+    "keeps external cancellation ahead of a failed attempt during final result construction (%s)",
+    async (error) => {
+      const assistant = emptyAssistant({ stopReason: "stop" });
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: { kind: "failed", source: "prompt", error },
+        lastToolError: { toolName: "exec", error: "Tool execution aborted" },
+        currentAttemptAssistant: assistant,
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      });
+      const terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt,
+        assistant,
+        abortSignal: AbortSignal.abort(),
+      });
+      const input = makeTerminalInput({ attempt, terminalState });
+      const resolved = await resolveEmbeddedRunTerminal(input);
+      expectComplete(resolved);
+      expect(resolved.result.meta).toMatchObject({ aborted: true, livenessState: "blocked" });
+      expect(resolved.result.meta.error).toBeUndefined();
+      expect(resolved.result.payloads ?? []).not.toContainEqual(
+        expect.objectContaining({ isError: true }),
+      );
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
 
   it("completes NO_REPLY from an internal notification without retrying", async () => {
     const assistant = textAssistant(SILENT_REPLY_TOKEN);
@@ -396,14 +752,8 @@ describe("terminal resolution", () => {
         { text: '{"action":"NO_REPLY"}', silent: false },
         { text: "NO_REPLY The requested result.", silent: false },
       ]) {
-        const assistant = textAssistant(text);
         const input = makeTerminalInput({
-          assistant,
-          attemptOverrides: {
-            assistantTexts: [text],
-            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-          },
-          finalAssistantRawText: text,
+          ...replaySafeTextInput(text),
           payloadsWithToolMedia: silent ? [] : [{ text }],
           runParams: { lane, messageChannel: undefined },
         });
@@ -417,6 +767,57 @@ describe("terminal resolution", () => {
           expect(resolved.result.meta.terminalReply).toEqual({ disposition: "visible", text });
         }
       }
+    },
+  );
+
+  it("surfaces the canonical missing-result outcome for a presentation-hidden acknowledgement", async () => {
+    const text = "HEARTBEAT_OK";
+    const input = makeTerminalInput({
+      ...replaySafeTextInput(text),
+      payloadsWithToolMedia: [{ text }],
+      payloadsForVisibleCompletion: [],
+      runParams: { terminalReplyExpectation: "result-required" },
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expectComplete(resolved);
+    expect(resolved.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      message: "No answer was returned. Ask again if you still need one.",
+    });
+    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "empty" });
+    expect(resolved.result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(resolved.result.meta.finalAssistantRawText).toBeUndefined();
+    expect(resolved.result.payloads).toBeUndefined();
+    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "an optional turn", terminalReplyExpectation: "optional", delivered: false },
+    {
+      name: "a delivered required result",
+      terminalReplyExpectation: "result-required",
+      delivered: true,
+    },
+  ] as const)(
+    "does not manufacture a missing-result outcome for $name",
+    async ({ terminalReplyExpectation, delivered }) => {
+      const text = "HEARTBEAT_OK";
+      const input = makeTerminalInput({
+        ...replaySafeTextInput(text),
+        payloadsWithToolMedia: [{ text }],
+        payloadsForVisibleCompletion: [],
+        replyDeliveryState: delivered ? "delivered" : "missing",
+        runParams: { terminalReplyExpectation },
+      });
+
+      const resolved = await resolveEmbeddedRunTerminal(input);
+
+      expectComplete(resolved);
+      expect(resolved.result.meta.error).toBeUndefined();
+      expect(resolved.result.payloads).toEqual([{ text }]);
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
     },
   );
 
@@ -434,6 +835,7 @@ describe("terminal resolution", () => {
   it("retries reasoning-only output and surfaces a retained presentation after exhaustion", async () => {
     const assistant = reasoningAssistant("rs_terminal", "internal reasoning");
     const attempt = assistantAttempt(assistant, {
+      finalPresentation,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     const retryInput = makeTerminalInput({
@@ -473,6 +875,73 @@ describe("terminal resolution", () => {
     expect(exhausted.result.meta.finalAssistantVisibleText).toBeUndefined();
     expect(exhausted.result.meta.finalAssistantRawText).toBeUndefined();
   });
+
+  it.each([
+    { provider: "anthropic", api: "anthropic-messages", thinkingSignature: "sig" },
+    { provider: "kimi", api: "anthropic-messages", thinkingSignature: "" },
+    { provider: "openai", api: "openai-responses", thinkingSignature: '{"id":"rs_1"}' },
+    { provider: "openai", api: "openai-completions", thinkingSignature: "" },
+  ] as const)(
+    "continues $provider/$api reasoning only while replay keeps the turn",
+    async ({ provider, api, thinkingSignature }) => {
+      const model = makeProviderModelFixture({
+        provider,
+        api,
+        id: "reasoning-model",
+        baseUrl: "https://example.test",
+      });
+      const user = { role: "user", content: "Answer the question.", timestamp: 0 } as const;
+      for (const stopReason of ["stop", "length"] as const) {
+        const assistant = buildEmbeddedRunnerAssistant({
+          provider,
+          api,
+          model: model.id,
+          stopReason,
+          content: [{ type: "thinking", thinking: "Partial reasoning.", thinkingSignature }],
+        });
+        // Both replay owners omit a token-limited reasoning-only turn from the next request.
+        const replay = stopReason === "stop" ? [user, assistant] : [user];
+        expect(normalizeAssistantReplayContent([user, assistant])).toEqual(replay);
+        expect(transformTransportMessages([user, assistant], model)).toEqual(replay);
+        const input = makeTerminalInput({
+          attempt: assistantAttempt(assistant, {
+            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          }),
+          activeErrorContext: { provider, model: model.id },
+          modelApi: api,
+        });
+
+        const resolved = await resolveEmbeddedRunTerminal(input);
+
+        if (stopReason === "stop") {
+          expect(resolved).toEqual({ action: "retry" });
+          expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledWith(
+            REASONING_ONLY_RETRY_INSTRUCTION,
+          );
+          continue;
+        }
+        expectComplete(resolved);
+        expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+        expect(resolved.result.payloads).toEqual([
+          {
+            text: "⚠️ The model reached its output token limit before generating an answer. Please try again.",
+            isError: true,
+          },
+        ]);
+        expect(resolved.result.meta.error).toMatchObject({
+          kind: "incomplete_turn",
+          fallbackSafe: true,
+        });
+        expect(
+          classifyEmbeddedAgentRunResultForModelFallback({
+            provider,
+            model: model.id,
+            result: resolved.result,
+          }),
+        ).toMatchObject({ code: "incomplete_result" });
+      }
+    },
+  );
 
   it("keeps a prepared answer when a later assistant message is reasoning-only", async () => {
     const answerText = "The operation completed successfully.";
@@ -522,19 +991,7 @@ describe("terminal resolution", () => {
   });
 
   it("activates the prompt owner for an OpenAI Responses compaction checkpoint", async () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "length",
-      providerReplay: {
-        v: 1,
-        type: "openai-responses-compaction",
-        id: "cmp-terminal-retry",
-        data: "opaque-compaction",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.6-luna",
-        baseUrlHash: "base-url-hash",
-      },
-    });
+    const assistant = compactionAssistantFixture("cmp-terminal-retry");
     const input = makeTerminalInput({
       assistant,
       attemptOverrides: {
@@ -546,7 +1003,6 @@ describe("terminal resolution", () => {
     expect(input.sessionPromptState.activateCompactionContinuation).toHaveBeenCalledWith(
       expect.stringContaining("Continue from the compacted transcript"),
     );
-    expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
   });
 
   it("reports exhausted finalization as a failed required reply", async () => {
@@ -578,6 +1034,7 @@ describe("terminal resolution", () => {
         assistant: textAssistant(text, { stopReason: "length" }),
         attemptOverrides: {
           assistantTexts: [text],
+          finalPresentation,
           toolMediaUrls,
           currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
         },
@@ -587,6 +1044,13 @@ describe("terminal resolution", () => {
       expect(resolved.result.payloads).toEqual(
         truncated ? [{ text }, { text: TRUNCATED_REPLY_NOTICE_TEXT }] : [{ text }],
       );
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "partial-answer",
+          result: resolved.result,
+        }),
+      ).toBeNull();
       if (truncated) {
         expect(resolved.result.meta.error).toBeUndefined();
         expect(resolved.result.meta.livenessState).toBe("working");

@@ -103,6 +103,7 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
 ## Supported message types
 
 - Text: full support, chunked to 2000 characters.
+- Unsupported inbound events (such as link previews): available text follows normal authorization and agent processing. Events without usable text are logged at the default log level with resend guidance; no automatic reply is sent.
 - Media: inbound/outbound, capped by `mediaMaxMb`.
 - Photo captions: truncated to fit the 2000-character limit, including polling replies.
 - Reactions, threads, polls, native commands: not supported by the plugin.

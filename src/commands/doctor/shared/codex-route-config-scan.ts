@@ -92,7 +92,6 @@ function collectAgentModelRefs(params: {
   collect("subagents.model", asMutableRecord(agent.subagents)?.model);
   const compaction = asMutableRecord(agent.compaction);
   collect("compaction.model", compaction?.model, true);
-  collect("compaction.memoryFlush.model", asMutableRecord(compaction?.memoryFlush)?.model, true);
   collectModelsMapRefs({
     ...params,
     path: `${params.path}.models`,

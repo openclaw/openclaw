@@ -11,17 +11,18 @@ import {
   getAgentWorkspaceAccess,
   isWorkspaceAccessUnavailableError,
 } from "../../agents/workspace-access.js";
+import { listReservedChatSlashCommandNames } from "../../auto-reply/commands-registry.data.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { resolveSessionSkillExecutionWorkspace } from "../loading/workspace-skill-roots.js";
 import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
-import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import {
   buildWorkspaceSkillCommandSpecs,
   prepareWorkspaceSkillCommandSpecs,
@@ -38,11 +39,16 @@ type WorkspaceSkillCommandParams = {
   agentId?: string;
   skillFilter?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<
+      SessionEntry,
+      "skillLibrarySelections" | "skillsSnapshot" | "spawnedCwd" | "worktree" | "projectId"
+    >;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
   includeAllowlistHidden?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
 function resolveWorkspaceSkillCommandOptions(
@@ -53,6 +59,17 @@ function resolveWorkspaceSkillCommandOptions(
     nodeSkills,
     remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
   };
+  // Invocation consumers receive only the session entry; resolve its execution skill
+  // root exactly as the runtime catalog does so listed commands are also invocable.
+  const execution =
+    params.executionWorkspaceDir !== undefined
+      ? {
+          executionWorkspaceDir: params.executionWorkspaceDir,
+          executionWorkspaceFileHost: params.executionWorkspaceFileHost,
+        }
+      : params.sessionEntry
+        ? resolveSessionSkillExecutionWorkspace(params.sessionEntry, params.sessionEntry.spawnedCwd)
+        : {};
   return {
     config: params.cfg,
     agentId: params.agentId,
@@ -61,6 +78,8 @@ function resolveWorkspaceSkillCommandOptions(
     eligibility,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     librarySelections: params.sessionEntry?.skillLibrarySelections,
+    executionWorkspaceDir: execution.executionWorkspaceDir,
+    executionWorkspaceFileHost: execution.executionWorkspaceFileHost,
   };
 }
 
@@ -152,9 +171,15 @@ type AgentSkillCommandParams = {
   cfg: OpenClawConfig;
   agentIds?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<
+      SessionEntry,
+      "skillLibrarySelections" | "skillsSnapshot" | "spawnedCwd" | "worktree" | "projectId"
+    >;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
+  /** Admitted project root for a single-agent catalog; callers own its authorization. */
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
 function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, allowRemote = false) {
@@ -204,6 +229,8 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
               sessionEntry: params.sessionEntry,
               sessionKey: params.sessionKey,
               execOverrides: params.execOverrides,
+              executionWorkspaceDir: params.executionWorkspaceDir,
+              executionWorkspaceFileHost: params.executionWorkspaceFileHost,
             }
           : {}),
       },

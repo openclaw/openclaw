@@ -12,6 +12,8 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
@@ -22,12 +24,12 @@ import {
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { hasSlackNativeDataBlock } from "../blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
-  hasSlackNativeDataBlock,
   isSlackInvalidBlocksResponse,
   isSlackNativeResponseUrlRejection,
 } from "../native-data-blocks.js";
@@ -36,6 +38,7 @@ import {
   chunkSlackTextAtHardLimit,
   type SlackFormattingDisabledMessage,
 } from "../native-data-fallback.js";
+import { registerSlackQuestionDelivery } from "../question-delivery.js";
 import {
   hasSlackReplyStructuredContent,
   iterateSlackReplyDeliveryMessages,
@@ -43,7 +46,12 @@ import {
   resolveSlackReplyBlocks,
   type PreparedSlackReply,
 } from "../reply-blocks.js";
-import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "../send.js";
+import {
+  sendMessageSlack,
+  updateMessageSlack,
+  type SlackSendIdentity,
+  type SlackSendResult,
+} from "../send.js";
 import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
@@ -154,6 +162,7 @@ export async function deliverReplies(params: {
   const mediaLocalRoots = deliverySession
     ? getAgentScopedMediaLocalRoots(params.cfg, deliverySession.agentId)
     : undefined;
+  const mediaAccess = resolveOutboundMediaAccessForConfig(params.cfg);
   let latestResult: SlackSendResult | undefined;
   for (const prepared of params.replies) {
     const { payload } = prepared;
@@ -169,6 +178,7 @@ export async function deliverReplies(params: {
     const reply = resolveSendableOutboundReplyParts(payload);
     const textRaw = reply.hasText ? reply.trimmedText : undefined;
     const { authoredTextPlacement, segments } = prepared.resolveDelivery();
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
       continue;
     }
@@ -191,8 +201,26 @@ export async function deliverReplies(params: {
         token: params.token,
         accountId: params.accountId,
         ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+        mediaAccess,
         onDeliveryResult: (result) => {
           acceptedResults.push(result);
+          if (questionId) {
+            registerSlackQuestionDelivery({
+              questionId,
+              accountId: params.accountId,
+              result,
+              text,
+              update: async (message) => {
+                await updateMessageSlack({
+                  ...message,
+                  cfg: params.cfg,
+                  accountId: params.accountId,
+                  token: params.token,
+                  eventScope: params.eventScope,
+                });
+              },
+            });
+          }
         },
         ...(params.eventScope
           ? {
@@ -405,6 +433,7 @@ export async function deliverSlackSlashReplies(params: {
     const materializeAuthoredText = hasSlackReplyStructuredContent(payload);
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
       materializeAuthoredText,
+      tableMode: params.tableMode,
     });
     if (segments.length > 0) {
       const messages: PlannedSlashReplyMessage[] = [];

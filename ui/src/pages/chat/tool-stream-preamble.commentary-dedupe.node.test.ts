@@ -1,13 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { projectInFlightRunSnapshot } from "../../../../src/gateway/chat-inflight-snapshot.js";
 import { createChatRunState } from "../../../../src/gateway/server-chat-state.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText as isHiddenStreamText } from "../../lib/chat/message-visibility.ts";
+import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { activeHistory, createState, renderedText } from "./chat-history.inflight.test-support.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import {
+  activeHistory,
+  buildStateItems,
+  createState,
+} from "./chat-history.inflight.test-support.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
+import {
+  materializeVisibleStreamState,
+  visibleAssistantStreamParts,
+} from "./stream-reconciliation.ts";
 import { TOOL_STREAM_TEST_NOW, useToolStreamFakeTimers } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -19,19 +25,17 @@ const assistant = (text: string) => ({ role: "assistant", content: [{ type: "tex
 function commentaryHarness() {
   useToolStreamFakeTimers();
   const gateway = createChatRunState();
-  const history = activeHistory(RUN_ID);
-  const host = createState(history);
+  const host = createState(activeHistory(RUN_ID));
   host.chatRunId = RUN_ID;
   let seq = 0;
   let messageSeq = 0;
   const envelope = () => ({ sessionKey: "main", runId: RUN_ID, seq: ++seq });
-  const agent = (stream: "item" | "tool", data: Record<string, unknown>) =>
-    handleAgentEvent(host, {
-      ...envelope(),
-      stream,
-      ts: TOOL_STREAM_TEST_NOW + seq,
-      data,
-    });
+  const agent = (
+    stream: "item" | "tool",
+    data: Record<string, unknown>,
+    source?: "live" | "history",
+  ) =>
+    handleAgentEvent(host, { ...envelope(), stream, ts: TOOL_STREAM_TEST_NOW + seq, data }, source);
   const deliver = () => {
     const projected = gateway.resolveBuffer(RUN_ID);
     const delta = gateway.takeBufferDelta(RUN_ID, projected.text);
@@ -54,22 +58,20 @@ function commentaryHarness() {
     }
     agent("item", { kind: "preamble", itemId, progressText: text });
   };
+  const save = (id: string, message: object, order = ++messageSeq) => {
+    const durable = { ...message, __openclaw: { id, seq: order, runId: RUN_ID } };
+    const payload = { runId: RUN_ID, messageId: id, messageSeq: order, message: durable };
+    applySessionMessagePayload(host, payload, true, { kind: "live", activeRunId: RUN_ID });
+    return durable;
+  };
   const persist = (itemId: string, text: string) => {
-    const messageId = `saved-${itemId}`;
-    const durable = {
-      ...assistant(text),
-      __openclaw: { id: messageId, seq: ++messageSeq, runId: RUN_ID },
-      openclawStreamFallback: { source: "segment", itemId },
-    };
     gateway.retireBuffer(RUN_ID, [itemId]);
-    applySessionMessagePayload(
-      host,
-      { runId: RUN_ID, messageId, messageSeq, message: durable },
-      true,
-      { kind: "live", activeRunId: RUN_ID },
-    );
+    const fallback = { source: "segment", itemId };
+    const durable = save(`saved-${itemId}`, {
+      ...assistant(text),
+      openclawStreamFallback: fallback,
+    });
     deliver();
-    (history.messages ??= []).push(durable);
     return durable;
   };
   const tool = () =>
@@ -78,13 +80,7 @@ function commentaryHarness() {
     visibleAssistantStreamParts(host, { includeCurrent: true, isHiddenStreamText });
   const expectParts = (...expected: [string, string | undefined][]) =>
     expect(parts().map((part) => [part.text.trim(), part.itemId])).toEqual(expected);
-  const reconnect = async () => {
-    history.inFlightRun = projectInFlightRunSnapshot({ chatRunState: gateway, runId: RUN_ID });
-    const restored = createState(history);
-    await loadChatHistory(restored);
-    return restored;
-  };
-  return { host, stream, preamble, persist, tool, expectParts, reconnect };
+  return { host, stream, preamble, persist, tool, expectParts, agent, save };
 }
 
 afterEach(() => {
@@ -92,26 +88,60 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["history-first", "delta-first", "reconnect"] as const)(
-  "keeps persisted commentary once when the identified delta is %s",
-  async (order) => {
-    const earlier = "An earlier observation remains visible.";
-    const text = "The saved commentary should appear once.";
-    const later = "The next identified item remains visible.";
-    const h = commentaryHarness();
-    h.stream("earlier", earlier);
-    if (order === "history-first") {
-      h.persist("commentary-1", text);
-    }
-    h.stream("commentary-1", text);
-    if (order !== "history-first") {
-      h.persist("commentary-1", text);
-    }
-    h.stream("commentary-2", later);
-    const displayed = order === "reconnect" ? await h.reconnect() : h.host;
-    expect(renderedText(displayed)).toEqual([text, `${earlier}\n\n${later}`]);
-  },
-);
+const callIdsOrText = (message: unknown, fallback: string) => {
+  const cards = extractToolCards(message);
+  return cards.length ? cards.map((card) => card.callId) : [fallback];
+};
+
+// Live and replayed starts carry different send anchors; the saved call is older than the
+// commentary, and nested work must not claim it. Commentary stays before a steer, and an
+// older run's reused call ID is not an anchor.
+it.each(["live", "history"] as const)("binds %s commentary to the next root call", (source) => {
+  const h = commentaryHarness();
+  const steered = source === "history";
+  const user = (content: string, seq: number, idempotencyKey: string, steer?: string) => ({
+    role: "user",
+    content,
+    timestamp: steer ? TOOL_STREAM_TEST_NOW + seq : seq,
+    __openclaw: { id: `user-${seq}`, idempotencyKey, steerTargetRunId: steer, seq },
+  });
+  const args = { code: "return await agents_wait({ids: ['child']});" };
+  const call = { type: "toolCall", id: "collect", name: "exec", arguments: args };
+  h.host.chatMessages = [
+    { role: "assistant", timestamp: 0, content: [call], __openclaw: { runId: "old-run" } },
+    user("Collect the results", 1, `${RUN_ID}:user`),
+  ];
+  const progressText = "Waiting for the collected results.";
+  h.agent("item", { kind: "preamble", itemId: "commentary", progressText }, source);
+  if (steered) {
+    h.host.chatMessages.push(user("Keep the existing collection", 2, "steer:user", RUN_ID));
+  }
+  h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args });
+  const savedAt = TOOL_STREAM_TEST_NOW - 1_000;
+  h.save("saved-collect", { role: "assistant", timestamp: savedAt, content: [call] }, 3);
+  const wait = { toolCallId: "wait", parentToolCallId: "collect", name: "agents_wait" };
+  h.agent("tool", { ...wait, phase: "start" });
+  vi.advanceTimersByTime(100);
+  expect(
+    buildStateItems(h.host).flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.flatMap(({ message }) => callIdsOrText(message, item.role))
+        : [item.kind],
+    ),
+  ).toEqual(["collect", "user", "stream", ...(steered ? ["user"] : []), "collect", "wait"]);
+  const materialized = materializeVisibleStreamState(h.host.chatMessages, h.host, {
+    persistCommentary: true,
+    isHiddenAssistantMessage: () => false,
+    isHiddenStreamText,
+  });
+  expect(materialized.flatMap((m) => callIdsOrText(m, extractText(m) ?? ""))).toEqual([
+    "collect",
+    "Collect the results",
+    progressText,
+    ...(steered ? ["Keep the existing collection"] : []),
+    "collect",
+  ]);
+});
 
 it("does not let stale item identity prune a newer unscoped append", () => {
   const h = commentaryHarness();

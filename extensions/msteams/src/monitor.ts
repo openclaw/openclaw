@@ -1,6 +1,12 @@
 import type { Request, Response } from "express";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 import {
@@ -23,17 +29,12 @@ import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { createMSTeamsHandlerConfigReader } from "./monitor-handler/config.js";
-import {
-  publishMSTeamsBlocked,
-  publishMSTeamsReady,
-  publishMSTeamsStopped,
-  type MSTeamsStatusSink,
-} from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
 import { createMSTeamsPollStoreState, extractMSTeamsPollVote } from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
+  keepConfiguredMSTeamsAllowlistActive,
   looksLikeMSTeamsConversationId,
   projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsUserAllowlist,
@@ -53,6 +54,7 @@ import {
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { createMSTeamsWebhookHandler } from "./webhook-handler.js";
 import {
+  resolveMSTeamsLegacyMessagesOwner,
   resolveMSTeamsLegacyWebhook,
   resolveMSTeamsWebhookPathIssue,
   resolveMSTeamsWebhookCollisionIssue,
@@ -64,7 +66,7 @@ type MonitorMSTeamsOpts = {
   msteamsCfg?: MSTeamsConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  statusSink?: MSTeamsStatusSink;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<void> {
@@ -77,13 +79,17 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
   let msteamsCfg = account.config;
   if (opts.cfg.channels?.msteams?.enabled !== true || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
-    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams provider is disabled", { running: true }),
+    );
     return;
   }
 
   if (!creds) {
     log.error("msteams credentials not configured");
-    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams credentials are not configured", { running: true }),
+    );
     return;
   }
   const collisionIssue = resolveMSTeamsWebhookCollisionIssue(accountPolicyCfg);
@@ -175,6 +181,12 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
     runtime.error?.(
       `msteams resolve failed; mutable allowlist entries are disabled. ${formatUnknownError(err)}`,
     );
+  }
+
+  if (Array.isArray(configuredGroupAllowFrom)) {
+    // A configured sender list whose entries are all unresolvable names must keep restricting
+    // senders. An empty projection would fall back to the DM allowlist (or its wildcard).
+    groupAllowFrom = keepConfiguredMSTeamsAllowlistActive(configuredGroupAllowFrom, groupAllowFrom);
   }
 
   if (configuredGroupAllowFrom == null && groupAllowFrom) {
@@ -561,13 +573,16 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
         log: (message) => log.warn?.(message),
       }),
     );
-    if (accountId === DEFAULT_ACCOUNT_ID && configuredPath !== "/api/messages") {
+    // Only the Gateway alias yields; compatibility listeners retain their forwarder.
+    const legacyMessagesOwner = resolveMSTeamsLegacyMessagesOwner(accountPolicyCfg);
+    if (accountId === DEFAULT_ACCOUNT_ID && !legacyMessagesOwner) {
       unregisterRoutes.push(
         registerPluginHttpRoute({
           path: "/api/messages",
           auth: "plugin",
           pluginId: "msteams",
-          source: "msteams-webhook-alias",
+          // Same owner as primary routes, so reload handoffs pass between alias and primary.
+          source: "msteams-webhook",
           accountId,
           handler: webhook.handler,
           log: (message) => log.warn?.(message),
@@ -582,7 +597,7 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
     throw error;
   }
   log.info(`msteams provider started on Gateway route ${configuredPath}`);
-  publishMSTeamsReady(opts.statusSink);
+  opts.statusSink?.(channelReadyPatch());
 
   try {
     await waitUntilAbort(opts.abortSignal);
@@ -592,7 +607,7 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
       unregister();
     }
     await ingress.stop();
-    publishMSTeamsStopped(opts.statusSink);
+    opts.statusSink?.(channelStoppedPatch());
   }
 }
 

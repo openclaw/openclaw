@@ -4,6 +4,7 @@ import type {
   SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
@@ -53,7 +54,6 @@ import {
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
 import type {
   GroupMutationOperation,
-  MutationCoreResult,
   MutationOutcome,
   MutationTarget,
   PreparedPatchTarget,
@@ -77,17 +77,19 @@ export async function executeSessionPatchMutations(params: {
   signal?: AbortSignal;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
+  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
-}): Promise<MutationCoreResult> {
+}) {
   const { client } = params;
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
   try {
     personalModelSelection = await preparePersonalModelSelection(params, params.patch.model);
   } catch (error) {
-    return { ok: false, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
+    return { ok: false as const, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
   }
   const getCurrentConfig = params.context.getRuntimeConfig;
   const cfg = getCurrentConfig();
@@ -95,7 +97,7 @@ export async function executeSessionPatchMutations(params: {
   const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
   const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const callerScopes = client?.connect.scopes ?? [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const discovery = await discoverSessionPatchTargets(cfg, params.targets);
@@ -124,7 +126,11 @@ export async function executeSessionPatchMutations(params: {
     length: params.targets.length,
   });
   for (const [index, { input, key, requestedAgent, resolved }] of discovery.value.entries()) {
-    const unreadAckError = validateSessionUnreadAck(params.patch, input);
+    // Commit guards are core control state; construct the protocol patch from
+    // its public identity fields so closures can never reach hooks or entries.
+    const { commitGuard: _commitGuard, ...identity } = input;
+    const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
+    const unreadAckError = validateSessionUnreadAck(fullPatch, input);
     if (unreadAckError) {
       outcomes[index] = invalidSessionRequest(unreadAckError);
       continue;
@@ -160,10 +166,6 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = invalidSessionRequest(missingHarnessSessionError);
       continue;
     }
-    // Commit guards are core control state; construct the protocol patch from
-    // its public identity fields so closures can never reach hooks or entries.
-    const { commitGuard: _commitGuard, ...identity } = input;
-    const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
     const expectationError =
       sessionPatchExpectations.resolveSessionPatchExpectationError(fullPatch);
     if (expectationError) {
@@ -214,6 +216,7 @@ export async function executeSessionPatchMutations(params: {
     placementChecks,
     outcomes,
     operatorAuthority: params.operatorAuthority,
+    followSharingRegistration: params.followSharingRegistration,
     personalModelSelection,
   });
   const {
@@ -290,10 +293,17 @@ export async function executeSessionPatchMutations(params: {
               const first = group[0]!;
               const storage = preparation.storage.get(first.index);
               const groupTiming = params.diagnostics?.scope("snapshot");
-              const runtimeSelectionReleases: Array<() => void> = [];
+              const runtimeSelections: Array<{
+                validate?: () => ErrorShape | undefined;
+                release?: () => void;
+              }> = [];
+              const commitGuards = new Set<() => ErrorShape | undefined>();
               const releaseRuntimeSelections = () => {
-                for (const release of runtimeSelectionReleases.splice(0)) {
-                  release();
+                for (const selection of runtimeSelections.splice(0)) {
+                  if (selection.validate) {
+                    commitGuards.delete(selection.validate);
+                  }
+                  selection.release?.();
                 }
               };
               try {
@@ -308,7 +318,6 @@ export async function executeSessionPatchMutations(params: {
                 const createdSessions: Parameters<
                   NonNullable<SessionMutationAuthorization["recordCreatedSession"]>
                 >[0][] = [];
-                const commitGuards = new Set<() => ErrorShape | undefined>();
                 const originalGuards = group.map(({ index }) =>
                   expectDefined(originalCommitGuards[index], "original patch guard"),
                 );
@@ -364,6 +373,10 @@ export async function executeSessionPatchMutations(params: {
                         store: workingStore,
                         ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                       });
+                      const submittedModel =
+                        target.fullPatch.model !== undefined
+                          ? resolveSessionSubmittedModelRef(existingEntry)
+                          : undefined;
                       const accessError = targetAccessError(
                         existingEntry,
                         target.targetAgentId,
@@ -459,6 +472,7 @@ export async function executeSessionPatchMutations(params: {
                           entry: projected.entry,
                           expectedEntry: existingEntry,
                           callerCanConsent: callerIsAdmin,
+                          operatorAuthority,
                           catalog: (await catalogs.available(target.targetAgentId))?.entries,
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },
@@ -468,15 +482,7 @@ export async function executeSessionPatchMutations(params: {
                         projectedOutcomes.push(runtimeSelection);
                         continue;
                       }
-                      if (runtimeSelection.release) {
-                        const release = runtimeSelection.release;
-                        runtimeSelectionReleases.push(() => {
-                          if (runtimeSelection.validate) {
-                            commitGuards.delete(runtimeSelection.validate);
-                          }
-                          release();
-                        });
-                      }
+                      runtimeSelections.push(runtimeSelection);
                       const permissionChanged =
                         projected.entry.permissionMode !== existingEntry?.permissionMode;
                       const sandboxChanged =
@@ -495,6 +501,7 @@ export async function executeSessionPatchMutations(params: {
                             ).prepareSessionPatchExecutionPermissionChange({
                               client,
                               context: params.context,
+                              readSessionSharing: params.readSessionSharing,
                               patch: target.fullPatch,
                               existingEntry,
                               entry: projected.entry,
@@ -509,6 +516,7 @@ export async function executeSessionPatchMutations(params: {
                         projectedOutcomes.push(executionPermissions);
                         continue;
                       }
+                      runtimeSelections.push(executionPermissions);
                       target.permissionChange = executionPermissions.change;
                       const authorizationFailure = mutationTargets[target.index]!.commitGuard();
                       if (authorizationFailure) {
@@ -550,6 +558,14 @@ export async function executeSessionPatchMutations(params: {
                       }
                       if (runtimeSelection.validate) {
                         commitGuards.add(runtimeSelection.validate);
+                      }
+                      if (
+                        submittedModel &&
+                        !projected.entry.lastSubmittedModel &&
+                        (submittedModel.provider !== projected.entry.modelProvider ||
+                          submittedModel.model !== projected.entry.model)
+                      ) {
+                        projected.entry.lastSubmittedModel = submittedModel;
                       }
                       const replacement = prepareSessionPatchReplacement({
                         existingEntry,
@@ -596,14 +612,13 @@ export async function executeSessionPatchMutations(params: {
                   },
                   afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                   assertCommitAllowed,
-                  agentId: first.targetAgentId,
                   sessionKeys: selectedSessionKeys,
-                  storePath: first.storePath,
                   skipMaintenance: true,
                 };
                 const applyGroup = createSessionPatchGroupWriter({
                   store: groupStore,
-                  patch: first.fullPatch,
+                  followSharingRegistration: params.followSharingRegistration,
+                  targets: group,
                   project: projectGroup,
                   timing: groupTiming,
                 });
@@ -703,7 +718,7 @@ export async function executeSessionPatchMutations(params: {
     outcomes[index] = { ok: false, error };
   }
   return {
-    ok: true,
+    ok: true as const,
     archivedSessionsCommitted,
     cfg,
     outcomes: outcomes as MutationOutcome[],

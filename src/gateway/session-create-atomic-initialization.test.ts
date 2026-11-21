@@ -1,121 +1,210 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { withSessionTranscriptWrite } from "../plugin-sdk/session-transcript-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createGatewaySession } from "./session-create-service.js";
+import {
+  createGatewaySession,
+  SessionCreationNotCommittedError,
+} from "./session-create-service.js";
+import type { CreatedGatewaySession } from "./session-create-service.types.js";
 
-async function appendImportedMessage(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}) {
-  await withSessionTranscriptWriteLock(
-    {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    async (transcript) => {
-      await transcript.appendMessage({
-        message: { role: "user", content: "Imported snapshot", timestamp: 1 },
-      });
-    },
-  );
+afterEach(() => memorySessionActorOwners.reset());
+
+async function appendImportedMessage({ agentId, entry, key, storePath }: CreatedGatewaySession) {
+  const scope = { agentId, sessionId: entry.sessionId, sessionKey: key, storePath };
+  await withSessionTranscriptWrite(scope, async (transcript) => {
+    await transcript.appendMessage({
+      message: { role: "user", content: "Imported snapshot", timestamp: 1 },
+    });
+  });
+  return scope;
 }
 
-describe("atomic Gateway session initialization", () => {
-  it("publishes a usable session only after its transcript initializer succeeds", async () => {
-    await withOpenClawTestState({ label: "atomic-session-success" }, async () => {
-      let transcriptScope:
-        | { agentId: string; sessionId: string; sessionKey: string; storePath: string }
-        | undefined;
-      const created = await createGatewaySession({
-        cfg: {},
-        key: "agent:main:atomic-success",
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        atomicInitialization: true,
-        afterCreate: async (entry) => {
-          expect(entry.entry.initializationPending).toBe(true);
-          transcriptScope = {
-            agentId: entry.agentId,
-            sessionId: entry.entry.sessionId,
-            sessionKey: entry.key,
-            storePath: entry.storePath,
-          };
-          await appendImportedMessage(transcriptScope);
-        },
-      });
-
-      expect(created).toMatchObject({
-        ok: true,
-        postCommit: { status: "completed" },
-      });
-      if (!created.ok) {
-        throw new Error(created.error.message);
-      }
-      expect(created.entry.initializationPending).toBeUndefined();
-      expect(loadSessionEntryReadOnly({ sessionKey: created.key })?.initializationPending).toBe(
-        undefined,
-      );
-      expect(transcriptScope).toBeDefined();
-      expect(JSON.stringify(await loadTranscriptEvents(transcriptScope!))).toContain(
-        "Imported snapshot",
-      );
+it.each([
+  ["atomic success", true, undefined],
+  ["atomic rollback", true, "snapshot changed"],
+  ["ordinary post-commit failure", false, "initial turn failed"],
+] as const)("initializes sessions: %s", async (label, atomic, failure) => {
+  await withOpenClawTestState({ label }, async () => {
+    const key = "agent:main:initializer";
+    let scope: Awaited<ReturnType<typeof appendImportedMessage>> | undefined;
+    const created = await createGatewaySession({
+      cfg: {},
+      key,
+      commandSource: "test",
+      operatorRoleActor: { kind: "system" },
+      atomicInitialization: atomic ? true : undefined,
+      afterCreate: async (session) => {
+        if (atomic) {
+          expect(session.entry.initializationPending).toBe(true);
+          scope = await appendImportedMessage(session);
+        }
+        if (failure) {
+          throw new Error(failure);
+        }
+      },
     });
-  });
-
-  it("removes the new session and transcript when initialization fails", async () => {
-    await withOpenClawTestState({ label: "atomic-session-failure" }, async () => {
-      const sessionKey = "agent:main:atomic-failure";
-      const created = await createGatewaySession({
-        cfg: {},
-        key: sessionKey,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        atomicInitialization: true,
-        afterCreate: async (entry) => {
-          await appendImportedMessage({
-            agentId: entry.agentId,
-            sessionId: entry.entry.sessionId,
-            sessionKey: entry.key,
-            storePath: entry.storePath,
-          });
-          throw new Error("snapshot changed");
-        },
-      });
-
+    if (atomic && failure) {
       expect(created).toMatchObject({
         ok: false,
-        error: { code: "UNAVAILABLE", message: "session initialization failed: snapshot changed" },
+        error: { code: "UNAVAILABLE", message: `session initialization failed: ${failure}` },
       });
-      expect(loadSessionEntryReadOnly({ sessionKey })).toBeUndefined();
+      expect(loadSessionEntryReadOnly({ sessionKey: key })).toBeUndefined();
+      return;
+    }
+    expect(created).toMatchObject({
+      ok: true,
+      postCommit: failure
+        ? { status: "failed", error: expect.any(Error) }
+        : { status: "completed" },
     });
+    if (!created.ok) {
+      throw new Error(created.error.message);
+    }
+    expect(created.entry.initializationPending).toBeUndefined();
+    expect(loadSessionEntryReadOnly({ sessionKey: key })?.initializationPending).toBeUndefined();
+    if (!failure) {
+      expect(scope).toBeDefined();
+      expect(JSON.stringify(await loadTranscriptEvents(scope!))).toContain("Imported snapshot");
+    }
   });
+});
 
-  it("preserves the existing post-commit contract for ordinary session creation", async () => {
-    await withOpenClawTestState({ label: "ordinary-session-initializer" }, async () => {
-      const sessionKey = "agent:main:ordinary-initializer";
-      const created = await createGatewaySession({
-        cfg: {},
-        key: sessionKey,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        afterCreate: async () => {
-          throw new Error("initial turn failed");
-        },
-      });
-
-      expect(created).toMatchObject({
-        ok: true,
-        postCommit: { status: "failed", error: expect.any(Error) },
-      });
-      expect(loadSessionEntryReadOnly({ sessionKey })?.initializationPending).toBeUndefined();
+it("atomically stamps catalog origin without plugin runtime ownership", async () => {
+  await withOpenClawTestState({ label: "catalog logical continuation" }, async () => {
+    const key = "agent:main:dashboard:catalog-origin";
+    const origin = {
+      id: "receiver-generation",
+      catalogId: "sample",
+      hostId: "source-host",
+      threadId: "source-thread",
+    };
+    const created = await createGatewaySession({
+      cfg: {},
+      key,
+      commandSource: "test",
+      operatorRoleActor: { kind: "system" },
+      atomicInitialization: true,
+      initialCatalogContinuation: origin,
+      afterCreate: async (session) => {
+        expect(session.entry.pluginExtensions?.sample).toEqual({ catalogContinuation: origin });
+        expect(session.entry.pluginOwnerId).toBeUndefined();
+        await appendImportedMessage(session);
+      },
+    });
+    expect(created.ok).toBe(true);
+    const stored = loadSessionEntryReadOnly({ sessionKey: key });
+    expect(stored?.pluginExtensions?.sample).toEqual({ catalogContinuation: origin });
+    expect(stored?.initializationPending).toBeUndefined();
+    expect(stored?.pluginOwnerId).toBeUndefined();
+    const refused = await createGatewaySession({
+      cfg: {},
+      key,
+      commandSource: "test",
+      operatorRoleActor: { kind: "system" },
+      initialCatalogContinuation: { ...origin, id: "replacement" },
+    });
+    expect(refused).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(loadSessionEntryReadOnly({ sessionKey: key })?.pluginExtensions?.sample).toEqual({
+      catalogContinuation: origin,
     });
   });
 });
+
+it.each(["admission", "publication", "initialTurn"] as const)(
+  "recovers the same ordinary conversation after a thrown %s failure",
+  async (phase) => {
+    await withOpenClawTestState({ label: "catalog creation failure custody" }, async () => {
+      const key = "agent:main:dashboard:retry-origin";
+      const origin = {
+        id: "one-logical-generation",
+        catalogId: "sample",
+        hostId: "host",
+        threadId: "thread",
+      };
+      const failure = new Error("source publication changed during creation");
+      const base = {
+        cfg: {},
+        key,
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" as const },
+        atomicInitialization: true as const,
+        initialCatalogContinuation: origin,
+        afterCreate: async (session: CreatedGatewaySession) => {
+          await appendImportedMessage(session);
+        },
+      };
+      const creating = createGatewaySession({
+        ...base,
+        onPhase(current) {
+          if (current === phase) {
+            throw failure;
+          }
+        },
+      });
+      if (phase === "admission") {
+        await expect(creating).rejects.toBeInstanceOf(SessionCreationNotCommittedError);
+      } else {
+        await expect(creating).resolves.toMatchObject({
+          ok: false,
+          initializationRolledBack: true,
+        });
+      }
+      expect(loadSessionEntryReadOnly({ sessionKey: key })).toBeUndefined();
+      const retry = await createGatewaySession(base);
+      expect(retry).toMatchObject({ ok: true });
+      expect(loadSessionEntryReadOnly({ sessionKey: key })?.pluginExtensions?.sample).toEqual({
+        catalogContinuation: origin,
+      });
+    });
+  },
+);
+
+it.each([false, true])(
+  "certifies a final pre-write guard rejection with incognito=%s",
+  async (incognito) => {
+    await withOpenClawTestState({ label: "catalog final commit guard" }, async () => {
+      const key = `agent:main:dashboard:${incognito ? "incognito-" : ""}guard-retry`;
+      let deny = false;
+      const base = {
+        cfg: {},
+        key,
+        incognito,
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" as const },
+        atomicInitialization: true as const,
+        initialCatalogContinuation: {
+          id: "guarded",
+          catalogId: "sample",
+          hostId: "host",
+          threadId: "thread",
+        },
+        afterCreate: async (session: CreatedGatewaySession) => {
+          await appendImportedMessage(session);
+        },
+      };
+      await expect(
+        createGatewaySession({
+          ...base,
+          onPhase(phase) {
+            if (phase === "commit") {
+              deny = true;
+            }
+          },
+          commitGuard() {
+            if (deny) {
+              throw new Error("publication guard rejected before write");
+            }
+          },
+        }),
+      ).rejects.toBeInstanceOf(SessionCreationNotCommittedError);
+      expect(loadSessionEntryReadOnly({ sessionKey: key })).toBeUndefined();
+      const retry = await createGatewaySession(base);
+      expect(retry, JSON.stringify(retry)).toMatchObject({ ok: true, key });
+    });
+  },
+);

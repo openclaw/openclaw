@@ -12,6 +12,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
@@ -52,13 +53,9 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
         Object.assign(identifiedClient(`viewer-${index}`), {
           connId: `viewer-${index}`,
           usesSharedGatewayAuth: false,
-          authenticatedUserProfile: {
-            profileId: `viewer-${index}`,
+          authenticatedUserProfile: dispatchProfile(`viewer-${index}`, {
             displayName: `viewer-${index}`,
-            avatarRevision: "1",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          }),
           socket: {
             readyState: 1,
             bufferedAmount: 0,

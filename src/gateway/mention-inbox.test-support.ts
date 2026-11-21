@@ -61,7 +61,6 @@ export function mentionRoles(
 }
 type InboxFixtureOptions = {
   notifications?: boolean;
-  beforeInbox?: () => void;
   retainProfileCatalog?: boolean;
 };
 
@@ -127,7 +126,6 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     inboxes.add(inbox);
     return inbox;
   };
-  options.beforeInbox?.();
   const committedSources = new Map<string, MentionCommittedInput["committedSource"]>();
   const inbox = openInbox();
   const context = { mentionInbox: inbox, getRuntimeConfig: () => cfg } as GatewayRequestContext;

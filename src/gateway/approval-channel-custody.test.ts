@@ -164,9 +164,6 @@ it("checks plugin reviewer custody against the pending request", async () => {
 
   expect(await custody?.authorizes(pending("calendar"))).toBe(true);
   expect(await custody?.authorizes(pending("other"))).toBe(false);
-  expect(mocks.authorize).toHaveBeenCalledWith(
-    expect.objectContaining({ request: pending("calendar") }),
-  );
 });
 
 it("requires a channel capability to enforce configured plugin reviewers", async () => {

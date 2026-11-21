@@ -6,6 +6,7 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
 import {
   type PreparedWorkerSsh,
@@ -43,6 +44,7 @@ import {
   MAX_RECONCILIATION_TOTAL_BYTES,
 } from "./workspace-reconcile.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
+import { createSshWorkspaceHistoryTransfer } from "./workspace-ssh-history.js";
 import {
   captureRemoteWorkspaceManifest,
   createWorkerWorkspaceRsyncReceiverPathFactory,
@@ -90,14 +92,7 @@ export function createWorkerWorkspaceActions(
   WorkerTunnelHandle,
   "quiesceWorkspace" | "reconcileWorkspace" | "runWorkspaceCommand" | "syncWorkspace"
 > {
-  const track = <T>(task: Promise<T>): Promise<T> => {
-    options.tasks.add(task);
-    void task.then(
-      () => options.tasks.delete(task),
-      () => options.tasks.delete(task),
-    );
-    return task;
-  };
+  const track = createPendingPromiseTracker(options.tasks);
 
   const waitForPrepared = async (
     timeoutMs: number,
@@ -479,6 +474,14 @@ export function createWorkerWorkspaceActions(
     );
     const stagingRoot = path.join(temporaryDirectory, "staging");
     const manifestRoot = path.join(temporaryDirectory, "manifests");
+    const historyTransfer = createSshWorkspaceHistoryTransfer({
+      remoteWorkspaceDir: request.remoteWorkspaceDir,
+      temporaryDirectory,
+      scpTarget: prepared.scpTarget,
+      bandwidthLimitKiB: INBOUND_RSYNC_BW_LIMIT_KIB,
+      runWorkspaceCommand,
+      runBoundedInboundRsync: (transfer) => runBoundedInboundRsync({ ...transfer, prepared }),
+    });
     // Inbound files stay private until verified; stable names keep live quota scans complete.
     const transferListPath = path.join(temporaryDirectory, "transfer-list");
     const downloadManifest = async (manifestRef: string) => {
@@ -522,6 +525,7 @@ export function createWorkerWorkspaceActions(
         runWorkspaceCommand,
         remoteWorkspaceDir: request.remoteWorkspaceDir,
       });
+      const gitHistory = await historyTransfer.capture(base.baseCommit);
       const verifyStable = async (expectedRef: string): Promise<void> => {
         const expectedDigest = expectedRef.slice("sha256:".length);
         const observedRef = await captureRemoteWorkspaceManifest({
@@ -536,6 +540,7 @@ export function createWorkerWorkspaceActions(
         if (observedRef !== expectedRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
         }
+        await historyTransfer.verifyStable();
       };
       const currentRef = await captureRemoteWorkspaceManifest({
         runWorkspaceCommand,
@@ -599,6 +604,7 @@ export function createWorkerWorkspaceActions(
           entries: current.entries.filter((entry) => transferPathSet.has(entry.path)),
         });
       }
+      const gitPackPath = await historyTransfer.downloadPack();
       return await acceptLocal({
         stagingRoot,
         base,
@@ -606,11 +612,14 @@ export function createWorkerWorkspaceActions(
         baseRaw,
         currentRaw,
         currentManifestRef: currentRef,
+        gitHistory,
+        gitPackPath,
         publishAcceptedManifest,
         manifestRef: expectedRemoteRef,
         verifyStable: async () => await verifyStable(expectedRemoteRef()),
       });
     } finally {
+      await historyTransfer.cleanup();
       await fs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
     }
   };

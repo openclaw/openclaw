@@ -52,11 +52,12 @@ await import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runti
   runtime.prewarmConfigDrivenReplyRuntime(),
 );
 
-function captureCancellation(
+async function cancelRequest(
   target: Parameters<typeof captureExecRequestCancellation>[0],
   deviceId: string,
+  allowed: boolean,
 ) {
-  return captureExecRequestCancellation(target, (identity) =>
+  const cancellation = captureExecRequestCancellation(target, (identity) =>
     canRequesterAbortChatRun(
       {
         ...identity,
@@ -65,6 +66,8 @@ function captureCancellation(
       { deviceId, isAdmin: false },
     ),
   );
+  expect(cancellation.cancel()).toBe(allowed);
+  await cancellation.settle();
 }
 
 test.for([
@@ -246,14 +249,10 @@ test.for([
           );
           if (stopAt === "active destination") {
             await withinTest(entered.promise, signal);
-            const denied = captureCancellation(continuation, "foreign-device");
-            expect(denied.cancel()).toBe(false);
-            await denied.settle();
+            await cancelRequest(continuation, "foreign-device", false);
             expect(continuedProcess?.exited).toBe(false);
             expect(continuedProcess?.cancellationRequested).not.toBe(true);
-            const cancellation = captureCancellation(continuation, "destination-device");
-            expect(cancellation.cancel()).toBe(true);
-            await cancellation.settle();
+            await cancelRequest(continuation, "destination-device", true);
             expect(continuedProcess).toMatchObject({ exited: true, exitReason: "manual-cancel" });
             expect(continuedProcess?.finalizationFailed).not.toBe(true);
             expect(continuedProcess?.cleanupUncertain).not.toBe(true);
@@ -263,12 +262,8 @@ test.for([
             );
             expect(routed).toHaveLength(1);
             expect(readExecRequestOwners(routed[0]!)).toHaveLength(1);
-            const denied = captureCancellation(origin, "foreign-device");
-            expect(denied.cancel()).toBe(false);
-            await denied.settle();
-            const cancellation = captureCancellation(origin, "origin-device");
-            expect(cancellation.cancel()).toBe(true);
-            await cancellation.settle();
+            await cancelRequest(origin, "foreign-device", false);
+            await cancelRequest(origin, "origin-device", true);
           }
           releaseModel.resolve();
           await Promise.all([completion.settled, predecessor?.settled]);

@@ -1,7 +1,19 @@
 import { expect, test, vi } from "vitest";
+import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "../agents/tools/embedded-gateway-stub.js";
+import { createSessionsSearchTool } from "../agents/tools/sessions-search-tool.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -12,6 +24,7 @@ import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { profileActor, writeListEntry } from "./session-list-entry.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -22,14 +35,8 @@ import type { WorkerSessionPlacementProjection } from "./worker-environments/pla
 function viewer(name: string): GatewayClient {
   const profileId = ensureProfileForEmail(`${name}@example.com`).id;
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: { profileId, displayName: profileId, hasAvatar: false, updatedAt: 1 },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
+    authenticatedUserProfile: gatewayProfile(profileId, profileId),
     preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
   };
 }
@@ -321,7 +328,7 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
   });
 });
 
-test("shares concurrent list selection across row modes and refilters only published partitions", async () => {
+test.each([true, false])("shares unchanged list selection (wire=%s)", async (wire) => {
   await withStateDirEnv("openclaw-list-selection-repeat-", async () => {
     const cfg = initialize();
     const alice = viewer("alice");
@@ -344,12 +351,12 @@ test("shares concurrent list selection across row modes and refilters only publi
     writeResidentEntries(store);
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const read = (rowMode: "compact" | "sidebar", client = alice) =>
+    const read = (rowMode: "compact" | "sidebar", client = alice, limit = 2) =>
       listProjectedSessions({
         projection,
         client,
-        acceptsSerializedJson: true,
-        opts: { limit: 2, activeMinutes: 1, rowMode },
+        acceptsSerializedJson: wire,
+        opts: { limit, activeMinutes: 1, rowMode },
       });
     try {
       expect(sessionIds(await read("compact"))).toEqual(["s127", "s126"]);
@@ -359,6 +366,56 @@ test("shares concurrent list selection across row modes and refilters only publi
       );
       expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
       expect(owner).not.toHaveBeenCalled();
+      for (const client of [alice, bob]) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          await read(rowMode, client, 2);
+          await read(rowMode, client, 128);
+        }
+      }
+      using stringify = vi.spyOn(JSON, "stringify");
+      using present = vi.spyOn(projection, "present");
+      for (const client of [alice, bob, alice, bob]) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          stringify.mockClear();
+          await read(rowMode, client, 2);
+          const smallPageEncodings = stringify.mock.calls.length;
+          stringify.mockClear();
+          const result = await read(rowMode, client, 128);
+          const encodings = stringify.mock.calls.length;
+          expect(result.totalCount).toBe(128);
+          // Fixed request preparation may encode facts; additional warm rows must not.
+          if (wire) {
+            expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
+              smallPageEncodings,
+            );
+          }
+          const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
+          expect(rows.every((row) => row.rowMode === rowMode)).toBe(true);
+          expect(rows.find((row) => row.sessionId === "s127")?.sharingRole).toBe(
+            client === bob ? "owner" : "viewer",
+          );
+          expect(rows.find((row) => row.sessionId === "s0")?.sharingRole).toBe(
+            client === alice ? "owner" : "viewer",
+          );
+        }
+      }
+      expect(present).not.toHaveBeenCalled();
+      stringify.mockRestore();
+      present.mockRestore();
+      const people = () =>
+        listProjectedSessions({
+          projection,
+          client: alice,
+          acceptsSerializedJson: true,
+          opts: { limit: 2, includePeople: true },
+        });
+      const beforeUsage = await people();
+      owner.mockClear();
+      patchEntry(store, "agent:main:selection-0", { inputTokens: 123 });
+      await read("compact", bob);
+      expect((await people()).people).toEqual(beforeUsage.people);
+      expect(owner).not.toHaveBeenCalled();
+      owner.mockClear();
       patchEntry(store, "agent:main:selection-0", { updatedAt: now + 200, visibility: "draft" });
       expectPage(await read("compact"), ["s0", "s127"], 128);
       expect(owner.mock.calls.length).toBeLessThan(32);
@@ -378,6 +435,109 @@ test("shares concurrent list selection across row modes and refilters only publi
     } finally {
       projection.dispose();
       release();
+    }
+  });
+});
+
+test("indexed recall preserves pinned visibility without inventory paging", async () => {
+  await withStateDirEnv("openclaw-search-selection-", async () => {
+    const cfg = initialize({ agents: { entries: { main: {}, work: {} } } });
+    const requester = "agent:main:dashboard:requester";
+    const archived = "agent:main:dashboard:archived";
+    const child = "agent:main:subagent:child";
+    const foreign = "agent:work:dashboard:foreign";
+    const foreignChild = "agent:work:subagent:child";
+    writeResidentEntries({
+      [requester]: { sessionId: "requester", updatedAt: 6 },
+      [archived]: { sessionId: "archived", updatedAt: 5, archivedAt: 10 },
+      [child]: { sessionId: "child", updatedAt: 4, spawnedBy: requester },
+      [foreign]: { sessionId: "foreign", updatedAt: 3 },
+      [foreignChild]: { sessionId: "foreign-child", updatedAt: 2, spawnedBy: requester },
+    });
+    for (const agentId of ["main", "work"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: "global" },
+        {
+          sessionId: `${agentId}-global`,
+          updatedAt: 1,
+          archivedAt: 10,
+        },
+      );
+    }
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:dashboard:incognito-hidden" },
+      { sessionId: "private", updatedAt: 7, incognito: true, archivedAt: 10 },
+    );
+    for (const [agentId, sessionKey, sessionId] of [
+      ["main", requester, "requester"],
+      ["main", archived, "archived"],
+      ["main", child, "child"],
+      ["work", foreign, "foreign"],
+      ["work", foreignChild, "foreign-child"],
+      ["main", "global", "main-global"],
+      ["work", "global", "work-global"],
+      ["main", "agent:main:dashboard:incognito-hidden", "private"],
+    ] as const) {
+      await persistSessionTranscriptTurn(
+        { agentId, sessionKey, sessionId },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: "synthetic" }, now: Date.now() }],
+        },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
+    const gateway = createEmbeddedCallGateway();
+    const own = [requester, archived, child, "global"];
+    try {
+      for (const scope of ["all", "self", "tree", "agent"] as const) {
+        for (const enabled of [true, false]) {
+          for (const sandboxed of [false, true]) {
+            const tool = createSessionsSearchTool({
+              // The Gateway remains permissive; the tool's pinned restrictions must survive RPC.
+              config: {
+                ...cfg,
+                tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
+                agents: {
+                  ...cfg.agents,
+                  defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+                },
+              },
+              agentId: "main",
+              agentSessionKey: requester,
+              sandboxed,
+              callGateway: async (request) => {
+                expect(request.method).not.toBe("sessions.list");
+                return gateway(request);
+              },
+            });
+            const result = await tool.execute("visibility", { query: "synthetic", limit: 25 });
+            const expected = sandboxed
+              ? [requester, child, foreignChild]
+              : scope === "self"
+                ? [requester]
+                : scope === "tree"
+                  ? [requester, child, foreignChild]
+                  : scope === "agent"
+                    ? own
+                    : [...own, foreignChild, ...(enabled ? [foreign] : [])];
+            const keys = (result.details as { results: { sessionKey: string }[] }).results.map(
+              (hit) => hit.sessionKey,
+            );
+            expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
+              expected.toSorted(),
+            );
+          }
+        }
+      }
+    } finally {
+      unbind();
+      projection.dispose();
+      release();
+      memorySessionActorOwners.reset();
     }
   });
 });

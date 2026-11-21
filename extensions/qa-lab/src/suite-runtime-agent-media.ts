@@ -24,19 +24,6 @@ function extractMediaPathFromText(text: string | undefined): string | undefined 
   return isRecord(media) ? readFirstMediaPath(media) || undefined : undefined;
 }
 
-function readPluginAllow(config: Record<string, unknown>) {
-  const plugins = config.plugins;
-  if (!isRecord(plugins)) {
-    return [];
-  }
-  const allow = plugins.allow;
-  return Array.isArray(allow)
-    ? allow.filter(
-        (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
-      )
-    : [];
-}
-
 async function resolveGeneratedImagePath(params: {
   env: Pick<QaSuiteRuntimeEnv, "mock" | "gateway">;
   promptSnippet: string;
@@ -112,13 +99,20 @@ async function resolveGeneratedImagePath(params: {
 
 async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
   const snapshot = await readConfigSnapshot(env);
+  const plugins = snapshot.config.plugins;
+  const allow = isRecord(plugins) ? plugins.allow : undefined;
+  const existingPluginIds = Array.isArray(allow)
+    ? allow.filter(
+        (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
+      )
+    : [];
   await patchConfig({
     env,
     patch: buildQaImageGenerationConfigPatch({
       providerMode: env.providerMode,
       providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
       requiredPluginIds: env.transport.requiredPluginIds,
-      existingPluginIds: readPluginAllow(snapshot.config),
+      existingPluginIds,
       forcedRuntime:
         env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" ? "codex" : undefined,
     }),

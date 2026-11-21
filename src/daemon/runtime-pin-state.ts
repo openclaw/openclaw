@@ -1,12 +1,14 @@
 import { z } from "zod";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import type { DatabaseEngineId } from "../infra/database-engine/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   completeUnshippedDaemonRuntimePinMigration,
+  daemonRuntimePinMigrationSourcesMatch,
   readDaemonRuntimePinValue,
   readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
@@ -21,12 +23,16 @@ import {
 } from "./service-types.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
-const pinSchema = z.object({ runtime: z.enum(["node", "bun"]), path: z.string().min(1) });
+const pinSchema = z.object({
+  runtime: z.enum(["node", "bun", "standalone"]),
+  path: z.string().min(1),
+});
 const recordSchema = z.object({ version: z.literal(1), pin: pinSchema, definition: z.string() });
 
 type PinScope = { kind: "gateway" | "node"; env: NodeJS.ProcessEnv };
 function resolveKey({ kind, env }: PinScope) {
-  const nativeEnv = kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment() } : env;
+  const nativeEnv =
+    kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment(env) } : env;
   const name =
     process.platform === "darwin"
       ? resolveLaunchAgentLabel(nativeEnv)
@@ -36,8 +42,11 @@ function resolveKey({ kind, env }: PinScope) {
   return `daemon-runtime-pin:${sha256Hex(JSON.stringify([kind, process.platform, name, resolveConfigPathCandidate(env)]))}`;
 }
 const migrationPending = new Map<string, boolean>();
-export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): boolean {
-  if (completeUnshippedDaemonRuntimePinMigration(env)) {
+export function readDaemonRuntimePinMigrationPending(
+  env: NodeJS.ProcessEnv,
+  stateEngine?: DatabaseEngineId,
+): boolean {
+  if (completeUnshippedDaemonRuntimePinMigration(env, stateEngine)) {
     return false;
   }
   const source = resolveOpenClawStateSqlitePath(env);
@@ -46,19 +55,21 @@ export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): bo
     migrationPending.set(
       source,
       receipt?.phase !== "complete" ||
-        (receipt.source_state !== source && receipt.source_state !== "none/unshipped"),
+        (receipt.source_state !== "none/unshipped" &&
+          !daemonRuntimePinMigrationSourcesMatch(receipt.source_state, source)),
     );
   }
   return migrationPending.get(source) ?? false;
 }
 
-/** Admit migration under native service custody before planning any runtime change. */
+/** Admit migration under native service custody. Local startup can supply the pin source engine before resolving connection secrets. */
 export function withDaemonRuntimePinMigration<T>(
   env: NodeJS.ProcessEnv,
   read: () => T,
+  stateEngine?: DatabaseEngineId,
 ): Promise<T> {
   return withGatewayServiceOperationLock(env, async () => {
-    if (readDaemonRuntimePinMigrationPending(env)) {
+    if (readDaemonRuntimePinMigrationPending(env, stateEngine)) {
       const { migrateDaemonRuntimePins } =
         await import("../infra/state-migrations.daemon-runtime-pins.js");
       const result = await migrateDaemonRuntimePins(env);

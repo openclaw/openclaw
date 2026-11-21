@@ -7,16 +7,13 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getSessionSafeDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
-import {
-  MediaAttachmentCache,
-  type MediaAttachmentCacheOptions,
-  normalizeAttachments,
-} from "./attachments.js";
+import { MediaAttachmentCache, type MediaAttachmentCacheOptions } from "./attachments.cache.js";
+import { normalizeAttachments } from "./attachments.normalize.js";
 import type { MediaAttachment } from "./types.js";
 
 /** Normalizes message context media fields for the media-understanding runner. */
 export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
-  const attachments = normalizeAttachments(ctx);
+  const attachments = normalizeAttachments(ctx.media);
   // Cached Telegram sticker descriptions already cover the current attachment,
   // but supplemental quote media still needs normal understanding.
   return ctx.SkipStickerMediaUnderstanding

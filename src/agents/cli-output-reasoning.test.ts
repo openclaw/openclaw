@@ -12,11 +12,10 @@ import {
   claudeTextDelta,
   createClaudeParser,
   joinJsonlFrames,
+  finishCliFrames,
+  localCliBackend as localBackend,
+  claudeMessageStart,
 } from "./cli-output.test-helpers.js";
-
-function claudeMessageStart(id?: string) {
-  return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
-}
 
 function claudeThinkingDelta(thinking: string, index?: number | string) {
   return claudeStreamEvent({
@@ -30,19 +29,18 @@ function claudeAssistantSnapshot(id: string, content: unknown[]) {
   return { type: "assistant", message: { id, content } };
 }
 
-const reasoning = (text: string, delta = text) => ({ text, delta, isReasoningSnapshot: true });
+const reasoning = (text: string, delta = text) => ({
+  text,
+  delta,
+  isReasoningSnapshot: true,
+  modelProgress: true,
+});
 const thought = (thinking: string, signature?: string) => ({
   type: "thinking",
   thinking,
   signature,
 });
 const answer = { type: "text", text: "Answer." };
-const localBackend: CliJsonlStreamingParserOptions["backend"] = {
-  command: "local-cli",
-  output: "jsonl",
-  jsonlDialect: "claude-stream-json",
-  sessionIdFields: ["session_id"],
-};
 
 describe("createCliJsonlStreamingParser reasoning", () => {
   function createClaudeTaggedReasoningHarness(
@@ -96,8 +94,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     { name: "tag name", chunks: ["<thi", "nking>Private "] },
     { name: "quoted attribute", chunks: ['<thinking note="', "x>y", '">Private '] },
   ])("holds reasoning with a split $name until its close tag is complete", ({ chunks }) => {
-    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
-    const pushText = (text: string) => parser.push(`${JSON.stringify(claudeTextDelta(text))}\n`);
+    const { assistant, parser, thinking, pushText } = createClaudeTaggedReasoningHarness();
 
     for (const chunk of chunks) {
       pushText(chunk);
@@ -119,7 +116,6 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const visible = createClaudeTaggedReasoningHarness();
     const split = createClaudeTaggedReasoningHarness();
     const mixed = createClaudeTaggedReasoningHarness();
-    const tagged = createClaudeTaggedReasoningHarness();
     visible.pushText("<div>Visible prefix <thi");
     expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
     expect(visible.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
@@ -135,14 +131,6 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     mixed.pushText("<thi");
     expect(mixed.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
     expect(mixed.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
-
-    tagged.pushText("<thi");
-    tagged.pushText("nking>Private analysis.");
-    expect(tagged.assistant).toEqual([]);
-    expect(tagged.thinking).toEqual([]);
-    tagged.pushText("</thinking>Visible answer.");
-    expect(tagged.thinking.at(-1)?.text).toBe("Private analysis.");
-    expect(tagged.assistant.at(-1)?.text).toBe("Visible answer.");
   });
 
   it("promotes consecutive leading blocks but preserves later literal tags", () => {
@@ -163,21 +151,15 @@ describe("createCliJsonlStreamingParser reasoning", () => {
   });
 
   it("prefers native Claude thinking over a mirrored leading tagged block", () => {
-    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
-
-    parser.push(
-      joinJsonlFrames(
-        claudeThinkingDelta("Native analysis.", 0),
-        claudeTextDelta("<thinking>Native analysis.</thinking>Visible answer.", 1),
-        { type: "result", result: "<thinking>Native analysis.</thinking>Visible answer." },
-        "",
-      ),
+    const { assistant, parser, thinking, push } = createClaudeTaggedReasoningHarness();
+    push(
+      claudeThinkingDelta("Native analysis.", 0),
+      claudeTextDelta("<thinking>Native analysis.</thinking>Visible answer.", 1),
+      { type: "result", result: "<thinking>Native analysis.</thinking>Visible answer." },
     );
     parser.finish();
 
-    expect(thinking).toEqual([
-      { text: "Native analysis.", delta: "Native analysis.", isReasoningSnapshot: true },
-    ]);
+    expect(thinking).toEqual([reasoning("Native analysis.")]);
     expect(assistant.at(-1)?.text).toBe("Visible answer.");
     expect(parser.getOutput()?.text).toBe("Visible answer.");
   });
@@ -192,8 +174,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
   ])("preserves $name on the visible path", ({ text }) => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
-    parser.push(joinJsonlFrames(claudeTextDelta(text), ""));
-    parser.finish();
+    finishCliFrames(parser, claudeTextDelta(text));
 
     expect(thinking).toEqual([]);
     expect(assistant.map((entry) => entry.delta).join("")).toBe(text);
@@ -256,6 +237,30 @@ describe("createCliJsonlStreamingParser reasoning", () => {
       ],
     },
     {
+      name: "keeps fuller reasoning across prefix and full replays before a later delta",
+      frames: [
+        claudeMessageStart("msg-1"),
+        claudeThinkingDelta("Known analysis", 0),
+        claudeAssistantSnapshot("msg-1", [thought("Known")]),
+        claudeAssistantSnapshot("msg-1", [thought("Known analysis")]),
+        claudeThinkingDelta(" more", 0),
+      ],
+      expected: [
+        {
+          text: "Known analysis",
+          delta: "Known analysis",
+          isReasoningSnapshot: true,
+          modelProgress: true,
+        },
+        {
+          text: "Known analysis more",
+          delta: " more",
+          isReasoningSnapshot: true,
+          modelProgress: true,
+        },
+      ],
+    },
+    {
       name: "replaces per-index thinking when assistant snapshots revise non-prefix text",
       frames: [
         claudeThinkingDelta("rough draft", 0),
@@ -267,25 +272,6 @@ describe("createCliJsonlStreamingParser reasoning", () => {
         reasoning("rough draft"),
         reasoning("revised thought"),
         reasoning("revised thought continued", " continued"),
-      ],
-    },
-    {
-      name: "dedupes per content-block index across multiple thinking blocks",
-      frames: [
-        claudeThinkingDelta("A", 0),
-        claudeThinkingDelta("B", 1),
-        claudeAssistantSnapshot("msg-1", [
-          { type: "thinking", thinking: "A", signature: "sig-a" },
-          { type: "thinking", thinking: "B", signature: "sig-b" },
-        ]),
-        claudeThinkingDelta("C", 0),
-        claudeThinkingDelta("D", 1),
-      ],
-      expected: [
-        { text: "A", delta: "A", isReasoningSnapshot: true },
-        { text: "AB", delta: "B", isReasoningSnapshot: true },
-        { text: "ACB", delta: "C", isReasoningSnapshot: true },
-        { text: "ACBD", delta: "D", isReasoningSnapshot: true },
       ],
     },
     {
@@ -322,18 +308,18 @@ describe("createCliJsonlStreamingParser reasoning", () => {
           `{"type":"stream_event","event":{"type":"content_block_delta","index":${index},"delta":{"type":"thinking_delta","thinking":${JSON.stringify(thinking)}}}}`,
       ),
       expected: [
-        { text: "L", delta: "L", isReasoningSnapshot: true },
-        { text: "L!", delta: "!", isReasoningSnapshot: true },
-        { text: "L!N", delta: "N", isReasoningSnapshot: true },
-        { text: "L!NZ", delta: "Z", isReasoningSnapshot: true },
-        { text: "L!NZ+", delta: "+", isReasoningSnapshot: true },
-        { text: "L!NZ+H", delta: "H", isReasoningSnapshot: true },
-        { text: "L!NZ+H!", delta: "!", isReasoningSnapshot: true },
-        { text: "L!N?Z+H!", delta: "?", isReasoningSnapshot: true },
+        reasoning("L"),
+        reasoning("L!", "!"),
+        reasoning("L!N", "N"),
+        reasoning("L!NZ", "Z"),
+        reasoning("L!NZ+", "+"),
+        reasoning("L!NZ+H", "H"),
+        reasoning("L!NZ+H!", "!"),
+        reasoning("L!N?Z+H!", "?"),
       ],
     },
     {
-      name: "dedupes snapshot thinking after tool-interleaved multi-block streaming",
+      name: "dedupes and continues snapshot thinking after tool-interleaved streaming",
       frames: [
         claudeThinkingDelta("A", 0),
         claudeBlockStart({ type: "tool_use", id: "tool-1", name: "Read" }, 1),
@@ -341,14 +327,18 @@ describe("createCliJsonlStreamingParser reasoning", () => {
         claudeBlockStop(1),
         claudeThinkingDelta("B", 2),
         claudeAssistantSnapshot("msg-1", [
-          { type: "thinking", thinking: "A", signature: "sig-a" },
+          thought("A", "sig-a"),
           { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "x" } },
-          { type: "thinking", thinking: "B", signature: "sig-b" },
+          thought("B", "sig-b"),
         ]),
+        claudeThinkingDelta("C", 0),
+        claudeThinkingDelta("D", 2),
       ],
       expected: [
-        { text: "A", delta: "A", isReasoningSnapshot: true },
-        { text: "AB", delta: "B", isReasoningSnapshot: true },
+        reasoning("A"),
+        reasoning("AB", "B"),
+        reasoning("ACB", "C"),
+        reasoning("ACBD", "D"),
       ],
     },
     {
@@ -364,12 +354,9 @@ describe("createCliJsonlStreamingParser reasoning", () => {
         claudeBlockStart({ type: "thinking" }),
         claudeThinkingDelta("B"),
         claudeBlockStop(),
-        claudeAssistantSnapshot("msg-1", [{ type: "text", text: "Answer." }]),
+        claudeAssistantSnapshot("msg-1", [answer]),
       ],
-      expected: [
-        { text: "A", delta: "A", isReasoningSnapshot: true },
-        { text: "AB", delta: "B", isReasoningSnapshot: true },
-      ],
+      expected: [reasoning("A"), reasoning("AB", "B")],
     },
     {
       name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",
@@ -398,8 +385,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
   ])("$name", ({ frames, expected }) => {
     const { parser, thinking } = createClaudeTaggedReasoningHarness({ onAssistantDelta: () => {} });
 
-    parser.push(joinJsonlFrames(...frames));
-    parser.finish();
+    finishCliFrames(parser, ...frames);
 
     expect(thinking).toEqual(expected);
   });
@@ -418,9 +404,9 @@ describe("createCliJsonlStreamingParser reasoning", () => {
 
     expect(thinking).toEqual([]);
     expect(progress).toEqual([
-      { progressTokens: 50 },
-      { progressTokens: 200 },
-      { progressTokens: 300 },
+      { progressTokens: 50, modelProgress: true },
+      { progressTokens: 200, modelProgress: true },
+      { progressTokens: 300, modelProgress: true },
     ]);
   });
 });

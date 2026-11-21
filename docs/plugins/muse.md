@@ -22,7 +22,7 @@ For the broader model/provider/runtime split, start with
 
 ## Requirements
 
-- OpenClaw. Model Setup can install and enable the `@openclaw/muse` plugin.
+- OpenClaw. Models can install and enable the `@openclaw/muse` plugin.
 - If your config uses `plugins.allow`, allow `muse` (the manifest id), not the
   npm package name.
 - The Muse Code CLI installed separately, with a `muse` binary on `PATH` or a
@@ -38,7 +38,7 @@ For the broader model/provider/runtime split, start with
 
 ## Install
 
-Model Setup installs the plugin when you choose **Muse Code**. To install it
+Models installs the plugin when you choose **Muse Code**. To install it
 manually instead:
 
 ```bash
@@ -51,7 +51,7 @@ itself in the middle of a Gateway run. Update Muse with its own installer.
 
 ## Quickstart
 
-1. Open **Model Setup** (`/models`) in the Control UI.
+1. Open **Models** (`/models`) in the Control UI.
 2. In **AI Setup**, choose **Connect provider**, then **Meta → Muse Code**.
 3. Start sign-in, confirm the displayed device code in the browser, and approve it.
 4. Accept **Use Muse Code’s native permissions?** to finish setup for the selected
@@ -95,7 +95,7 @@ API binding or host credential takes precedence. An API catalog row alone is
 not an API credential. Explicit runtime choices and required cloud workers
 keep their existing runtime policy.
 
-Choosing **Muse Code** in Model Setup routes the selected model through Muse
+Choosing **Muse Code** in Models routes the selected model through Muse
 for the agent being set up. It writes that agent's model entry, replacing any
 runtime choice already on it. Global model defaults, other agents and other
 Meta models keep their existing runtime policy.
@@ -133,11 +133,12 @@ guessed relationships or inherited recommendations.
 
 ## Auth
 
-Use **Model Setup → Meta → Muse Code** in either **Provider Access** or **AI Setup**
+Use **Models → Meta → Muse Code** in either **Provider Access** or **AI Setup**
 in the Control UI for browser sign-in.
-The credential stays in Muse Code's own credential store; OpenClaw does not
-copy it into an auth profile. This sign-in authorizes the Muse runtime, not
-the direct Meta API route.
+The credential is saved in a Muse credential file under the OpenClaw state
+directory, separate from the default sign-in that the `muse` CLI uses on the
+same host; OpenClaw does not copy it into an auth profile. This sign-in
+authorizes the Muse runtime, not the direct Meta API route.
 
 Keep the sign-in dialog open while it shows **Waiting for approval in your
 browser…**. The device code and **Open sign-in** link remain available during
@@ -153,7 +154,10 @@ from Meta's live catalog. It does not run a model turn or expose native tools
 during verification. The same check runs again before activation is committed.
 The read-only Muse host is reused while its credential binding stays unchanged;
 the pre-commit check still requests the live catalog and rechecks caller authority.
-Canceling sign-in closes its verification host, including during startup.
+Canceling sign-in stops its verification wait. During startup, cancellation closes
+the starting verification host. Once the host is initialized, other catalog readers
+sharing it continue; OpenClaw closes the canceled verification host after its last
+reader finishes.
 **AI Setup** selects that model; **Provider Access** preserves the active model.
 
 Gateway-driven sign-in always uses Muse's file credential backend under the
@@ -163,7 +167,8 @@ credential directory when its credential file exists.
 
 Before the first sign-in for an agent, OpenClaw asks you to accept Muse Code's
 native permissions. Continuing remembers this choice for that agent, so future
-Muse chats do not ask again. Muse runs on the Gateway host with its own tools;
+Muse chats do not ask again, including your own channel chats. Other senders
+still need a chat set to Full access. Muse runs on the Gateway host with its own tools;
 OpenClaw's optional native tool and sandbox restrictions do not apply to it.
 OpenClaw-hosted tools retain their policy checks. Revoke consent by removing
 `muse` from the agent's **Remembered native runtime permissions** setting.
@@ -265,7 +270,7 @@ active model. New chats using Muse then start with **Full access** and optional
 sandboxing off, without repeating the prompt.
 
 If you set up Muse through the CLI or manual configuration instead, the Control
-UI may still offer **Continue for this chat** when consent is needed. Setup
+UI may still offer **Continue for this session** when consent is needed. Setup
 outside these flows does not grant permission automatically. That fallback
 changes only the current chat. Remove `muse` from
 `agents.entries.<agentId>.nativeRuntimeConsent` to revoke the remembered choice.
@@ -347,9 +352,9 @@ Muse owns its MCP configuration. Add MCP servers in Muse itself; OpenClaw's
   sandboxes or remote node execution.
 - Muse's built-in `echo` provider is not available over `muse serve`, so the
   runtime always needs a working Meta credential.
-- Model Setup checks a new Meta API-key sign-in with a short tool-restricted probe
+- Models checks a new Meta API-key sign-in with a short tool-restricted probe
   turn. Muse cannot enforce that restriction, so while `meta/*` models are
-  routed to `muse`, activating a new `meta` API key in Model Setup fails with
+  routed to `muse`, activating a new `meta` API key in Models fails with
   "Muse Code cannot enforce this conversation's tool policy". Use Muse's own
   sign-in instead (see [Auth](#auth)).
 

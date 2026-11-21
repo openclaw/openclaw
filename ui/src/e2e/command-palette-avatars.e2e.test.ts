@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -53,6 +54,45 @@ const agents = [
   agent("reviewer", "Review bot", "", "🦀"),
 ];
 suite.define(() => {
+  it("opens session and message results in new tabs without closing search", async () => {
+    await suite.withPage({}, async ({ context, page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": { ...roster, count: 1, sessions: rows.slice(0, 1) },
+          "sessions.search": transcript,
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator(".shell").waitFor({ state: "visible" });
+      await page.keyboard.press("ControlOrMeta+K");
+      const palette = page.locator(".cmd-palette");
+      const input = palette.locator(".cmd-palette__input");
+      await input.fill("missing errors");
+      const session = palette.getByRole("option").filter({ hasText: rows[0]!.displayName });
+      const message = palette.getByRole("option").filter({ hasText: rows[1]!.displayName });
+      await session.waitFor();
+      await message.waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await palette.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "palette-new-tab-results.png"),
+        });
+      }
+      const originalUrl = page.url();
+      for (const [result, click, destination] of [
+        [session, { button: "middle" }, "/chat/main/search-design"],
+        [message, { modifiers: ["ControlOrMeta"] }, "/chat/main/worker"],
+      ] satisfies [typeof session, Parameters<typeof session.click>[0], string][]) {
+        expect(await result.getAttribute("href")).toBe(destination);
+        const [tab] = await Promise.all([context.waitForEvent("page"), result.click(click)]);
+        await tab.waitForURL(new URL(destination, originalUrl).href);
+        expect(page.url()).toBe(originalUrl);
+        expect(await input.inputValue()).toBe("missing errors");
+        await tab.close();
+      }
+    });
+  });
+
   it.each([
     { width: 1280, height: 900, mode: "light" },
     { width: 1280, height: 900, mode: "dark" },
@@ -154,9 +194,18 @@ suite.define(() => {
         }
         expect(await page.getByText("Search notices", { exact: false }).count()).toBe(0);
         expect(
-          await page.getByRole("status").filter({ hasText: "Indexing older messages" }).isVisible(),
+          await page
+            .getByRole("status")
+            .filter({ hasText: "Results may be incomplete" })
+            .isVisible(),
         ).toBe(true);
         expect(await input.isVisible()).toBe(true);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.locator(".cmd-palette").screenshot({
+            animations: "disabled",
+            path: path.join(suite.artifactDir, `palette-completeness-${width}-${mode}.png`),
+          });
+        }
         await gateway.setMethodResponse("sessions.search", {
           ...transcript,
           truncated: true,
@@ -170,9 +219,7 @@ suite.define(() => {
         expect(
           await page.locator(".cmd-palette__search").getByRole("status").allTextContents(),
         ).toEqual([]);
-        expect(
-          await page.getByText(/Search notices|Indexing older messages|may be incomplete/).count(),
-        ).toBe(0);
+        expect(await page.getByText(/Search notices|may be incomplete/).count()).toBe(0);
         await input.focus();
         await input.press("ArrowDown");
         await input.press("Enter");

@@ -217,34 +217,21 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
       waitAccountId: accountId,
     },
   );
-  await context.waitGatewayAccountReady(accountId, {
-    timeoutMs: context.timeoutMs,
-  });
-  const cli = await createMatrixQaCliGatewayRuntime({
-    artifactLabel: "cli-setup-then-gateway-reply",
-    context,
-  });
+  const cli = await createMatrixQaCliGatewayRuntime(context);
   try {
-    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
-      cli,
-      "encryption-setup",
-      ["matrix", "encryption", "setup", "--account", accountId, "--json"],
-    );
-    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
-    if (
-      setup.accountId !== accountId ||
-      setup.success !== true ||
-      setup.bootstrap?.success !== true
-    ) {
-      throw new Error(
-        `Matrix CLI gateway account setup did not succeed: ${setup.bootstrap?.error ?? "unknown error"}`,
-      );
-    }
-    if (setup.status) {
-      assertMatrixQaCliE2eeStatus("Matrix CLI gateway account setup", setup.status);
-    }
+    let setupRun: Awaited<ReturnType<typeof runMatrixQaSetupCliJson>> | undefined;
+    // `encryption setup` is an offline command: it refuses while a Gateway owns
+    // the state root, so run it in the operator's stop/run/restart window.
     await context.restartGatewayAfterStateMutation(
       async () => {
+        setupRun = await runMatrixQaSetupCliJson(cli, "encryption-setup", [
+          "matrix",
+          "encryption",
+          "setup",
+          "--account",
+          accountId,
+          "--json",
+        ]);
         await patchMatrixQaGatewayMatrixAccount({
           accountPatch: {
             encryption: true,
@@ -259,9 +246,23 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
         waitAccountId: accountId,
       },
     );
-    await context.waitGatewayAccountReady(accountId, {
-      timeoutMs: context.timeoutMs,
-    });
+    if (!setupRun) {
+      throw new Error("Matrix CLI gateway account setup did not run");
+    }
+    const setupArtifacts = setupRun.artifacts;
+    const setup = setupRun.payload as MatrixQaCliEncryptionSetupStatus;
+    if (
+      setup.accountId !== accountId ||
+      setup.success !== true ||
+      setup.bootstrap?.success !== true
+    ) {
+      throw new Error(
+        `Matrix CLI gateway account setup did not succeed: ${setup.bootstrap?.error ?? "unknown error"}`,
+      );
+    }
+    if (setup.status) {
+      assertMatrixQaCliE2eeStatus("Matrix CLI gateway account setup", setup.status);
+    }
     // The Gateway now owns encrypted state. Exercise a real CLI crypto command
     // against the same account, then require the Gateway to resume and reply.
     const { artifacts: handoffArtifacts, payload: handoffPayload } = await runMatrixQaSetupCliJson(

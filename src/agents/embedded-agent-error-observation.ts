@@ -6,10 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { parseApiErrorInfo } from "../shared/assistant-error-format.js";
-import {
-  classifyProviderRuntimeFailureKind,
-  type ProviderRuntimeFailureKind,
-} from "./embedded-agent-helpers/provider-runtime-failure.js";
+import { classifyProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import { getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 
@@ -65,46 +62,10 @@ function redactObservationText(text: string | undefined): string | undefined {
   });
 }
 
-function buildObservationFingerprint(params: {
-  raw: string;
-  requestId?: string;
-  httpCode?: string;
-  type?: string;
-  message?: string;
-}): string | null {
-  const boundedMessage =
-    params.message && truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS);
-  const structured =
-    params.httpCode || params.type || boundedMessage
-      ? stableStringify({
-          httpCode: params.httpCode,
-          type: params.type,
-          message: boundedMessage,
-        })
-      : null;
-  if (structured) {
-    return structured;
-  }
-  if (params.requestId) {
-    return params.raw.split(params.requestId).join("<request_id>");
-  }
-  return getApiErrorPayloadFingerprint(params.raw);
-}
-
 export function buildApiErrorObservationFields(
   rawError?: string,
   opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner; code?: string },
-): {
-  rawErrorPreview?: string;
-  rawErrorHash?: string;
-  rawErrorFingerprint?: string;
-  httpCode?: string;
-  providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
-  providerErrorCode?: string;
-  providerErrorType?: string;
-  providerErrorMessagePreview?: string;
-  requestIdHash?: string;
-} {
+) {
   const trimmed = boundObservationInput(rawError);
   if (!trimmed) {
     return {};
@@ -114,13 +75,21 @@ export function buildApiErrorObservationFields(
     const requestId =
       parsed?.requestId ?? normalizeOptionalString(trimmed.match(REQUEST_ID_RE)?.[1]);
     const requestIdHash = requestId ? redactIdentifier(requestId, { len: 12 }) : undefined;
-    const rawFingerprint = buildObservationFingerprint({
-      raw: trimmed,
-      requestId,
-      httpCode: parsed?.httpCode,
-      type: parsed?.type,
-      message: parsed?.message,
-    });
+    const boundedMessage =
+      parsed?.message && truncateUtf16Safe(parsed.message, MAX_FINGERPRINT_MESSAGE_CHARS);
+    const structured =
+      parsed?.httpCode || parsed?.type || boundedMessage
+        ? stableStringify({
+            httpCode: parsed?.httpCode,
+            type: parsed?.type,
+            message: boundedMessage,
+          })
+        : null;
+    const rawFingerprint =
+      structured ||
+      (requestId
+        ? trimmed.split(requestId).join("<request_id>")
+        : getApiErrorPayloadFingerprint(trimmed));
     const redactedRawPreview = replaceRequestIdPreview(redactObservationText(trimmed), requestId);
     const redactedProviderMessage = replaceRequestIdPreview(
       redactObservationText(parsed?.message),
@@ -158,16 +127,7 @@ export function buildApiErrorObservationFields(
 export function buildTextObservationFields(
   text?: string,
   opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
-): {
-  textPreview?: string;
-  textHash?: string;
-  textFingerprint?: string;
-  httpCode?: string;
-  providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
-  providerErrorType?: string;
-  providerErrorMessagePreview?: string;
-  requestIdHash?: string;
-} {
+) {
   const observed = buildApiErrorObservationFields(text, opts);
   return {
     textPreview: observed.rawErrorPreview,

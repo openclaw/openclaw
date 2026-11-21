@@ -71,3 +71,14 @@ export function activePlacement(sessionId: string, overrides: Partial<Active> = 
     ...overrides,
   };
 }
+
+export function journalOwner(
+  placement: Pick<Active, "sessionId" | "environmentId" | "activeOwnerEpoch" | "generation">,
+) {
+  return {
+    sessionId: placement.sessionId,
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+    placementGeneration: placement.generation,
+  };
+}

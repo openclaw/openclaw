@@ -3,7 +3,7 @@ import { parseJsonc } from "../../jsonc/parse.js";
 
 const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
 
-describe.each(["\n", "\r\n"])("parseJsonc line positions with %j line endings", (newline) => {
+describe.each(["\n", "\r\n", "\r"])("parseJsonc line positions with %j line endings", (newline) => {
   it.each(["", "\uFEFF"])("locates column-one tokens with prefix %j", (prefix) => {
     const raw = prefix + ["", "{", '"items":[', "42", "]", "}"].join(newline);
     const ast = parseJsonc(raw);

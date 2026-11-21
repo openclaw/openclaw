@@ -75,9 +75,7 @@ beforeEach(async () => {
     models: [],
     params: { modelCacheDir: tempRoot, mediaModels: { ocr: recipe.id, vision: "vision" } },
   };
-  install.mockResolvedValue({
-    command,
-  });
+  install.mockResolvedValue({ command });
   await fs.writeFile(command, "test runtime");
 });
 
@@ -206,10 +204,7 @@ it("passes media inference cancellation through model preparation before touchin
   const controller = new AbortController();
   controller.abort(new Error("image request cancelled"));
   await expect(
-    ensureManagedLlamaServerForChat({
-      ...mediaRequest(),
-      signal: controller.signal,
-    }),
+    ensureManagedLlamaServerForChat({ ...mediaRequest(), signal: controller.signal }),
   ).rejects.toBe(controller.signal.reason);
   expect(await fs.readFile(presetPath, "utf8")).toBe(activeChat);
   expect(install).not.toHaveBeenCalled();

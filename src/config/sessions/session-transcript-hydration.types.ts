@@ -1,3 +1,4 @@
+import type { CodeModeStoreWrites } from "../../agents/code-mode-session-store-replay.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type {
@@ -12,18 +13,31 @@ import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type {
   PreparedSessionTranscriptHydration,
-  SessionCompactionPreparation,
+  SessionTranscriptContextSelection,
   SessionTranscriptReadSnapshot,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
+import type { SessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 export type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 
+export type SessionTranscriptMaintenanceCheckpoint = {
+  generation: string;
+  rawSeq: number;
+  leafEntryId: string | null;
+};
+
 export type SessionTranscriptMaintenanceRead =
+  | {
+      operation: "code-mode-store";
+      leafEntryId: string | null;
+      checkpoint?: SessionTranscriptMaintenanceCheckpoint;
+    }
   | { operation: "previous"; beforeSeq: number }
   | { operation: "identity"; eventId: string }
   | { operation: "version" }
+  | { operation: "custom-branch"; leafEntryId: string | null; customType: string }
   | {
       operation: "nested-activity";
       scopeId: string;
@@ -46,6 +60,7 @@ export type SessionTranscriptMaintenanceFacts = {
   appendParentId?: string | null;
   lifecycleRevision?: SessionTranscriptWriteScope["expectedLifecycleRevision"];
   events?: TranscriptEvent[];
+  store?: { writes: CodeModeStoreWrites; incremental: boolean };
 };
 
 export type SessionTranscriptHydrationWorkerResult =
@@ -53,9 +68,22 @@ export type SessionTranscriptHydrationWorkerResult =
       kind: "full";
       version: SessionTranscriptReadSnapshot["version"];
       eventCount: number;
-      compaction?: SessionCompactionPreparation;
     }
-  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
+  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>
+  | SessionTranscriptStreamedBoundedResult;
+
+export type SessionTranscriptStreamedBoundedResult = Omit<
+  Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>,
+  "kind" | "snapshot"
+> & {
+  kind: "streamed-bounded";
+  snapshot: Omit<
+    Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>["snapshot"],
+    "events"
+  >;
+  sequences: number[];
+  eventCount: number;
+};
 
 export type SessionTranscriptHydrationChunk = {
   kind: "transcript-hydration-chunk";
@@ -78,6 +106,7 @@ export type SessionTranscriptCurrentTurnEntryRequest = {
 
 export type SessionTranscriptHydrationWorkerInput = {
   kind: "transcript-hydration";
+  caller?: SessionTranscriptHydrationCaller;
   database: { agentId: string; path: string };
   target: SessionTranscriptReadScope;
   resolvedScope: ResolvedTranscriptReadScope;
@@ -85,7 +114,7 @@ export type SessionTranscriptHydrationWorkerInput = {
   afterSeq?: number;
   includeEventJson?: boolean;
   compaction?: true;
-  limits?: { maxBytes: number; maxEvents: number };
+  limits?: SessionTranscriptContextSelection;
   transcript?: SessionEntryCohortRequest["transcript"];
   preparedEntry?: SessionTranscriptAnchorEntry;
   admission?: UserTurnTranscriptAdmissionReceipt;
@@ -93,7 +122,7 @@ export type SessionTranscriptHydrationWorkerInput = {
 
 type SessionTranscriptRuntimeHydrationInput = Omit<
   SessionTranscriptHydrationWorkerInput,
-  "kind" | "limits" | "target" | "expectedIdentity"
+  "kind" | "caller" | "limits" | "target" | "expectedIdentity"
 > & { target: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv } };
 
 export type SessionTranscriptCurrentTurnEntryWorkerInput = SessionTranscriptRuntimeHydrationInput &

@@ -6,8 +6,9 @@ import type {
   CronStreamJob,
   CronStreamLogger,
 } from "./cron-stream-output.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
-type DisableStop = "disabled" | "trust-disabled" | "cron-disabled";
+type DisableStop = "disabled" | "trust-disabled" | "cron-disabled" | "host-execution-disabled";
 type LifecycleStop =
   | "removed"
   | "shutdown"
@@ -20,6 +21,7 @@ export type CronStreamStopReason = DisableStop | LifecycleStop;
 export type CronStreamOwnerParams = {
   scheduler: GatewayScheduler;
   getDefaultAgentId?: () => string | undefined;
+  resolveGatewayContext?: () => GatewayRequestContext | undefined;
   getProcessSupervisor: () => ProcessSupervisor;
   spawnSandboxSource?: (params: {
     job: CronStreamJob;

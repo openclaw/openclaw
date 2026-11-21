@@ -36,14 +36,6 @@ const managersForCleanup: Array<{
   expire(id: string, resolvedBy?: string | null): Promise<boolean>;
 }> = [];
 
-export function createDatabaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
-  );
-  tempDirs.push(stateDir);
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
-
 export function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
   const common = {
     scheduler: createTestGatewayScheduler(),
@@ -88,7 +80,13 @@ export function createHandlers(
 }
 
 export function createFixture(includeSystemAgent = false) {
-  const databaseOptions = createDatabaseOptions();
+  const stateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
+  );
+  tempDirs.push(stateDir);
+  const databaseOptions: OpenClawStateDatabaseOptions = {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  };
   const managers = createManagers(databaseOptions);
   const handlers = createHandlers(managers, databaseOptions, {
     systemAgentApprovalManager: includeSystemAgent ? managers.systemAgent : undefined,
@@ -112,6 +110,7 @@ export async function registerExec(
     request?: Partial<ExecApprovalRequestPayload>;
     expiresAtMs?: number;
     requester?: {
+      profileId?: string;
       connId?: string | null;
       deviceId?: string | null;
       clientId?: string | null;
@@ -135,6 +134,7 @@ export async function registerExec(
     clientId: "requester-client",
     ...params.requester,
   };
+  record.requestedByProfileId = requester.profileId;
   record.requestedByConnId = requester.connId ?? null;
   record.requestedByDeviceId = requester.deviceId;
   record.requestedByClientId = requester.clientId;
@@ -150,6 +150,7 @@ export async function registerExec(
 export async function registerSystemAgent(
   manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>,
   id: string,
+  profileId?: string,
 ) {
   const record = manager.create(
     {
@@ -165,6 +166,7 @@ export async function registerSystemAgent(
     600_000,
     id,
   );
+  record.requestedByProfileId = profileId;
   const decision = (await manager.register(record, 600_000)).decision;
   return { record, decision };
 }
@@ -174,6 +176,7 @@ export async function registerPlugin(
   params: {
     id: string;
     request?: Partial<PluginApprovalRequestPayload>;
+    profileId?: string;
     reviewerDeviceIds?: string[];
   },
 ) {
@@ -191,6 +194,7 @@ export async function registerPlugin(
     600_000,
     params.id,
   );
+  record.requestedByProfileId = params.profileId;
   record.requestedByDeviceId = "requester-device";
   record.requestedByClientId = "requester-client";
   record.requestedByDeviceTokenAuth = true;
@@ -218,7 +222,14 @@ export function createClient(params: {
 
 export async function invoke(params: {
   handlers: ReturnType<typeof createApprovalHandlers>;
-  method: "approval.get" | "approval.history" | "approval.resolve";
+  method:
+    | "approval.get"
+    | "approval.history"
+    | "approval.resolve"
+    | "exec.approval.list"
+    | "exec.approval.get"
+    | "plugin.approval.list"
+    | "openclaw.approval.list";
   body: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   context?: GatewayRequestHandlerOptions["context"];

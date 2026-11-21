@@ -4,7 +4,6 @@ import {
   admitStoreSearch,
   type TextQuery,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -24,9 +23,14 @@ import {
   projectMemorySearchRow,
   resolveSnippetProjection,
   type MemorySearchRow,
-  type SearchRowResult,
 } from "./manager-search-shared.js";
-import { buildSqliteMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
+import type {
+  BodyKeywordSearchResult,
+  ExactPathSpecificity,
+  MemoryKeywordWorkerQuery,
+  PathKeywordSearchResult,
+} from "./manager-search-types.js";
+import { buildSqliteMemorySourceFilter } from "./source-filter.js";
 
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
@@ -55,13 +59,6 @@ function loadKeywordRowsWithFallback<T>(
   }
   return { rows: loadRows(null, plan.substringTerms), usedMatch: false };
 }
-
-type PathKeywordSearchResult = SearchRowResult & {
-  textScore: 0;
-  pathScore: number;
-  exactPathSpecificity: ExactPathSpecificity;
-  hasBodyMatch: false;
-};
 
 function mergePathKeywordScores(target: PathKeywordSearchResult, hit: PathKeywordSearchResult) {
   target.pathScore = Math.max(target.pathScore, hit.pathScore);
@@ -92,8 +89,6 @@ function comparePathKeywordSearchResults(
     left.id.localeCompare(right.id)
   );
 }
-
-export type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 function normalizeSearchTokens(raw: string): string[] {
   return normalizeStringEntriesLower(tokenizeFtsQuery(raw.normalize("NFC")));
@@ -320,17 +315,9 @@ function planPathKeywordSearch(params: {
   return plans;
 }
 
-export async function searchKeyword(params: {
-  db: DatabaseSync;
-  ftsTable: string;
-  query: string;
-  ftsTokenizer?: "unicode61" | "trigram";
-  limit: number;
-  snippetMaxChars: number;
-  sourceFilter: MemorySourceFilter;
-  boostFallbackRanking?: boolean;
-  matchAny?: boolean;
-}): Promise<Array<SearchRowResult & { textScore: number; hasBodyMatch: true }>> {
+export async function searchKeyword(
+  params: MemoryKeywordWorkerQuery["body"] & { db: DatabaseSync },
+): Promise<BodyKeywordSearchResult[]> {
   if (params.limit <= 0) {
     return [];
   }
@@ -381,7 +368,7 @@ export async function searchKeyword(params: {
     // leg first; substring-only trigram hits fill spare capacity without a score.
     const mixedOr = params.matchAny && matchQuery && terms.length > 0;
     const sql = mixedOr
-      ? `WITH matches AS MATERIALIZED (${ranked}), substrings AS (
+      ? /* pg-sqlite-only: manager-search.worker.ts:130 returns the PostgreSQL reader first. */ `WITH matches AS MATERIALIZED (${ranked}), substrings AS (
            SELECT ${columns}, NULL AS rank FROM ${params.ftsTable}
            WHERE 1=1${filter}${liveChunkClause}${sourceFilter.sql}
              AND id NOT IN (SELECT id FROM matches)
@@ -442,36 +429,9 @@ export async function searchKeyword(params: {
   });
 }
 
-export async function searchKeywordWithFallback(params: {
-  db: DatabaseSync;
-  body: Omit<Parameters<typeof searchKeyword>[0], "db" | "matchAny">;
-  path: Omit<Parameters<typeof searchPathKeyword>[0], "db">;
-}) {
-  const runBody = (matchAny = false) =>
-    searchKeyword({ ...params.body, db: params.db, matchAny })
-      .then((rows) => ({ rows, error: undefined }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-  let body = await runBody();
-  const path = await searchPathKeyword({ ...params.path, db: params.db })
-    .then((rows) => ({ rows, error: undefined }))
-    .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-  // A filename hit also preserves AND precision. Expand only an empty result.
-  if (body.rows.length === 0 && path.rows.length === 0 && !body.error && !path.error) {
-    body = await runBody(true);
-  }
-  return { body, path };
-}
-
-export async function searchPathKeyword(params: {
-  db: DatabaseSync;
-  pathFtsTable: string;
-  query: string;
-  exactPathLimit?: number;
-  ftsTokenizer?: "unicode61" | "trigram";
-  limit: number;
-  snippetMaxChars: number;
-  sourceFilter: MemorySourceFilter;
-}): Promise<PathKeywordSearchResult[]> {
+export async function searchPathKeyword(
+  params: MemoryKeywordWorkerQuery["path"] & { db: DatabaseSync },
+): Promise<PathKeywordSearchResult[]> {
   if (params.limit <= 0) {
     return [];
   }

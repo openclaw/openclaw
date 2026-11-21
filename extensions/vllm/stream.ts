@@ -10,6 +10,7 @@ import {
   createPayloadPatchStreamWrapper,
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { wrapVllmPriorityStream } from "./priority.js";
 import {
   isVllmNemotronThinkingModel,
@@ -62,14 +63,8 @@ function setChatTemplateDefaults(
   payload: Record<string, unknown>,
   defaults: Record<string, unknown>,
 ): void {
-  const existing = payload.chat_template_kwargs;
-  payload.chat_template_kwargs =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? {
-          ...defaults,
-          ...(existing as Record<string, unknown>),
-        }
-      : defaults;
+  const existing = asOptionalRecord(payload.chat_template_kwargs);
+  payload.chat_template_kwargs = existing ? { ...defaults, ...existing } : defaults;
 }
 
 export function createVllmQwenThinkingWrapper(params: {

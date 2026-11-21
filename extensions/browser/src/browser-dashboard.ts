@@ -430,7 +430,7 @@ export async function requestBrowserDashboard(
 ): Promise<BrowserDashboardResponse> {
   return await serializeDashboardOperation(request, authority, (definition, current) =>
     withBrowserRequestScope(
-      { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
+      { assertCurrent: () => assertDefinitionCurrent(definition, current) },
       async () => await materialize(definition, request.resume === true, current),
     ),
   );

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
@@ -9,13 +10,16 @@ import {
 import type { Message } from "@openclaw/llm-core";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
-import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/preparation.types.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
+import type { UsageLike } from "../usage.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
 import {
   estimateLlmBoundaryTokenPressure,
+  estimateProjectedRequestTokenPressure,
   estimateRenderedLlmBoundaryTokenPressure,
 } from "./run/preemptive-compaction.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
@@ -38,11 +42,13 @@ export async function attemptServerEndpointCompaction(params: {
   extraParams: Record<string, unknown>;
   requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
   requestBudget?: CompactionRequestBudget;
+  /** An over-window observation can reject early; older, smaller usage cannot admit input. */
+  estimatedInputTokens?: number;
   customInstructions?: string;
-  onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
+  onUsage?: (usage: UsageLike) => void;
   onCompactionCommitted?: (tokensBefore: number) => void;
   assertActive?: () => void;
-}): Promise<ServerEndpointCompactionResult | undefined> {
+}): Promise<ServerEndpointCompactionResult | "context-overflow" | undefined> {
   if (
     params.trigger === "overflow" ||
     params.customInstructions?.trim() ||
@@ -73,6 +79,30 @@ export async function attemptServerEndpointCompaction(params: {
       );
       return undefined;
     }
+    const contextWindow = Math.min(
+      params.model.contextWindow ?? Infinity,
+      params.requestBudget?.contextWindow ?? Infinity,
+    );
+    const inputTokens =
+      params.estimatedInputTokens !== undefined && params.estimatedInputTokens > contextWindow
+        ? params.estimatedInputTokens
+        : estimateLlmBoundaryTokenPressure({
+            messages,
+            systemPrompt: params.context.systemPrompt,
+            prompt: "",
+            replay: { model: params.model, ...params.requestOptions },
+            llmBoundaryTokenPressure: () =>
+              estimateProjectedRequestTokenPressure({
+                context: { systemPrompt: params.context.systemPrompt, messages },
+              }),
+          });
+    if (inputTokens > contextWindow) {
+      log.warn(
+        `Responses compact endpoint skipped: estimated input ${inputTokens} exceeds ` +
+          `${contextWindow}-token window; using bounded client summarization`,
+      );
+      return undefined;
+    }
     // Retained windows must already contain canonical image payloads.
     const windowSource = findEndpointWindowNormalizationSource(params);
     if (windowSource) {
@@ -82,9 +112,9 @@ export async function attemptServerEndpointCompaction(params: {
       );
       return undefined;
     }
-    const owner = params.sessionManager
-      .getBranch()
-      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const owner = params.sessionManager[sessionManagerReadTranscriptBranch]().findLast(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
     if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
       throw new Error("Responses compact endpoint requires a persisted assistant owner");
     }
@@ -99,7 +129,7 @@ export async function attemptServerEndpointCompaction(params: {
       params.requestOptions.timeoutMs,
       params.requestOptions.signal ? { abortSignal: params.requestOptions.signal } : undefined,
     );
-    params.onUsage?.(compacted.usage);
+    params.onUsage?.(compacted.modelUsage ?? compacted.usage);
     params.assertActive?.();
     const replacement = structuredClone(owner.message);
     captureOpenAIResponsesCompaction(
@@ -121,7 +151,6 @@ export async function attemptServerEndpointCompaction(params: {
           replay: {
             model: params.model,
             sessionId: params.requestOptions.sessionId,
-            authProfileId: params.requestOptions.authProfileId,
           },
         }) - estimateRenderedLlmBoundaryTokenPressure({ prompt: "" });
       if (
@@ -169,9 +198,15 @@ export async function attemptServerEndpointCompaction(params: {
       throw err;
     }
     params.assertActive?.();
-    log.warn(
-      `Responses compact endpoint failed; falling back to client compaction: ${formatErrorMessage(err)}`,
-    );
+    const reason = formatErrorMessage(err);
+    if (params.trigger !== "manual" && matchesContextOverflowMessage(reason, "assistant-error")) {
+      log.warn(
+        `Responses compact endpoint context overflow; using deterministic client reduction ` +
+          `without another model request: ${reason}`,
+      );
+      return "context-overflow";
+    }
+    log.warn(`Responses compact endpoint failed; falling back to client compaction: ${reason}`);
     return undefined;
   }
 }

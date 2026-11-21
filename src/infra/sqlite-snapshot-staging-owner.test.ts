@@ -560,6 +560,26 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
   }
 });
 
+it("preserves the cleanup cause while a snapshot still has an active reader", async () => {
+  const { root } = fixture();
+  const request = startPreparation(root, createProbe(root));
+  const reply = await request.result;
+  const releaseReader = retainSnapshotTempDirectory(reply.directory);
+  try {
+    await expect(request.startClose().result).rejects.toMatchObject({
+      message: `SQLite staging preparation cleanup failed: ${reply.directory}`,
+      cause: expect.objectContaining({
+        message: "SQLite snapshot still belongs to an active reader",
+      }),
+    });
+    expect(fs.existsSync(reply.directory)).toBe(true);
+  } finally {
+    releaseReader();
+  }
+  await request.startClose().result;
+  expect(fs.existsSync(reply.directory)).toBe(false);
+});
+
 it("retains an early preparation close until its original accepted result joins", async () => {
   const { root } = fixture();
   const source = createProbe(root, "source", "early");

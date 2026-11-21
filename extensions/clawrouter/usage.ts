@@ -9,21 +9,19 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
+import { normalizeClawRouterRootUrl } from "./base-url.js";
 
 const CLAWROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
-type ClawRouterBudget = {
-  configured?: unknown;
-  ledger?: unknown;
-  windowKey?: unknown;
-  limitMicros?: unknown;
-  spentMicros?: unknown;
-  remainingMicros?: unknown;
-};
-
 type ClawRouterUsagePayload = {
-  budget?: ClawRouterBudget;
+  budget?: {
+    configured?: unknown;
+    ledger?: unknown;
+    windowKey?: unknown;
+    limitMicros?: unknown;
+    spentMicros?: unknown;
+    remainingMicros?: unknown;
+  };
   usage?: {
     summary?: {
       requestCount?: unknown;

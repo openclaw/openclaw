@@ -10,16 +10,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Model-command fixtures control source and runtime snapshots without loading operator state.
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
-  setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
-}));
+vi.mock("../../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+    getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+    setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
+  };
+});
 
 vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
@@ -29,92 +27,50 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
 }));
 
-import { loadModelsConfig, loadModelsConfigWithSource } from "./load-config.js";
+import { loadModelsConfig } from "./load-config.js";
 
 describe("models load-config", () => {
-  const runtimeConfig = {
-    models: { providers: { openai: { apiKey: "sk-runtime" } } }, // pragma: allowlist secret
-  };
-  const resolvedConfig = {
-    models: { providers: { openai: { apiKey: "sk-resolved" } } }, // pragma: allowlist secret
-  };
+  const configWithKey = (apiKey: unknown) => ({ models: { providers: { openai: { apiKey } } } });
+  const runtimeConfig = configWithKey("sk-runtime"); // pragma: allowlist secret
+  const resolvedConfig = configWithKey("sk-resolved"); // pragma: allowlist secret
   const targetIds = new Set(["models.providers.*.apiKey"]);
 
-  function mockResolvedConfigFlow(params: { sourceConfig: unknown; diagnostics: string[] }) {
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(params.sourceConfig);
-    mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig,
-      diagnostics: params.diagnostics,
-    });
-  }
-
+  const sourceConfig = configWithKey({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
+  const diagnostics = ["diag-one", "diag-two"];
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
+    mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({ resolvedConfig, diagnostics });
   });
 
-  it("returns source+resolved configs and sets runtime snapshot", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          openai: {
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
+  it.each([
+    ["pinned", sourceConfig],
+    ["unpinned", null],
+  ] as const)("resolves secrets and preserves the %s source snapshot", async (_label, source) => {
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(source);
     const runtime = createTestRuntime();
-
-    mockResolvedConfigFlow({ sourceConfig, diagnostics: ["diag-one", "diag-two"] });
-
-    const result = await loadModelsConfigWithSource({ commandName: "models list", runtime });
-
+    const result = await loadModelsConfig({ commandName: "models list", runtime });
+    const expectedSource = source ?? runtimeConfig;
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith({
       config: runtimeConfig,
       commandName: "models list",
       targetIds,
     });
-    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-    expect(runtime.error).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
-    expect(runtime.error).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, expectedSource);
+    expect(runtime.error.mock.calls).toEqual([["[secrets] diag-one"], ["[secrets] diag-two"]]);
     expect(runtime.log).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      sourceConfig,
-      resolvedConfig,
-      diagnostics: ["diag-one", "diag-two"],
-    });
+    expect(result).toBe(resolvedConfig);
   });
 
-  it("loadModelsConfig returns resolved config while preserving runtime snapshot behavior", async () => {
-    const sourceConfig = { models: { providers: {} } };
-    mockResolvedConfigFlow({ sourceConfig, diagnostics: [] });
-
-    await expect(loadModelsConfig({ commandName: "models list" })).resolves.toBe(resolvedConfig);
+  it.each([false, true])("loads the resolved config with skipPluginValidation=%s", async (skip) => {
+    await expect(
+      loadModelsConfig({ commandName: "models list", skipPluginValidation: skip }),
+    ).resolves.toBe(resolvedConfig);
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith(
+      skip ? { skipPluginValidation: true } : undefined,
+    );
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-  });
-
-  it("can read core model config without loading plugin schemas", async () => {
-    const sourceConfig = { models: { providers: {} } };
-    mockResolvedConfigFlow({ sourceConfig, diagnostics: [] });
-
-    await loadModelsConfig({ commandName: "models status", skipPluginValidation: true });
-
-    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
-  });
-
-  it("does not reread config when no source snapshot is pinned", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
-    mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig,
-      diagnostics: [],
-    });
-
-    const result = await loadModelsConfigWithSource({ commandName: "models list" });
-
-    expect(result.sourceConfig).toBe(runtimeConfig);
-    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, runtimeConfig);
   });
 });

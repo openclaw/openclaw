@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { installTitleTooltips } from "../../components/tooltip-title.ts";
+import { dispatchMousePointer } from "../../components/tooltip.test-support.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   catalogPage,
   createGatewayHarness,
@@ -15,9 +18,10 @@ function dispatchDragEvent(
   target: Element,
   type: "dragstart" | "dragover" | "drop",
   dataTransfer: ReturnType<typeof createDataTransferStub>,
+  clientY = 0,
 ) {
   const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  Object.assign(event, { dataTransfer, clientY });
   target.dispatchEvent(event);
 }
 
@@ -81,24 +85,137 @@ describe("AppSidebar section reordering", () => {
     return { sidebar, harness, section, header, moveSection };
   }
 
-  it("disables section and row dragging without group write access", async () => {
+  it("allows personal session drags but blocks shared group changes without group write access", async () => {
     const { sidebar, harness, header, section } = await mountWithGroups(["Alpha"], [], {
       scopes: ["operator.read"],
     });
     const source = header("category:Alpha");
-    const row = sidebar.querySelector('[data-session-key="agent:main:plain"]');
+    const row = sidebar.querySelector('[data-session-key="agent:main:plain"]')!;
 
     expect(source.getAttribute("draggable")).toBe("false");
-    expect(source.getAttribute("title")).toBeTruthy();
-    expect(row?.getAttribute("draggable")).toBe("false");
-    expect(row?.hasAttribute("title")).toBe(false);
+    expect(row.getAttribute("draggable")).toBe("true");
+    expect(row.hasAttribute("title")).toBe(false);
 
     const dataTransfer = createDataTransferStub();
     dispatchDragEvent(source, "dragstart", dataTransfer);
     dispatchDragEvent(section("ungrouped"), "drop", dataTransfer);
 
     expect(dataTransfer.types).toEqual([]);
+
+    dispatchDragEvent(row, "dragstart", dataTransfer);
+    expect(dataTransfer.types).not.toEqual([]);
+    dispatchDragEvent(section("category:Alpha"), "dragover", dataTransfer);
+    dispatchDragEvent(section("category:Alpha"), "drop", dataTransfer);
+    expect(harness.sessions.patch).not.toHaveBeenCalled();
     expect(harness.groupsPut).not.toHaveBeenCalled();
+  });
+
+  it.each(["hover", "focus"] as const)(
+    "keeps read-only section names usable without a permission hint on %s",
+    async (input) => {
+      const { sidebar, harness, header } = await mountWithGroups(["Alpha"], [], {
+        scopes: ["operator.read"],
+        withCatalog: true,
+      });
+      onTestFinished(installTitleTooltips(document));
+
+      for (const id of ["work", "category:Alpha", "catalog:codex"]) {
+        const source = header(id);
+        const toggle = source.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!;
+        if (input === "hover") {
+          dispatchMousePointer(toggle, "pointerover");
+        } else {
+          toggle.focus();
+          expect(document.activeElement).toBe(toggle);
+        }
+        expect(
+          [...document.querySelectorAll("openclaw-tooltip")].some((tooltip) =>
+            tooltip.anchor?.contains(toggle),
+          ),
+        ).toBe(false);
+        expect(source.getAttribute("draggable")).toBe("false");
+
+        const expanded = toggle.getAttribute("aria-expanded");
+        toggle.click();
+        await sidebar.updateComplete;
+        expect(toggle.getAttribute("aria-expanded")).toBe(expanded === "true" ? "false" : "true");
+        toggle.click();
+        await sidebar.updateComplete;
+        expect(toggle.getAttribute("aria-expanded")).toBe(expanded);
+        toggle.blur();
+        dispatchMousePointer(source, "pointerleave");
+      }
+      expect(harness.groupsPut).not.toHaveBeenCalled();
+      expect(harness.sessions.patch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reorders personal pins around a row without changing other navigation entries", async () => {
+    const { sidebar, harness, section } = await mountWithGroups(["Alpha"], [], {
+      scopes: ["operator.sessions.read"],
+    });
+    const plain = "session:agent:main:plain";
+    const thread = "session:agent:main:thread";
+    const group = "session:agent:main:group-0";
+    const rail = "session-rail:agent:main:plain";
+    const unavailable = "session:agent:missing:saved";
+    sidebar.sidebarEntries = [plain, "route:usage", unavailable, thread, rail];
+    const update = vi.fn((next: string[]) => {
+      sidebar.sidebarEntries = next;
+    });
+    sidebar.onUpdateSidebarEntries = update;
+    await sidebar.updateComplete;
+    const row = (entry: string) =>
+      section("pinned").querySelector(`[data-session-key="${entry.slice("session:".length)}"]`)!;
+    const drop = async (source: Element, target: Element, after = false) => {
+      const transfer = createDataTransferStub();
+      dispatchDragEvent(source, "dragstart", transfer);
+      const bounds = target.getBoundingClientRect();
+      dispatchDragEvent(target, "dragover", transfer, after ? bounds.bottom + 1 : bounds.top - 1);
+      await sidebar.updateComplete;
+      expect(target.classList.contains(`reorder-drop-${after ? "after" : "before"}`)).toBe(true);
+      dispatchDragEvent(target, "drop", transfer);
+      await sidebar.updateComplete;
+    };
+
+    await drop(row(thread), row(plain));
+    expect(sidebar.sidebarEntries).toEqual([thread, plain, "route:usage", unavailable, rail]);
+    await drop(row(thread), row(plain), true);
+    expect(sidebar.sidebarEntries).toEqual([plain, thread, "route:usage", unavailable, rail]);
+    const writes = update.mock.calls.length;
+    await drop(row(plain), row(plain));
+    expect(update).toHaveBeenCalledTimes(writes);
+    await drop(sidebar.querySelector('[data-session-key="agent:main:group-0"]')!, row(thread));
+    expect(sidebar.sidebarEntries).toEqual([
+      plain,
+      group,
+      thread,
+      "route:usage",
+      unavailable,
+      rail,
+    ]);
+    expect(harness.sessions.patch).not.toHaveBeenCalled();
+    expect(harness.groupsPut).not.toHaveBeenCalled();
+  });
+
+  it("drags a section from its label toggle without a dedicated grip", async () => {
+    const { sidebar, header, harness } = await mountWithGroups(["Alpha", "Beta"], [], {
+      scopes: ["operator.read", "operator.write"],
+    });
+    const source = header("category:Beta");
+    const toggle = source.querySelector(".sidebar-session-group-toggle")!;
+    const dataTransfer = createDataTransferStub();
+
+    expect(
+      source.querySelector(".sidebar-session-group-drag-handle, .sidebar-reorder-trigger"),
+    ).toBeNull();
+    toggle.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+
+    expect(dataTransfer.types).not.toEqual([]);
+    expect(sidebar.sessionOrganizer.draggingSidebarSection).toBe("category:Beta");
+    dispatchDragEvent(header("category:Alpha"), "drop", dataTransfer);
+    await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalled());
   });
 
   it("keeps new-session link gestures separate from section dragging and menus", async () => {
@@ -124,6 +241,7 @@ describe("AppSidebar section reordering", () => {
     const { sidebar, harness, section } = await mountWithGroups(["Done"], [], {
       groupSessions: true,
     });
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
     const source = sidebar.querySelector('[data-session-key="agent:main:group-0"]');
     const groupsSection = section("groups");
     expect(source).not.toBeNull();

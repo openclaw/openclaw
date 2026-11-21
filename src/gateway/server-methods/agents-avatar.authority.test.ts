@@ -7,6 +7,7 @@ import {
 } from "../../agents/isolated-completion.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createGardenKeeperDesign } from "../avatar-design.test-support.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -24,14 +25,7 @@ vi.mock("../../agents/isolated-completion-route.js", () => ({
 const cfg: OpenClawConfig = {
   agents: { defaults: { model: { primary: "test-provider/allowed" } } },
 };
-const design = {
-  version: 1,
-  id: "garden-keeper",
-  name: "Garden Keeper",
-  description: "A gardener with a sprout.",
-  palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
-  layers: { back: "", left_prop: "", right_prop: "", shell_overlay: "", accessory: "" },
-};
+const design = createGardenKeeperDesign("A gardener with a sprout.", "");
 
 beforeEach(() => {
   resetIsolatedCompletionTestState();

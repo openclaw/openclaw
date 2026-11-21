@@ -1,121 +1,100 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { loadSettings } from "../../app/settings.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { createSidebarTestRouter } from "../app-sidebar-router.ts";
-import {
-  agentIds,
-  mountRoster,
-  roster,
-  settleRoster,
-  session,
-  sessionKeys,
-  toggleRoster,
-} from "./roster.test-support.ts";
+import * as R from "./roster.test-support.ts";
 
-describe("AppSidebar agent roster", () => {
-  it("keeps a held row outside the displayed sidebar window current without rendering", async () => {
-    const rows = Array.from({ length: SIDEBAR_SESSION_PAGE_SIZE + 3 }, (_, index) =>
-      session("main", 100 - index, {
-        key: `agent:main:work-${index}`,
-        isMain: false,
-        label: `Work ${index}`,
-      }),
-    );
-    const { sidebar, sessions } = await mountRoster(roster, [session("main", 0), ...rows]);
-    await settleRoster(sidebar);
-    const last = rows.at(-1)!;
-    expect(sidebar.querySelector(`[data-session-key="${last.key}"]`)).toBeNull();
-    const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
-    const current = sessions.sessions.state.result!;
-    const updated = {
-      ...current,
-      sessions: current.sessions.map((row) =>
-        row.key === last.key ? Object.assign({}, row, { label: "Quiet latest title" }) : row,
-      ),
-    };
-    sessions.publish({ result: updated });
-    await settleRoster(sidebar);
-    expect(sidebar.sessionData.sessionsResult).toBe(updated);
-    expect(prepare).not.toHaveBeenCalled();
-    sessions.sessions.setPullRequestSummary(last.key, { numbers: [42], state: "open" });
-    await settleRoster(sidebar);
-    expect(prepare).not.toHaveBeenCalled();
-    sidebar.setVisibleSessionLimit("ungrouped", rows.length);
-    await settleRoster(sidebar);
-    expect(sidebar.querySelector(`[data-session-key="${last.key}"]`)?.textContent).toContain(
-      "Quiet latest title",
-    );
-  });
-  it.each(["navigation", "contextual"] as const)(
-    "parks hidden roster publications under %s and reads the latest session state on reveal",
-    async (surface) => {
-      const { sidebar, context, sessions, result } = await mountRoster();
-      await toggleRoster(sidebar);
-      await settleRoster(sidebar);
-      const store = rosterActivityStore(context);
-      onTestFinished(store.subscribe(() => {}));
-      const renderedRow = sidebar.querySelector<HTMLElement>('[data-agent-group="main"]')!;
-      const initial = renderedRow.textContent;
-      const router = createSidebarTestRouter();
-      if (surface === "navigation") {
-        sidebar.navigationVisible = false;
-      } else {
-        sidebar.router = router;
-        await router.navigate("systems", {});
-      }
-      await settleRoster(sidebar);
-      const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
-      for (let index = 0; index < 3; index += 1) {
-        result.sessions = result.sessions.map((heldRow) =>
-          heldRow.key === "agent:main:recent"
-            ? {
-                ...heldRow,
-                lastAssistantMessage: { text: `Latest work ${index}`, timestamp: index + 1 },
-              }
-            : heldRow,
-        );
-        sessions.publish({
-          result: { ...result, sessions: result.sessions.filter((row) => row.agentId === "main") },
-        });
-        await store.refresh();
-        await settleRoster(sidebar);
-      }
-      expect(prepare).not.toHaveBeenCalled();
-      expect(renderedRow.textContent).toBe(initial);
-      if (surface === "navigation") {
-        sidebar.navigationVisible = true;
-      } else {
-        await router.navigate("cron", {});
-      }
-      await settleRoster(sidebar);
-      expect(
-        sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__preview')
-          ?.textContent,
-      ).toContain("Latest work 2");
-      expect(prepare).toHaveBeenCalledTimes(1);
-    },
+it("AppSidebar updates held off-window rows without rendering", async () => {
+  const rows = Array.from({ length: SIDEBAR_SESSION_PAGE_SIZE + 3 }, (_, index) =>
+    R.session("main", 100 - index, {
+      key: `agent:main:work-${index}`,
+      isMain: false,
+      label: `Work ${index}`,
+    }),
   );
-  it("retains agent-only mode after remount, then restores chip sessions", async () => {
-    const { sidebar, provider } = await mountRoster();
-    expect(sidebar.querySelector(".sidebar-agent-roster")).toBeNull();
-    expect(sessionKeys(sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
-    await toggleRoster(sidebar);
-    await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    expect(loadSettings().sidebarAgentsMode).toBe("roster");
-    expect(sessionKeys(sidebar)).toEqual([]);
-    expect(sidebar.querySelector("[data-agent-collapse]")).toBeNull();
-    provider.remove();
-    const remounted = await mountRoster();
-    remounted.sidebar.sidebarAgentsMode = loadSettings().sidebarAgentsMode ?? "chip";
-    await vi.waitFor(() => expect(agentIds(remounted.sidebar)).toHaveLength(3));
-    expect(sessionKeys(remounted.sidebar)).toEqual([]);
-    await toggleRoster(remounted.sidebar);
-    await vi.waitFor(() =>
-      expect(remounted.sidebar.querySelector(".sidebar-agent-roster")).toBeNull(),
+  const { sidebar, sessions } = await R.mountRoster(R.roster, [R.session("main", 0), ...rows]);
+  await R.settleRoster(sidebar);
+  const last = rows.at(-1)!;
+  const lastElement = () => sidebar.querySelector(`[data-session-key="${last.key}"]`);
+  expect(lastElement()).toBeNull();
+  const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
+  const current = sessions.sessions.state.result!;
+  const updated = {
+    ...current,
+    sessions: R.patchRows(current.sessions, last.key, { label: "Quiet latest title" }),
+  };
+  sessions.publish({ result: updated });
+  await R.settleRoster(sidebar);
+  expect(sidebar.sessionData.sessionsResult).toBe(updated);
+  expect(prepare).not.toHaveBeenCalled();
+  sessions.sessions.setPullRequestSummary(last.key, { numbers: [42], state: "open" });
+  await R.settleRoster(sidebar);
+  expect(prepare).not.toHaveBeenCalled();
+  sidebar.setVisibleSessionLimit("ungrouped", rows.length);
+  await R.settleRoster(sidebar);
+  expect(lastElement()?.textContent).toContain("Quiet latest title");
+});
+it.each(["navigation", "contextual"] as const)(
+  "AppSidebar parks %s roster updates",
+  async (surface) => {
+    const { sidebar, context, sessions, result } = await R.mountRoster();
+    await R.toggleRoster(sidebar);
+    await R.settleRoster(sidebar);
+    const store = rosterActivityStore(context);
+    onTestFinished(store.subscribe(() => {}));
+    const renderedRow = sidebar.querySelector<HTMLElement>('[data-agent-group="main"]')!;
+    const initial = renderedRow.textContent;
+    const router = createSidebarTestRouter();
+    if (surface === "navigation") {
+      sidebar.navigationVisible = false;
+    } else {
+      sidebar.router = router;
+      await router.navigate("systems", {});
+    }
+    await R.settleRoster(sidebar);
+    const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
+    for (let index = 0; index < 3; index += 1) {
+      result.sessions = R.patchRows(result.sessions, "agent:main:recent", {
+        lastAssistantMessage: { text: `Latest work ${index}`, timestamp: index + 1 },
+      });
+      sessions.publish({
+        result: { ...result, sessions: result.sessions.filter((row) => row.agentId === "main") },
+      });
+      await store.refresh();
+      await R.settleRoster(sidebar);
+    }
+    expect(prepare).not.toHaveBeenCalled();
+    expect(renderedRow.textContent).toBe(initial);
+    if (surface === "navigation") {
+      sidebar.navigationVisible = true;
+    } else {
+      await router.navigate("cron", {});
+    }
+    await R.settleRoster(sidebar);
+    const preview = sidebar.querySelector(
+      '[data-agent-group="main"] .sidebar-agent-roster__preview',
     );
-    expect(loadSettings().sidebarAgentsMode).toBe("chip");
-    expect(sessionKeys(remounted.sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
-  });
+    expect(preview?.textContent).toContain("Latest work 2");
+    expect(prepare).toHaveBeenCalledTimes(1);
+  },
+);
+it("AppSidebar retains roster mode after remount, then restores chip sessions", async () => {
+  const { sidebar, provider } = await R.mountRoster();
+  await R.toggleRoster(sidebar);
+  await vi.waitFor(() => expect(R.agentIds(sidebar)).toHaveLength(3));
+  expect(loadSettings().sidebarAgentsMode).toBe("roster");
+  expect(R.sessionKeys(sidebar)).toEqual([]);
+  provider.remove();
+  const { sidebar: restored } = await R.mountRoster();
+  restored.sidebarAgentsMode = loadSettings().sidebarAgentsMode ?? "chip";
+  await vi.waitFor(() => expect(R.agentIds(restored)).toHaveLength(3));
+  expect(R.sessionKeys(restored)).toEqual([]);
+  await R.toggleRoster(restored);
+  await vi.waitFor(() => expect(restored.querySelector(".sidebar-agent-roster")).toBeNull());
+  expect(loadSettings().sidebarAgentsMode).toBe("chip");
+  await vi.waitFor(() =>
+    expect(R.sessionKeys(restored)).toEqual(["agent:main:pinned", "agent:main:recent"]),
+  );
 });

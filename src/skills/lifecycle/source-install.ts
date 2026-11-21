@@ -47,52 +47,6 @@ type InstalledSkillSource = {
   git?: SkillSourceOrigin["git"];
 };
 
-async function resolveSkillInstallSlug(params: {
-  sourceDir: string;
-  fallbackLabel: string;
-  slug?: string;
-  config?: OpenClawConfig;
-}): Promise<string> {
-  const explicit = normalizeOptionalString(params.slug);
-  const requestedSlug = explicit ? validateRequestedSkillSlug(explicit) : undefined;
-  let rootRealPath: string;
-  try {
-    rootRealPath = await fs.realpath(params.sourceDir);
-  } catch (error) {
-    throw new Error(`Skill path not found: ${params.sourceDir}`, { cause: error });
-  }
-  const diagnostics: LocalSkillLoadDiagnostic[] = [];
-  // Discovery owns the content rules. Install copies source bytes into a new
-  // file, so a hardlinked SKILL.md does not remain a hardlink after install.
-  // Rejecting that source link here would fail a skill the staged copy can load.
-  const loaded = loadSingleSkillDirectory({
-    skillDir: rootRealPath,
-    rootRealPath,
-    source: "source-install",
-    maxBytes: resolveSkillDiscoveryLimits(params.config).maxSkillFileBytes,
-    rejectHardlinks: false,
-    onDiagnostic: (diagnostic) => {
-      diagnostics.push(diagnostic);
-    },
-  });
-  if (!loaded) {
-    const message = diagnostics[0]?.message ?? "SKILL.md is missing";
-    throw new Error(`Skill source is not loadable: ${message}`);
-  }
-  if (requestedSlug) {
-    return requestedSlug;
-  }
-  const frontmatterName = normalizeOptionalString(loaded.frontmatter.name);
-  if (frontmatterName) {
-    try {
-      return validateRequestedSkillSlug(frontmatterName);
-    } catch {
-      // Invalid display names use the source label instead.
-    }
-  }
-  return validateRequestedSkillSlug(params.fallbackLabel);
-}
-
 async function installLocalSkillDir(
   params: Omit<SkillSourceInstallParams, "spec"> & {
     sourceDir: string;
@@ -102,12 +56,47 @@ async function installLocalSkillDir(
     git?: SkillSourceOrigin["git"];
   },
 ): Promise<InstalledSkillSource> {
-  const slug = await resolveSkillInstallSlug({
-    sourceDir: params.sourceDir,
-    fallbackLabel: params.fallbackLabel,
-    slug: params.slug,
-    config: params.config,
-  });
+  const slug = await (async (): Promise<string> => {
+    const { sourceDir, fallbackLabel, slug: slugInput, config } = params;
+    const explicit = normalizeOptionalString(slugInput);
+    const requestedSlug = explicit ? validateRequestedSkillSlug(explicit) : undefined;
+    let rootRealPath: string;
+    try {
+      rootRealPath = await fs.realpath(sourceDir);
+    } catch (error) {
+      throw new Error(`Skill path not found: ${sourceDir}`, { cause: error });
+    }
+    const diagnostics: LocalSkillLoadDiagnostic[] = [];
+    // Discovery owns the content rules. Install copies source bytes into a new
+    // file, so a hardlinked SKILL.md does not remain a hardlink after install.
+    // Rejecting that source link here would fail a skill the staged copy can load.
+    const loaded = loadSingleSkillDirectory({
+      skillDir: rootRealPath,
+      rootRealPath,
+      source: "source-install",
+      maxBytes: resolveSkillDiscoveryLimits(config).maxSkillFileBytes,
+      rejectHardlinks: false,
+      onDiagnostic: (diagnostic) => {
+        diagnostics.push(diagnostic);
+      },
+    });
+    if (!loaded) {
+      const message = diagnostics[0]?.message ?? "SKILL.md is missing";
+      throw new Error(`Skill source is not loadable: ${message}`);
+    }
+    if (requestedSlug) {
+      return requestedSlug;
+    }
+    const frontmatterName = normalizeOptionalString(loaded.frontmatter.name);
+    if (frontmatterName) {
+      try {
+        return validateRequestedSkillSlug(frontmatterName);
+      } catch {
+        // Invalid display names use the source label instead.
+      }
+    }
+    return validateRequestedSkillSlug(fallbackLabel);
+  })();
   const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
   const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
   if (access && !access.recordSkillSourceInstall) {

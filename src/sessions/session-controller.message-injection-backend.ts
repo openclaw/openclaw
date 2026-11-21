@@ -1,19 +1,21 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { canSteerEmbeddedRunDuringCompaction } from "../agents/embedded-agent-runner/runs.probes.js";
+import { resolveEmbeddedRunCompactionSteeringRejection } from "../agents/embedded-agent-runner/runs.probes.js";
 import {
   bindMessageInjectionV2,
   createLegacyToolAuthorityQueuePreflight,
 } from "../agents/harness/tool-authority-preparation.js";
 import { createMessageInjectionAuthority } from "../auto-reply/reply/message-injection-authority.js";
 import { hasPromptImageInput } from "../media/prompt-image-input.js";
-import type {
-  ReplyBackendHandle,
-  ReplyBackendMessageInjection,
-  ReplyBackendQueueMessageOptions,
-  ReplyMessageInjectionOptions,
-  ReplyMessageInjectionResolution,
-  ReplyTurnParticipants,
-  ReplyToolAuthorityPreparation,
+import {
+  replyMessageInjectionTargetOwner,
+  type ReplyMessageInjectionTarget,
+  type ReplyBackendHandle,
+  type ReplyBackendMessageInjection,
+  type ReplyBackendQueueMessageOptions,
+  type ReplyMessageInjectionOptions,
+  type ReplyMessageInjectionResolution,
+  type ReplyTurnParticipants,
+  type ReplyToolAuthorityPreparation,
 } from "./session-controller.contracts.js";
 import { resolveReplyBackendQueueMessageMismatch } from "./session-controller.message-injection-failure.js";
 
@@ -111,15 +113,23 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
         backend && params.assertCurrent && backend.messageInjectionV2?.version !== 2
           ? "guarded_injection_unsupported"
           : "injection_unavailable",
+      runtimeReason: "injection_unsupported",
     };
   }
   try {
-    const compactionAllowsSteering = canSteerEmbeddedRunDuringCompaction(params.sessionId, backend);
-    if (!injection.isAvailable() || !compactionAllowsSteering) {
-      return { reason: "injection_unavailable" };
+    const runtimeReason = resolveEmbeddedRunCompactionSteeringRejection(params.sessionId, backend);
+    if (runtimeReason) {
+      return { reason: "injection_unavailable", runtimeReason };
+    }
+    if (!injection.isAvailable()) {
+      return { reason: "injection_unavailable", runtimeReason: "turn_not_steerable" };
     }
   } catch (error) {
-    return { reason: "injection_unavailable", errorMessage: String(error) };
+    return {
+      reason: "injection_unavailable",
+      runtimeReason: "availability_check_failed",
+      errorMessage: String(error),
+    };
   }
   if (
     backend.supportsCrossProfileSteering === false &&
@@ -180,5 +190,59 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
             ? injection.cancelPendingUserInput
             : undefined,
       }
-    : { backend, injection, prepareQueueMessage: injection.prepareQueueMessage };
+    : {
+        backend,
+        injection,
+        prepareQueueMessage: injection.prepareQueueMessage,
+      };
+}
+
+/** Advisory only; injection still prepares and checks the captured owner at its effect. */
+export function canInjectReplyMessageTarget(
+  target: ReplyMessageInjectionTarget,
+  options?: ReplyMessageInjectionOptions,
+): boolean {
+  try {
+    if (options?.canAdmit?.() === false) {
+      return false;
+    }
+    const owner = target[replyMessageInjectionTargetOwner];
+    const {
+      toolAuthorityOverlay,
+      requesterToolAuthority,
+      toolAuthorityPreparation,
+      personalToolParticipant,
+      assertCurrent,
+      allowPendingUserInputAnswer,
+      inboundAudio,
+      canAdmit: _canAdmit,
+      allowCollaborativeSteering: _allowCollaborativeSteering,
+      ...backendOptions
+    } = options ?? {};
+    toolAuthorityPreparation?.compatAssertCurrent();
+    assertCurrent?.();
+    return (
+      "injection" in
+      owner.resolve({
+        options: {
+          ...backendOptions,
+          ...(requesterToolAuthority || toolAuthorityOverlay
+            ? {
+                toolAuthorityFingerprint: requesterToolAuthority
+                  ? owner.projectRequesterToolAuthorityFingerprint(requesterToolAuthority)
+                  : toolAuthorityOverlay &&
+                    owner.projectToolAuthorityFingerprint(toolAuthorityOverlay),
+              }
+            : {}),
+        },
+        requesterToolAuthority,
+        personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
+        inboundAudio,
+        allowPendingUserInputAnswer,
+        assertCurrent,
+      })
+    );
+  } catch {
+    return false;
+  }
 }

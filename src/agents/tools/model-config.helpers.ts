@@ -81,9 +81,7 @@ export function hasAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
 }): boolean {
@@ -111,20 +109,14 @@ export function hasAuthForProvider(params: {
   }
   return hasAuthProfileForProvider({
     provider: params.provider,
-    agentDir: params.agentDir,
     authStore: params.authStore,
-    authProfileStoreSource: params.authProfileStoreSource,
-    includeExternalCli: true,
     capability: params.capability,
   });
 }
 
 export function hasAuthProfileForProvider(params: {
   provider: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
-  includeExternalCli?: boolean;
   type?: AuthProfileCredential["type"];
   capability?: string;
 }): boolean {
@@ -153,7 +145,6 @@ export function hasAuthProfileForProvider(params: {
 export async function prepareToolAuthProfileStore(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): Promise<AuthProfileStore | undefined> {
   return (
     options?.authProfileStore ??
@@ -239,7 +230,6 @@ function hasAuthProfileTypeInStore(params: {
 function hasAuthProfileTypeForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
-  agentDir?: string;
   authStore?: AuthProfileStore;
   includeExternalCli?: boolean;
   type: AuthProfileCredential["type"] | readonly AuthProfileCredential["type"][];
@@ -266,7 +256,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
   modelApi?: string;
 }): boolean {
@@ -291,7 +280,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
   return hasAuthProfileTypeForProvider({
     provider: params.provider,
     cfg: params.cfg,
-    agentDir: params.agentDir,
     authStore: params.authStore,
     type: "api_key",
   });
@@ -300,7 +288,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
 function resolveDirectProviderEntryAuthFromProfileReference(params: {
   provider: string;
   cfg?: OpenClawConfig;
-  agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean | undefined {
   const resolveFromStore = (store: AuthProfileStore): boolean | undefined => {
@@ -340,7 +327,6 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
 export function resolveOpenAiImageMediaCandidate(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir: string;
   authStore?: AuthProfileStore;
   openAiModel: string;
   resolveCodexMediaRoute?: () => { model: string } | undefined;
@@ -363,7 +349,6 @@ export function resolveOpenAiImageMediaCandidate(params: {
       provider: OPENAI_PROVIDER_ID,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       authStore: params.authStore,
       modelApi: OPENAI_RESPONSES_MODEL_API,
     })
@@ -380,7 +365,6 @@ export function resolveOpenAiImageMediaCandidate(params: {
     !hasAuthProfileTypeForProvider({
       provider: OPENAI_PROVIDER_ID,
       cfg: params.cfg,
-      agentDir: params.agentDir,
       authStore: params.authStore,
       includeExternalCli: true,
       type: ["oauth", "token"],
@@ -415,9 +399,7 @@ export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   candidates: Array<string | null | undefined>;
   isProviderConfigured?: (provider: string) => boolean | undefined;
 }): ToolModelConfig | null {
@@ -440,9 +422,7 @@ export function buildToolModelConfigFromCandidates(params: {
         provider,
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
         authStore: params.authStore,
-        authProfileStoreSource: params.authProfileStoreSource,
       });
     if (!provider || !providerConfigured) {
       continue;

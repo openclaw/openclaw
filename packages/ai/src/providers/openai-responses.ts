@@ -13,7 +13,6 @@ import {
   clampOpenAIPromptCacheKey,
   resolveOpenAIPromptCacheParams,
 } from "./openai-prompt-cache.js";
-import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import {
   resolveOpenAISimpleReasoningEffort,
   type OpenAIRequestReasoningEffort,
@@ -46,7 +45,10 @@ export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
 type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
   authProfileId?: string;
   replayResponsesItemIds?: boolean;
-};
+} & Pick<
+    BaseOpenAIStreamOptions,
+    "openclawCodeModeToolSurface" | "openclawCodeModeAllowedHostedToolTypes"
+  >;
 
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
   model,
@@ -60,8 +62,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
     stream,
     model,
     output,
+    context,
     options,
-    createClient: () => {
+    createClient: async () => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
@@ -82,6 +85,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
         headers["x-client-request-id"] = cacheSessionId;
       }
 
+      const { createOpenAIProviderClient } = await import("./openai-provider-client.js");
       return createOpenAIProviderClient(
         model,
         apiKey,
@@ -94,13 +98,15 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
         replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
         sessionId: options?.sessionId,
-        authProfileId: options?.authProfileId,
+        mutableInput: Boolean(options?.onPayload),
         replayMode,
       });
 
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const compat = getCompat(model);
-      const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
+      // The API supports 12h before the pinned SDK exposes that TTL. Keep other SDK fields strict.
+      const params: Omit<ResponseCreateParamsStreaming, "prompt_cache_options"> &
+        OpenAIResponsesRequestParams = {
         model: model.id,
         input: messages,
         stream: true,
@@ -108,7 +114,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
           cacheRetention === "none" || !compat.supportsPromptCacheKey
             ? undefined
             : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-        ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
+        ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
         store: false,
       };
 
@@ -144,6 +150,8 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
+    openclawCodeModeToolSurface: replayOptions?.openclawCodeModeToolSurface,
+    openclawCodeModeAllowedHostedToolTypes: replayOptions?.openclawCodeModeAllowedHostedToolTypes,
     reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);

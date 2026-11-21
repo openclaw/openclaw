@@ -1,22 +1,18 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { describe, expect, it } from "vitest";
+import { configureAiTransportHost } from "../host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import type { AssistantMessageEvent, Context, Model, SimpleStreamOptions } from "../types.js";
 import { streamOpenAICompletions, type OpenAICompletionsOptions } from "./openai-completions.js";
+import { makeOpenAIProviderModel, preserveTransportHost } from "./openai-provider.test-support.js";
 
-const model = {
+const model = makeOpenAIProviderModel("openai-completions", {
   id: "gpt-4",
   name: "GPT-4",
-  api: "openai-completions",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
   reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 8_192,
   maxTokens: 1_024,
-} satisfies Model<"openai-completions">;
+});
 
 const context = {
   messages: [{ role: "user", content: "Look up cats", timestamp: 1 }],
@@ -136,11 +132,7 @@ function installStream(chunks: ChatCompletionChunk[]): void {
   });
 }
 
-let previousHost: ReturnType<typeof getAiTransportHost>;
-
-beforeEach(() => (previousHost = getAiTransportHost()));
-
-afterEach(() => configureAiTransportHost(previousHost));
+preserveTransportHost();
 
 const createManagedStream = createOpenAICompletionsTransportStreamFn();
 type FixtureOptions = { apiKey: string; reasoningEffort?: "medium"; signal?: AbortSignal };
@@ -307,30 +299,21 @@ describe("OpenAI Chat Completions stream", () => {
     );
   });
 
-  it.each([{ finishReason: "tool_calls", stopReason: "stop" }] as const)(
-    "discards provisional legacy fragments when the provider finishes with $finishReason",
-    async ({ finishReason, stopReason }) => {
-      const { eventTypes, result } = await collectFixture([
-        chunk({ function_call: { name: "lookup", arguments: '{"query":"discard"}' } }),
-        chunk({}, finishReason),
-      ]);
+  it("discards provisional legacy fragments when the provider finishes with tool_calls", async () => {
+    const { eventTypes, result } = await collectFixture([
+      chunk({ function_call: { name: "lookup", arguments: '{"query":"discard"}' } }),
+      chunk({}, "tool_calls"),
+    ]);
 
-      expect(result.stopReason).toBe(stopReason);
-      expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-      expect(eventTypes).not.toContain("toolcall_start");
-      expect(eventTypes).not.toContain("toolcall_delta");
-    },
-  );
+    expect(result.stopReason).toBe("stop");
+    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+    expect(eventTypes).not.toContain("toolcall_start");
+    expect(eventTypes).not.toContain("toolcall_delta");
+  });
 
-  it.each<[string, string, string]>([
-    [
-      "rejects oversized legacy arguments without publishing a provisional tool call",
-      "x".repeat(256_001),
-      "lookup",
-    ],
-  ])("%s", async (_title, rawArguments, name) => {
+  it("rejects oversized legacy arguments without publishing a provisional tool call", async () => {
     const { eventTypes, result } = await collectFixture(
-      confirmedLegacyCallChunks(rawArguments, name),
+      confirmedLegacyCallChunks("x".repeat(256_001)),
     );
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
@@ -367,14 +350,8 @@ describe("OpenAI Chat Completions stream", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "rejects an oversized surrogate pair split between deltas",
-      bytes: TOOL_ARGUMENT_BYTE_LIMIT + 1,
-      stopReason: "error",
-    },
-  ] as const)("$name", async ({ bytes, stopReason }) => {
-    const [first, second] = splitSurrogateArguments(bytes);
+  it("rejects an oversized surrogate pair split between deltas", async () => {
+    const [first, second] = splitSurrogateArguments(TOOL_ARGUMENT_BYTE_LIMIT + 1);
     const { eventTypes, result } = await collectFixture([
       chunk({
         tool_calls: [
@@ -390,19 +367,10 @@ describe("OpenAI Chat Completions stream", () => {
       chunk({}, "tool_calls"),
     ]);
 
-    expect(result.stopReason).toBe(stopReason);
-    if (stopReason === "error") {
-      expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
-      expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-      expect(eventTypes).not.toContain("toolcall_end");
-      return;
-    }
-    expect(result.content[0]).toMatchObject({ id: "call_surrogate", type: "toolCall" });
-    expect(
-      result.content[0]?.type === "toolCall"
-        ? Buffer.byteLength(JSON.stringify(result.content[0].arguments), "utf8")
-        : undefined,
-    ).toBe(bytes);
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
+    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+    expect(eventTypes).not.toContain("toolcall_end");
   });
 
   it("coalesces tiny provisional legacy fragments into one bounded executable delta", async () => {
@@ -461,16 +429,14 @@ describe("mapped off effort in chat completions", () => {
   ) {
     let payload: unknown;
     const reasoningFixtureModel = {
+      ...model,
       id: "mapped-thinking-model",
       name: "Mapped thinking model",
       provider: "synthetic-provider",
-      api: "openai-completions",
       baseUrl: "https://provider.example/v1",
       reasoning: true,
-      input: ["text"],
       contextWindow: 32_000,
       maxTokens: 1024,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevelMap: off === undefined ? undefined : { off },
       compat,
     } satisfies Model<"openai-completions">;
@@ -554,19 +520,13 @@ describe("OpenAI Chat Completions cache metadata", () => {
       lifetime: { prompt_cache_options: { ttl: "30m" } },
     },
   ])("uses native cache policy for $id with $compat", async ({ id, compat, key, lifetime }) => {
-    const cacheModel = {
+    const cacheModel = makeOpenAIProviderModel("openai-completions", {
       id,
       name: id,
-      api: "openai-completions",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
       reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
       maxTokens: 4096,
       compat,
-    } satisfies Model<"openai-completions">;
+    });
     let payload: unknown;
     const result = await streamOpenAICompletions(
       cacheModel,

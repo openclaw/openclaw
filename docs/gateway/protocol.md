@@ -30,7 +30,7 @@ the TypeBox schemas re-exported from `packages/gateway-protocol/src/schema.ts`.
 - [Transport and framing](/gateway/protocol/transport) — gateway WS transport: packages, frame shapes, limits, and WebRTC Talk control.
 - [Handshake and roles](/gateway/protocol/handshake) — connect frame, hello-ok payload, client capabilities, roles, and scopes.
 - [Presence and events](/gateway/protocol/presence) — presence snapshots, node host stats, and broadcast event scoping.
-- [RPC methods](/gateway/protocol/rpc-methods) — RPC method families, discovery, session list bootstrap, and event families.
+- [RPC methods](/gateway/protocol/rpc-methods) — RPC method families, discovery, session list bootstrap, and event families, including the [cron inventory invalidation](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
 - [Ledger RPCs](/gateway/protocol/ledgers) — audit ledger RPCs, their scopes, cursors, and payloads.
 - [Operator methods](/gateway/protocol/operator-methods) — operator helper methods, exec approvals, and agent delivery fallback.
 - [Versioning](/gateway/protocol/versioning) — protocol version constants, the N-1 node window, and client defaults.

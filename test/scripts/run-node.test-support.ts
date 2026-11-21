@@ -34,7 +34,11 @@ import {
 } from "./update-compat-chunks.test-support.js";
 export const it = baseIt.extend<{ tmp: string }>({
   tmp: async ({ task: _task }, use) => {
-    await withTestDir({ prefix: "openclaw-run-node-" }, use);
+    await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      // Model a standalone checkout even when the test temp root is inside another repository.
+      await fs.mkdir(path.join(tmp, ".git"));
+      await use(tmp);
+    });
   },
 });
 
@@ -386,10 +390,7 @@ type RunNodeTestOptions = NonNullable<Parameters<typeof runNodeMain>[0]> & {
 };
 type RunNodeResult = Awaited<ReturnType<typeof runNodeMain>>;
 
-export async function runNodeCommand(
-  tmp: string,
-  options: RunNodeTestOptions,
-): Promise<RunNodeResult> {
+export async function runNodeCommand(tmp: string, options: RunNodeTestOptions) {
   const { env, ...overrides } = options;
   return await runNodeMain({
     cwd: tmp,
@@ -417,10 +418,7 @@ type RunCommandParams = {
   runRuntimePostBuild?: RunNodeTestOptions["runRuntimePostBuild"];
 };
 
-export async function runStatusCommand({
-  tmp,
-  ...options
-}: RunCommandParams): Promise<RunNodeResult> {
+export async function runStatusCommand({ tmp, ...options }: RunCommandParams) {
   return await runNodeCommand(tmp, options);
 }
 

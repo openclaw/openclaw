@@ -51,6 +51,31 @@ export class TranscriptReportNavigation extends SessionEntryNavigation<ReportNav
   facts() {
     return { appendParentId: this.appendParentId, path: this.getBranch() };
   }
+
+  readCustomBranch(
+    leafEntryId: string | null,
+    customType: string,
+    readEvent: (seq: number) => Record<string, unknown> | undefined,
+  ): Iterable<Record<string, unknown>> | undefined {
+    if (leafEntryId === null) {
+      return [];
+    }
+    if (!this.byId.has(leafEntryId)) {
+      return undefined;
+    }
+    const branch = this.getBranch(leafEntryId);
+    return (function* () {
+      for (const entry of branch) {
+        if (entry.type !== "custom") {
+          continue;
+        }
+        const event = readEvent(entry.seq);
+        if (event?.customType === customType) {
+          yield event;
+        }
+      }
+    })();
+  }
 }
 
 function latestCustomReport(

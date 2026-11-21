@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -10,6 +11,7 @@ import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { createGatewayRequestContext } from "./server-request-context.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
 type TestCronState = GatewayServerLiveState["cronState"];
@@ -23,7 +25,6 @@ export function makeCronState(overrides: Partial<TestCronState> = {}): TestCronS
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
@@ -36,19 +37,27 @@ export function makeContextParams(
     runtime: {
       scheduler: createTestGatewayScheduler(),
       getSessionRowProjection: () => undefined,
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 0,
+      })),
       forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,
       runtimeState: {
         cronState: makeCronState(),
-        configReloader: { isConfigReloadSettled: vi.fn(() => true) },
+        configReloader: {
+          getCommittedRuntimeConfig: vi.fn(getRuntimeConfig),
+          isConfigReloadSettled: vi.fn(() => true),
+        },
       },
       lifecycle: { closePreludeStarted: false },
       getAttachedGatewayMethodRegistry: vi.fn(() => ({}) as never),
       gatewayTls: { enabled: false },
       sessionCompanion: {} as never,
       sessionObserver: { removeConnection: vi.fn() } as never,
-      mentionInbox: undefined,
       transportBridge: {
         getPortalService: vi.fn(() => undefined),
         getMcpAppSandboxPort: vi.fn(() => undefined),
@@ -58,19 +67,6 @@ export function makeContextParams(
         resolve: vi.fn(() => ({ ok: false as const, block: { kind: "disabled" as const } })),
         isEnabled: vi.fn(() => false),
       },
-      execApprovalManager: undefined,
-      questionManager: undefined,
-      cancelRunBoundApprovals: undefined,
-      forwardPluginApprovalRequest: undefined,
-      forwardExecApprovalRequest: undefined,
-      forwardSystemAgentApprovalRequest: undefined,
-      forwardSystemAgentApprovalResolved: undefined,
-      execApprovalIosPushDelivery: undefined,
-      approvalWebPushDelivery: undefined,
-      pluginApprovalIosPushDelivery: undefined,
-      pluginApprovalManager: undefined,
-      placementStandingGrants: undefined,
-      systemAgentApprovalManager: undefined,
       approvalSessionEvents: { replay: undefined },
       validateAgentRuntimeApprovalAuthority: () => false,
       loadGatewayModelCatalog: vi.fn(async () => []),
@@ -83,7 +79,6 @@ export function makeContextParams(
         entries: [],
         routeVariants: [],
       })),
-      readPreparedGatewayModelCatalog: undefined,
       refreshGatewayHealthSnapshotWithRuntime: vi.fn(async () => ({}) as never),
       broadcast: vi.fn(),
       publishPresence: vi.fn(),
@@ -106,14 +101,9 @@ export function makeContextParams(
       }),
       resolveSharedGatewaySessionGenerationForRuntimeSnapshot: vi.fn(() => undefined),
       nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
-      nodeDesktopService: undefined,
-      workerEnvironmentService: undefined,
-      hostDesktopService: undefined,
       workerEnvironmentStartup: undefined,
       workerPlacementRuntime: undefined,
       workerPlacementControlAvailable: undefined,
-      githubPublicationService: undefined,
-      terminalSessions: undefined,
       agentRunSeq: new Map(),
       chatRunState: createChatRunState(),
       addChatRun: vi.fn(),

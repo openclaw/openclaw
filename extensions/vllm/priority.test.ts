@@ -4,22 +4,20 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import vllmPlugin from "./index.js";
 
 const originalHost = getAiTransportHost();
 afterEach(() => configureAiTransportHost(originalHost));
 
-async function captureRequest(params: {
-  modelParams?: Record<string, unknown>;
-  extraParams?: Record<string, unknown>;
-  urgency?: ProviderWrapStreamFnContext["modelCallUrgency"];
-  simple?: boolean;
-  provider?: string;
-  requestProvider?: string;
-  requestModelId?: string;
-  explicitPriority?: number;
-}) {
+type RequestModel = Partial<Model<"openai-completions">>;
+
+async function captureRequest(
+  context: Partial<ProviderWrapStreamFnContext>,
+  requestModel: RequestModel = {},
+  simple = false,
+  explicitPriority?: number,
+) {
   let captured: Record<string, unknown> | undefined;
   configureAiTransportHost({
     ...originalHost,
@@ -37,7 +35,7 @@ async function captureRequest(params: {
   const model: Model<"openai-completions"> = {
     id: "small-model",
     name: "Small model",
-    provider: params.provider ?? "vllm",
+    provider: context.provider ?? "vllm",
     api: "openai-completions",
     baseUrl: "https://vllm.example/v1",
     input: ["text"],
@@ -47,24 +45,12 @@ async function captureRequest(params: {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
   const base = createOpenAICompletionsTransportStreamFn();
-  const wrap = params.simple ? plugin.wrapSimpleCompletionStreamFn : plugin.wrapStreamFn;
+  const wrap = simple ? plugin.wrapSimpleCompletionStreamFn : plugin.wrapStreamFn;
+  const { provider, id: modelId, api: sourceApi } = model;
   const streamFn =
-    wrap?.({
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      sourceApi: model.api,
-      streamFn: base,
-      modelParams: params.modelParams,
-      extraParams: params.extraParams,
-      modelCallUrgency: params.urgency,
-    }) ?? base;
+    wrap?.({ provider, modelId, model, sourceApi, streamFn: base, ...context }) ?? base;
   const stream = await streamFn(
-    {
-      ...model,
-      provider: params.requestProvider ?? model.provider,
-      id: params.requestModelId ?? model.id,
-    },
+    { ...model, ...requestModel },
     { messages: [{ role: "user", content: "Reply ok", timestamp: 1 }] },
     {
       apiKey: "synthetic-fixture",
@@ -72,7 +58,7 @@ async function captureRequest(params: {
       onPayload: async (payload) => ({
         ...asOptionalObjectRecord(payload),
         temperature: 0.25,
-        ...(params.explicitPriority !== undefined ? { priority: params.explicitPriority } : {}),
+        ...(explicitPriority !== undefined ? { priority: explicitPriority } : {}),
       }),
     },
   );
@@ -83,48 +69,28 @@ async function captureRequest(params: {
   return captured;
 }
 
-describe("vLLM native priority wire contract", () => {
-  it.each([undefined, false])("adds no priority when scheduling is %s", async (enabled) => {
-    expect(
-      await captureRequest({ modelParams: { priorityScheduling: enabled } }),
-    ).not.toHaveProperty("priority");
-  });
+it.each([0, -25, 75])("preserves static priority %s without opt-in", async (priority) => {
+  expect(await captureRequest({}, {}, false, priority)).toHaveProperty("priority", priority);
+});
 
-  it.each([0, -25, 75])(
-    "preserves the explicit static priority %s without opt-in",
-    async (priority) => {
-      expect(await captureRequest({ explicitPriority: priority })).toHaveProperty(
-        "priority",
-        priority,
-      );
-    },
-  );
+it.each([
+  ["foreground", -100],
+  ["normal", 0],
+  ["background", 100],
+] as const)("sends %s priority %s through both provider hooks", async (urgency, priority) => {
+  const context = { modelParams: { priorityScheduling: true }, modelCallUrgency: urgency };
+  for (const simple of [false, true]) {
+    expect(await captureRequest(context, {}, simple, 0)).toHaveProperty("priority", priority);
+  }
+});
 
-  it.each([
-    ["foreground", -100],
-    ["normal", 0],
-    ["background", 100],
-  ] as const)("sends %s priority %s through both provider hooks", async (urgency, priority) => {
-    for (const simple of [false, true]) {
-      expect(
-        await captureRequest({
-          modelParams: { priorityScheduling: true },
-          urgency,
-          simple,
-          explicitPriority: 0,
-        }),
-      ).toHaveProperty("priority", priority);
-    }
-  });
-
-  it.each([
-    { provider: "other" },
-    { requestProvider: "other" },
-    { requestModelId: "fallback" },
-    { modelParams: undefined, extraParams: { priorityScheduling: true } },
-  ])("does not enable a different provider/model or global params: %j", async (scenario) => {
-    expect(
-      await captureRequest({ modelParams: { priorityScheduling: true }, ...scenario }),
-    ).not.toHaveProperty("priority");
-  });
+it.each<[Partial<ProviderWrapStreamFnContext>, RequestModel]>([
+  [{ modelParams: { priorityScheduling: undefined } }, {}],
+  [{ modelParams: { priorityScheduling: false } }, {}],
+  [{ modelParams: { priorityScheduling: true }, provider: "other" }, {}],
+  [{ modelParams: { priorityScheduling: true } }, { provider: "other" }],
+  [{ modelParams: { priorityScheduling: true } }, { id: "fallback" }],
+  [{ extraParams: { priorityScheduling: true } }, {}],
+])("leaves priority absent for context %j and request %j", async (context, request) => {
+  expect(await captureRequest(context, request)).not.toHaveProperty("priority");
 });

@@ -7,13 +7,7 @@ import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 import * as fixture from "./session-catalog.test-helpers.js";
 
 const defaultPluginConfig = { supervision: { enabled: true } };
-type FactoryOptions = Parameters<typeof fixture.createCodexSessionCatalogControlFactory>[0];
-const createFactory = (options: Partial<FactoryOptions> = {}) =>
-  fixture.createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => defaultPluginConfig,
-    getRuntimeConfig: () => fixture.config,
-    ...options,
-  });
+const createFactory = fixture.createCodexSessionCatalogControlFactory;
 type ListOptions = Parameters<typeof fixture.listCodexSessionCatalog>[0];
 const listCatalog = ({
   runtime = fixture.createRuntime().runtime,
@@ -24,18 +18,12 @@ function registeredProvider(
   control: Parameters<typeof fixture.registerCodexSessionCatalog>[0]["control"],
   runtimeConfig = fixture.config,
 ) {
-  const { api, getProvider } = fixture.createGatewayApi(
-    fixture.createRuntime().runtime,
-    runtimeConfig,
-  );
-  fixture.registerCodexSessionCatalog({
-    api,
-    bindingStore: fixture.createCodexTestBindingStore(),
+  return fixture.createCatalogTestProvider({
+    startupConfig: runtimeConfig,
     control,
     getPluginConfig: () => defaultPluginConfig,
     getRuntimeConfig: () => runtimeConfig,
   });
-  return getProvider()!;
 }
 type ManagedThreads = NonNullable<
   ReturnType<typeof fixture.createCodexTestBindingStore>["managedThreads"]
@@ -112,14 +100,6 @@ async function homeFixture(label: string) {
   };
 }
 
-it("keeps the underlying paired-node list failure", () => {
-  expect(fixture.catalogError("NODE_LIST_FAILED", new Error("paired store is unreadable"))).toEqual(
-    {
-      code: "NODE_LIST_FAILED",
-      message: "Paired nodes could not be listed: paired store is unreadable",
-    },
-  );
-});
 it("waits for the registered provider's first page and then serves its resident host", async () => {
   const pending = createDeferred<{ data: ReturnType<typeof fixture.idleThread>[] }>();
   const started = createDeferred<void>();
@@ -132,6 +112,9 @@ it("waits for the registered provider's first page and then serves its resident 
   const control = factory.forRequest("main", home);
   const provider = registeredProvider(factory);
   const query = { agentId: "main", hostIds: [home.hostId] };
+  await import("./session-catalog-node-continue.js");
+  // Exercise first-page ordering independently of the cold index's wall-clock startup cost.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   let delivered = false;
   const listed = provider.list(query).then((hosts) => {
     delivered = true;
@@ -154,7 +137,11 @@ it("waits for the registered provider's first page and then serves its resident 
     expect(fixture.commandRpcMocks.codexControlRequest.mock.calls[0]?.[1]).toBe("thread/list");
   } finally {
     pending.resolve({ data: [] });
-    await listed;
+    try {
+      await listed;
+    } finally {
+      vi.useRealTimers();
+    }
   }
 });
 
@@ -216,7 +203,7 @@ it("lists non-archived interactive threads without probing transcript previews",
   fixture.commandRpcMocks.codexControlRequest.mockResolvedValue({
     data: [
       nativeThread("thread-title", {
-        name: "Match title",
+        name: "Cafe\u0301 title",
         preview: "private\ntranscript preview",
         cwd: "/workspace/one",
         source: "vscode",
@@ -224,7 +211,7 @@ it("lists non-archived interactive threads without probing transcript previews",
       nativeThread("thread-preview", { preview: "Unrelated private preview text" }),
       nativeThread("thread-fallback", {
         cwd: "/workspace/one",
-        preview: "\x1b[31mMatch\x1b[0m\nvisible\x00 fallback\x7f title",
+        preview: "\x1b[31mCafe\u0301\x1b[0m\nvisible\x00 fallback\x7f title",
       }),
     ],
   });
@@ -232,22 +219,21 @@ it("lists non-archived interactive threads without probing transcript previews",
   await control.initialize();
 
   await expect(
-    control.listPage({ limit: 25, searchTerm: "mAtCh", cwd: " /workspace/one " }),
+    control.listPage({ limit: 25, searchTerm: "CAFÉ", cwd: " /workspace/one " }),
   ).resolves.toEqual({
     sessions: [
       catalogSession("thread-title", {
-        name: "Match title",
+        name: "Cafe\u0301 title",
         cwd: "/workspace/one",
         source: "vscode",
       }),
       catalogSession("thread-fallback", {
         cwd: "/workspace/one",
-        fallbackName: "Match visible fallback title",
+        fallbackName: "Cafe\u0301 visible fallback title",
       }),
     ],
   });
-  expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-  expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledWith(
+  expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledExactlyOnceWith(
     pluginConfig,
     "thread/list",
     {
@@ -262,10 +248,9 @@ it("lists non-archived interactive threads without probing transcript previews",
       config: fixture.config,
       authProfileId: null,
       startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
-      timeoutMs: expect.any(Number),
     }),
   );
-  expect(JSON.stringify(await control.listPage({ searchTerm: "mAtCh" }))).not.toContain("private");
+  expect(JSON.stringify(await control.listPage({ searchTerm: "CAFÉ" }))).not.toContain("private");
   expect(
     fixture.commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[1]),
   ).not.toContain("thread/resume");

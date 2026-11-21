@@ -1,3 +1,4 @@
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AgentsApiClient,
@@ -5,7 +6,7 @@ import {
   type AgentsApiInputFile,
 } from "./agentsapi-client.js";
 import { createTurn } from "./agentsapi.test-support.js";
-import { DEFAULT_NATIVE_TOOLS } from "./config.js";
+import { agentsApiConfigSchema } from "./config.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -130,7 +131,11 @@ describe("Agents API session creation", () => {
     queueResponse(Response.json({ id: "session-fixture" }));
     const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
 
-    const options = { nativeTools: DEFAULT_NATIVE_TOOLS, functions: [], mcpTools: [] };
+    const options = {
+      nativeTools: agentsApiConfigSchema.parse({}).nativeTools,
+      functions: [],
+      mcpTools: [],
+    };
     await expect(client.create(signal, "Fixture instructions", model, options)).resolves.toBe(
       "session-fixture",
     );
@@ -591,14 +596,6 @@ function artifact(overrides: Partial<AgentsApiArtifact> = {}): AgentsApiArtifact
     size_bytes: 4,
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 function serverError(status: number, headers?: HeadersInit) {

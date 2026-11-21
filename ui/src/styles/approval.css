@@ -28,46 +28,22 @@
 }
 
 .approval-page__card {
-  --approval-page-accent: var(--border);
-
   position: relative;
   z-index: 1;
   width: 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--approval-page-accent) 45%, var(--border));
-  border-left: 3px solid var(--approval-page-accent);
-  border-radius: 4px 18px 18px 4px;
-  background: color-mix(in srgb, var(--approval-page-accent) 5%, var(--card));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
   box-shadow: var(--shadow-xl);
-}
-
-.approval-page__card--severity-warning {
-  --approval-page-accent: var(--warn);
-}
-
-.approval-page__card--severity-danger {
-  --approval-page-accent: var(--danger);
-}
-
-.approval-page__card::after {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 72px;
-  height: 72px;
-  border-top: 1px solid color-mix(in srgb, var(--approval-page-accent) 55%, transparent);
-  border-right: 1px solid color-mix(in srgb, var(--approval-page-accent) 55%, transparent);
-  border-radius: 0 17px 0 0;
-  content: "";
-  pointer-events: none;
 }
 
 .approval-page__brand {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 76px;
-  padding: 16px 24px;
+  min-height: 64px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 66%, transparent);
 }
@@ -95,7 +71,7 @@
 }
 
 .approval-page__content {
-  padding: 28px 30px 30px;
+  padding: 22px 24px 24px;
 }
 
 .approval-page__status {
@@ -129,6 +105,17 @@
   box-shadow: 0 0 0 4px var(--ok-subtle);
 }
 
+/* The card stays neutral, so a pending request states its severity in this badge. */
+.approval-page__card--severity-info .approval-page__status-dot--pending {
+  background: var(--muted);
+  box-shadow: none;
+}
+
+.approval-page__card--severity-danger .approval-page__status-dot--pending {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px var(--danger-subtle);
+}
+
 .approval-page__status-dot--denied,
 .approval-page__status-dot--expired,
 .approval-page__status-dot--cancelled {
@@ -137,7 +124,7 @@
 }
 
 .approval-page__heading {
-  margin: 22px 0 24px;
+  margin: 16px 0 18px;
 }
 
 .approval-page__heading h1,
@@ -181,7 +168,7 @@
 }
 
 .approval-page__preview-label {
-  margin: 20px 0 8px;
+  margin: 16px 0 6px;
   color: var(--muted);
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -209,7 +196,7 @@
   max-height: min(38vh, 330px);
   margin: 0;
   overflow: auto;
-  padding: 17px 18px;
+  padding: 12px 14px;
   border-radius: var(--radius-md);
   font-size: var(--control-ui-text-md);
   line-height: 1.55;
@@ -221,9 +208,13 @@
   font-family: var(--font-body);
 }
 
+.approval-page__preview + .approval-page__preview,
+.approval-page__warning + .approval-page__warning {
+  margin-top: 8px;
+}
+
 .approval-page__warning {
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--warn) 36%, var(--border));
+  padding: 10px 12px;
   border-radius: var(--radius-sm);
   background: var(--warn-subtle);
   color: var(--text);
@@ -234,13 +225,8 @@
 
 .approval-page__meta {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
+  gap: 12px;
   margin: 14px 0 0;
-  padding: 1px;
-  border-radius: var(--radius-sm);
-  background: var(--border);
 }
 
 .approval-page__meta:empty {
@@ -248,23 +234,25 @@
 }
 
 .approval-page__meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
   min-width: 0;
-  padding: 10px 12px;
-  background: var(--card);
-}
-
-.approval-page__meta-row dt {
-  margin-bottom: 3px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
+.approval-page__meta-row dt {
+  flex: none;
+}
+
 .approval-page__meta-row dd {
+  min-width: 0;
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--text);
   font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
+  text-align: end;
   unicode-bidi: plaintext;
   user-select: text;
 }
@@ -273,7 +261,7 @@
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 18px;
+  margin-top: 12px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -286,25 +274,14 @@
 .approval-page__actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 26px;
+  gap: 8px;
+  margin-top: 18px;
 }
 
 .approval-page__action {
-  min-height: 48px;
+  min-height: 44px;
   justify-content: center;
   font-weight: 700;
-}
-
-.approval-page__action--allow-once {
-  border-color: var(--accent);
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-
-.approval-page__action--allow-once:hover:not(:disabled) {
-  border-color: var(--primary-hover);
-  background: var(--primary-hover);
 }
 
 .approval-page__action--deny {
@@ -369,11 +346,11 @@
 }
 
 .approval-page__spinner {
+  --spinner-art: var(--spinner-mask-large);
   width: 34px;
   height: 34px;
   margin-bottom: 20px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  color: var(--accent);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }
@@ -408,37 +385,77 @@
   .approval-page {
     align-content: start;
     place-items: start center;
-    padding: 14px 12px 18px;
+    padding: 12px 12px 16px;
   }
 
   .approval-page__card {
-    border-radius: 3px 14px 14px 3px;
+    border-radius: var(--radius-lg);
   }
 
   .approval-page__brand {
-    min-height: 68px;
-    padding: 13px 17px;
+    min-height: 52px;
+    padding: 8px 14px;
+  }
+
+  .approval-page__logo {
+    width: 28px;
+    height: 28px;
   }
 
   .approval-page__content {
-    padding: 23px 17px 20px;
+    padding: 14px;
   }
 
   .approval-page__heading {
-    margin-block: 18px 21px;
+    margin-block: 12px 14px;
   }
 
+  .approval-page__heading h1,
+  .approval-page__state h1 {
+    font-size: 22px;
+  }
+
+  .approval-page__heading p {
+    margin-top: 8px;
+    line-height: 1.45;
+  }
+
+  .approval-page__preview-label {
+    margin-block: 14px 6px;
+  }
+
+  /* The whole request is read before deciding; the page is the one scroller. */
   .approval-page__preview {
-    max-height: 34vh;
-    padding: 14px;
+    max-height: none;
+    overflow: visible;
+    padding: 10px 12px;
+    line-height: 1.45;
+  }
+
+  .approval-page__preview + .approval-page__preview {
+    margin-top: 8px;
+  }
+
+  .approval-page__warning,
+  .approval-page__callout {
+    padding: 10px 12px;
   }
 
   .approval-page__meta {
     grid-template-columns: 1fr;
+    margin-top: 10px;
   }
 
   .approval-page__actions {
     grid-template-columns: 1fr;
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  .approval-page__action {
+    min-height: 44px;
+    font-size: var(--control-ui-text-md);
+    font-weight: 600;
   }
 
   .approval-page__action--deny:last-child:nth-child(odd) {
@@ -446,18 +463,188 @@
   }
 
   .approval-page__timing,
+  .approval-page__meta-row,
   .approval-page__callout {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .approval-page__timing {
+  .approval-page__timing,
+  .approval-page__meta-row {
     gap: 4px;
+    margin-top: 12px;
+  }
+
+  .approval-page__meta-row dd {
+    text-align: start;
   }
 
   .approval-page__callout .btn {
     min-height: 44px;
     justify-content: center;
+  }
+
+  /* One surface: the question panel, or the same surface for every state around it. */
+  .question-page .approval-page__card {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .question-page .approval-page__card::after {
+    display: none;
+  }
+
+  .question-page .approval-page__content {
+    padding: 0;
+  }
+
+  .question-page .approval-page__state {
+    min-height: 0;
+    padding: 12px;
+    border: 1px solid var(--chat-composer-hairline, var(--border));
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+    background: var(--chat-composer-surface, var(--popover));
+  }
+
+  :root[data-theme-mode="dark"] .question-page .approval-page__state {
+    border-color: color-mix(in srgb, var(--text-strong) 9%, transparent);
+  }
+
+  :root[data-theme-mode="light"] .question-page .approval-page__state {
+    border-color: transparent;
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 6%),
+      0 1px 2px -1px rgb(0 0 0 / 6%),
+      0 2px 4px rgb(0 0 0 / 4%);
+  }
+
+  /* The chat dock caps this panel; on its own document the page is the one scroller. */
+  .question-page .chat-question-panel:not(.chat-question-panel--collapsed) {
+    gap: 10px;
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  /* The panel takes focus on load for its keys; on a document that isn't a state to draw. */
+  .question-page .chat-question-panel:focus-visible {
+    outline: none;
+  }
+
+  /* Nothing sits under this panel, so collapsing it would only empty the page. */
+  .question-page .chat-question-panel__collapse {
+    display: none;
+  }
+
+  .question-page .chat-question-panel__title {
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .question-page .chat-question-panel__prompt {
+    font-size: 16px;
+    line-height: 1.35;
+  }
+
+  .question-page .chat-question-panel__options {
+    gap: 6px;
+  }
+
+  .question-page .chat-question-panel__option {
+    gap: 10px;
+    min-height: 44px;
+    padding: 8px 10px;
+  }
+
+  .question-page .chat-question-panel__option-label {
+    font-size: var(--control-ui-text-md);
+    line-height: 1.3;
+  }
+
+  .question-page .chat-question-panel__option-copy small {
+    font-size: calc(13px * var(--control-ui-text-scale));
+  }
+
+  .question-page
+    .chat-question-panel__option:not(.chat-question-panel__option--selected)
+    .chat-question-panel__option-marker {
+    border-color: var(--border-strong);
+  }
+
+  .question-page .chat-question-panel .input {
+    min-height: 44px;
+    padding-block: 9px;
+  }
+
+  /* The value stays 16px, iOS's input floor; the empty field reads like the rows beside it. */
+  .question-page :is(.chat-question-panel .input, .chat-question-panel__other)::placeholder {
+    font-size: var(--control-ui-text-md);
+  }
+
+  .question-page .chat-question-panel__footer {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .question-page .chat-question-panel__footer .btn {
+    min-height: 44px;
+    justify-content: center;
+    padding-inline: 16px;
+    font-size: var(--control-ui-text-md);
+  }
+
+  /* Answer first; taking the free width holds Skip still while the label changes. */
+  .question-page .chat-question-panel__footer .chat-question-panel__advance {
+    flex: 1 1 auto;
+    order: -1;
+  }
+
+  .question-page .chat-question-panel__footer .chat-question-panel__back {
+    order: 1;
+    margin-inline: auto 0;
+  }
+
+  .question-page .chat-question-panel__error {
+    order: -2;
+    flex-basis: 100%;
+    margin-right: 0;
+  }
+
+  /* A resolved question stays the same card: the status takes the open header's place. */
+  .question-page .approval-page__state:has(.chat-question-summary) {
+    place-items: start;
+    text-align: start;
+  }
+
+  .question-page .approval-page__state:has(.chat-question-summary) h1 {
+    color: var(--muted);
+    font-family: inherit;
+    font-size: var(--control-ui-text-sm);
+    font-weight: 500;
+    letter-spacing: 0;
+    line-height: 1.3;
+  }
+
+  .question-page .chat-question-summary {
+    gap: 6px;
+    width: 100%;
+    margin: 10px 0 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font-size: var(--control-ui-text-md);
+    text-align: start;
+  }
+
+  .question-page .chat-question-summary__prompt {
+    color: var(--text-strong);
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.35;
   }
 }
 

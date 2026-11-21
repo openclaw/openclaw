@@ -45,7 +45,7 @@ it.each(["commit", "retirement"])(
         }
         throw new GatewayProtocolRequestError({
           code: "UNAVAILABLE",
-          message: "Waiting for the widget result.",
+          message: "Waiting for the widget result…",
           retryable: true,
           details: { type: "canvas_widget_pending" },
         });
@@ -63,10 +63,9 @@ it.each(["commit", "retirement"])(
     });
     const scope = { client, epoch: 0 };
     const sessions = createSessionScopedOperations({
+      gateway: gateway.gateway,
       connection: { capture: () => scope, isCurrent: (captured) => captured === scope },
       reconcileMutation: async () => ({ status: "stale" }),
-      notifyCreated: () => {},
-      reportError: () => {},
     });
     // SAFETY: The widget consumes only these two application capabilities.
     const context = { gateway: gateway.gateway, sessions } as unknown as ApplicationContext;
@@ -127,12 +126,18 @@ it.each(["commit", "retirement"])(
     });
     await vi.advanceTimersByTimeAsync(0);
     flush();
-    expect(widget.documentHtml).toBe(documentView.html);
-    expect(subscriptions.size).toBe(0);
+    expect(widget.documentHtml).toBeUndefined();
+    expect(request.mock.calls.filter(([method]) => method === "canvas.document.view")).toHaveLength(
+      1,
+    );
     setRow("committed");
     flush();
     expect(onElement.mock.calls).toEqual([[widget], [undefined], [widget]]);
     expect(root.container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
+    await vi.advanceTimersByTimeAsync(1_000);
+    flush();
+    expect(widget.documentHtml).toBe(documentView.html);
+    expect(subscriptions.size).toBe(0);
     const frame = widget.querySelector("iframe")!;
     expect(frame.srcdoc).toBe(documentView.html);
     const views = request.mock.calls.filter(([method]) => method === "canvas.document.view");

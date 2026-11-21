@@ -1,9 +1,8 @@
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import {
@@ -19,15 +18,16 @@ import {
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
 import {
+  createManagedServiceChildMock as createChild,
+  createReadyManagedServiceChild,
+} from "./update-managed-service-handoff-command.test-support.js";
+import {
   scopeWrapperSource,
   useHandoffFixtureReceipts,
   waitForOrphanExit,
 } from "./update-managed-service-handoff-cross-process.test-support.js";
 import type { ManagedServiceUpdateHandoffParams } from "./update-managed-service-handoff-types.js";
-import {
-  signalMockManagedUpdateHandoffReady,
-  writeConcurrentManagedHandoffParams,
-} from "./update-managed-service-handoff.test-support.js";
+import { writeConcurrentManagedHandoffParams } from "./update-managed-service-handoff.test-support.js";
 import { pathExists } from "./update-managed-service-native.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -37,25 +37,8 @@ const mockedHandoffLeaseCleanups = new Set<() => void>();
 const receipts = useHandoffFixtureReceipts();
 type ConcurrentParams = Parameters<typeof writeConcurrentManagedHandoffParams>[0];
 
-function createChild() {
-  return Object.assign(new EventEmitter(), {
-    pid: process.pid,
-    exitCode: null,
-    signalCode: null,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    unref: vi.fn(),
-  });
-}
-
 function createReadyChild(_command: string, args: string[]) {
-  const child = createChild();
-  process.nextTick(signalMockManagedUpdateHandoffReady, {
-    child,
-    paramsPath: readManagedHandoffArtifacts(args).paramsPath,
-    cleanups: mockedHandoffLeaseCleanups,
-  });
-  return child;
+  return createReadyManagedServiceChild(args, mockedHandoffLeaseCleanups);
 }
 
 vi.mock("node:child_process", async () => {
@@ -346,7 +329,7 @@ describe("managed service update handoff cross-process lease", () => {
           expect(helperPid).not.toBe(started.pid);
           expect(launcher?.pid).toBe(started.pid);
           expect(isPidAlive(helperPid)).toBe(true);
-          expect(claimManagedServiceUpdateHandoff(identity)).toBe(true);
+          expect(await claimManagedServiceUpdateHandoff(identity)).toBe(true);
 
           process.kill(helperPid, "SIGKILL");
           await withinTest(
@@ -360,7 +343,7 @@ describe("managed service update handoff cross-process lease", () => {
           await expect(fs.readFile(helperExitPath, "utf8")).resolves.toBe(String(helperPid));
           expect(isPidAlive(helperPid)).toBe(false);
           expect(isPidAlive(started.pid)).toBe(true);
-          expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
+          expect(await claimManagedServiceUpdateHandoff(identity)).toBe(false);
 
           let payload = current.payload_json;
           if (replacement === "owner") {
@@ -712,3 +695,10 @@ childProcess.spawnSync = function(command, args, options) {
     },
   );
 });
+
+vi.mock("./update-managed-service-handoff-worker.js", async (original) => ({
+  ...(await original<typeof import("./update-managed-service-handoff-worker.js")>()),
+  prepareManagedHandoffParentStore: (
+    await import("./update-managed-service-handoff-worker.test-support.js")
+  ).prepareManagedHandoffParentStoreForTest,
+}));

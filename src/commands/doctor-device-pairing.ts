@@ -1,5 +1,4 @@
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
@@ -8,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
+import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import {
   summarizeDeviceTokens,
   type DeviceAuthTokenSummary,
@@ -18,8 +18,10 @@ import {
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";
-import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeDeviceAuthScopes, type DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { shortenHomeInString } from "../utils.js";
 
 const DEVICE_PAIRING_CHECK_ID = "core/doctor/device-pairing";
 
@@ -136,6 +138,8 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "devices.pending",
       target: `${pending.deviceId}:${pending.requestId}`,
       fixHint,
@@ -143,6 +147,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     if (!paired) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "first-time",
         message: `Pending device pairing request ${pending.requestId} for ${deviceLabel}. ${fixHint}`,
       };
@@ -164,6 +169,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     if (requestedRoles.some((role) => !approvedRoles.includes(role))) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "role-upgrade",
         message: `Pending role upgrade ${pending.requestId} for ${deviceLabel}: approved roles [${formatValues(approvedRoles)}], requested roles [${formatValues(requestedRoles)}]. ${fixHint}`,
       };
@@ -184,6 +190,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     ) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "scope-upgrade",
         message: `Pending scope upgrade ${pending.requestId} for ${deviceLabel}: approved scopes [${formatValues(approvedScopes)}], requested scopes [${formatValues(requestedScopes)}]. ${fixHint}`,
       };
@@ -203,6 +210,8 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "devices.paired",
       target: device.deviceId,
     };
@@ -213,6 +222,7 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
         ...finding,
         requirement: "missing-operator-scope-baseline",
         message: `Paired device ${deviceLabel} is missing its approved operator scope baseline. Scope upgrades can get stuck in pairing-required until the device repairs or is re-approved.`,
+        fixHint: `Run ${formatCliArgs(["openclaw", "devices", "list"])} to inspect the device, reconnect it to request the intended scopes, then approve only the scopes you recognize.`,
       });
     }
     for (const role of approvedRoles) {
@@ -250,22 +260,42 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
   return findings;
 }
 
+/** An unreadable local store is a skipped check, not a clean device. */
+function describeLocalDeviceAuthReadFailure(subject: string, error: unknown): HealthFinding {
+  const inspectCommand = formatCliArgs(["openclaw", "devices", "list"]);
+  return {
+    checkId: DEVICE_PAIRING_CHECK_ID,
+    severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/devices",
+    path: "identity.device-auth",
+    requirement: "local-device-auth-unreadable",
+    message: `Could not read ${subject}, so local device token scopes were not checked: ${sanitizeTerminalText(shortenHomeInString(formatErrorMessage(error)))}`,
+    fixHint: `Keep the client credential store and correct the reported access or corruption error, then rerun openclaw doctor and inspect the device with ${inspectCommand}.`,
+  };
+}
+
 async function collectLocalDeviceAuthFindings(
   snapshot: DoctorPairingSnapshot,
 ): Promise<HealthFinding[]> {
-  let identity;
+  let identity: DeviceIdentity | null;
   try {
     identity = await loadDeviceIdentityIfPresentAsync({ env: process.env });
-  } catch {
-    return [];
+  } catch (error) {
+    return [describeLocalDeviceAuthReadFailure("the local device identity", error)];
   }
   if (!identity) {
     return [];
   }
-  const localTokens = await loadDeviceAuthTokens({
-    deviceId: identity.deviceId,
-    env: process.env,
-  }).catch(() => []);
+  let localTokens: DeviceAuthEntry[];
+  try {
+    localTokens = await loadDeviceAuthTokens({
+      deviceId: identity.deviceId,
+      env: process.env,
+    });
+  } catch (error) {
+    return [describeLocalDeviceAuthReadFailure("the local device auth token inventory", error)];
+  }
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];
@@ -281,6 +311,8 @@ async function collectLocalDeviceAuthFindings(
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "identity.device-auth",
       target: `${paired.deviceId}:${role}`,
     };
@@ -331,6 +363,8 @@ async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<H
   return (await listLegacyPairingStoreFiles()).map((filePath): HealthFinding => ({
     checkId: DEVICE_PAIRING_CHECK_ID,
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/devices",
     message: `Legacy pairing store ${filePath} has not been imported into SQLite. Stop the Gateway and run openclaw doctor --fix. Unreadable sources remain in place for repair.`,
     path: "devices.legacy-store",
     requirement: "pairing-store-legacy-file",
@@ -359,6 +393,8 @@ export async function collectDevicePairingHealthFindings(params: {
       legacyStoreFindings.push({
         checkId: DEVICE_PAIRING_CHECK_ID,
         severity: "warning",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/devices",
         message: `Legacy device auth store ${sanitizeTerminalText(deviceAuth.sourcePath)} is still present and local credentials require migration or repair. ${fixHint}`,
         path: "identity.device-auth",
         requirement: "device-auth-store-legacy-file",
@@ -379,17 +415,4 @@ export async function collectDevicePairingHealthFindings(params: {
     ...collectPairedRecordFindings(snapshot),
     ...(await collectLocalDeviceAuthFindings(snapshot)),
   ];
-}
-
-/** Render the same local migration and pairing findings as structured Doctor output. */
-export async function noteDevicePairingHealth(params: {
-  cfg: OpenClawConfig;
-  healthOk: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const findings = await collectDevicePairingHealthFindings(params);
-  if (findings.length === 0) {
-    return;
-  }
-  note(findings.map((finding) => `- ${finding.message}`).join("\n"), "Device pairing");
 }

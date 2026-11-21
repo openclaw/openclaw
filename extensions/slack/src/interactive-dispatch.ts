@@ -102,7 +102,6 @@ export async function dispatchSlackPluginInteractiveHandler(params: {
   channelType?: NonNullable<SlackMessageEvent["channel_type"]>;
   ctx: Parameters<typeof dispatchSlackInteractive>[0]["ctx"];
   respond: SlackInteractiveHandlerContext["respond"];
-  onMatched?: () => Promise<void> | void;
 }) {
   const senderId = params.ctx.senderId?.trim();
   const rawBaseConversationId =

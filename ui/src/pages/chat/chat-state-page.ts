@@ -12,15 +12,17 @@ import {
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
-import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
+import { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
-import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { cachedChatAssistantIdentity } from "./chat-avatar.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { cancelPendingQueuedChatInput } from "./chat-history-actions.ts";
@@ -30,7 +32,9 @@ import {
 } from "./chat-history-events.ts";
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
-import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
+import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
+import { chatSessionPresentationKey, watchPresentation } from "./chat-pane-session-presentation.ts";
+import { initializeChatPaneSettings } from "./chat-pane-startup-subscriptions.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -43,14 +47,16 @@ import {
 } from "./chat-send-actions.ts";
 import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   openSessionWorkspacePreview,
   getSessionWorkspace,
   clearSessionWorkspacePreviews,
+  sessionWorkspaceForHost,
 } from "./components/chat-session-workspace-state.ts";
 import {
   handleChatDraftChange,
@@ -69,6 +75,7 @@ import {
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { cacheChatAvatarSource } from "./session-message-cache.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   updateSidebarSessionActivePanel,
@@ -88,7 +95,11 @@ import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
+  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandPresentation;
+  inlineCommandPreparationError?: string;
+  isCurrent?: () => boolean;
   sessionKey?: string;
+  agentId?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   transcriptLoadingChanged?: () => void;
@@ -110,33 +121,30 @@ export function createPageState(
 ): ChatPageHost {
   const settings = loadSettings();
   const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
+  const assistantAgentId = page.agentId || context.agentSelection.state.selectedId;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
     { agentsList: context.agents.state.agentsList, hello: context.gateway?.snapshot.hello },
     initialSessionKey,
   );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
-  const bootstrapIdentity =
-    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl) &&
-    appConfig.assistantIdentity.agentId ===
-      resolveAgentIdForSession({
-        sessionKey: initialSessionKey,
-        assistantAgentId: context.agentSelection.state.selectedId,
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      })
-      ? appConfig.assistantIdentity
-      : null;
-  const errors = createChatErrorState();
+  const assistantIdentity = cachedChatAssistantIdentity(
+    {
+      sessionKey: initialSessionKey,
+      assistantAgentId,
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    },
+    context,
+  );
   const presentedFields = {
     settings,
-    // Unscoped names retain the gateway-wide fallback.
-    assistantName:
-      bootstrapIdentity?.name ??
-      (appConfig.assistantIdentity.agentId ? "" : appConfig.assistantIdentity.name),
-    assistantAvatar: bootstrapIdentity?.avatar ?? null,
-    assistantAvatarStatus: bootstrapIdentity?.avatarStatus ?? null,
-    assistantAvatarReason: bootstrapIdentity?.avatarReason ?? null,
+    inlineCommandPresentation: page.inlineCommandPresentation,
+    accessPreferenceRevision: 0,
+    assistantName: assistantIdentity.name,
+    assistantAvatar: assistantIdentity.avatar,
+    assistantAvatarStatus: assistantIdentity.avatarStatus ?? null,
+    assistantAvatarReason: assistantIdentity.avatarReason ?? null,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
     automaticallyFetchFavicons: appConfig.automaticallyFetchFavicons,
@@ -149,7 +157,8 @@ export function createPageState(
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
-    assistantAgentId: context.agentSelection.state.selectedId,
+    browserPanelUnavailableReason: "disconnected",
+    assistantAgentId,
     sessionKey: initialSessionKey,
     currentSessionId: undefined,
     chatLoading: false,
@@ -194,13 +203,20 @@ export function createPageState(
     sidebarContent: null,
     imageLightbox: null,
   } satisfies Partial<ChatPageHost>;
-  const state = Object.assign(errors, presentedFields, {
+  const state = Object.assign(createChatErrorState(), presentedFields, {
     uploadConfig: context.config,
+    outboxRecovery: {
+      gateway: context.gateway,
+      retainedAttachmentIds: (attachments: readonly ChatAttachment[]) =>
+        ChatPaneComposerHandoff.retainedAttachmentIds(context, attachments),
+    },
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
     },
     sessions: context.sessions,
+    readChatAgentsList: () =>
+      context.agents.state.client === state.client ? context.agents.state.agentsList : null,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
@@ -237,7 +253,7 @@ export function createPageState(
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsArchivedFilter: "active",
-    agentsSelectedId: context.agentSelection.state.selectedId,
+    agentsSelectedId: assistantAgentId,
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Set<string>(),
@@ -280,6 +296,9 @@ export function createPageState(
     sessionWorkspaceState: undefined,
   }) as unknown as ChatPageHost;
 
+  state.cacheChatAvatarSource = (agentId, source) =>
+    cacheChatAvatarSource(chatMessagesBySession, state, state, agentId, source);
+  state.refreshCurrentChat = () => refreshPageChat(state);
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.scrollToBottom = (options) => {
@@ -289,17 +308,7 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  state.applySettings = (patch) => {
-    const next = { ...state.settings, ...patch };
-    state.settings = patchSettings({
-      chatShowThinking: next.chatShowThinking,
-      chatShowToolCalls: next.chatShowToolCalls,
-      chatPersistCommentary: next.chatPersistCommentary,
-      chatSendShortcut: next.chatSendShortcut,
-      chatBubbleSessionKeys: next.chatBubbleSessionKeys,
-      chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
-    });
-  };
+  initializeChatPaneSettings(state, page);
   attachChatRealtimeActions(
     state,
     () => !chatProviderReviewRow(state)?.providerReview,
@@ -310,14 +319,27 @@ export function createPageState(
         expectedLeafEntryId: resolveDisplayedLeafEntryId(state),
       }),
     async () => {
-      await context.runtimeConfig.ensureLoaded();
-      return resolveSpeechTextLimit(
-        context.runtimeConfig.state.configSnapshot?.runtimeConfig ??
-          context.runtimeConfig.state.configSnapshot?.config,
-      );
+      let config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      if (!config || !Object.hasOwn(config, "tts")) {
+        await context.runtimeConfig.ensureDisplayLoaded();
+        config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      }
+      return resolveSpeechTextLimit(config);
     },
   );
-  state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
+  state.accessPreferences = DraftPreferenceState.forChat(context, () => {
+    state.accessPreferenceRevision = (state.accessPreferenceRevision ?? 0) + 1;
+  });
+  state.loadAssistantIdentity = () => {
+    if (!state.connected) {
+      const cachedIdentity = cachedChatAssistantIdentity(state, context);
+      state.assistantName = cachedIdentity.name;
+      state.assistantAvatar = cachedIdentity.avatar;
+      state.assistantAvatarStatus = cachedIdentity.avatarStatus ?? null;
+      state.assistantAvatarReason = cachedIdentity.avatarReason ?? null;
+    }
+    return loadPageAssistantIdentity(state);
+  };
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
     const isCommand =
@@ -353,7 +375,7 @@ export function createPageState(
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);
     } else if (outcome === "rejected") {
-      setChatError(state, OFFLINE_QUEUE_STORAGE_ERROR);
+      setChatError(state, chatOfflineQueueStorageError());
     }
   };
   state.retryQueuedChatMessage = (id) => retryQueuedChatMessage(state, id);
@@ -403,7 +425,15 @@ export function createPageState(
       transientResources.clear();
       transientResourceScope = scope;
     }
-    const normalized = normalizeSidebarLayout(layout);
+    let normalized = normalizeSidebarLayout(layout);
+    // New tab is a live layout fact, not a saved resource or settings schema.
+    // The persistence normalizer deliberately strips it again below.
+    if (layout.newTab && normalized.columns[0]) {
+      normalized.newTab = { ...layout.newTab };
+      if (layout.columns[0]?.activePanelId === layout.newTab.id) {
+        normalized.columns[0].activePanelId = layout.newTab.id;
+      }
+    }
     const previous = state.sidebarLayout;
     const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
       value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
@@ -422,6 +452,12 @@ export function createPageState(
       if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
+    }
+    const retiringResource = options?.retireAutomaticResource;
+    if (retiringResource && transientResources.has(retiringResource)) {
+      // Discovery can retire only its own transient tab, never an explicit target.
+      normalized = closeSlot(normalized, retiringResource);
+      transientResources.delete(retiringResource);
     }
     if (
       previous.resourceAutoOpenDismissed ||
@@ -480,6 +516,9 @@ export function createPageState(
     if (!normalizedPanelId) {
       return;
     }
+    if (state.sidebarLayout.newTab?.id === normalizedPanelId) {
+      return;
+    }
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
@@ -505,6 +544,23 @@ export function createPageState(
         : content?.kind === "file"
           ? { id: `file:${content.path}`, label: content.name }
           : null);
+    if (fileTab && content) {
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+        sessionWorkspaceForHost(state).publish();
+      }
+    } else {
+      state.sidebarContent = content;
+    }
+    // Internal catalog navigation updates the retained reader, never the panel selection.
+    if (content?.fileTab?.intent === "navigate") {
+      return undefined;
+    }
     const targetSlot = fileTab ? "workspace" : "detail";
     let opened = openSlot(state.sidebarLayout, targetSlot);
     const targetPanel = opened.columns
@@ -518,22 +574,11 @@ export function createPageState(
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    if (fileTab && content) {
-      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
-      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
-        // A second app link changes host context on the retained instance.
-        preview.content = content;
-        preview.label = fileTab.label;
-        const workspace = getSessionWorkspace(state);
-        workspace.previews = [...workspace.previews];
-      }
-    } else {
-      state.sidebarContent = content;
-    }
     state.updateSidebarLayout(fitted);
     if (targetPanel) {
       state.updateSidebarActivePanel(targetPanel.id);
     }
+    return targetSlot;
   };
   state.handleCloseSidebar = (slot) => {
     if (slot === "workspace") {
@@ -567,7 +612,7 @@ export function createPageState(
   state.handleCloseImage = () => {
     invalidateImageLightbox(state);
   };
-  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory", "branchQuery"]);
   {
     let value = state.chatQueue;
     const queue = projectSource(state, {
@@ -586,14 +631,20 @@ export function createPageState(
   }
   {
     const source = chatRunPresentation(state);
-    const projection = projectOwner(source, (owner) => owner.values);
+    // Tool activity also publishes run receipts; it does not change the text row.
+    const projection = projectOwner(source, (owner) => owner.values.chatStream, Object.is);
+    const nonText = projectSource(source, {
+      read: (owner) => owner.values,
+      subscribe: (owner, notify) => owner.subscribeNonText(notify),
+      equality: "revision",
+    });
     for (const key of source.fields) {
       const descriptor = Object.getOwnPropertyDescriptor(state, key)!;
       Object.defineProperty(state, key, {
         ...descriptor,
         get() {
           if (getObserver()) {
-            projection.read();
+            (key === "chatStream" ? projection : nonText).read();
           }
           return Reflect.get(source.values, key);
         },
@@ -605,9 +656,11 @@ export function createPageState(
       read: (owner) => owner.readErrors(),
       subscribe: (owner, notify) => owner.subscribeErrors(notify),
       equality: (previous, next) =>
-        previous.lastError === next.lastError && previous.chatError === next.chatError,
+        previous.lastError === next.lastError &&
+        previous.lastErrorDetail === next.lastErrorDetail &&
+        previous.chatError === next.chatError,
     });
-    for (const key of ["lastError", "chatError"] as const) {
+    for (const key of ["lastError", "lastErrorDetail", "chatError"] as const) {
       Object.defineProperty(state, key, {
         ...Object.getOwnPropertyDescriptor(state, key),
         get: () => (getObserver() ? errorProjection.read()[key] : state.readErrors()[key]),
@@ -626,7 +679,7 @@ export function createPageState(
         ),
       subscribe: (_owner, notify) => {
         onChange = notify;
-        const stop = context.sessions.subscribe(notify);
+        const stop = watchPresentation(context.sessions, notify);
         return () => {
           onChange = undefined;
           stop();
@@ -655,9 +708,9 @@ export function createPageState(
       });
     }
   }
-  return projectChatFields(
-    state,
-    // SAFETY: This literal owns every enumerable key passed to the projection.
-    Object.keys(presentedFields) as (keyof typeof presentedFields)[],
-  );
+  Object.defineProperty(state, "sessionWorkspaceReadDisabledReason", {
+    get: () => selectedChatSessionRow(state)?.workspaceReadDisabledReason,
+  });
+  // SAFETY: This literal owns every enumerable key passed to the projection.
+  return projectChatFields(state, Object.keys(presentedFields) as (keyof typeof presentedFields)[]);
 }

@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { ok } from "@openclaw/normalization-core/result";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { readResolvedSessionEntriesInWorker } from "../config/sessions/session-accessor.entry.js";
@@ -17,16 +16,13 @@ import type {
   SessionEntryReadSource,
 } from "../config/sessions/session-entry-read-source.types.js";
 import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-} from "../config/sessions/session-store-read-candidates.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { assertSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -37,7 +33,10 @@ import {
   resolveNativeGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreLookupParams,
 } from "./session-utils-store-lookup.js";
-import type { GatewaySessionStoreRead } from "./session-utils-store-read.js";
+import {
+  createGatewaySessionStore,
+  type GatewaySessionStoreRead,
+} from "./session-utils-store-read.js";
 import {
   findCanonicalStoreMatch,
   omitInternalSessionEffectsEntries,
@@ -47,6 +46,8 @@ import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.t
 type GatewaySessionStoreReadPlan = {
   reads: readonly SessionEntryWorkerRead[];
   assertCurrent: () => void;
+  assertLegacyCurrent: () => void;
+  revalidate: () => Promise<void>;
   selectPrepared: (
     reads: readonly PreparedSessionEntryWorkerRead[],
   ) => GatewaySessionStoreTargetWithStore;
@@ -55,6 +56,8 @@ type GatewaySessionStoreReadPlan = {
 export type GatewaySessionEntryReadPlan = {
   reads: readonly SessionEntryWorkerRead[];
   assertCurrent: () => void;
+  assertLegacyCurrent: () => void;
+  revalidate: () => Promise<void>;
   selectPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => SessionEntry | undefined;
 };
 
@@ -181,16 +184,25 @@ async function prepareGatewaySessionStoreReadInWorker(
     onSelected?.(target);
     return { target };
   }
-  const { candidates, ...inventory } = prepareSessionStoreTargetInventory(
-    params.cfg,
-    [
-      agentId,
-      ...(retiredOwner ? listAgentIds(params.cfg) : []),
-      ...(parsedAgent && parsedAgent !== agentId ? [parsedAgent] : []),
-    ],
-    params.env,
-  );
-  const identities = retainPlan ? captureSessionStoreCandidateIdentities(candidates) : undefined;
+  const agentIds = [
+    agentId,
+    ...(retiredOwner ? listAgentIds(params.cfg) : []),
+    ...(parsedAgent && parsedAgent !== agentId ? [parsedAgent] : []),
+  ];
+  const { candidates, ...inventory } = {
+    ...(
+      await prepareSessionStoreCandidatesInWorker({
+        config: params.cfg,
+        agentIds,
+        env: { ...(params.env ?? process.env) },
+        captureIdentity: retainPlan || isArtifactPreservingStateRead() ? undefined : false,
+      })
+    ).inventory!,
+    ...(isArtifactPreservingStateRead("agent") ? { preserveSourceArtifacts: true as const } : {}),
+  };
+  const readCustody = retainPlan
+    ? candidates.map((candidate) => ({ sourcePath: candidate.path, candidates: [candidate] }))
+    : undefined;
   const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...inventory, candidates });
   const captured = new Map<
     GatewaySessionStoreRead,
@@ -221,7 +233,7 @@ async function prepareGatewaySessionStoreReadInWorker(
       }
       const lookup = {
         ...params,
-        cfg: inventory.config,
+        cfg: params.cfg,
         key: params.key,
         env: inventory.env,
         targetDiscoveryCache,
@@ -257,11 +269,7 @@ async function prepareGatewaySessionStoreReadInWorker(
                   continuation,
                 );
                 assertSourceCurrent();
-                read.result = ok(
-                  Object.fromEntries(
-                    result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                  ),
-                );
+                read.result = createGatewaySessionStore(result.entries);
                 read.readSource = { agentId: database.agentId, path: database.path };
                 read.capturedReadSource = result.source;
                 return readNext(index + 1);
@@ -285,24 +293,15 @@ async function prepareGatewaySessionStoreReadInWorker(
             assertCurrent();
             for (const [index, read] of pending.entries()) {
               const preparedRead = loaded[index]!;
-              read.result = ok(
-                Object.fromEntries(
-                  preparedRead.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                ),
-              );
+              read.result = createGatewaySessionStore(preparedRead.result.entries);
               read.readSource = {
                 agentId: preparedRead.database.agentId,
                 path: preparedRead.database.path,
               };
-              const identity = readDatabasePathIdentitySync(preparedRead.database.path);
               preparedRead.assertCurrent();
-              if (identity.key.startsWith("file:")) {
-                read.capturedReadSource = {
-                  ...read.readSource,
-                  databaseIdentity: identity.key.slice("file:".length),
-                  databaseBirthtime: identity.birthtime,
-                };
-              }
+              // Inspections retain original provenance, not the private image used for SQL.
+              read.capturedReadSource =
+                preparedRead.result.snapshotSource ?? preparedRead.result.source;
               if (retainPlan) {
                 captured.set(read, {
                   input: {
@@ -311,6 +310,7 @@ async function prepareGatewaySessionStoreReadInWorker(
                     sessionKeys: [...read.options.exactKeys!],
                     projection: "exact",
                     env: inventory.env,
+                    readCustody,
                   },
                   source: read.readSource,
                   expectedSource: read.capturedReadSource,
@@ -339,15 +339,10 @@ async function prepareGatewaySessionStoreReadInWorker(
   if (!retainPlan || !prepared.plan) {
     return { target: prepared.target };
   }
-  const assertCurrent = () => {
-    inventoryRead.assertRegistryCurrent();
-    for (const candidate of candidates) {
-      assertSessionStoreReadCandidate(candidate.path, candidates);
-    }
-    if (!isDeepStrictEqual(captureSessionStoreCandidateIdentities(candidates), identities)) {
-      throw new Error("Prepared session lookup candidates changed");
-    }
-  };
+  const assertCurrent = inventoryRead.assertRegistryCurrent;
+  const sources = candidates.flatMap((candidate) =>
+    candidate.identity ? [{ path: candidate.path, identity: candidate.identity }] : [],
+  );
   const { target: initialTarget, plan } = prepared;
   const selectedSource = {
     agentId: initialTarget.agentId,
@@ -386,9 +381,7 @@ async function prepareGatewaySessionStoreReadInWorker(
         ) {
           throw new Error("Prepared session lookup source changed");
         }
-        read.result = ok(
-          Object.fromEntries(current.entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-        );
+        read.result = createGatewaySessionStore(current.entries);
         read.readSource = current.source;
         read.capturedReadSource = current.capturedReadSource;
       }
@@ -422,6 +415,17 @@ async function prepareGatewaySessionStoreReadInWorker(
     readPlan: {
       reads: reads.map(({ input }) => input),
       assertCurrent,
+      // Shipped synchronous authority callbacks retain custody until their 2026-12-31 sunset.
+      assertLegacyCurrent() {
+        assertCurrent();
+        for (const candidate of candidates) {
+          assertSessionStoreReadCandidate(candidate.path, [candidate]);
+        }
+      },
+      async revalidate() {
+        await prepareSessionStoreCandidatesInWorker({ validate: { candidates, sources } });
+        assertCurrent();
+      },
       selectPrepared(current) {
         return select(
           current.map((read) => ({
@@ -461,10 +465,9 @@ export async function loadGatewaySessionEntryReadOnlyInWorker(
   };
 }
 
-/** Retain the original lookup domain for a later synchronous admission predicate. */
+/** Retain lookup facts for async qualification and a synchronous admission predicate. */
 export async function prepareGatewaySessionEntryReadOnlyInWorker(
   params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],
-  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void,
 ): Promise<{
   loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   readPlan?: GatewaySessionEntryReadPlan;
@@ -476,7 +479,6 @@ export async function prepareGatewaySessionEntryReadOnlyInWorker(
       projection: params.projection ?? "full",
     },
     true,
-    onSelected,
   );
   params.assertActive?.();
   const select = (current: GatewaySessionStoreTargetWithStore) => {
@@ -498,6 +500,8 @@ export async function prepareGatewaySessionEntryReadOnlyInWorker(
     readPlan: readPlan && {
       reads: readPlan.reads,
       assertCurrent: readPlan.assertCurrent,
+      assertLegacyCurrent: readPlan.assertLegacyCurrent,
+      revalidate: readPlan.revalidate,
       selectPrepared: (reads) => select(readPlan.selectPrepared(reads))?.entry,
     },
   };

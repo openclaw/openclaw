@@ -23,17 +23,6 @@ export interface AppRegistrationResult {
   openId?: string;
 }
 
-interface InitResponse {
-  supported_auth_methods: string[];
-}
-
-interface RawBeginResponse {
-  device_code: string;
-  verification_uri_complete: string;
-  interval: number;
-  expire_in: number;
-}
-
 interface PollResponse {
   client_id?: string;
   client_secret?: string;
@@ -90,7 +79,9 @@ async function fetchFeishuJson<T>(params: {
 
 export async function initAppRegistration(domain: FeishuDomain = "feishu"): Promise<void> {
   const baseUrl = accountsBaseUrl(domain);
-  const res = await postRegistration<InitResponse>(baseUrl, { action: "init" });
+  const res = await postRegistration<{
+    supported_auth_methods: string[];
+  }>(baseUrl, { action: "init" });
 
   if (!res.supported_auth_methods?.includes("client_secret")) {
     throw new Error("Current environment does not support client_secret auth method");
@@ -103,7 +94,12 @@ export async function initAppRegistration(domain: FeishuDomain = "feishu"): Prom
  */
 export async function beginAppRegistration(domain: FeishuDomain = "feishu") {
   const baseUrl = accountsBaseUrl(domain);
-  const res = await postRegistration<RawBeginResponse>(baseUrl, {
+  const res = await postRegistration<{
+    device_code: string;
+    verification_uri_complete: string;
+    interval: number;
+    expire_in: number;
+  }>(baseUrl, {
     action: "begin",
     archetype: "PersonalAgent",
     auth_method: "client_secret",
@@ -149,9 +145,9 @@ export async function pollAppRegistration(params: {
 
   const expireInMs =
     finiteSecondsToTimerSafeMilliseconds(expireIn) ?? DEFAULT_REGISTRATION_EXPIRE_SECONDS * 1_000;
-  const deadline = Date.now() + expireInMs;
+  const deadline = performance.now() + expireInMs;
 
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (abortSignal?.aborted) {
       return { status: "timeout" };
     }

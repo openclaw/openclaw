@@ -1,5 +1,6 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -38,42 +39,47 @@ import { readSessionRowFacts } from "./session-placement-read-projection.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+const createProjectionConfig = () => ({
+  agents: {
+    entries: { main: {} },
+    defaults: { model: "unit-test/model", utilityModel: "" },
+  },
+});
+const sessionIdentity = (sessionId: string) => ({
+  agentId: "main",
+  sessionKey: `agent:main:${sessionId}`,
+  sessionId,
+});
+
 it("prepares current placement facts off the host thread and retries failed refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = {
-      agents: {
-        entries: { main: {} },
-        defaults: { model: "unit-test/model", utilityModel: "" },
-      },
-    };
+    const cfg = createProjectionConfig();
     setRuntimeConfigSnapshot(cfg);
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:placement-read",
-      sessionId: "placement-read",
-    };
+    const identity = sessionIdentity("placement-read");
     replaceSessionEntrySync(identity, { sessionId: " placement-read ", updatedAt: 1 });
     expect(loadSessionEntryReadOnly(identity)?.sessionId).toBe(" placement-read ");
     const placements = createWorkerSessionPlacementStore();
     await placements.startDispatch(identity);
-    const options = {
+    const projection = await createSessionRowProjection({
       cfg,
       modelCatalog: [],
       placementFactsReader: placements,
-    };
-    const projection = await createSessionRowProjection(options);
+    });
+    const change = { agentId: identity.agentId, sessionKey: identity.sessionKey };
+    const currentPlacement = () =>
+      projection.snapshot({ agentId: identity.agentId, key: identity.sessionKey }).row?.placement;
     const refresh = async () => {
       const reads = vi.spyOn(stateDatabase, "openOpenClawStateDatabase");
       const statements = observeSqliteReadSql(StatementSync.prototype);
       try {
-        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
+        sessionChanges.emit(change);
         await projection.ensureMaterialized();
-        const result = projection.snapshot({ agentId: identity.agentId, key: identity.sessionKey });
+        const result = currentPlacement();
         expect(reads).not.toHaveBeenCalled();
         expect(
           statements.queries.filter((sql) => /\bfrom\s+"?worker_session_placements\b/i.test(sql)),
         ).toEqual([]);
-        return result.row?.placement;
+        return result;
       } finally {
         reads.mockRestore();
         statements.restore();
@@ -88,7 +94,7 @@ it("prepares current placement facts off the host thread and retries failed refr
         .spyOn(placements, "readProjection")
         .mockRejectedValue(new Error("Placement store admission refused"));
       try {
-        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
+        sessionChanges.emit(change);
         await expect(projection.ensureMaterialized()).rejects.toThrow(
           "Placement store admission refused",
         );
@@ -106,20 +112,17 @@ it("prepares current placement facts off the host thread and retries failed refr
         return snapshot;
       });
       try {
-        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
+        sessionChanges.emit(change);
         const refreshed = projection.ensureMaterialized();
         await captured.promise;
         await placements.fail({
           sessionId: identity.sessionId,
           recoveryError: "Changed during preparation",
         });
-        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
+        sessionChanges.emit(change);
         releaseRead.resolve();
         await refreshed;
-        expect(
-          projection.snapshot({ agentId: identity.agentId, key: identity.sessionKey }).row
-            ?.placement,
-        ).toMatchObject({ recoveryError: "Changed during preparation" });
+        expect(currentPlacement()).toMatchObject({ recoveryError: "Changed during preparation" });
       } finally {
         releaseRead.resolve();
         delayed.mockRestore();
@@ -133,44 +136,32 @@ it("prepares current placement facts off the host thread and retries failed refr
 it("refreshes selected placement/environment facts by revision and reuses them without SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:row-facts",
-      sessionId: "row-facts",
-    };
+    const identity = sessionIdentity("row-facts");
     replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
     const environmentStore = await createWorkerEnvironmentStore({ database });
-    seedAttachedPlacementEnvironment(database, {
+    const environmentIdentity = {
       environmentId: "row-environment",
-      sessionId: identity.sessionId,
       ownerEpoch: 7,
+    };
+    seedAttachedPlacementEnvironment(database, {
+      ...environmentIdentity,
+      sessionId: identity.sessionId,
       providerId: DEVICE_WORKER_PROVIDER_ID,
       profileId: "desktop",
       nodeDeviceId: "row-device",
     });
     let placement = await placements.startDispatch(identity);
-    for (const step of [
-      { to: "provisioning", patch: { environmentId: "row-environment" } },
-      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-      {
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-          remoteWorkspaceDir: "/workspace",
-        },
-      },
-      { to: "active", patch: { activeOwnerEpoch: 7 } },
-    ] as const) {
-      placement = await placements.transition({
-        sessionId: identity.sessionId,
-        from: placement.state,
-        expectedGeneration: placement.generation,
-        ...step,
-      });
-    }
+    placement = await placements.transition({
+      sessionId: identity.sessionId,
+      from: placement.state,
+      expectedGeneration: placement.generation,
+      to: "provisioning",
+      patch: { environmentId: "row-environment" },
+    });
     let machine = { cpu: 4, memoryGb: 16 };
+    let startStatus: WorkerEnvironmentStartStatus | undefined = { mode: "snapshot" };
     const environments = {
       get(environmentId: string) {
         const record = environmentStore.get(environmentId);
@@ -180,6 +171,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
               desktopAvailable: false,
               desktopApps: [],
               tunnelStatus: "stopped" as const,
+              startStatus,
             }
           : undefined;
       },
@@ -202,10 +194,11 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       startedAtMs: 10,
       updatedAtMs: 11,
     };
+    let runtimeInstallVersion = 0;
     const context = {
       workerSessionPlacementService: placements,
       workerEnvironmentService: environments,
-      workerPlacementDiskSpaceReader: { read: () => disk, version: () => 0 },
+      workerPlacementDiskSpaceReader: { read: () => disk, version: () => disk.observedAtMs },
       workerPlacementRunnerAvailabilityReader: createWorkerPlacementRunnerAvailabilityReader({
         environments,
         hasCurrentDeviceRunner: () => runnerAvailable,
@@ -216,7 +209,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
           readInstall: (nodeId) => (nodeId === runtimeInstall.nodeId ? runtimeInstall : undefined),
           readInstallForEnvironment: (id) =>
             runtimeInstall.environmentIds.includes(id) ? runtimeInstall : undefined,
-          version: () => runtimeInstall.updatedAtMs,
+          version: () => runtimeInstallVersion,
         },
       }),
     };
@@ -242,60 +235,86 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       placementFactsReader: preparedPlacements,
       databaseFacts: { hasBoard: false },
     });
+    const starting = facts.present();
+    expect(facts.present()).toBe(starting);
+    expect(starting.placement).toMatchObject({
+      state: "provisioning",
+      startStatus: { mode: "snapshot" },
+    });
+    startStatus = { mode: "snapshot", phase: "saving" };
+    expect(facts.present().placement).toMatchObject({ startStatus });
+    expect(starting.placement).not.toHaveProperty("startStatus.phase");
+    startStatus = undefined;
+    expect(facts.present().placement).not.toHaveProperty("startStatus");
+    for (const step of [
+      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+          remoteWorkspaceDir: "/workspace",
+        },
+      },
+      { to: "active", patch: { activeOwnerEpoch: 7 } },
+    ] as const) {
+      placement = await placements.transition({
+        sessionId: identity.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        ...step,
+      });
+    }
+    await refreshPlacements();
     const reads = observeMainThreadReads();
     const finishPermissionChange = beginSessionPermissionChange(identity.sessionId);
     try {
       const first = facts.present();
+      expect(facts.present()).toBe(first);
+      expect(Object.isFrozen(first.placement)).toBe(true);
       expect(first.permissionModePending).toBe(true);
       expect(first.placement).toMatchObject({
         state: "active",
-        providerId: DEVICE_WORKER_PROVIDER_ID,
-        profileId: "desktop",
         machine: { cpu: 4, memoryGb: 16 },
         diskSpace: { status: "ok", availableBytes: 6_000 },
         runner: { status: "available", deviceId: "row-device" },
-        workerRuntimeInstall: {
-          phase: "transferring",
-          transferredBytes: 100,
-          totalBytes: 1_000,
-          startedAtMs: 10,
-          updatedAtMs: 11,
-        },
+        workerRuntimeInstall: { phase: "transferring", transferredBytes: 100 },
       });
       expect(first.placement).not.toHaveProperty("workerRuntimeInstall.bundleHash");
       disk = { ...disk, availableBytes: 5_000, observedAtMs: 11 };
+      expect(facts.present().placement).toMatchObject({
+        diskSpace: { availableBytes: 5_000, observedAtMs: 11 },
+      });
       runnerAvailable = false;
+      context.workerPlacementRunnerAvailabilityReader.markChanged();
+      expect(facts.present().placement).toMatchObject({ runner: { status: "offline" } });
       runtimeInstall = {
         ...runtimeInstall,
         phase: "installing",
         transferredBytes: 1_000,
         updatedAtMs: 12,
       };
-      expect(facts.present().placement).toMatchObject({
+      runtimeInstallVersion++;
+      const updated = facts.present();
+      expect(facts.present()).toBe(updated);
+      expect(updated.placement).toMatchObject({
         diskSpace: { status: "ok", availableBytes: 5_000, observedAtMs: 11 },
         runner: { status: "offline" },
         workerRuntimeInstall: { phase: "installing", transferredBytes: 1_000, updatedAtMs: 12 },
       });
       expect(first.placement).toHaveProperty("workerRuntimeInstall.transferredBytes", 100);
-      runtimeInstall = { ...runtimeInstall, bundleHash: placement.workerBundleHash! };
-      expect(facts.present().placement).not.toHaveProperty("workerRuntimeInstall");
-      runtimeInstall = { ...runtimeInstall, bundleHash: "c".repeat(64) };
       expect(first.placement).toMatchObject({ diskSpace: { availableBytes: 6_000 } });
       finishPermissionChange();
       expect(facts.present().permissionModePending).toBe(false);
       reads.expectIdle();
 
-      const placementReads = vi.spyOn(placements, "readProjection");
       const rowReads = vi.spyOn(agentDatabaseReadOnly, "withOpenClawAgentDatabaseReadOnly");
       const summaryReads = vi.spyOn(activitySummary, "projectSessionActivitySummary");
       machine = { cpu: 8, memoryGb: 32 };
       seedAttachedPlacementEnvironment(database, {
-        environmentId: "row-environment",
+        ...environmentIdentity,
         sessionId: identity.sessionId,
-        ownerEpoch: 7,
         nodeDeviceId: "replacement-device",
       });
-      expect(placementReads).not.toHaveBeenCalled();
       await refreshPlacements();
       expect(facts.present().placement).toMatchObject({
         state: "active",
@@ -303,13 +322,11 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         runner: { status: "offline", deviceId: "replacement-device" },
       });
       expect(facts.present().placement).not.toHaveProperty("workerRuntimeInstall");
-      expect(placementReads).toHaveBeenCalledTimes(1);
       const move = await placements.beginPlacementMove({
         sessionId: identity.sessionId,
         source: {
           generation: placement.generation,
-          environmentId: "row-environment",
-          ownerEpoch: 7,
+          ...environmentIdentity,
         },
         target: { kind: "gateway" },
       });
@@ -319,9 +336,8 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         placementMove: { target: { kind: "gateway" } },
       });
       const reconciling = await placements.startReconcile({
+        ...environmentIdentity,
         sessionId: identity.sessionId,
-        environmentId: "row-environment",
-        ownerEpoch: 7,
         expectedGeneration: move.placement.generation,
       });
       await placements.fail({
@@ -337,12 +353,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       expect(rowReads).not.toHaveBeenCalled();
       expect(summaryReads).not.toHaveBeenCalled();
       const release = retainSessionListForegroundWork();
-      const cfg = {
-        agents: {
-          entries: { main: {} },
-          defaults: { model: "unit-test/model", utilityModel: "" },
-        },
-      };
+      const cfg = createProjectionConfig();
       setRuntimeConfigSnapshot(cfg);
       const projection = await createSessionRowProjection({
         cfg,

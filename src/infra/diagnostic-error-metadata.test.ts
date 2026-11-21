@@ -11,6 +11,10 @@ function throwingGetter(): never {
   throw new Error("should not read getter");
 }
 
+function withThrowingGetters(...keys: string[]): object {
+  return Object.create(null, Object.fromEntries(keys.map((key) => [key, { get: throwingGetter }])));
+}
+
 describe("diagnostic error metadata", () => {
   it("returns stable categories without reading mutable Error.name", () => {
     const namedFailure = new Error("bad");
@@ -28,16 +32,13 @@ describe("diagnostic error metadata", () => {
     expect(diagnosticErrorMessage("   ")).toBeUndefined();
   });
 
-  it("does not invoke message getters", () => {
-    const errorLike = Object.create(null, {
-      message: {
-        get() {
-          throw new Error("getter must not run");
-        },
-      },
-    });
-
-    expect(diagnosticErrorMessage(errorLike)).toBeUndefined();
+  it.each([
+    ["message", diagnosticErrorMessage, ["message"]],
+    ["status", diagnosticHttpStatusCode, ["status"]],
+    ["request id", diagnosticProviderRequestIdHash, ["requestId"]],
+    ["failure kind", diagnosticErrorFailureKind, ["code", "message"]],
+  ] as const)("does not invoke %s getters", (_name, extract, keys) => {
+    expect(extract(withThrowingGetters(...keys))).toBeUndefined();
   });
 
   it("accepts only own HTTP status data properties as error codes", () => {
@@ -46,17 +47,6 @@ describe("diagnostic error metadata", () => {
     expect(diagnosticHttpStatusCode({ code: "SECRET_TOKEN" })).toBeUndefined();
     expect(diagnosticHttpStatusCode({ status: 99 })).toBeUndefined();
     expect(diagnosticHttpStatusCode({ status: "https://example.invalid/secret" })).toBeUndefined();
-  });
-
-  it("does not invoke throwing getters while extracting status codes", () => {
-    const errorLike = {};
-    Object.defineProperty(errorLike, "status", {
-      get() {
-        throw new Error("should not read getter");
-      },
-    });
-
-    expect(diagnosticHttpStatusCode(errorLike)).toBeUndefined();
   });
 
   it("contains proxy traps during extraction", () => {
@@ -76,17 +66,6 @@ describe("diagnostic error metadata", () => {
     ).toBeUndefined();
   });
 
-  it("does not invoke throwing getters while extracting provider request ids", () => {
-    const errorLike = {};
-    Object.defineProperty(errorLike, "requestId", {
-      get() {
-        throw new Error("should not read getter");
-      },
-    });
-
-    expect(diagnosticProviderRequestIdHash(errorLike)).toBeUndefined();
-  });
-
   it("classifies low-cardinality transport failure kinds without exposing messages", () => {
     expect(diagnosticErrorFailureKind(new Error("terminated"))).toBe("terminated");
     expect(
@@ -102,13 +81,5 @@ describe("diagnostic error metadata", () => {
     );
     expect(diagnosticErrorFailureKind(new Error("operation was aborted"))).toBe("aborted");
     expect(diagnosticErrorFailureKind(new Error("provider rejected the request"))).toBeUndefined();
-  });
-
-  it("does not invoke throwing getters while classifying failure kinds", () => {
-    const errorLike = {};
-    for (const key of ["code", "message"]) {
-      Object.defineProperty(errorLike, key, { get: throwingGetter });
-    }
-    expect(diagnosticErrorFailureKind(errorLike)).toBeUndefined();
   });
 });

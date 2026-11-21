@@ -83,6 +83,9 @@ type ChannelSecretCollectorParams = {
 /** Keeps registry discovery and account-surface resolution shared while channels own activation. */
 export function createChannelSecretContract(
   params: Parameters<typeof createChannelSecretTargetRegistryEntries>[0] & {
+    hasImplicitDefaultAccount?: (
+      params: ChannelSecretCollectorParams & { channel: Record<string, unknown> },
+    ) => boolean;
     collect: (
       params: ChannelSecretCollectorParams & {
         channelKey: string;
@@ -99,14 +102,18 @@ export function createChannelSecretContract(
       this: void,
       collectorParams: ChannelSecretCollectorParams,
     ): void {
-      const resolved = getChannelSurface(collectorParams.config, params.channelKey);
-      if (!resolved) {
+      const channel = getChannelRecord(collectorParams.config, params.channelKey);
+      if (!channel) {
         return;
       }
       params.collect({
         ...collectorParams,
         channelKey: params.channelKey,
-        ...resolved,
+        channel,
+        surface: resolveChannelAccountSurface(
+          channel,
+          params.hasImplicitDefaultAccount?.({ ...collectorParams, channel }),
+        ),
         defaults: collectorParams.defaults,
       });
     },
@@ -266,6 +273,7 @@ export function getChannelSurface(
 /** Resolves explicit channel accounts or creates a default account backed by the channel root. */
 export function resolveChannelAccountSurface(
   channel: Record<string, unknown>,
+  hasImplicitDefaultAccount = false,
 ): ChannelAccountSurface {
   const channelEnabled = isEnabledFlag(channel);
   const accounts = channel.accounts;
@@ -286,6 +294,12 @@ export function resolveChannelAccountSurface(
       account,
       enabled: isChannelAccountEffectivelyEnabled(channel, account),
     });
+  }
+  if (
+    hasImplicitDefaultAccount &&
+    !Object.keys(accounts).some((accountId) => normalizeAccountId(accountId) === "default")
+  ) {
+    accountEntries.push({ accountId: "default", account: {}, enabled: channelEnabled });
   }
   return {
     hasExplicitAccounts: true,

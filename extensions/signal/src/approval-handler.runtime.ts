@@ -47,13 +47,7 @@ type SignalFinalPayload = {
   text: string;
 };
 
-type SignalApprovalRuntimeContext = {
-  baseUrl?: string;
-  account?: string;
-  accountUuid?: string;
-};
-
-function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRuntimeContext {
+function readSignalApprovalRuntimeContext(context: unknown) {
   const value = context as
     | { baseUrl?: unknown; account?: unknown; accountUuid?: unknown }
     | null
@@ -202,12 +196,8 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         targetAuthorKeys: entry.targetAuthorKeys,
         route: {
           deliveryMode: "session",
-          ...(normalizeOptionalString(request.request.agentId)
-            ? { agentId: normalizeOptionalString(request.request.agentId) }
-            : {}),
-          ...(normalizeOptionalString(request.request.sessionKey)
-            ? { sessionKey: normalizeOptionalString(request.request.sessionKey) }
-            : {}),
+          agentId: request.request.agentId ?? undefined,
+          sessionKey: request.request.sessionKey ?? undefined,
         },
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       }))

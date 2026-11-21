@@ -23,7 +23,6 @@ describe("cron request validation", () => {
         cronEnabled: false,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn().mockRejectedValue(new Error("unexpected run")),
       });
       const add = vi.spyOn(cron, "add").mockRejectedValue(new Error("unexpected mutation"));

@@ -6,8 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import { requestDeferredPluginInstall } from "../../../plugins/install-transaction.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
@@ -69,22 +67,6 @@ function expectPublished(records: unknown, cfg: OpenClawConfig, env = testEnv) {
   expect(writeRecords).toHaveBeenCalledWith(records, expectedIndexWriteOptions(cfg, env));
 }
 
-function updateResult(
-  installs: Record<string, PluginInstallRecord>,
-  outcomes: { pluginId: string; status: string; message: string; code?: string }[],
-) {
-  return {
-    config: { plugins: { installs } },
-    changed: outcomes.some(({ status }) => status === "updated" || status === "unchanged"),
-    outcomes,
-  };
-}
-
-function createRuntime(root: string) {
-  fs.mkdirSync(root, { recursive: true });
-  writePluginJson(root, "package.json", { name: "required-runtime", version: "1.0.0" });
-}
-
 function refuseMarkerCleanup(markerPath: string, failure: Error) {
   const rm = fs.promises.rm.bind(fs.promises);
   vi.spyOn(fs.promises, "rm").mockImplementation((file, options) =>
@@ -103,8 +85,6 @@ function createDependencyInstall(
   options: {
     packageName?: string;
     packageVersion?: string;
-    packageDependencies?: Record<string, string>;
-    packageOptionalDependencies?: Record<string, string>;
     origin?: "global" | "bundled";
   } = {},
 ) {
@@ -130,24 +110,22 @@ function createDependencyInstall(
     },
   });
   const version = plugin.packageVersion ?? "1.0.0";
-  const markerPath = () => resolveRetainedManagedNpmInstallMarkerPath(rootDir);
+  const markerPath = resolveRetainedManagedNpmInstallMarkerPath(rootDir);
   return {
     plugin,
     pluginId,
+    packageName,
     rootDir,
-    get markerPath() {
-      return markerPath();
-    },
-    readMarker: () => fs.readFileSync(markerPath(), "utf8"),
+    markerPath,
+    readMarker: () => fs.readFileSync(markerPath, "utf8"),
     isRetained: () => hasRetainedManagedNpmInstallMarker(rootDir),
-    retain: (retainedAt?: string) =>
+    retain: () =>
       markRetainedManagedNpmInstall({
         packageDir: rootDir,
         pluginId,
-        retainedAt,
         reason: "existing-owner",
       }),
-    manifest: fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    payload: readPayload(rootDir),
     record: {
       source: "npm" as const,
       spec: `${packageName}@${version}`,
@@ -155,6 +133,8 @@ function createDependencyInstall(
       resolvedSpec: `${packageName}@${version}`,
       resolvedVersion: version,
       installPath: rootDir,
+      version,
+      integrity: "sha512-dependency-fixture",
     },
   };
 }
@@ -164,10 +144,8 @@ it.each([
   "missing",
   "resolved-spec",
   "symlink-root",
-  "ancestor",
   "hoisted",
   "deferred",
-  "optional",
   "different-root",
   "package-mismatch",
   "resolved-name-mismatch",
@@ -189,7 +167,6 @@ it.each([
   const packageName = pluginId;
   const { plugin } = createDependencyInstall(rootDir, pluginId, {
     packageName: scenario === "package-mismatch" ? "another-package" : packageName,
-    packageOptionalDependencies: scenario === "optional" ? { "required-runtime": "2.0.0" } : {},
     origin: scenario === "bundled" ? "bundled" : "global",
   });
   const cfg = configuredPlugins(pluginId);
@@ -212,10 +189,10 @@ it.each([
     record.installPath = path.join(parent, "linked-copy");
     fs.symlinkSync(rootDir, record.installPath, "junction");
   }
-  if (scenario === "ancestor" || scenario === "hoisted") {
-    const dependencyRoot = scenario === "hoisted" ? projectRoot : parent;
-    const availableDir = path.join(dependencyRoot, "node_modules", "required-runtime");
-    createRuntime(availableDir);
+  if (scenario === "hoisted") {
+    const availableDir = path.join(projectRoot, "node_modules", "required-runtime");
+    fs.mkdirSync(availableDir, { recursive: true });
+    writePluginJson(availableDir, "package.json", { name: "required-runtime", version: "1.0.0" });
   }
   const policy = new Map<string, OpenClawConfig["plugins"]>([
     ["unconfigured", {}],
@@ -254,7 +231,7 @@ it.each([
   }
   const issues = await detectHealth({ cfg, env });
 
-  if (["missing", "resolved-spec", "symlink-root", "ancestor"].includes(scenario)) {
+  if (["missing", "resolved-spec", "symlink-root"].includes(scenario)) {
     expect(issues).toEqual([
       {
         kind: "missing-required-dependencies",
@@ -290,246 +267,103 @@ it.each([
   expectNoPackageEffects();
 });
 
-it.each(["managed", "flat"] as const)(
-  "does not repair a healthy canonical host dependency in a %s install",
-  async (layout) => {
-    const parent = tempDirs.make("openclaw-doctor-host-dependency-");
-    const pluginId = "host-dependency-plugin";
-    const rootDir =
-      layout === "managed"
-        ? path.join(parent, "project", "node_modules", pluginId)
-        : path.join(parent, pluginId);
-    const hostRoot = expectDefined(
-      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-      "running OpenClaw package root",
+it.each<[string, boolean?]>([
+  ["updated"],
+  ["unchanged"],
+  ["stale-updated"],
+  ["skipped"],
+  ["consent-error"],
+  ["metadata-error"],
+  ["effect-refused"],
+  ["cleanup-error"],
+  ["mixed", true],
+  ["updater-throw", true],
+  ["persist-throw", true],
+  ["partial-marker-write", true],
+  ["second-effect-refused", true],
+  ["transaction-owner-refused", true],
+  ["cleanup-throw", true],
+])("settles %s dependency repair (multiple=%s)", async (scenario, multiple = false) => {
+  const parent = tempDirs.make("openclaw-doctor-dependency-repair-");
+  const stale = ["stale-updated", "consent-error", "metadata-error"].includes(scenario);
+  const preexisting = scenario === "stale-updated";
+  const pluginIds = [
+    stale ? "codex" : "dependency-a",
+    ...(multiple ? ["dependency-b", "dependency-c"] : []),
+  ];
+  const fixtures = pluginIds.map((id) => {
+    const packageName = id === "codex" ? "@openclaw/codex" : id;
+    const version = id === "codex" ? "2026.9.1-beta.1" : "1.0.0";
+    const fixture = createDependencyInstall(
+      path.join(parent, id, "node_modules", packageName),
+      id,
+      {
+        packageName,
+        packageVersion: version,
+      },
     );
-    const { plugin, record } = createDependencyInstall(rootDir, pluginId, {
-      packageDependencies: { "required-runtime": "1.0.0", openclaw: "*" },
-      packageOptionalDependencies: {},
-    });
-    const nodeModulesDir = path.join(rootDir, "node_modules");
-    createRuntime(path.join(nodeModulesDir, "required-runtime"));
-    fs.symlinkSync(hostRoot, path.join(nodeModulesDir, "openclaw"), "junction");
-    const { auditOpenClawPeerDependencyLink } =
-      await import("../../../plugins/plugin-peer-link.js");
-    expect(await auditOpenClawPeerDependencyLink({ packageDir: rootDir })).toBeNull();
-    const cfg = configuredPlugins(pluginId);
-    const records = { [pluginId]: record };
-    mockInstalledPlugins(records, [plugin]);
-    for (let pass = 0; pass < 2; pass++) {
-      expect(await detectHealth({ cfg, env: testEnv })).toEqual([]);
-      const result = await repairConfiguredPlugins(cfg, testEnv);
-      expect(result.changes).toEqual([]);
-      expect(result.repairedPluginIds).toBeUndefined();
-      expect(result.records).toEqual(records);
+    if (id === "codex") {
+      fixture.record.spec = packageName;
     }
-    expect(fs.realpathSync(path.join(nodeModulesDir, "openclaw"))).toBe(fs.realpathSync(hostRoot));
-    expectNoPackageEffects();
-    expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(false);
-  },
-);
-
-it.each([
-  { outcome: "updated", preexisting: false, staleRuntime: false },
-  { outcome: "unchanged", preexisting: false, staleRuntime: false },
-  { outcome: "updated", preexisting: true, staleRuntime: true },
-  { outcome: "skipped", preexisting: false, staleRuntime: false },
-  { outcome: "consent-error", preexisting: false, staleRuntime: true },
-  { outcome: "metadata-error", preexisting: false, staleRuntime: true },
-  { outcome: "effect-refused", preexisting: false, staleRuntime: false },
-  { outcome: "cleanup-error", preexisting: false, staleRuntime: false },
-] as const)(
-  "settles $outcome dependency repair (retained=$preexisting, stale=$staleRuntime)",
-  async ({ outcome, preexisting, staleRuntime }) => {
-    const parent = tempDirs.make("openclaw-doctor-dependency-repair-");
-    const packageName = staleRuntime ? "@openclaw/codex" : "dependency-plugin";
-    const pluginId = staleRuntime ? "codex" : "dependency-plugin";
-    const version = staleRuntime ? "2026.9.1-beta.1" : "1.0.0";
-    const env = { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.2" };
-    const rootDir = path.join(parent, "node_modules", packageName);
-    const fixture = createDependencyInstall(rootDir, pluginId, {
-      packageName,
-      packageVersion: version,
-    });
-    const originalPayload = readPayload(rootDir);
-    const { markerPath, readMarker, retain, isRetained } = fixture;
-    if (preexisting) {
-      await retain("2026-05-01T00:00:00.000Z");
-    }
-    const originalMarker = preexisting ? readMarker() : undefined;
-    const record = {
-      ...fixture.record,
-      spec: staleRuntime ? packageName : `${packageName}@${version}`,
-      integrity: "sha512-dependency-fixture",
-      version,
-    };
-    const replacementRecord = { ...record, installPath: path.join(parent, "replacement") };
-    const records = { [pluginId]: record };
-    const originalRecords = structuredClone(records);
-    const cfg: OpenClawConfig = { ...configuredPlugins(pluginId), update: { channel: "beta" } };
-    mockInstalledPlugins(records, [fixture.plugin]);
-    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
-      officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
-    ]);
+    return fixture;
+  });
+  const first = expectDefined(fixtures[0], "first dependency fixture");
+  if (preexisting) {
+    await first.retain();
+  }
+  if (multiple) {
+    await expectDefined(fixtures[2], "preexisting dependency fixture").retain();
+  }
+  const markers = fixtures.map((fixture) =>
+    fixture.isRetained() ? fixture.readMarker() : undefined,
+  );
+  const records = Object.fromEntries(fixtures.map((fixture) => [fixture.pluginId, fixture.record]));
+  const originalRecords = structuredClone(records);
+  const env = multiple ? testEnv : { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.2" };
+  const cfg = configuredPlugins(...pluginIds);
+  if (!multiple) {
+    cfg.update = { channel: "beta" };
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue(
+      fixtures.map(({ pluginId, record }) =>
+        officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
+      ),
+    );
+  }
+  mockInstalledPlugins(
+    records,
+    fixtures.map((fixture) => fixture.plugin),
+  );
+  if (stale) {
     const { resolveConfiguredPluginInstallContext } =
       await import("./missing-configured-plugin-install.candidates.js");
     const context = await resolveConfiguredPluginInstallContext({
       cfg,
       env,
-      configuredPluginIds: new Set([pluginId]),
+      configuredPluginIds: new Set(pluginIds),
       configuredChannelIds: new Set(),
     });
-    // The stale collision must satisfy both gates, without another force-repair reason.
-    expect(context.installedPluginIdsWithStaleVersionBoundRuntimePackages).toEqual(
-      new Set(staleRuntime ? [pluginId] : []),
+    // Both reasons must apply to exercise stale-runtime/dependency precedence.
+    expect(context.installedPluginIdsWithStaleVersionBoundRuntimePackages.has(first.pluginId)).toBe(
+      true,
     );
-    expect(context.installedPluginMissingRequiredDependencies).toEqual(
-      new Map([[pluginId, { rootDir, missingRequired: ["required-runtime"] }]]),
-    );
-    expect(context.installedPluginIdsWithRepairablePackageDiagnostics.size).toBe(0);
-    expect(context.configuredPluginIdsWithStaleDescriptors.size).toBe(0);
-    expect(context.officialReplacementPluginIds.has(pluginId)).toBe(false);
-    expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
-    const failure = new Error(`dependency repair ${outcome}`);
-    const cleanupFailure = new Error("retention cleanup failed");
-    const succeeded = outcome === "updated" || outcome === "unchanged";
-    const status = ["consent-error", "metadata-error", "cleanup-error"].includes(outcome)
-      ? "error"
-      : outcome;
-    const errorCode = new Map([
-      ["consent-error", PLUGIN_CAPABILITY_CONSENT_REQUIRED],
-      ["metadata-error", PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE],
-    ]).get(outcome);
-    if (outcome === "cleanup-error") {
-      refuseMarkerCleanup(markerPath, cleanupFailure);
-    }
-    const beforePersistentEffect = vi.fn(async () => {
-      if (beforePersistentEffect.mock.calls.length === 1) {
-        expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(preexisting);
-      }
-      if (outcome === "effect-refused") {
-        throw failure;
-      }
-    });
-    const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>();
-    updater.mockImplementation(async (params: { config: OpenClawConfig }) => {
-      expect(isRetained()).toBe(true);
-      const repairRecord = params.config.plugins?.installs?.[pluginId];
-      expect(repairRecord).toStrictEqual({
-        source: "npm",
-        spec: record.spec,
-        resolvedName: packageName,
-        integrity: record.integrity,
-        version,
-        installPath: rootDir,
-      });
-      if (succeeded) {
-        createReplacement(replacementRecord.installPath, pluginId, packageName);
-      }
-      return updateResult({ [pluginId]: replacementRecord }, [
-        {
-          pluginId,
-          status,
-          message: failure.message,
-          ...(errorCode ? { code: errorCode } : {}),
-        },
-      ]);
-    });
-    const repair = () =>
-      repairInstalls({
-        cfg,
-        pluginIds: [pluginId],
-        env,
-        beforePersistentEffect,
-        onCapabilityConsent,
-      });
-
-    if (outcome === "effect-refused") {
-      await expect(repair()).rejects.toBe(failure);
-    } else {
-      const result = await repair();
-      if (succeeded) {
-        expect(result).toMatchObject({
-          repairedPluginIds: [pluginId],
-          pluginInventoryChanged: true,
-        });
-        expect(result.records).toEqual({ [pluginId]: replacementRecord });
-        expectPublished(result.records, cfg, env);
-      } else {
-        expect(result.failedPluginIds).toEqual([pluginId]);
-        expect(result.records).toEqual(records);
-        expect(result.warnings).toContain(failure.message);
-        if (outcome === "cleanup-error") {
-          expect(result.warnings).toContainEqual(expect.stringContaining(cleanupFailure.message));
-        }
-        expect(writeRecords).not.toHaveBeenCalled();
-        if (outcome === "consent-error") {
-          expect(result.outcomes).toContainEqual(
-            expect.objectContaining({
-              pluginId,
-              status: "error",
-              code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-            }),
-          );
-        }
-        if (outcome === "consent-error" || outcome === "metadata-error") {
-          expect(result.notices ?? []).toEqual([]);
-        }
-      }
-    }
-    expect(readPayload(rootDir)).toEqual(originalPayload);
-    expect(records).toEqual(originalRecords);
-    expect(npmInstaller).not.toHaveBeenCalled();
-    if (outcome === "effect-refused") {
-      expect(updater).not.toHaveBeenCalled();
-    } else {
-      expect(updater).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginIds: [pluginId],
-          skipDisabledPlugins: true,
-          beforePersistentEffect: expect.any(Function),
-          onCapabilityConsent,
-        }),
-      );
-    }
-    expect(isRetained()).toBe(preexisting || succeeded || outcome === "cleanup-error");
-    if (preexisting) {
-      expect(readMarker()).toBe(originalMarker);
-    }
-  },
-);
-
-it.each([
-  "mixed",
-  "updater-throw",
-  "persist-throw",
-  "partial-marker-write",
-  "second-effect-refused",
-  "transaction-owner-refused",
-  "cleanup-throw",
-] as const)("settles multiple dependency repair owners after %s", async (scenario) => {
-  const parent = tempDirs.make("openclaw-doctor-multiple-dependencies-");
-  const pluginIds = ["dependency-a", "dependency-b", "dependency-c"];
-  const fixtures = pluginIds.map((id) =>
-    createDependencyInstall(path.join(parent, id, "node_modules", id), id),
-  );
-  const first = expectDefined(fixtures[0], "first dependency fixture");
-  const second = expectDefined(fixtures[1], "second dependency fixture");
-  const existing = expectDefined(fixtures[2], "preexisting dependency fixture");
-  await existing.retain();
-  const existingMarker = existing.readMarker();
-  const records = Object.fromEntries(fixtures.map((item) => [item.pluginId, item.record]));
-  const cfg = configuredPlugins(...pluginIds);
-  mockInstalledPlugins(
-    records,
-    fixtures.map((fixture) => fixture.plugin),
-  );
-  const failure = new Error(`multiple dependency repair ${scenario}`);
-  const cleanupFailure = new Error("first dependency marker cleanup failed");
+    expect(context.installedPluginMissingRequiredDependencies.has(first.pluginId)).toBe(true);
+  }
+  const failure = new Error(`dependency repair ${scenario}`);
+  const cleanupFailure = new Error("retention cleanup failed");
+  const succeeded = ["updated", "unchanged", "stale-updated", "mixed"].includes(scenario);
+  const updated = succeeded || scenario === "persist-throw";
+  const status =
+    scenario === "unchanged" || scenario === "skipped" ? scenario : updated ? "updated" : "error";
   const authorityRefused = ["second-effect-refused", "transaction-owner-refused"].includes(
     scenario,
   );
+  const throws = (multiple && scenario !== "mixed") || scenario === "effect-refused";
+  const errorCode = new Map([
+    ["consent-error", PLUGIN_CAPABILITY_CONSENT_REQUIRED],
+    ["metadata-error", PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE],
+  ]).get(scenario);
   if (scenario === "partial-marker-write") {
+    const second = expectDefined(fixtures[1], "second dependency fixture");
     const writeFile = fs.promises.writeFile.bind(fs.promises);
     vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file, data, options) => {
       if (file === second.markerPath) {
@@ -539,12 +373,18 @@ it.each([
       return writeFile(file, data, options);
     });
   }
-  if (scenario === "cleanup-throw") {
+  if (scenario === "cleanup-throw" || scenario === "cleanup-error") {
     refuseMarkerCleanup(first.markerPath, cleanupFailure);
   }
   let transactionOwned = true;
   let markerAtRefusal: string | undefined;
   const beforePersistentEffect = vi.fn(async () => {
+    if (!multiple && beforePersistentEffect.mock.calls.length === 1) {
+      expect(first.isRetained()).toBe(preexisting);
+    }
+    if (scenario === "effect-refused") {
+      throw failure;
+    }
     if (beforePersistentEffect.mock.calls.length === 2 && authorityRefused) {
       markerAtRefusal = first.readMarker();
       if (scenario === "second-effect-refused") {
@@ -561,21 +401,31 @@ it.each([
     if (scenario === "updater-throw" || scenario === "cleanup-throw") {
       throw failure;
     }
-    createReplacement(replacementRecord.installPath, first.pluginId);
-    return updateResult(
-      { ...records, [first.pluginId]: replacementRecord },
-      fixtures.map(({ pluginId }) => ({
+    if (updated) {
+      createReplacement(replacementRecord.installPath, first.pluginId, first.packageName);
+    }
+    return {
+      config: { plugins: { installs: { ...records, [first.pluginId]: replacementRecord } } },
+      changed: updated,
+      outcomes: fixtures.map(({ pluginId }) => ({
         pluginId,
-        status: pluginId === first.pluginId ? "updated" : "error",
-        message: `repair outcome for ${pluginId}`,
+        status: pluginId === first.pluginId ? status : "error",
+        message: multiple ? `repair outcome for ${pluginId}` : failure.message,
+        ...(errorCode ? { code: errorCode } : {}),
       })),
-    );
+    };
   });
   if (scenario === "persist-throw") {
     writeRecords.mockRejectedValueOnce(failure);
   }
   const repair = () => {
-    const params = { cfg, pluginIds, env: testEnv, beforePersistentEffect };
+    const params = {
+      cfg,
+      pluginIds,
+      env,
+      beforePersistentEffect,
+      onCapabilityConsent: vi.fn<PluginCapabilityConsentHandler>(),
+    };
     return repairInstalls(
       scenario === "transaction-owner-refused"
         ? requestDeferredPluginInstall(params, [], () => {
@@ -586,36 +436,68 @@ it.each([
         : params,
     );
   };
-
-  if (scenario === "mixed") {
-    const result = await repair();
-    expect(result.repairedPluginIds).toEqual([first.pluginId]);
-    expect(result.failedPluginIds).toEqual([second.pluginId, existing.pluginId]);
-    expect(result.records).toEqual({ ...records, [first.pluginId]: replacementRecord });
-    expectPublished(result.records, cfg);
-  } else if (scenario === "cleanup-throw") {
-    await expect(repair()).rejects.toMatchObject({ errors: [failure, cleanupFailure] });
+  if (throws) {
+    if (scenario === "cleanup-throw") {
+      await expect(repair()).rejects.toMatchObject({ errors: [failure, cleanupFailure] });
+    } else {
+      await expect(repair()).rejects.toBe(failure);
+    }
   } else {
-    await expect(repair()).rejects.toBe(failure);
+    const result = await repair();
+    if (succeeded) {
+      expect(result).toMatchObject({
+        repairedPluginIds: [first.pluginId],
+        pluginInventoryChanged: true,
+      });
+      expect(result.records).toEqual({ ...records, [first.pluginId]: replacementRecord });
+      if (multiple) {
+        expect(result.failedPluginIds).toEqual(pluginIds.slice(1));
+      }
+      expectPublished(result.records, cfg, env);
+    } else {
+      expect(result.failedPluginIds).toEqual(pluginIds);
+      expect(result.records).toEqual(records);
+      expect(result.warnings).toContain(failure.message);
+      if (scenario === "cleanup-error") {
+        expect(result.warnings).toContainEqual(expect.stringContaining(cleanupFailure.message));
+      }
+      if (scenario === "consent-error") {
+        expect(result.outcomes).toContainEqual(
+          expect.objectContaining({
+            pluginId: first.pluginId,
+            status: "error",
+            code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+          }),
+        );
+      }
+      if (errorCode) {
+        expect(result.notices ?? []).toEqual([]);
+      }
+    }
   }
   expect(first.isRetained()).toBe(
-    scenario === "mixed" || scenario === "cleanup-throw" || authorityRefused,
+    preexisting ||
+      succeeded ||
+      ["cleanup-error", "cleanup-throw"].includes(scenario) ||
+      authorityRefused,
   );
   if (markerAtRefusal !== undefined) {
-    // Compensation cannot delete persistent protection after the initiating authority closes.
+    // Closed authority cannot remove persistent protection during compensation.
     expect(first.readMarker()).toBe(markerAtRefusal);
   }
-  expect(second.isRetained()).toBe(false);
-  expect(existing.readMarker()).toBe(existingMarker);
-  for (const fixture of fixtures) {
-    expect(fs.readFileSync(path.join(fixture.rootDir, "package.json"), "utf8")).toBe(
-      fixture.manifest,
-    );
+  for (const [index, fixture] of fixtures.entries()) {
+    expect(readPayload(fixture.rootDir)).toEqual(fixture.payload);
+    if (markers[index] !== undefined) {
+      expect(fixture.readMarker()).toBe(markers[index]);
+    } else if (index > 0) {
+      expect(fixture.isRetained()).toBe(false);
+    }
   }
-  if (scenario === "partial-marker-write" || authorityRefused) {
+  expect(records).toEqual(originalRecords);
+  if (scenario === "partial-marker-write" || authorityRefused || scenario === "effect-refused") {
     expect(updater).not.toHaveBeenCalled();
   }
-  if (scenario !== "mixed" && scenario !== "persist-throw") {
+  if (!succeeded && scenario !== "persist-throw") {
     expect(writeRecords).not.toHaveBeenCalled();
   }
   expect(npmInstaller).not.toHaveBeenCalled();

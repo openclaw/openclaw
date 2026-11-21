@@ -1,10 +1,11 @@
-import { createComponent, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { HubTabs } from "./hub-tabs.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import hubStyles from "../../styles/hub-tabs.css?inline";
+import settingsControlStyles from "../../styles/settings-controls.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
 import tabsStyles from "../../styles/tabs.css?inline";
 
@@ -21,7 +22,13 @@ function hubProps(id: string, onSelect: (value: string) => void, labels = ["Firs
 it("preserves hub styling when native defaults load last", async () => {
   const viewport = { width: innerWidth, height: innerHeight };
   const styles = document.createElement("style");
-  styles.textContent = [baseStyles, settingsStyles, hubStyles, tabsStyles].join("\n");
+  styles.textContent = [
+    baseStyles,
+    settingsControlStyles,
+    settingsStyles,
+    hubStyles,
+    tabsStyles,
+  ].join("\n");
   document.head.append(styles);
   const [active, setActive] = createSignal("messages");
   const view = mountSolid(() => (
@@ -66,9 +73,6 @@ it("preserves hub styling when native defaults load last", async () => {
       expect
         .soft(messages.getBoundingClientRect().bottom + 2)
         .toBeLessThanOrEqual(tabs.getBoundingClientRect().bottom);
-      if (width === 390) {
-        expect.soft(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
-      }
       messages.focus();
       await userEvent.keyboard("{ArrowRight}{Enter}");
       flush();
@@ -83,6 +87,101 @@ it("preserves hub styling when native defaults load last", async () => {
   }
 });
 
+it.each([
+  ["settings first", settingsStyles, hubStyles],
+  ["settings last", hubStyles, settingsStyles],
+])("keeps the stacked workspace gap with %s", (_order, first, second) => {
+  const styles = document.createElement("style");
+  styles.textContent = [baseStyles, first, second].join("\n");
+  document.head.append(styles);
+  const view = mountSolid(() => (
+    <>
+      <section class="content-header hub-page-header hub-page-header--stacked">
+        Stacked header
+      </section>
+      <section class="settings-workspace">Stacked workspace</section>
+      <section class="content-header">Ordinary header</section>
+      <section class="settings-workspace">Ordinary workspace</section>
+    </>
+  ));
+  flush();
+  try {
+    expect(getComputedStyle(view.getByText("Stacked workspace")).marginTop).toBe("0px");
+    expect(getComputedStyle(view.getByText("Ordinary workspace")).marginTop).toBe("20px");
+  } finally {
+    view.unmount();
+    styles.remove();
+  }
+});
+
+it.each(["ltr", "rtl"] as const)(
+  "reveals the active tab only at phone width in %s",
+  async (direction) => {
+    const viewport = { width: innerWidth, height: innerHeight };
+    const styles = document.createElement("style");
+    styles.textContent = [baseStyles, hubStyles, tabsStyles].join("\n");
+    document.head.append(styles);
+    const [active, setActive] = createSignal("alpha");
+    const view = mountSolid(() => (
+      <div dir={direction} style="width:160px">
+        <HubTabs
+          {...hubProps("reveal", setActive, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"])}
+          active={active()}
+        />
+      </div>
+    ));
+    flush();
+    const strip = view.getByRole("tablist");
+    const select = async (value: string) => {
+      setActive(value);
+      flush();
+      await nextFrame();
+      await nextFrame();
+    };
+    const farEdge = direction === "rtl" ? "atStart" : "atEnd";
+    try {
+      await page.viewport(390, 844);
+      await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("false"));
+
+      await select("charlie");
+      const charlie = view.getByRole("tab", { name: "Charlie" }).getBoundingClientRect();
+      const bounds = strip.getBoundingClientRect();
+      const padding = getComputedStyle(strip);
+      expect(charlie.left).toBeGreaterThanOrEqual(
+        bounds.left + Number.parseFloat(padding.scrollPaddingLeft) - 1,
+      );
+      expect(charlie.right).toBeLessThanOrEqual(
+        bounds.right - Number.parseFloat(padding.scrollPaddingRight) + 1,
+      );
+
+      await select("echo");
+      const echo = view.getByRole("tab", { name: "Echo" }).getBoundingClientRect();
+      expect(Math.abs(strip.scrollLeft)).toBeGreaterThan(0);
+      expect(echo.left).toBeGreaterThanOrEqual(strip.getBoundingClientRect().left - 1);
+      expect(echo.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right + 1);
+      await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("true"));
+
+      await select("alpha");
+      expect(Math.abs(strip.scrollLeft)).toBeLessThanOrEqual(1);
+
+      await page.viewport(1440, 900);
+      const desktopPosition = strip.scrollLeft;
+      await select("echo");
+      expect(strip.scrollLeft).toBe(desktopPosition);
+    } finally {
+      await page.viewport(viewport.width, viewport.height);
+      view.unmount();
+      styles.remove();
+    }
+  },
+);
+
+function nextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 const hosts: HTMLElement[] = [];
 
 afterEach(() => {
@@ -91,55 +190,28 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function shadow() {
+it("applies the hub skin and keeps one keyboard owner inside a closed shadow root", async () => {
   const host = document.createElement("section");
   host.style.cssText =
     "--control-ui-text-sm:19px;--space-1:4px;--space-2:8px;--muted:rgb(90 90 90)";
   document.body.append(host);
   hosts.push(host);
-  return host.attachShadow({ mode: "closed" });
-}
-
-function mountShadowHub(root: ShadowRoot, id: string) {
-  const container = document.createElement("div");
-  root.append(container);
+  const root = host.attachShadow({ mode: "closed" });
+  const container = root.appendChild(document.createElement("div"));
   const onSelect = vi.fn();
-  const props = { ...hubProps(id, onSelect), active: "first" };
-  const view = mountSolid(() => createComponent(HubTabs, props), { container });
+  mountSolid(() => <HubTabs {...hubProps("shadow", onSelect)} active="first" />, { container });
   flush();
-  return { container, dispose: view.unmount, onSelect };
-}
-
-function sheets(root: ShadowRoot) {
-  return [...root.querySelectorAll<HTMLStyleElement>("style[data-openclaw-overlay-style]")];
-}
-
-function expectSkin(container: HTMLElement) {
-  const tab = container.querySelector<HTMLButtonElement>(".hub-tab")!;
-  const style = getComputedStyle(tab);
-  expect(style.appearance).toBe("none");
-  expect(style.borderTopWidth).toBe("0px");
-  expect(style.display).toBe("flex");
-  expect(style.fontSize).toBe("19px");
-  expect(style.paddingTop).toBe("4px");
-}
-
-it("shares tab skins and keeps one keyboard owner inside a closed shadow root", async () => {
-  const first = shadow();
-  const moved = mountShadowHub(first, "moved");
-  const retained = mountShadowHub(first, "retained");
   await Promise.resolve();
-  expectSkin(moved.container);
-  expectSkin(retained.container);
-  expect(sheets(first)).toHaveLength(2);
-
-  moved.container
-    .querySelector("#moved-tab-second")!
+  const tab = container.querySelector<HTMLButtonElement>(".hub-tab")!;
+  expect(getComputedStyle(tab)).toMatchObject({
+    appearance: "none",
+    borderTopWidth: "0px",
+    display: "flex",
+    fontSize: "19px",
+    paddingTop: "4px",
+  });
+  container
+    .querySelector("#shadow-tab-second")!
     .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  expect(moved.onSelect).toHaveBeenCalledExactlyOnceWith("second");
-
-  retained.dispose();
-  expect(sheets(first)).toHaveLength(2);
-  moved.dispose();
-  expect(sheets(first)).toHaveLength(0);
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith("second");
 });

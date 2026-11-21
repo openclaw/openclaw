@@ -14,6 +14,8 @@ export interface CompactionDetails {
   latestUnresolvedUserRequest?: string;
   /** The best available summary was committed without passing the safeguard audit. */
   qualityDegraded?: true;
+  /** Recent history was retained without a new summary after a provider refusal. */
+  summaryRefused?: true;
 }
 
 export function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
@@ -31,5 +33,6 @@ export function parseCompactionDetails(value: unknown): CompactionDetails | unde
     modifiedFiles: details.modifiedFiles,
     ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
     ...(details.qualityDegraded === true ? { qualityDegraded: true as const } : {}),
+    ...(details.summaryRefused === true ? { summaryRefused: true as const } : {}),
   };
 }

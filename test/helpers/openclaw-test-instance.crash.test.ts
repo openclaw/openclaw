@@ -33,10 +33,7 @@ it.skipIf(process.platform === "win32")(
       child.once("exit", () => process.exit(0));
       setInterval(() => {}, 1000);
     `;
-    const entrypoint = [
-      "--input-type=module",
-      "-e",
-      `
+    const command = `
       import { spawn } from "node:child_process";
       import { createServer } from "node:http";
       const child = spawn(process.execPath, ["-e", ${JSON.stringify(intermediate)}], {
@@ -49,12 +46,10 @@ it.skipIf(process.platform === "win32")(
           response.end(JSON.stringify({ ok: true, status: "started", ready: true, pid: process.pid, ...descendants }));
         }).listen(port, "127.0.0.1");
       });
-    `,
-      "--",
-    ];
+    `;
     const instance = await createOpenClawTestInstance({
       name: "command-crash",
-      entrypoint,
+      entrypoint: ["--input-type=module", "-e", command, "--"],
       signal,
       env: { HOME: home, OPENCLAW_STATE_DIR: home },
     });

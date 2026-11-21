@@ -1,3 +1,4 @@
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserStatus, ProfileStatus } from "../browser/client.js";
 import {
@@ -6,20 +7,12 @@ import {
 } from "./browser-cli-manage.test-helpers.js";
 import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli.test-support.js";
 
-function mockBrowserResponses(
-  responses: Record<string, Record<string, unknown>>,
-  fallback?: Record<string, unknown>,
-) {
-  getBrowserManageGatewayMock().mockImplementation(async (_method, _opts, req) => {
-    const response = responses[req.path ?? ""];
-    if (response) {
-      return response;
-    }
-    if (fallback) {
-      return fallback;
-    }
-    throw new Error(`unexpected browser route: ${req.path}`);
-  });
+const runtime = getBrowserCliRuntime();
+const capture = getBrowserCliRuntimeCapture();
+const gateway = getBrowserManageGatewayMock();
+
+function mockBrowserResponses(responses: Record<string, Record<string, unknown>>) {
+  gateway.mockImplementation(async (_method, _opts, req) => responses[req.path ?? ""] ?? {});
 }
 
 function makeStatus(overrides: Partial<BrowserStatus> = {}) {
@@ -34,12 +27,8 @@ function makeStatus(overrides: Partial<BrowserStatus> = {}) {
   };
 }
 
-function mockStatus(overrides: Partial<BrowserStatus>) {
-  mockBrowserResponses({ "/": makeStatus(overrides) }, {});
-}
-
 function mockResponse(path: string, response: Record<string, unknown>) {
-  mockBrowserResponses({ [path]: response }, {});
+  mockBrowserResponses({ [path]: response });
 }
 
 function makeProfile(overrides: Partial<ProfileStatus> = {}) {
@@ -56,18 +45,21 @@ function mockDoctor(
   tabs: Record<string, unknown>[] = [],
   profiles = [{ name: report.status.profile, running: true }],
 ) {
-  mockBrowserResponses(
-    {
-      "/doctor": report,
-      "/profiles": { profiles },
-      "/tabs": { running: true, tabs },
-    },
-    {},
-  );
+  mockBrowserResponses({
+    "/doctor": report,
+    "/profiles": { profiles },
+    "/tabs": { running: true, tabs },
+  });
 }
 
 async function run(args: string[]) {
   await createBrowserManageProgram().parseAsync(["browser", ...args], { from: "user" });
+}
+
+async function statusOutput(overrides: Partial<BrowserStatus>) {
+  mockResponse("/", makeStatus(overrides));
+  await run(["--browser-profile", overrides.profile ?? "chrome-live", "status"]);
+  return lastRuntimeLog();
 }
 
 const secretUrl =
@@ -105,7 +97,7 @@ function graphics(
 }
 
 function lastRuntimeLog(): string {
-  const calls = getBrowserCliRuntime().log.mock.calls;
+  const calls = runtime.log.mock.calls;
   const value = calls[calls.length - 1]?.[0];
   if (typeof value !== "string") {
     throw new Error("expected browser CLI runtime log");
@@ -113,15 +105,9 @@ function lastRuntimeLog(): string {
   return value;
 }
 
-function parseSingleRuntimeJson(): unknown {
-  const logs = getBrowserCliRuntimeCapture().runtimeLogs;
-  expect(logs).toHaveLength(1);
-  return JSON.parse(logs[0] ?? "");
-}
-
 function expectHumanOutput(exitCode: number) {
-  expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
-  expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+  expect(runtime.writeJson).not.toHaveBeenCalled();
+  expect(runtime.exit).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(exitCode);
 }
 
@@ -131,84 +117,64 @@ describe("browser manage output", () => {
   beforeEach(() => {
     previousExitCode = process.exitCode;
     process.exitCode = 0;
-    getBrowserManageGatewayMock().mockClear();
-    getBrowserCliRuntimeCapture().resetRuntimeCapture();
-    getBrowserCliRuntime().exit.mockClear();
-    getBrowserCliRuntime().writeJson.mockClear();
+    gateway.mockClear();
+    capture.resetRuntimeCapture();
+    runtime.exit.mockClear();
+    runtime.writeJson.mockClear();
   });
 
   afterEach(() => {
     process.exitCode = previousExitCode ?? 0;
   });
 
-  it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
-    mockStatus({
-      headlessSource: "default",
-    });
-
-    await run(["--browser-profile", "chrome-live", "status"]);
-
-    const output = lastRuntimeLog();
-    expect(output).toContain("transport: chrome-mcp");
-    expect(output).toContain("headless: false (default)");
-    expect(output).not.toContain("cdpPort:");
-    expect(output).not.toContain("cdpUrl:");
-  });
-
-  it("shows configured userDataDir for existing-session status", async () => {
-    mockStatus({
-      profile: "brave-live",
-      userDataDir: "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
-      color: "#FB542B",
-    });
-
-    await run(["--browser-profile", "brave-live", "status"]);
-
-    const output = lastRuntimeLog();
-    expect(output).toContain(
-      "userDataDir: /Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
-    );
-  });
-
-  it("shows configured cdpUrl for existing-session status", async () => {
-    mockStatus({
-      cdpUrl: secretUrl,
-      userDataDir: "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
-    });
-
-    await run(["--browser-profile", "chrome-live", "status"]);
-
-    const output = lastRuntimeLog();
-    expect(output).toContain("transport: chrome-mcp");
-    expectRedactedUrl(output);
-    expect(output).not.toContain("userDataDir:");
-  });
-
-  it("shows chrome-mcp transport in browser profiles output", async () => {
-    mockResponse("/profiles", { profiles: [makeProfile()] });
-    await run(["profiles"]);
-
-    const output = lastRuntimeLog();
-    expect(output).toContain("chrome-live: running (2 tabs) [existing-session]");
-    expect(output).toContain("transport: chrome-mcp");
-    expect(output).not.toContain("port: 0");
-  });
-
-  it("redacts remote cdpUrl details in browser profiles output", async () => {
+  const userDataDir = "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser";
+  it.each([
+    {
+      overrides: { headlessSource: "default" },
+      includes: ["transport: chrome-mcp", "headless: false (default)"],
+      excludes: ["cdpPort:", "cdpUrl:"],
+    },
+    {
+      overrides: { profile: "brave-live", userDataDir, color: "#FB542B" },
+      includes: [`userDataDir: ${userDataDir}`],
+      excludes: [],
+    },
+    {
+      overrides: { cdpUrl: secretUrl, userDataDir },
+      includes: ["transport: chrome-mcp"],
+      excludes: ["userDataDir:"],
+    },
+    {
+      overrides: { driver: "openclaw", transport: "cdp", graphics: graphics({}) },
+      includes: ["graphics: hardware; renderer ANGLE (Intel); backend (gl=angle,angle=metal)"],
+      excludes: [],
+    },
+  ] satisfies { overrides: Partial<BrowserStatus>; includes: string[]; excludes: string[] }[])(
+    "renders status facts without leaking unrelated fields: $overrides",
+    async ({ overrides, includes, excludes }) => {
+      const output = await statusOutput(overrides);
+      expect(includes.filter((text) => !output.includes(text))).toEqual([]);
+      expect(excludes.filter((text) => output.includes(text))).toEqual([]);
+      if ("cdpUrl" in overrides) {
+        expectRedactedUrl(output);
+      }
+    },
+  );
+  it.each([false, true])("renders profiles with remote=%s", async (remote) => {
     mockResponse("/profiles", {
       profiles: [
-        makeProfile({
-          name: "remote",
-          driver: "openclaw",
-          transport: "cdp",
-          tabCount: 1,
-          isRemote: true,
-          cdpUrl: secretUrl,
-        }),
+        makeProfile(remote ? { name: "remote", transport: "cdp", cdpUrl: secretUrl } : {}),
       ],
     });
     await run(["profiles"]);
-    expectRedactedUrl(lastRuntimeLog());
+    const output = lastRuntimeLog();
+    if (remote) {
+      expectRedactedUrl(output);
+    } else {
+      expect(output).toContain("chrome-live: running (2 tabs) [existing-session]");
+      expect(output).toContain("transport: chrome-mcp");
+      expect(output).not.toContain("port: 0");
+    }
   });
 
   it.each([
@@ -234,26 +200,6 @@ describe("browser manage output", () => {
     },
   );
 
-  it("prints managed graphics facts in status output", async () => {
-    mockStatus({
-      profile: "openclaw",
-      driver: "openclaw",
-      transport: "cdp",
-      cdpPort: 18800,
-      cdpUrl: "http://127.0.0.1:18800",
-      chosenBrowser: "chromium",
-      headless: true,
-      attachOnly: false,
-      graphics: graphics({}),
-    });
-
-    await run(["status"]);
-
-    expect(lastRuntimeLog()).toContain(
-      "graphics: hardware; renderer ANGLE (Intel); backend (gl=angle,angle=metal)",
-    );
-  });
-
   it("prints suggested tab references while keeping raw target ids visible", async () => {
     mockResponse("/tabs", {
       running: true,
@@ -277,40 +223,30 @@ describe("browser manage output", () => {
     expect(output).toContain("id: RAW_TARGET_1");
   });
 
-  it("rejects non-integer tab indexes without calling browser actions", async () => {
-    const program = createBrowserManageProgram();
-
-    await expect(
-      program.parseAsync(["browser", "tab", "select", "1.9"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
-      "index must be a positive integer",
-    );
-
-    getBrowserCliRuntimeCapture().resetRuntimeCapture();
-    await expect(
-      program.parseAsync(["browser", "tab", "close", "abc"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
-      "index must be a positive integer",
-    );
-    expect(getBrowserManageGatewayMock()).not.toHaveBeenCalledWith(
-      "browser.request",
-      expect.anything(),
-      expect.objectContaining({ path: "/tabs/action" }),
-      expect.anything(),
-    );
-  });
+  it.each([
+    { action: "select", index: "1.9", json: false },
+    { action: "close", index: "abc", json: false },
+    { action: "select", index: "0", json: true },
+    { action: "close", index: "abc", json: true },
+  ])(
+    "rejects tab $action $index with json=$json before actions",
+    async ({ action, index, json }) => {
+      await expect(run([...(json ? ["--json"] : []), "tab", action, index])).rejects.toThrow(
+        json ? "index must be a positive integer" : "__exit__:1",
+      );
+      expect(capture.runtimeErrors).toEqual(json ? [] : ["index must be a positive integer"]);
+      expect(runtime.exit).toHaveBeenCalledTimes(json ? 0 : 1);
+      expect(gateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects unsupported profile drivers before creating a profile", async () => {
     await expect(run(["create-profile", "--name", "test", "--driver", "chromium"])).rejects.toThrow(
       "__exit__:1",
     );
 
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
-      "--driver must be openclaw or existing-session",
-    );
-    expect(getBrowserManageGatewayMock()).not.toHaveBeenCalled();
+    expect(capture.runtimeErrors.at(-1)).toContain("--driver must be openclaw or existing-session");
+    expect(gateway).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -334,14 +270,12 @@ describe("browser manage output", () => {
         checks: [
           { id: "extension-version", label: "Chrome extension version", status, summary, fixHint },
         ],
-        status: {
-          enabled: true,
+        status: makeStatus({
           profile: "chrome",
           driver: "extension",
           transport: "extension",
-          running: true,
           cdpReady: true,
-        },
+        }),
       });
       await run(["--browser-profile", "chrome", "doctor"]);
       expect(lastRuntimeLog()).toContain(line);
@@ -349,7 +283,7 @@ describe("browser manage output", () => {
         expect(lastRuntimeLog()).not.toContain("WARN extension-version");
       }
       expect(process.exitCode).toBe(0);
-      expect(getBrowserManageGatewayMock().mock.calls[0]?.[2]).toMatchObject({
+      expect(gateway.mock.calls[0]?.[2]).toMatchObject({
         path: "/doctor",
         query: { profile: "chrome" },
       });
@@ -400,18 +334,17 @@ describe("browser manage output", () => {
 
     await run(["--json", "doctor"]);
 
-    expect(parseSingleRuntimeJson()).toEqual(
-      expect.objectContaining({
-        ok: false,
-        checks: expect.arrayContaining([
-          expect.objectContaining({ name: "gateway", ok: true }),
-          expect.objectContaining({ name: "plugin", ok: false }),
-        ]),
-      }),
-    );
-    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
-    expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
-    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(capture.runtimeLogs).toHaveLength(1);
+    expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([
+        expect.objectContaining({ name: "gateway", ok: true }),
+        expect.objectContaining({ name: "plugin", ok: false }),
+      ]),
+    });
+    expect(capture.runtimeErrors).toEqual([]);
+    expect(runtime.writeJson).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
@@ -420,7 +353,7 @@ describe("browser manage output", () => {
       code: "GATEWAY_SECRET_REF_UNAVAILABLE",
       name: "GatewaySecretRefUnavailableError",
     });
-    getBrowserManageGatewayMock().mockRejectedValueOnce(error);
+    gateway.mockRejectedValueOnce(error);
 
     await run(["doctor"]);
 
@@ -435,11 +368,11 @@ describe("browser manage output", () => {
 
   it.each([false, true])("reports profile deletion with deleted=%s", async (deleted) => {
     const result = { ok: true, profile: "proof-retained", deleted };
-    getBrowserManageGatewayMock().mockResolvedValueOnce(result);
+    gateway.mockResolvedValueOnce(result);
 
     await run(["delete-profile", "--name", result.profile]);
 
-    expect(getBrowserManageGatewayMock()).toHaveBeenCalledWith(
+    expect(gateway).toHaveBeenCalledWith(
       "browser.request",
       expect.anything(),
       expect.objectContaining({ method: "DELETE", path: "/profiles/proof-retained" }),
@@ -450,7 +383,57 @@ describe("browser manage output", () => {
         ? '🦞 Deleted profile "proof-retained" (user data removed)'
         : '🦞 Deleted profile "proof-retained" (user data removal not confirmed)',
     );
-    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
+    expect(capture.runtimeErrors).toEqual([]);
     expectHumanOutput(0);
   });
+
+  it.each(["/doctor", "/profiles"])(
+    "does not report an interrupted doctor read at %s as unhealthy",
+    async (path) => {
+      const scope = new AsyncWorkScope();
+      const report = { status: makeStatus(), checks: [] };
+      mockDoctor(report);
+      if (path === "/profiles") {
+        gateway.mockResolvedValueOnce(report);
+      }
+      gateway.mockImplementationOnce(async () => {
+        process.exitCode = 130;
+        scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+        return path === "/doctor" ? report : { profiles: [] };
+      });
+
+      await scope.run(() => run(["--json", "doctor"]));
+
+      expect(capture.runtimeLogs).toEqual([]);
+      expect(capture.runtimeErrors).toEqual([]);
+      expect(process.exitCode).toBe(130);
+    },
+  );
+
+  it.each(["start", "stop"])(
+    "keeps the accepted %s status output after interruption",
+    async (action) => {
+      const scope = new AsyncWorkScope();
+      mockResponse("/", makeStatus({ running: action === "start" }));
+      gateway.mockImplementationOnce(async () => {
+        process.exitCode = 130;
+        scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+        return {
+          ok: true,
+          profile: "chrome-live",
+          ...(action === "stop" ? { stopped: true } : {}),
+        };
+      });
+
+      await scope.run(() => run(["--json", action]));
+
+      expect(capture.runtimeLogs).toHaveLength(1);
+      expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toMatchObject({
+        profile: "chrome-live",
+        running: action === "start",
+      });
+      expect(capture.runtimeErrors).toEqual([]);
+      expect(process.exitCode).toBe(130);
+    },
+  );
 });

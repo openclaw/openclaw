@@ -1,17 +1,31 @@
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
+import {
+  createGitHubIdentityView,
+  type GitHubIdentityView,
+} from "../../lib/reactive/domain-github-identity.ts";
 import { trackSolidRoot } from "../../test-helpers/solid-cleanup.ts";
-import { createGitHubIdentity, type GitHubIdentity } from "./github-identity.ts";
+import type { createGitHubIdentity } from "./github-identity.ts";
 
-export function createGitHubIdentityForTest(deps: Parameters<typeof createGitHubIdentity>[0] = {}) {
-  return createRoot((dispose) => ({
-    ...createGitHubIdentity(deps),
-    dispose: trackSolidRoot(dispose),
-  }));
+export function createGitHubIdentityForTest(
+  deps: Parameters<typeof createGitHubIdentityView>[0] = {},
+) {
+  return createRoot((dispose) => {
+    const identity = createGitHubIdentityView(deps);
+    return {
+      ...identity,
+      dispose: trackSolidRoot(() => {
+        identity.dispose();
+        dispose();
+      }),
+    };
+  });
 }
 export type TestGitHubIdentity = ReturnType<typeof createGitHubIdentityForTest>;
-type IdentityState = ReturnType<GitHubIdentity["read"]>;
+type IdentityState = ReturnType<ReturnType<typeof createGitHubIdentity>["read"]>;
 
-export function githubIdentityViewFixture(overrides: Partial<IdentityState> = {}): GitHubIdentity {
+export function githubIdentityViewFixture(
+  overrides: Partial<IdentityState> = {},
+): GitHubIdentityView {
   const state: IdentityState = {
     status: null,
     personal: null,
@@ -19,6 +33,9 @@ export function githubIdentityViewFixture(overrides: Partial<IdentityState> = {}
     loading: false,
     busy: false,
     error: null,
+    statusCompletion: undefined,
+    mutationCompletion: undefined,
+    completion: undefined,
     statusReadable: true,
     configurable: false,
     authorizable: false,
@@ -33,6 +50,9 @@ export function githubIdentityViewFixture(overrides: Partial<IdentityState> = {}
   };
   return {
     read: () => state,
+    saving: createSignal(state.busy)[0],
+    subscribe: () => () => {},
+    dispose() {},
     sync() {},
     ensureVerified() {},
     setDraft() {},

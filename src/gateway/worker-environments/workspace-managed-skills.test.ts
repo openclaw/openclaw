@@ -3,6 +3,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import {
   isDerivedWorkspacePath,
@@ -65,13 +66,20 @@ it.each(
     const input = tempDirs.make("managed-skill-replacement-input-");
     await fs.writeFile(path.join(input, parent), "replacement");
     const current = (await captureWorkspaceSnapshot({ root: input, baseCommit: null })).manifest;
-    const preflight = await preflightWorkspaceApplyImpl({ root, base, current });
+    const preflight = await preflightWorkspaceApplyImpl({
+      root,
+      ...prepareWorkspaceReconciliation(base, current).preflight,
+    });
     expect(preflight.conflictPaths).toContain(parent);
     expect(preflight.applyPaths.has(parent)).toBe(false);
     const deletion = await preflightWorkspaceApplyImpl({
       root,
-      base,
-      current: { version: 1, baseCommit: null, entries: [], directories: [] },
+      ...prepareWorkspaceReconciliation(base, {
+        version: 1,
+        baseCommit: null,
+        entries: [],
+        directories: [],
+      }).preflight,
     });
     expect(deletion.conflictPaths).toEqual([]);
     await prepareNonDirectoryTargets(root, current.entries);

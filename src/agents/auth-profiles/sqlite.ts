@@ -18,6 +18,7 @@ import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.j
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { agentDatabaseLifecycle } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -29,6 +30,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
+import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -37,7 +39,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
+import {
+  resolveRegisteredAgentIdForDir,
+  resolveRegisteredAgentIdForDirAsync,
+} from "../agent-dir-registry.js";
 import {
   prepareAuthProfileAuthorizationWrite,
   readAuthProfileAuthorizationLifetimes,
@@ -65,6 +70,8 @@ import {
   inspectAuthProfileJsonCell,
   inspectAgentAuthProfileJsonCellReadOnly,
   readAuthProfileJsonCellText,
+  readAuthProfileRows,
+  readAuthProfileRowsReadOnly,
 } from "./sqlite-json.js";
 import {
   acquireAuthProfileReadDatabase,
@@ -72,6 +79,7 @@ import {
   isMissingDatabasePath,
 } from "./sqlite-read-pool.js";
 import type {
+  AuthProfileRowRead,
   AuthProfileStoreOwner,
   PersistedAuthProfileStoreInspection,
   PreparedAuthProfileStoreOwner,
@@ -80,6 +88,18 @@ import type {
 export { closeAuthProfileReadPool };
 
 export type AuthProfileDatabase = OpenClawAgentDatabase | OpenClawStateDatabase;
+
+function readNativeAuthProfileIdentity(database: AuthProfileDatabase) {
+  if (!("agentId" in database)) {
+    return readTrackedStateDatabaseIdentity(database.db);
+  }
+  const identity = readOpenClawAgentDatabaseIdentity(database);
+  return {
+    key: `file:${identity.identity}`,
+    canonicalPath: identity.canonicalPath,
+    birthtime: identity.birthtime,
+  };
+}
 
 export function resolveAuthProfileStoreOwner(
   database: AuthProfileDatabase,
@@ -92,11 +112,17 @@ export function resolveAuthProfileStoreOwner(
   // A supplied shared connection already names its owner; ambient discovery can
   // select another database (or fail on it) before this connection is ever used.
   if (!("agentId" in database)) {
-    return { databasePath: database.path, sharedDatabasePath: database.path, location: "state-db" };
+    return {
+      databasePath: database.path,
+      sharedDatabasePath: database.path,
+      location: "state-db",
+      databaseIdentity: readNativeAuthProfileIdentity(database),
+    };
   }
   return {
     ...prepareAuthProfileSharedOwner(env),
     databasePath: database.path,
+    databaseIdentity: readNativeAuthProfileIdentity(database),
   };
 }
 
@@ -166,6 +192,11 @@ export function resolveAuthProfileDatabaseOwnerId(agentDir: string): string {
     throw new Error("agent auth database unexpectedly resolved to shared state");
   }
   return target.agentId;
+}
+
+export async function resolveAuthProfileDatabaseOwnerIdAsync(agentDir: string): Promise<string> {
+  const directory = path.dirname(resolveAuthProfileDatabasePath(agentDir));
+  return (await resolveRegisteredAgentIdForDirAsync(directory)) ?? inferAgentIdFromDir(directory);
 }
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
@@ -246,40 +277,66 @@ function readSelectedAgentAuthDatabase<T>(
   }
 }
 
-export function inspectAuthProfileJsonCellReadOnly(
+function readAuthProfileDatabaseReadOnly<T>(
   databaseTarget: Pick<AuthProfileDatabaseTarget, "kind" | "path"> & { env?: NodeJS.ProcessEnv },
-  target: "store" | "state",
-): PersistedAuthProfileStoreInspection {
+  reader: {
+    read: (db: EngineConnection, kind: AuthProfileDatabaseTarget["kind"]) => T;
+    readNativeAgent: (databasePath: string) => T;
+    unavailable: (inspection: PersistedAuthProfileStoreInspection) => T;
+  },
+): T {
   if (databaseTarget.kind === "shared-state") {
     try {
       return (
-        withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) => inspectAuthProfileJsonCell(db, target, "shared-state"),
-          { path: databaseTarget.path, ...(databaseTarget.env ? { env: databaseTarget.env } : {}) },
-        ) ?? { status: "missing", reason: "database" }
+        withExistingOpenClawStateDatabaseReadOnly(({ db }) => reader.read(db, "shared-state"), {
+          path: databaseTarget.path,
+          ...(databaseTarget.env ? { env: databaseTarget.env } : {}),
+        }) ?? reader.unavailable({ status: "missing", reason: "database" })
       );
     } catch {
-      return isMissingDatabasePath(databaseTarget.path)
-        ? { status: "missing", reason: "database" }
-        : { status: "unreadable" };
+      return reader.unavailable(
+        isMissingDatabasePath(databaseTarget.path)
+          ? { status: "missing", reason: "database" }
+          : { status: "unreadable" },
+      );
     }
   }
   if (getDatabaseEngineInput("agent")) {
     try {
       return (
-        readSelectedAgentAuthDatabase(databaseTarget, (db) =>
-          inspectAuthProfileJsonCell(db, target, "agent"),
-        )?.value ?? { status: "missing", reason: "database" }
+        readSelectedAgentAuthDatabase(databaseTarget, (db) => reader.read(db, "agent"))?.value ??
+        reader.unavailable({ status: "missing", reason: "database" })
       );
     } catch {
-      return { status: "unreadable" };
+      return reader.unavailable({ status: "unreadable" });
     }
   }
-  return inspectAgentAuthProfileJsonCellReadOnly(
-    databaseTarget.path,
-    target,
-    openSqliteReadOnlyDatabase,
-  );
+  return reader.readNativeAgent(databaseTarget.path);
+}
+
+export function inspectAuthProfileJsonCellReadOnly(
+  databaseTarget: Pick<AuthProfileDatabaseTarget, "kind" | "path"> & { env?: NodeJS.ProcessEnv },
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection {
+  return readAuthProfileDatabaseReadOnly(databaseTarget, {
+    read: (db, kind) => inspectAuthProfileJsonCell(db, target, kind),
+    readNativeAgent: (databasePath) =>
+      inspectAgentAuthProfileJsonCellReadOnly(databasePath, target, openSqliteReadOnlyDatabase),
+    unavailable: (inspection) => inspection,
+  });
+}
+
+export function readPersistedAuthProfileRows(
+  agentDir?: string,
+  env?: NodeJS.ProcessEnv,
+): AuthProfileRowRead {
+  const target = resolveAuthProfileDatabaseOptions(agentDir, env);
+  return readAuthProfileDatabaseReadOnly(target, {
+    read: (db, kind) => readAuthProfileRows(db, target.path, kind),
+    readNativeAgent: (databasePath) =>
+      readAuthProfileRowsReadOnly(databasePath, openSqliteReadOnlyDatabase),
+    unavailable: (inspection) => ({ store: inspection, state: inspection, cacheable: false }),
+  });
 }
 
 /** Doctor retains opaque rotation-state bytes while repairing independently readable credentials. */
@@ -556,6 +613,7 @@ export async function prepareAuthProfileWriteTransactionAsync(
   agentDir: string | undefined,
   options: AuthProfileWriteOptions,
   assertCurrent?: () => void,
+  existingDatabaseTarget?: AuthProfileDatabaseTarget,
 ) {
   const env = prepareAuthProfileWriteEnvironment(options);
   const capturedAgentDir = agentDir ? resolveUserPath(agentDir, env) : undefined;
@@ -567,10 +625,9 @@ export async function prepareAuthProfileWriteTransactionAsync(
   });
   options.assertEnvironment?.(env);
   assertCurrent?.();
-  const databaseTarget = resolveAuthProfileDatabaseOptions(
-    sharedStoreWrite ? undefined : capturedAgentDir,
-    env,
-  );
+  const databaseTarget =
+    existingDatabaseTarget ??
+    resolveAuthProfileDatabaseOptions(sharedStoreWrite ? undefined : capturedAgentDir, env);
   return { databaseTarget, sharedOwner: prepareAuthProfileSharedOwner(env) };
 }
 
@@ -626,7 +683,11 @@ export function runAuthProfileWriteTransaction<T>(
       const run = (database: AuthProfileDatabase) => {
         retain?.(database.db);
         const previous = authProfileTransactions.get(database);
-        const owner = previous ?? { ...sharedOwner, databasePath: database.path };
+        const owner = previous ?? {
+          ...sharedOwner,
+          databasePath: database.path,
+          databaseIdentity: readNativeAuthProfileIdentity(database),
+        };
         authProfileTransactions.set(database, owner);
         try {
           return operation(database, owner);

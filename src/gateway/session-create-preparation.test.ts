@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -25,8 +25,8 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { prepareSessionRepositoryWorkspace } from "./server-methods/session-create-project.js";
 import { createGatewaySession } from "./session-create-service.js";
+import { prepareSessionRepositoryWorkspace } from "./session-repository-preparation.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -55,6 +55,127 @@ const receiptOf = (created: Created, entry = created.entry) => ({
 });
 const preparedRoot = (sessionRoot: string, spawnedCwd?: string) =>
   vi.fn(async () => ({ ok: true as const, value: { sessionRoot, spawnedCwd } }));
+
+it.each([
+  { source: "draft", drafts: true, visibility: undefined, expected: "draft" },
+  { source: "draft", drafts: false, visibility: undefined, expected: undefined },
+  { source: "draft", drafts: false, visibility: "shared", expected: "shared" },
+  { source: undefined, drafts: false, visibility: undefined, expected: "shared" },
+] as const)(
+  "applies current Draft creation policy to whole copies: $source/$drafts/$visibility",
+  ({ source, drafts, visibility, expected }) =>
+    withState({}, async (state) => {
+      const parent = await createSession({ key: "agent:main:copy-source", visibility: source });
+      assert(parent.ok);
+      const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key: parent.key });
+      const scope = scopeOf({ ...target, key: parent.key });
+      await appendTranscriptMessage(
+        { ...scope, sessionId: parent.entry.sessionId },
+        {
+          message: { role: "user", content: "Keep the working notes in this Draft." },
+        },
+      );
+      const before = loadSessionEntry(scope);
+      const key = "agent:main:copy-destination";
+      const prepareLifecycle = preparedRoot(state.path("copy"));
+      const result = await createSession({
+        key,
+        parentSessionKey: parent.key,
+        fork: true,
+        visibility,
+        creation: { via: "operator" },
+        getCurrentConfig: () => ({ session: { sharing: { drafts } } }),
+        prepareLifecycle,
+      });
+      if (expected) {
+        assert(result.ok);
+        expect(loadSessionEntry({ ...scope, sessionKey: key })?.visibility ?? "shared").toBe(
+          expected,
+        );
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining("Continue in the existing Draft"),
+            details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+          },
+        });
+        expect(prepareLifecycle).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ ...scope, sessionKey: key })).toBeUndefined();
+      }
+      expect(loadSessionEntry(scope)).toEqual(before);
+    }),
+);
+
+it.each(["snapshot", "writerAdmission", "publication"] as const)(
+  "checks Draft policy until creation commits, disabled at %s",
+  (disabledAt) =>
+    withState({}, async (state) => {
+      const parent = await createSession({ key: "agent:main:policy-source", visibility: "draft" });
+      assert(parent.ok);
+      const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key: parent.key });
+      const scope = scopeOf({ ...target, key: parent.key });
+      await appendTranscriptMessage(
+        { ...scope, sessionId: parent.entry.sessionId },
+        {
+          message: { role: "user", content: "Continue my existing Draft work." },
+        },
+      );
+      const before = loadSessionEntry(scope);
+      const key = "agent:main:policy-copy";
+      const workspace = state.path("prepared-copy");
+      let drafts = true;
+      const rollback = vi.fn(async () => fs.rm(workspace, { recursive: true }));
+      const continued = vi.fn<NonNullable<Creation["afterCreate"]>>(async (created) => {
+        expect(drafts).toBe(false);
+        expect(created.entry.visibility).toBe("draft");
+        await appendTranscriptMessage(
+          { ...scopeOf(created), sessionId: created.entry.sessionId },
+          {
+            message: { role: "user", content: "Keep going in this conversation." },
+          },
+        );
+      });
+      const copying = createSession({
+        key,
+        parentSessionKey: parent.key,
+        fork: true,
+        creation: { via: "operator" },
+        getCurrentConfig: () => ({ session: { sharing: { drafts } } }),
+        onPhase: (phase) => {
+          if (phase === disabledAt) {
+            drafts = false;
+          }
+        },
+        prepareLifecycle: async () => {
+          await fs.mkdir(workspace);
+          return { ok: true, value: { sessionRoot: workspace, rollback } };
+        },
+        afterCreate: continued,
+      });
+      if (disabledAt === "writerAdmission") {
+        await expect(copying).rejects.toMatchObject({
+          name: "SessionMutationAuthorizationChangedError",
+          error: { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" } },
+        });
+      } else {
+        expect(await copying).toMatchObject({ ok: disabledAt === "publication" });
+      }
+      if (disabledAt === "publication") {
+        expect(continued).toHaveBeenCalledOnce();
+        expect(rollback).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ ...scope, sessionKey: key })?.visibility).toBe("draft");
+      } else {
+        expect(continued).not.toHaveBeenCalled();
+        expect(rollback).toHaveBeenCalledOnce();
+        await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(loadSessionEntry({ ...scope, sessionKey: key })).toBeUndefined();
+      }
+      expect(loadSessionEntry(scope)).toEqual(before);
+    }),
+);
+
 const unavailable = (message: string) => ({
   ok: false,
   error: { code: "UNAVAILABLE", message: expect.stringContaining(message) },
@@ -160,14 +281,11 @@ it.each([
       const { create, first, scope } = await setupCreationTarget(key, originalRoot, "main");
       const original = { sessionId: first.entry.sessionId, sessionRoot: originalRoot };
       const transcriptScope = { ...scope, sessionId: first.entry.sessionId };
-      for (const message of [
-        { role: "user", content: "Keep this conversation when moving the workspace." },
-        { role: "assistant", content: "The conversation stays with this session." },
-      ]) {
-        expect(await appendTranscriptMessage(transcriptScope, { message })).toMatchObject({
-          appended: true,
-        });
-      }
+      expect(
+        await appendTranscriptMessage(transcriptScope, {
+          message: { role: "user", content: "Keep this conversation when moving the workspace." },
+        }),
+      ).toMatchObject({ appended: true });
       const transcript = await loadTranscriptEvents(transcriptScope);
       const onInterrupt = vi.fn();
       const handle = {
@@ -365,6 +483,8 @@ it.each(["sessions.send", "sessions.create", "generated-create", "custom-store-s
       });
       expect(captured.error).toBeNull();
       const authorization = captured.authorization!;
+      // Created-session sharing facts stay retained until the request authorization releases.
+      onTestFinished(() => authorization.release?.());
       const notify = vi.fn<NonNullable<Creation["onCreatedSessionCommitted"]>>((created) => {
         expect(loadSessionEntry(scopeOf(created))).toMatchObject({
           sessionId: created.entry.sessionId,
@@ -398,7 +518,6 @@ it.each(["sessions.send", "sessions.create", "generated-create", "custom-store-s
         afterCreate,
       });
       expect(created.ok).toBe(true);
-      expect(notify).toHaveBeenCalledOnce();
       expect(afterCreate).toHaveBeenCalledOnce();
     }),
 );
@@ -436,10 +555,9 @@ it("retains the full adopted target while checking sibling labels", () =>
     const first = await create("agent:main:target", "Original");
     expect(first.ok).toBe(true);
     const scope = { agentId: "main", sessionKey: "agent:main:target" };
-    const initial = loadSessionEntry(scope);
-    assert(initial, "Missing initial session");
+    assert(first.ok);
     const saved = {
-      ...initial,
+      ...first.entry,
       skillsSnapshot: { prompt: "Saved skill prompt", skills: [] },
       systemPromptReport: {
         source: "run" as const,

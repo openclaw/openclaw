@@ -1,58 +1,28 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureSessionWorkRunInterruptions } from "../sessions/session-controller.lifecycle.js";
 import { isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import type { AgentTurnIo } from "./agent-turn/types.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { installAuthorityProofKernel } from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
-import {
-  agentCommandMock,
-  installGatewayTestHooks,
-  prepareGatewayReplyRuntimeForTest,
-} from "./test-helpers.js";
+import { agentCommandMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 
-let harness: GatewayServerHarness;
-let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
-let acquisition: Promise<GatewayServerHarness> | undefined;
-installGatewayTestHooks({
-  scope: "suite",
-  setup: async () => {
-    const kernelModule = await import("./server-kernel.js");
-    const createKernel = kernelModule.createGatewayKernel;
-    const capture = vi
-      .spyOn(kernelModule, "createGatewayKernel")
-      .mockImplementation(async (...args) => {
-        kernel = await createKernel(...args);
-        return kernel;
-      });
-    acquisition = startGatewayServerHarness();
-    harness = await acquisition.finally(() => capture.mockRestore());
-  },
-  cleanup: async () => {
-    const ready = await acquisition?.catch(() => undefined);
-    await ready?.close();
-  },
-});
+const gateway = installAuthorityProofKernel();
 
 it("refuses provider execution when close overtakes acquired WS work during preparation", async ({
   signal,
 }) => {
+  const harness = gateway.harness();
+  const kernel = gateway.kernel();
   await prepareGatewayReplyRuntimeForTest();
   const admissionHeld = createDeferred();
   const releaseAdmission = createDeferred();
-  const commandStarted = createDeferred();
-  const releaseCommand = createDeferred();
-  const terminalObserved = createDeferred();
   const drainEntered = createDeferred();
   let serviceCompletion: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let terminal: Parameters<AgentTurnIo["emitAcceptance"]> | undefined;
-  const release = () => {
-    releaseAdmission.resolve();
-    releaseCommand.resolve();
-  };
+  const release = () => releaseAdmission.resolve();
   signal.addEventListener("abort", release, { once: true });
   const admissionModule = await import("./agent-turn/agent-run-admission-phase.js");
   const prepare = admissionModule.prepareAgentRunDispatch;
@@ -73,39 +43,17 @@ it("refuses provider execution when close overtakes acquired WS work during prep
     const service = createService(...args);
     const start = service.startTurn.bind(service);
     vi.spyOn(service, "startTurn").mockImplementationOnce((params) => {
-      serviceCompletion = start({
-        ...params,
-        io: {
-          ...params.io,
-          emitAcceptance: (...frame) => {
-            params.io.emitAcceptance(...frame);
-            if (!frame[0][0] || (isRecord(frame[0][1]) && frame[0][1].status === "timeout")) {
-              terminal = frame;
-              terminalObserved.resolve();
-            }
-          },
-          emitFinal: (...frame) => {
-            params.io.emitFinal(...frame);
-            terminalObserved.resolve();
-          },
-        },
+      const emit = params.io.emitAcceptance;
+      vi.spyOn(params.io, "emitAcceptance").mockImplementation((...frame) => {
+        emit(...frame);
+        terminal = frame;
       });
+      serviceCompletion = start(params);
       return serviceCompletion;
     });
     return service;
   });
-  vi.mocked(agentCommandMock).mockReset();
-  vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
-    commandStarted.resolve();
-    await releaseCommand.promise;
-    return {
-      payloads: [{ text: "late provider reply" }],
-      meta: {
-        durationMs: 1,
-        terminalReply: { disposition: "visible", text: "late provider reply" },
-      },
-    };
-  });
+  vi.mocked(agentCommandMock).mockReset().mockResolvedValueOnce(undefined);
   try {
     const { ws } = await harness.openClient();
     ws.send(
@@ -149,9 +97,6 @@ it("refuses provider execution when close overtakes acquired WS work during prep
     closing = harness.server.close({ reason: "gateway stopping", restartExpectedMs: null });
     await drainEntered.promise;
     releaseAdmission.resolve();
-    await Promise.race([commandStarted.promise, terminalObserved.promise]);
-    releaseCommand.resolve();
-    await terminalObserved.promise;
     await serviceCompletion;
     await closing;
     expect(agentCommandMock).not.toHaveBeenCalled();
@@ -172,9 +117,6 @@ it("refuses provider execution when close overtakes acquired WS work during prep
   } finally {
     release();
     await Promise.allSettled([serviceCompletion]);
-    if (vi.mocked(agentCommandMock).mock.calls.length > 0) {
-      await terminalObserved.promise;
-    }
     await Promise.allSettled([closing]);
     vi.restoreAllMocks();
     signal.removeEventListener("abort", release);

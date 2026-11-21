@@ -12,7 +12,11 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
   createLifecycleControllerFixture,
@@ -74,15 +78,11 @@ it("retires a terminal callback when another completion replaces its session-eff
   signal,
 }) => {
   const entry = createRunEntry({ expectsCompletionMessage: false });
-  const progressEntered = createDeferredCore();
-  const releaseProgress = createDeferredCore();
+  const progressGate = createEnteredGate();
   const { controller, cleanupBrowser, complete } = fixture({
     entry,
     callGateway: vi.fn(),
-    emitSubagentProgressEndedForRun: async () => {
-      progressEntered.resolve();
-      await releaseProgress.promise;
-    },
+    emitSubagentProgressEndedForRun: progressGate.wait,
   });
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   const createSessionEffects = () => ({
@@ -92,14 +92,14 @@ it("retires a terminal callback when another completion replaces its session-eff
   });
   const first = complete({ sessionEffects: createSessionEffects() });
   try {
-    await withinTest(progressEntered.promise, signal);
+    await withinTest(progressGate.entered, signal);
     await complete({ sessionEffects: createSessionEffects() });
-    releaseProgress.resolve();
+    progressGate.release();
     await first;
     expect(announce).toHaveBeenCalledOnce();
     expect(cleanupBrowser).toHaveBeenCalledOnce();
   } finally {
-    releaseProgress.resolve();
+    progressGate.release();
     await first;
   }
 });
@@ -218,10 +218,8 @@ it.for(["queued", "pre-commit"] as const)(
   "retires a superseded session while its browser cleanup claim waits (%s)",
   async (barrier, { signal }) => {
     const entry = createRunEntry({ generation: 1, expectsCompletionMessage: false });
-    const loaderEntered = createDeferredCore();
-    const releaseLoader = createDeferredCore();
-    const writeEntered = createDeferredCore();
-    const releaseWrite = createDeferredCore();
+    const loader = createEnteredGate();
+    const write = createEnteredGate();
     const cleanupQueued = createDeferredCore();
     let holdNextWrite = false;
     const cleanupBrowser = vi.fn(async () => {});
@@ -230,15 +228,13 @@ it.for(["queued", "pre-commit"] as const)(
         entry,
         cleanupBrowserSessionsForLifecycleEnd: undefined,
         loadCleanupBrowserSessionsForLifecycleEnd: async () => {
-          loaderEntered.resolve();
-          await releaseLoader.promise;
+          await loader.wait();
           return cleanupBrowser;
         },
         beforeWrite: async () => {
           if (holdNextWrite) {
             holdNextWrite = false;
-            writeEntered.resolve();
-            await releaseWrite.promise;
+            await write.wait();
           }
         },
       },
@@ -261,18 +257,18 @@ it.for(["queued", "pre-commit"] as const)(
     const completion = complete();
     let pendingWrite: Promise<void> | undefined;
     try {
-      await withinTest(loaderEntered.promise, signal);
+      await withinTest(loader.entered, signal);
       holdNextWrite = true;
       if (barrier === "queued") {
         pendingWrite = mutateLifecycleRun(entry, (row) => {
           row.label = "preceding durable write";
         });
-        await withinTest(writeEntered.promise, signal);
+        await withinTest(write.entered, signal);
       }
-      releaseLoader.resolve();
+      loader.release();
       await withinTest(cleanupQueued.promise, signal);
       if (barrier === "pre-commit") {
-        await withinTest(writeEntered.promise, signal);
+        await withinTest(write.entered, signal);
       }
       const successor = createRunEntry({
         runId: "successor-run",
@@ -282,7 +278,7 @@ it.for(["queued", "pre-commit"] as const)(
       });
       controller.options.runs.set(successor.runId, successor);
       expect(controller.newerGenerationOwnsSession(entry)).toBe(true);
-      releaseWrite.resolve();
+      write.release();
       await pendingWrite;
       await expect(completion).resolves.toBeUndefined();
 
@@ -293,12 +289,82 @@ it.for(["queued", "pre-commit"] as const)(
       expect(announce).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      releaseLoader.resolve();
-      releaseWrite.resolve();
+      loader.release();
+      write.release();
       await Promise.allSettled([completion, pendingWrite]);
     }
   },
 );
+
+it("settles a queued browser cleanup claim after the killed run retires", async ({ signal }) => {
+  const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
+  const loader = createEnteredGate();
+  const retirement = createEnteredGate();
+  const cleanupQueued = createDeferredCore();
+  const cleanupBrowser = vi.fn(async () => {});
+  const { controller, complete, read } = fixture(
+    {
+      entry,
+      cleanupBrowserSessionsForLifecycleEnd: undefined,
+      loadCleanupBrowserSessionsForLifecycleEnd: async () => {
+        await loader.wait();
+        return cleanupBrowser;
+      },
+      beforeWrite: async ({ postimages }) => {
+        if (postimages.get(entry.runId) === null) {
+          await retirement.wait();
+        }
+      },
+    },
+    cleanupBrowser,
+  );
+  const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
+  const settleRoots = observeRootWork();
+  const completion = complete({
+    reason: SUBAGENT_ENDED_REASON_KILLED,
+    outcome: { status: "error" },
+  });
+  let pendingRetirement: Promise<void> | undefined;
+  try {
+    await withinTest(loader.entered, signal);
+    pendingRetirement = controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry: read(),
+      cleanup: "delete",
+      completedAt: 4_000,
+      preserveTranscript: true,
+      skipRequesterSettleWake: true,
+    });
+    await withinTest(retirement.entered, signal);
+    const commit = lifecyclePersistence.commitSubagentLifecycleMutation;
+    vi.spyOn(lifecyclePersistence, "commitSubagentLifecycleMutation").mockImplementation(
+      (context, args) => {
+        const pending = commit(context, args);
+        if (args.onPublished) {
+          cleanupQueued.resolve();
+        }
+        return pending;
+      },
+    );
+    loader.release();
+    await withinTest(cleanupQueued.promise, signal);
+    retirement.release();
+    await pendingRetirement;
+    await expect(completion).resolves.toBeUndefined();
+    await settleRoots();
+
+    expect(controller.options.runs.has(entry.runId)).toBe(false);
+    expect(cleanupBrowser).not.toHaveBeenCalled();
+    expect(announce).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  } finally {
+    loader.release();
+    retirement.release();
+    await Promise.allSettled([completion, pendingRetirement]);
+    await settleRoots();
+  }
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();

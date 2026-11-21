@@ -1,6 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
-import { inheritToolSchemaTruncation, truncateToolSchemaDepth } from "./tool-schema-depth.js";
+import {
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  truncateToolSchemaDepth,
+  wasToolSchemaTruncated,
+} from "./tool-schema-depth.js";
+import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
+import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 import {
   copySchemaMeta,
   SCHEMA_MAP_KEYS as OPENAPI_MAP_KEYS,
@@ -68,6 +75,7 @@ function inferUnionBranchType(schema: Record<string, unknown>): string | undefin
 }
 
 type SchemaProfile = "strict" | "compat" | "openapi" | "moonshot";
+const publishedNormalizations = createToolSchemaNormalizationCache<unknown>();
 
 // Profiles retain their schema-slot scope, map-name handling and root promotion.
 function normalizeToolSchemaRecursive(
@@ -273,12 +281,36 @@ function normalizeToolSchemaRecursive(
 export function normalizeToolSchema(
   schema: Record<string, unknown>,
   profile: "moonshot",
+  toolName?: string,
 ): Record<string, unknown>;
 export function normalizeToolSchema(
   schema: unknown,
   profile: "strict" | "compat" | "openapi",
+  toolName?: string,
 ): unknown;
-export function normalizeToolSchema(schema: unknown, profile: SchemaProfile): unknown {
-  const bounded = truncateToolSchemaDepth(schema);
-  return inheritToolSchemaTruncation(bounded, normalizeToolSchemaRecursive(bounded, profile));
+export function normalizeToolSchema(
+  schema: unknown,
+  profile: SchemaProfile,
+  toolName?: string,
+): unknown {
+  const source =
+    schema && typeof schema === "object" && getPublishedRuntimeToolInputSchema(schema)
+      ? schema
+      : undefined;
+  if (source) {
+    if (wasToolSchemaTruncated(source)) {
+      reportToolSchemaTruncation(source, toolName);
+    }
+    const cached = publishedNormalizations.get(source, profile);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+  // Publication already bounded and detached the schema; mutable inputs still need admission.
+  const bounded = source ?? truncateToolSchemaDepth(schema, toolName);
+  const normalized = inheritToolSchemaTruncation(
+    bounded,
+    normalizeToolSchemaRecursive(bounded, profile),
+  );
+  return source ? publishedNormalizations.remember(source, profile, normalized) : normalized;
 }

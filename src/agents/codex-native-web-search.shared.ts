@@ -3,32 +3,8 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-/** Whether native Codex search may use cached or live external web access. */
-type CodexNativeSearchMode = "cached" | "live";
-/** OpenAI search context-size hint for Codex native web search. */
-type CodexNativeSearchContextSize = "low" | "medium" | "high";
-
-/** Optional approximate user location for Codex native web search. */
-type CodexNativeSearchUserLocation = {
-  country?: string;
-  region?: string;
-  city?: string;
-  timezone?: string;
-};
-
-/** Normalized Codex native web-search settings. */
-type ResolvedCodexNativeWebSearchConfig = {
-  enabled: boolean;
-  mode: CodexNativeSearchMode;
-  allowedDomains?: string[];
-  contextSize?: CodexNativeSearchContextSize;
-  userLocation?: CodexNativeSearchUserLocation;
-};
-
 /** Resolve Codex native web-search config from OpenClaw tool settings. */
-export function resolveCodexNativeWebSearchConfig(
-  config: OpenClawConfig | undefined,
-): ResolvedCodexNativeWebSearchConfig {
+export function resolveCodexNativeWebSearchConfig(config: OpenClawConfig | undefined) {
   const nativeConfig = config?.tools?.web?.search?.openaiCodex;
   return {
     enabled: nativeConfig?.enabled === true,

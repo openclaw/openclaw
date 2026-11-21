@@ -38,7 +38,8 @@ vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
 }));
 
 // mock-isolation: Keep MCP configuration in the test's in-memory server map.
-vi.mock("../../config/mcp-config.js", () => ({
+vi.mock("../../config/mcp-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/mcp-config.js")>()),
   listConfiguredMcpServers: vi.fn(async () => configuredServers()),
 }));
 
@@ -162,7 +163,9 @@ it("rejects internal writes without operator.admin", async () => {
   expect(result.reply?.text).toContain("requires operator.admin");
 });
 
-it("routes group /mcp show privately and redacts the delivered config", async () => {
+it.each(["billing-server", ""])("privately shows redacted MCP config: %s", async (name) => {
+  const secret = "private-config-secret";
+  const token = "ghp_realgithubtoken1234567890ABCD";
   const privateReplies: string[] = [];
   privateRouteMocks.resolvePrivateCommandRouteTargets.mockResolvedValue([
     { channel: "telegram", to: "owner-1" },
@@ -171,74 +174,47 @@ it("routes group /mcp show privately and redacts the delivered config", async ()
     privateReplies.push(payloads[0]?.text ?? "");
     return [{ channel: "telegram", messageId: "private-config" }];
   });
-  const secrets = {
-    header: "Bearer sk-test-secret-value",
-    env: "stdio-process-token-value",
-    separate: "plain-separate-arg-secret",
-    inline: "plain-inline-arg-secret",
-    positional: "ghp_realgithubtoken1234567890ABCD",
-    key: "opaque-secret-key-value",
-    aws: "opaque-aws-secret-access-key-value",
-    underscore: "opaque-underscore-api-key-value",
-    credentials: "opaque-plural-credentials-value",
-  };
   mcpServers.set("billing-server", {
     command: "uvx",
     args: [
       "billing-mcp",
       "--api-key",
-      secrets.separate,
-      `--token=${secrets.inline}`,
-      secrets.positional,
+      secret,
+      `--token=${secret}`,
+      token,
       "--secret-key",
-      secrets.key,
-      `--aws-secret-access-key=${secrets.aws}`,
+      secret,
+      `--aws-secret-access-key=${secret}`,
       "--openai_api_key",
-      secrets.underscore,
+      secret,
       "--credentials",
-      secrets.credentials,
+      secret,
       "--region",
       "us-east-1",
     ],
-    headers: { Authorization: secrets.header },
-    env: { BILLING_TOKEN: secrets.env },
+    headers: { Authorization: `Bearer ${secret}` },
+    env: { BILLING_TOKEN: secret },
   });
-  mcpServers.set("local-tools", {
-    env: { TOOL_API_KEY: "local-env-secret-value" },
-  });
-
-  const namedResult = await runMcp("/mcp show billing-server", { group: true });
-  const namedGroupText = namedResult.reply?.text ?? "";
-  expect(namedGroupText).toContain("sent the details to the owner privately");
-  expect(namedGroupText).not.toContain("billing-server");
-  expect(namedGroupText).not.toContain("/tmp/openclaw.json");
-  expect(namedGroupText).not.toContain(secrets.header);
+  mcpServers.set("local-tools", { env: { TOOL_API_KEY: secret } });
+  const result = await runMcp(`/mcp show ${name}`, { group: true });
+  expectPrivateReply(result, ["owner-1"], "sent the details to the owner privately", [
+    "billing-server",
+    "/tmp/openclaw.json",
+    secret,
+  ]);
   expect(privateReplies).toHaveLength(1);
-  const namedText = privateReplies[0] ?? "";
-  expect(namedText).toContain('MCP server "billing-server"');
-  expect(namedText).toContain('"command": "uvx"');
-  expect(namedText).toContain('"billing-mcp"');
-  expect(namedText).toContain('"--api-key"');
-  expect(namedText).toContain(`"--token=${REDACTED_SENTINEL}"`);
-  expect(namedText).toContain('"--secret-key"');
-  expect(namedText).toContain(`"--aws-secret-access-key=${REDACTED_SENTINEL}"`);
-  expect(namedText).toContain('"--openai_api_key"');
-  expect(namedText).toContain('"--region"');
-  expect(namedText).toContain('"us-east-1"');
-  expect(namedText).toContain(REDACTED_SENTINEL);
-  expectText(namedText, [], [...Object.values(secrets), "sk-test-secret-value"]);
-
-  const allResult = await runMcp("/mcp show", { group: true });
-  const allGroupText = allResult.reply?.text ?? "";
-  expect(allGroupText).toContain("sent the details to the owner privately");
-  expect(allGroupText).not.toContain("billing-server");
-  expect(allGroupText).not.toContain("/tmp/openclaw.json");
-  expect(privateReplies).toHaveLength(2);
-  const allText = privateReplies[1] ?? "";
-  expect(allText).toContain('"billing-server"');
-  expect(allText).toContain('"local-tools"');
-  expect(allText).toContain(REDACTED_SENTINEL);
-  expectText(allText, [], [...Object.values(secrets), "local-env-secret-value"]);
+  expectText(
+    privateReplies[0],
+    [
+      '"billing-mcp"',
+      REDACTED_SENTINEL,
+      '"us-east-1"',
+      `"--token=${REDACTED_SENTINEL}"`,
+      `"--aws-secret-access-key=${REDACTED_SENTINEL}"`,
+      name ? 'MCP server "billing-server"' : '"local-tools"',
+    ],
+    [secret, token],
+  );
 });
 
 it.each(["no private owner target", "private delivery failure"])(
@@ -262,26 +238,20 @@ it.each(["no private owner target", "private delivery failure"])(
   },
 );
 
-it("tries later private routes after a released failure", async () => {
-  const error = new OutboundDeliveryError("private route unavailable", { cause: undefined });
-  error.queueCustody = "released";
-  deliverOutboundPayloads
-    .mockRejectedValueOnce(error)
-    .mockResolvedValueOnce([{ channel: "signal", messageId: "fallback-send" }]);
-  const result = await showGroupMcpConfig();
-
-  expectPrivateReply(result, ["owner-1", "owner-2"], "sent the details to the owner privately", [
-    "billing-server",
-    "private-billing-mcp",
-  ]);
-});
-
-it("keeps identityless first acceptance pending without sending to another private target", async () => {
-  suppressNextDelivery("adapter_returned_no_identity");
-  deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "signal", messageId: "second-send" }]);
-  const result = await showGroupMcpConfig();
-
-  expectPrivateReply(result, ["owner-1"], "pending", [
+it.each([
+  ["adapter_returned_no_identity", "pending"],
+  [
+    "cancelled_by_reply_payload_sending_hook",
+    "Private delivery was suppressed; no details were sent",
+  ],
+] as const)("stops private delivery after %s", async (reason, acknowledgement) => {
+  suppressNextDelivery(reason);
+  if (reason === "adapter_returned_no_identity") {
+    deliverOutboundPayloads.mockResolvedValueOnce([
+      { channel: "signal", messageId: "second-send" },
+    ]);
+  }
+  expectPrivateReply(await showGroupMcpConfig(), ["owner-1"], acknowledgement, [
     "sent the details",
     "billing-server",
     "/tmp/openclaw.json",
@@ -310,11 +280,11 @@ it("tries another private route when channel preparation throws before dispatch"
 
   const result = await showGroupMcpConfig();
 
-  expect(transformReplyPayload).toHaveBeenCalledTimes(1);
   expectPrivateReply(result, ["owner-2"], "sent the details to the owner privately");
 });
 
 it.each([
+  { name: "released failure", custody: "released", ambiguous: false, visible: false },
   { name: "held partial delivery", custody: "held", ambiguous: false, visible: true },
   { name: "released ambiguity", custody: "released", ambiguous: true, visible: false },
 ] as const)(
@@ -335,15 +305,17 @@ it.each([
     });
     error.queueCustody = custody;
     deliverOutboundPayloads.mockRejectedValueOnce(error);
-    const result = await showGroupMcpConfig();
-
-    expectPrivateReply(result, ["owner-1"], "pending", ["sent the details", "billing-server"]);
+    const released = custody === "released" && !ambiguous;
+    if (released) {
+      deliverOutboundPayloads.mockResolvedValueOnce([
+        { channel: "signal", messageId: "fallback-send" },
+      ]);
+    }
+    expectPrivateReply(
+      await showGroupMcpConfig(),
+      released ? ["owner-1", "owner-2"] : ["owner-1"],
+      released ? "sent the details to the owner privately" : "pending",
+      released ? ["billing-server", "private-billing-mcp"] : ["sent the details", "billing-server"],
+    );
   },
 );
-
-it("stops after intentional suppression with an honest acknowledgement", async () => {
-  suppressNextDelivery("cancelled_by_reply_payload_sending_hook");
-  const result = await showGroupMcpConfig();
-
-  expectPrivateReply(result, ["owner-1"], "Private delivery was suppressed; no details were sent");
-});

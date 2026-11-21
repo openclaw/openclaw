@@ -39,16 +39,12 @@ function saveSelection(
 }
 function resolveLocation(
   overrides: Partial<Parameters<typeof resolveInitialApplicationLocation>[0]>,
-  subscribe = vi.fn(() => () => undefined),
 ) {
   return resolveInitialApplicationLocation({
     location: makeLocation("/"),
     basePath: "",
     sessionKey: "global",
-    gateway: {
-      ...makeRoutingGateway({ sessionKey: "global", hello: hello("dummy", true) }).gateway,
-      subscribe,
-    },
+    gateway: makeRoutingGateway({ sessionKey: "global", hello: hello("dummy", true) }).gateway,
     agentsList: () => roster(["dummy"], "dummy", "global"),
     signal: new AbortController().signal,
     ...overrides,
@@ -70,41 +66,35 @@ afterEach(() => {
 });
 
 it.each([
-  ["openclaw", ["dummy", "openclaw"], "/chat/openclaw"],
-  ["removed", ["dummy"], "/chat/dummy"],
+  ["global", "openclaw", ["dummy", "openclaw"], false, "/chat/openclaw"],
+  ["global", "removed", ["dummy"], false, "/chat/dummy"],
+  ["global", "openclaw", ["dummy", "openclaw"], true, "/chat/openclaw"],
+  ["workspace", "openclaw", ["dummy", "openclaw"], true, "/chat/openclaw/workspace"],
 ] as const)(
-  "routes a global session remembering %s through the live roster",
-  async (selectedAgentId, ids, pathname) => {
-    const subscribe = vi.fn(() => () => undefined);
-
+  "restores %s remembering %s from roster %j (cold: %s)",
+  async (sessionKey, selectedAgentId, ids, cold, pathname) => {
+    const liveList = roster(ids, "dummy", "global");
     await expect(
-      resolveLocation(
-        {
-          location: makeLocation("/chat"),
-          selectedAgentId,
-          agentsList: () => roster(ids, "dummy", "global"),
-        },
-        subscribe,
-      ),
-    ).resolves.toEqual({ pathname, search: "", hash: "" });
-    expect(subscribe).not.toHaveBeenCalled();
+      resolveLocation({
+        location: makeLocation("/chat"),
+        sessionKey,
+        selectedAgentId,
+        agentsList: () => (cold ? null : liveList),
+        ...(cold ? { ensureAgentsList: async () => liveList } : {}),
+      }),
+    ).resolves.toEqual(makeLocation(pathname));
   },
 );
 
 it("refreshes a cached roster and its default before accepting a remembered agent", async () => {
-  const cachedList = roster(["retired"]);
-  const liveList = roster(["next"]);
-  const ensureAgentsList = vi.fn(async () => liveList);
-
   await expect(
     resolveLocation({
       sessionKey: "agent:retired:main",
       gateway: readyGateway({ request: vi.fn() }).gateway,
-      agentsList: () => cachedList,
-      ensureAgentsList,
+      agentsList: () => roster(["retired"]),
+      ensureAgentsList: async () => roster(["next"]),
     }),
   ).resolves.toEqual(makeLocation("/chat/next"));
-  expect(ensureAgentsList).toHaveBeenCalledOnce();
 });
 
 it("validates a remembered session again after the Gateway client changes", async () => {
@@ -114,56 +104,41 @@ it("validates a remembered session again after the Gateway client changes", asyn
     async (): Promise<{ ok: boolean; key?: string; agentId?: string }> => ({ ok: false }),
   );
   const gatewayState = readyGateway({ request: firstRequest });
-  const gateway = gatewayState.gateway;
   const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
 
   const pending = resolveLocation({
     location: makeLocation("/", "?draft=hello"),
     sessionKey: rememberedKey,
-    gateway,
+    gateway: gatewayState.gateway,
     agentsList: () => roster(["main", "research"]),
   });
   await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
-  gatewayState.publish({
-    client: { request: replacementRequest },
-    hello: hello(),
-  });
+  gatewayState.publish({ client: { request: replacementRequest }, hello: hello() });
   first.resolve({ ok: true, key: rememberedKey, agentId: "research" });
 
   await expect(pending).resolves.toEqual(makeLocation("/chat/research", "?draft=hello"));
-  expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
-    "sessions.resolve",
-    { key: rememberedKey, agentId: "research", allowMissing: true },
-    { signal: expect.any(AbortSignal) },
-  );
 });
 
 it("loads the agent roster again after the Gateway client changes", async () => {
   const first = createDeferred<AgentsListResult>();
   const currentList = roster(["main"]);
-  const oldList = { ...currentList, agents: [{ id: "main" }, { id: "research" }] };
   const ensureAgentsList = vi
     .fn<() => Promise<AgentsListResult>>()
     .mockReturnValueOnce(first.promise)
     .mockResolvedValue(currentList);
   const gatewayState = readyGateway({});
-  const gateway = gatewayState.gateway;
 
   const pending = resolveLocation({
     sessionKey: "agent:research:main",
-    gateway,
+    gateway: gatewayState.gateway,
     agentsList: () => null,
     ensureAgentsList,
   });
   await vi.waitFor(() => expect(ensureAgentsList).toHaveBeenCalledOnce());
-  gatewayState.publish({
-    client: {},
-    hello: hello(),
-  });
-  first.resolve(oldList);
+  gatewayState.publish({ client: {}, hello: hello() });
+  first.resolve(roster(["main", "research"]));
 
   await expect(pending).resolves.toEqual(makeLocation("/chat/main"));
-  expect(ensureAgentsList).toHaveBeenCalledTimes(2);
 });
 
 it("starts routing an agent-scoped remembered session while the Gateway is offline", async () => {

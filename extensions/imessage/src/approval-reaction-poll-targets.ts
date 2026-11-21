@@ -253,8 +253,3 @@ export async function listPendingIMessageApprovalReactionPollTargets(params: {
   }
   return [...targetByApprovalAndMessage.values()];
 }
-
-export function clearIMessageApprovalReactionPollTargetsForTest(): void {
-  pendingReactionPollTargets.clear();
-  pendingReactionPollTargetStore = undefined;
-}

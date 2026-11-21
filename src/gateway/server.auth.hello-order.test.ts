@@ -5,18 +5,18 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeConfigFile } from "../config/config.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { upsertPresence, type SystemPresence } from "../infra/system-presence.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import {
   connectReq,
+  BROWSER_ORIGIN as origin,
+  configureBrowserAuth,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   openWs,
   onceMessage,
-  testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 import { connectWatchNode } from "./watch-node-http.test-helpers.js";
@@ -24,9 +24,9 @@ import { connectWatchNode } from "./watch-node-http.test-helpers.js";
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const origin = "https://control.example.com";
-
 type ObservedFrame = {
+  type?: string;
+  id?: string;
   event?: string;
   payload?: {
     type?: string;
@@ -35,31 +35,25 @@ type ObservedFrame = {
   };
 };
 
-beforeEach(async () => {
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
-  testState.gatewayAuth = auth;
-  const controlUi = { allowedOrigins: [origin] };
-  testState.gatewayControlUi = controlUi;
-  await writeConfigFile({
-    gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi },
-  });
-});
+beforeEach(() => configureBrowserAuth());
 
-async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
-  const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
-  const socket = await openWs(port, {
+const browserAuth = {
+  skipDefaultAuth: true,
+  prePairDevice: true,
+  scopes: ["operator.read"],
+  browserOrigin: origin,
+};
+const openProxySocket = (port: number, user?: string) =>
+  openWs(port, {
     origin,
     "x-forwarded-for": "203.0.113.50",
     "x-forwarded-proto": "https",
-    "x-forwarded-user": `${instanceId}@example.com`,
+    ...(user ? { "x-forwarded-user": user } : {}),
   });
+
+async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
+  const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
+  const socket = await openProxySocket(port, `${instanceId}@example.com`);
   const frames: ObservedFrame[] = [];
   socket.on("message", (data) => frames.push(JSON.parse(rawDataToString(data))));
   return {
@@ -67,13 +61,10 @@ async function openBrowser(port: number, instanceId: string, caps: string[] = []
     frames,
     connect: () =>
       connectReq(socket, {
-        skipDefaultAuth: true,
-        prePairDevice: true,
+        ...browserAuth,
         deviceIdentityPath: identityPath,
         client: { ...CONTROL_UI_CLIENT, instanceId },
-        scopes: ["operator.read"],
         caps,
-        browserOrigin: origin,
       }),
   };
 }
@@ -156,6 +147,84 @@ test.each([false, true])(
         expect(helloPresence.map((entry) => entry.instanceId)).toContain("established-reader");
       }
       expect(presenceReasons(reader.frames, "joining-browser")).toContain("connect");
+    });
+  },
+);
+
+test.each(["accepted", "denied"] as const)(
+  "keeps requests pipelined behind connect subject to %s authentication",
+  async (authentication) => {
+    await withGatewayServer(async ({ port }) => {
+      const accepted = authentication === "accepted";
+      const socket = await openWs(port, {
+        origin,
+        "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
+        ...(accepted ? { "x-forwarded-user": "pipeline@example.com" } : {}),
+      });
+      const frames: ObservedFrame[] = [];
+      socket.on("message", (data) => frames.push(JSON.parse(rawDataToString(data))));
+      const requests = [
+        { type: "req", id: "pipeline-subscribe", method: "sessions.subscribe", params: {} },
+        { type: "req", id: "pipeline-health", method: "health", params: {} },
+      ];
+      const replies = accepted
+        ? requests.map((request) =>
+            onceMessage(socket, (frame) => frame.type === "res" && frame.id === request.id),
+          )
+        : [];
+      const closed = accepted ? undefined : once(socket, "close");
+      const originalSend = Reflect.get(socket, "send");
+      let pipelined = false;
+      using sendSpy = vi.spyOn(socket, "send");
+      sendSpy.mockImplementation(function (
+        this: WebSocket,
+        ...args: Parameters<WebSocket["send"]>
+      ) {
+        Reflect.apply(originalSend, this, args);
+        if (typeof args[0] === "string" && JSON.parse(args[0]).method === "connect") {
+          // Append at the actual connect write, after the helper has prepared device auth.
+          expect(frames.some((frame) => frame.payload?.type === "hello-ok")).toBe(false);
+          for (const request of requests) {
+            Reflect.apply(originalSend, this, [JSON.stringify(request)]);
+          }
+          pipelined = true;
+        }
+      });
+
+      const [result, responses] = await Promise.all([
+        connectReq(socket, {
+          skipDefaultAuth: true,
+          prePairDevice: true,
+          deviceIdentityPath: path.join(
+            tempDirs.make("hello-pipeline-"),
+            "client",
+            "credentials.sqlite",
+          ),
+          client: CONTROL_UI_CLIENT,
+          scopes: ["operator.read"],
+          browserOrigin: origin,
+        }),
+        Promise.all(replies),
+      ]);
+      expect(pipelined).toBe(true);
+      if (accepted) {
+        expect(result).toMatchObject({ ok: true, payload: { type: "hello-ok" } });
+        expect(frames.find((frame) => frame.type === "res")?.id).toBe(result.id);
+        expect(responses).toMatchObject([
+          { id: "pipeline-subscribe", ok: true, payload: { subscribed: true } },
+          { id: "pipeline-health", ok: true, payload: { channels: expect.any(Object) } },
+        ]);
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST", details: { authReason: "trusted_proxy_user_missing" } },
+        });
+        expect((await closed)?.[0]).toBe(1008);
+        expect(
+          frames.filter((frame) => requests.some((request) => request.id === frame.id)),
+        ).toEqual([]);
+      }
     });
   },
 );

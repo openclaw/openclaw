@@ -23,35 +23,6 @@ import {
 } from "./frame.js";
 
 export const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
-const CUA_COMMON_ACTION_NAMES = [
-  "screenshot",
-  ...CUA_WIRE_ACTION_NAMES.filter((action) => action !== "hold_key"),
-  "list_apps",
-  "list_windows",
-  "get_accessibility_tree",
-  "get_cursor_position",
-  "get_window_state",
-  "launch_app",
-  "kill_app",
-  "bring_to_front",
-  "set_value",
-  "zoom",
-  "get_browser_state",
-  "browser_prepare",
-  "browser_navigate",
-  "browser_click",
-  "browser_type",
-  "browser_dialog",
-  "browser_set_input_files",
-  "browser_download",
-  "browser_pointer",
-  "escalate_scope",
-  "get_recording_state",
-  "start_recording",
-  "stop_recording",
-  "replay_trajectory",
-  "invoke_menu",
-] as const;
 
 const NativeAppSchema = z.object({
   pid: z.number().int().nonnegative().nullable().optional(),
@@ -118,9 +89,11 @@ const PARTIAL_EFFECT = 1 as import("@trycua/cua-driver").ActionEffect;
 const VALUE_READBACK_EVIDENCE = 0 as import("@trycua/cua-driver").ActionEvidenceKind;
 
 export function platformActions(platform: NodeJS.Platform): ComputerUseV2ActionName[] {
-  return CUA_COMMON_ACTION_NAMES.filter(
+  return COMPUTER_USE_V2_ACTION_NAMES.filter(
     (action) =>
-      platform === "linux" || (action !== "left_mouse_down" && action !== "left_mouse_up"),
+      action !== "hold_key" &&
+      action !== "wait" &&
+      (platform === "linux" || (action !== "left_mouse_down" && action !== "left_mouse_up")),
   );
 }
 

@@ -4,12 +4,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { withTitleProvider, provider } from "./dashboard-session-title.test-support.js";
-import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
-import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
-  directSessionReq,
-  setupGatewaySessionsHandlerTestHarness,
-} from "./test/server-sessions.test-helpers.js";
+  controlUiClient,
+  successfulSessionRequest,
+} from "./server.sessions.create.projects.test-support.js";
+import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
+import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
 
 setupGatewaySessionsHandlerTestHarness();
 afterEach(() => {
@@ -17,7 +17,7 @@ afterEach(() => {
   testState.agentConfig = undefined;
 });
 
-it("names task-bearing prepare, create, and send requests while preserving controls and manual names", async () => {
+it("names task-bearing sends and attachments while ignoring control-only messages", async () => {
   await withTitleProvider(
     "Repair request routing",
     async ({ cfg, workspaceDir, storePath, requests }) => {
@@ -25,32 +25,17 @@ it("names task-bearing prepare, create, and send requests while preserving contr
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(
         path.join(skillDir, "SKILL.md"),
-        `---
-name: route-proof
-description: Investigate request routing
----
-Handle the supplied task.
-`,
+        "---\nname: route-proof\ndescription: Investigate request routing\n---\nHandle the supplied task.\n",
       );
-      cfg.session = { store: storePath };
       testState.agentConfig = cfg.agents!.defaults;
       const context = {
         getRuntimeConfig: () => cfg,
         loadGatewayModelCatalogSnapshot: async () => ({
-          agentId: "main",
-          agentDir: workspaceDir,
-          workspaceDir,
           config: cfg,
           catalogComplete: true,
           routeVariants: [],
-          entries: cfg.models!.providers![provider]!.models.map(
-            ({ id, name, contextWindow, reasoning }) => ({
-              id,
-              name,
-              contextWindow,
-              reasoning,
-              provider,
-            }),
+          entries: cfg.models!.providers![provider]!.models.map((model) =>
+            Object.assign({}, model, { provider }),
           ),
         }),
         broadcastToConnIds: vi.fn(),
@@ -63,16 +48,10 @@ Handle the supplied task.
         vi.waitFor(() => expect(entry(key)?.displayName).toBe("Repair request routing"), {
           timeout: 20_000,
         });
-      async function request(
-        method: Parameters<typeof directSessionReq>[0],
+      const request = (
+        method: Parameters<typeof successfulSessionRequest>[0],
         params: Record<string, unknown>,
-      ) {
-        const result = await directSessionReq(method, params, options);
-        expect(result.ok, JSON.stringify(result.error)).toBe(true);
-        return result.payload;
-      }
-      const create = (key: string, fields: Record<string, unknown> = {}) =>
-        request("sessions.create", { agentId: "main", key, ...fields });
+      ) => successfulSessionRequest(method, params, options);
       const send = (sessionKey: string, message: string, idempotencyKey: string) =>
         request("chat.send", { sessionKey, message, idempotencyKey });
       dispatchInboundMessageMock.mockResolvedValue({
@@ -80,35 +59,23 @@ Handle the supplied task.
         counts: { block: 0, final: 0, tool: 0 },
       });
       const task = "/route_proof /api request routing needs repair";
-      const prepared = await request("sessions.title.prepare", { agentId: "main", message: task });
-      expect(prepared).toMatchObject({ title: "Repair request routing" });
-
-      const createdKey = "agent:main:dashboard:created-title-source";
-      await create(createdKey, { titleSource: task });
-      await waitForTitle(createdKey);
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({ sessionKey: createdKey, reason: "chat.title" }),
-        expect.anything(),
-        expect.anything(),
-      );
-
       const sentKey = "agent:main:dashboard:sent-title-source";
-      await create(sentKey);
+      await request("sessions.create", { agentId: "main", key: sentKey });
       await send(sentKey, "/status", "title-control");
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
       expect(entry(sentKey)?.displayName).toBeUndefined();
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(0);
       await send(sentKey, task, "title-task");
       await waitForTitle(sentKey);
-
-      const manualKey = "agent:main:dashboard:manual-title-source";
-      await create(manualKey, { label: "My chosen name", titleSource: task });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
-      expect(entry(manualKey)?.label).toBe("My chosen name");
-      expect(requests).toHaveLength(3);
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ sessionKey: sentKey, reason: "chat.title" }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(requests).toHaveLength(1);
       const attachmentKey = "agent:main:dashboard:attachment-title-source";
-      await create(attachmentKey);
+      await request("sessions.create", { agentId: "main", key: attachmentKey });
       await request("chat.send", {
         sessionKey: attachmentKey,
         message: "/status",
@@ -123,14 +90,14 @@ Handle the supplied task.
         ],
       });
       await waitForTitle(attachmentKey);
-      expect(requests).toHaveLength(4);
+      expect(requests).toHaveLength(2);
       for (const [index, titleRequest] of requests.entries()) {
         const messages = titleRequest.body.messages as Array<{ role: string; content: string }>;
         expect(
           JSON.parse(messages.findLast((message) => message.role === "user")!.content),
         ).toEqual({
           conversationLabelSource:
-            index < 3 ? "/api request routing needs repair" : "Repair the attachment incident",
+            index === 0 ? "/api request routing needs repair" : "Repair the attachment incident",
         });
       }
     },

@@ -1,7 +1,12 @@
-import { createMemo, For, lazy, Loading, Show } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { createMemo, lazy, Show } from "solid-js";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments } from "./chat-attachment-draft.ts";
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 // Keep preview-only rendering out of empty composers, including New Session.
 const AttachmentPreviewStrip = lazy(() => import("./chat-attachment-preview-strip.tsx"), {
@@ -41,7 +46,9 @@ export function AttachmentPreview(
 ) {
   const entries = createMemo(() => {
     void props.readRevision;
-    const attachments = props.attachments ?? [];
+    // Draft props notify membership changes; reconcile with the synchronous owner.
+    void props.attachments;
+    const attachments = currentAttachments(props);
     const reads =
       props.attachmentReads?.project(attachments) ??
       attachments.map((attachment): ChatAttachmentRead => ({ attachment, state: "ready" }));
@@ -54,27 +61,11 @@ export function AttachmentPreview(
       errorMessage: read.errorMessage,
     }));
   });
-  const failures = createMemo(() => entries().filter((entry) => entry.state === "error"));
   return (
     <Show when={entries().length > 0}>
-      <Loading>
+      <ChatLazyBoundary>
         <AttachmentPreviewStrip entries={entries()} controls={props} />
-      </Loading>
-      <Show when={failures().length > 0}>
-        <div class="chat-attachment-failures" role="alert">
-          <For each={failures()} keyed={(entry) => entry.attachment.id}>
-            {(entry) => (
-              <div>
-                {t(entry().errorMessage ?? "chat.attachments.readFailed", {
-                  names: entry().attachment.fileName ?? t("chat.attachments.attachedFile"),
-                  more: "",
-                })}
-              </div>
-            )}
-          </For>
-          <div class="chat-attachment-failures__help">{t("chat.attachments.retryHelp")}</div>
-        </div>
-      </Show>
+      </ChatLazyBoundary>
     </Show>
   );
 }

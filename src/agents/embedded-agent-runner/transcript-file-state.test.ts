@@ -26,6 +26,17 @@ function messageEntry(id: string, parentId: string | null, message: unknown) {
   return { type: "message", id, parentId, message };
 }
 
+function userEntry(id: string, parentId: string | null, content?: string) {
+  return messageEntry(id, parentId, {
+    role: "user",
+    ...(content === undefined ? {} : { content }),
+  });
+}
+
+function assistantEntry(id: string, parentId: string | null, content: unknown) {
+  return messageEntry(id, parentId, { role: "assistant", content });
+}
+
 async function readTranscriptState(sessionFile: string): Promise<SessionManager> {
   return SessionManager.fromEntries(parseSessionEntries(await fs.readFile(sessionFile, "utf8")));
 }
@@ -104,22 +115,19 @@ describe("readTranscriptState", () => {
 
   it("preserves repair-supported assistant tool call payload shapes", async () => {
     const state = await readFixture([
-      messageEntry("user-1", null, { role: "user", content: "read a file" }),
-      messageEntry("assistant-tool", "user-1", {
-        role: "assistant",
-        content: [
-          { type: "toolUse", id: "call-input", name: "read", input: { path: "README.md" } },
-          { type: "toolCall", id: "call-args", name: "write", arguments: { path: "out" } },
-          { type: "toolUse", id: "call-no-args", name: "list" },
-          {
-            type: "function_call",
-            call_id: "call-legacy",
-            name: "search",
-            arguments: '{"query":"docs"}',
-          },
-          { type: "toolCall", id: "call-null-args", name: "noop", arguments: null },
-        ],
-      }),
+      userEntry("user-1", null, "read a file"),
+      assistantEntry("assistant-tool", "user-1", [
+        { type: "toolUse", id: "call-input", name: "read", input: { path: "README.md" } },
+        { type: "toolCall", id: "call-args", name: "write", arguments: { path: "out" } },
+        { type: "toolUse", id: "call-no-args", name: "list" },
+        {
+          type: "function_call",
+          call_id: "call-legacy",
+          name: "search",
+          arguments: '{"query":"docs"}',
+        },
+        { type: "toolCall", id: "call-null-args", name: "noop", arguments: null },
+      ]),
       messageEntry(
         "tool-result",
         "assistant-tool",
@@ -191,16 +199,12 @@ describe("readTranscriptState", () => {
 
   it("remaps malformed compaction markers to descendants on the active branch", async () => {
     const state = await readFixture([
-      messageEntry("bad-message", null, { role: "user" }),
-      messageEntry("branch-a-user", "bad-message", { role: "user", content: "other branch" }),
-      messageEntry("branch-b-user", "bad-message", {
-        role: "user",
-        content: "active branch kept turn",
-      }),
-      messageEntry("branch-b-assistant", "branch-b-user", {
-        role: "assistant",
-        content: [{ type: "text", text: "active reply" }],
-      }),
+      userEntry("bad-message", null),
+      userEntry("branch-a-user", "bad-message", "other branch"),
+      userEntry("branch-b-user", "bad-message", "active branch kept turn"),
+      assistantEntry("branch-b-assistant", "branch-b-user", [
+        { type: "text", text: "active reply" },
+      ]),
       {
         type: "compaction",
         id: "compact-1",
@@ -224,10 +228,7 @@ describe("readTranscriptState", () => {
   it("breaks cycles between canonical and opaque rows", async () => {
     const state = await readFixture(
       [
-        messageEntry("active-entry", "opaque-cycle", {
-          role: "user",
-          content: "kept through cycle",
-        }),
+        userEntry("active-entry", "opaque-cycle", "kept through cycle"),
         controlEntry("metadata", "opaque-cycle", "active-entry", { payload: { source: "plugin" } }),
       ],
       { timestamp: "2026-06-15T00:00:00.000Z" },
@@ -246,9 +247,9 @@ describe("readTranscriptState", () => {
 
   it("drops labels targeting rejected entries before transcript rewrite replay", async () => {
     const state = await readFixture([
-      messageEntry("user-1", null, { role: "user", content: "before malformed row" }),
-      messageEntry("bad-message", "user-1", { role: "user" }),
-      messageEntry("user-2", "bad-message", { role: "user", content: "after malformed row" }),
+      userEntry("user-1", null, "before malformed row"),
+      userEntry("bad-message", "user-1"),
+      userEntry("user-2", "bad-message", "after malformed row"),
       {
         type: "label",
         id: "label-1",
@@ -256,7 +257,7 @@ describe("readTranscriptState", () => {
         targetId: "bad-message",
         label: "bad",
       },
-      messageEntry("user-3", "label-1", { role: "user", content: "after poisoned label" }),
+      userEntry("user-3", "label-1", "after poisoned label"),
     ]);
 
     expect(state.getEntries().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual(
@@ -270,11 +271,8 @@ describe("readTranscriptState", () => {
   });
 
   it("applies leaf controls to active state and marker-linked descendants", async () => {
-    const rootEntry = messageEntry("root-user", null, { role: "user", content: "root question" });
-    const abandonedEntry = messageEntry("abandoned-assistant", rootEntry.id, {
-      role: "assistant",
-      content: "abandoned answer",
-    });
+    const rootEntry = userEntry("root-user", null, "root question");
+    const abandonedEntry = assistantEntry("abandoned-assistant", rootEntry.id, "abandoned answer");
     const leafEntry = controlEntry("leaf", "leaf-1", abandonedEntry.id, { targetId: rootEntry.id });
     const sessionFile = await writeTranscriptFixture([rootEntry, abandonedEntry, leafEntry]);
 
@@ -282,10 +280,11 @@ describe("readTranscriptState", () => {
     expect(selectedState.getLeafId()).toBe(rootEntry.id);
     expect(branchIds(selectedState)).toEqual([rootEntry.id]);
 
-    const replacementEntry = messageEntry("replacement-assistant", leafEntry.id, {
-      role: "assistant",
-      content: "replacement answer",
-    });
+    const replacementEntry = assistantEntry(
+      "replacement-assistant",
+      leafEntry.id,
+      "replacement answer",
+    );
     await fs.appendFile(
       sessionFile,
       `${JSON.stringify({ timestamp: "2026-05-16T00:00:04.000Z", ...replacementEntry })}\n`,
@@ -323,11 +322,8 @@ describe("readTranscriptState", () => {
   it("preserves marked side ancestry without capturing the next active append", async () => {
     const state = await readFixture(
       [
-        messageEntry("active-root", null, { role: "assistant", content: "active" }),
-        messageEntry("side-one", "active-root", {
-          role: "assistant",
-          content: "first side delivery",
-        }),
+        assistantEntry("active-root", null, "active"),
+        assistantEntry("side-one", "active-root", "first side delivery"),
         controlEntry("leaf", "first-leaf", "side-one", {
           targetId: "active-root",
           appendParentId: "side-one",
@@ -354,23 +350,40 @@ describe("readTranscriptState", () => {
     expect(branchIds(state, nextUser.id)).toEqual(["active-root", nextUser.id]);
   });
 
-  it("keeps a terminal leaf control's opaque append parent", async () => {
-    const sessionFile = await writeTranscriptFixture(
-      [
-        messageEntry("active-root", null, { role: "assistant", content: "active" }),
-        controlEntry("metadata", "plugin-metadata", null, { payload: { source: "plugin" } }),
-        messageEntry("side-delivery", "active-root", {
-          role: "assistant",
-          content: "side delivery",
-        }),
+  it.each([
+    {
+      kind: "opaque append parent",
+      metadataParent: null,
+      controls: [
+        assistantEntry("side-delivery", "active-root", "side delivery"),
         controlEntry("leaf", "active-leaf", "side-delivery", {
           targetId: "active-root",
           appendParentId: "plugin-metadata",
         }),
       ],
+    },
+    {
+      kind: "dangling target and append references",
+      metadataParent: "active-root",
+      controls: [
+        controlEntry("leaf", "missing-target", "plugin-metadata", { targetId: "missing" }),
+        controlEntry("leaf", "missing-append", "missing-target", {
+          targetId: "active-root",
+          appendParentId: "missing",
+        }),
+      ],
+    },
+  ])("keeps canonical append ancestry with $kind", async ({ metadataParent, controls }) => {
+    const sessionFile = await writeTranscriptFixture(
+      [
+        assistantEntry("active-root", null, "active"),
+        controlEntry("metadata", "plugin-metadata", metadataParent, {
+          payload: { source: "plugin" },
+        }),
+        ...controls,
+      ],
       { timestamp: "2026-06-15T00:00:00.000Z" },
     );
-
     const state = await readTranscriptState(sessionFile);
     const appended = appendUser(state);
     await persistTranscriptStateMutation({ sessionFile, state, appendedEntries: [appended] });
@@ -378,35 +391,10 @@ describe("readTranscriptState", () => {
       .trim()
       .split(/\r?\n/)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
-
     expect(state.getLeafId()).toBe(appended.id);
     expect(appended.parentId).toBe("active-root");
     expect(branchIds(state)).toEqual(["active-root", appended.id]);
     expect(persisted.at(-1)).toMatchObject({ id: appended.id, parentId: "active-root" });
-  });
-
-  it("ignores leaf controls with dangling target or append references", async () => {
-    const sessionFile = await writeTranscriptFixture(
-      [
-        messageEntry("active-root", null, { role: "assistant", content: "active" }),
-        controlEntry("metadata", "plugin-metadata", "active-root", {
-          payload: { source: "plugin" },
-        }),
-        controlEntry("leaf", "missing-target", "plugin-metadata", { targetId: "missing" }),
-        controlEntry("leaf", "missing-append", "missing-target", {
-          targetId: "active-root",
-          appendParentId: "missing",
-        }),
-      ],
-      { timestamp: "2026-06-15T00:00:00.000Z" },
-    );
-
-    const state = await readTranscriptState(sessionFile);
-    const appended = appendUser(state);
-    await persistTranscriptStateMutation({ sessionFile, state, appendedEntries: [appended] });
-
-    expect(appended.parentId).toBe("active-root");
-    expect(branchIds(state)).toEqual(["active-root", appended.id]);
     const reopened = await readTranscriptState(sessionFile);
     expect(reopened.getLeafId()).toBe(appended.id);
     expect(branchIds(reopened)).toEqual(["active-root", appended.id]);

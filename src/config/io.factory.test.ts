@@ -120,14 +120,13 @@ it("honors per-call unobserved mutation reads without disabling write auditing",
   await mutate((config) => ({
     nextConfig: { ...config, gateway: { ...config.gateway, port: 19002 } },
   }));
-  expect(await health()).toEqual(beforeHealth);
+  const acceptedHealth = await health();
+  expect(acceptedHealth?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
+  expect(acceptedHealth?.last_observed_suspicious_signature).toBeNull();
   expect(audit()).toContainEqual(
     expect.objectContaining({ event: "config.write", configPath, result: "rename" }),
   );
   expect((await saved()).gateway.port).toBe(19002);
-
-  await io.readConfigFileSnapshotForWrite();
-  expect((await health())?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
 });
 
 it.each(["path", "snapshot"] as const)("rechecks %s after writer import", async (change) => {

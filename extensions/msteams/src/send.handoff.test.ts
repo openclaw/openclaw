@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 import { sendMSTeamsMessages } from "./messenger.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
+import { createMSTeamsPersonalConversation } from "./sdk-proactive.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { sendPollMSTeams } from "./send.js";
 
@@ -41,6 +43,7 @@ const cfg = { channels: { msteams: { enabled: true } } } as OpenClawConfig;
 const destination = { cfg, to: `conversation:${conversationId}` };
 
 const textSender = msteamsPlugin.message!.send!.text!;
+const mediaSender = msteamsPlugin.message!.send!.media!;
 function sendText(
   text: string,
   options: Omit<Parameters<typeof textSender>[0], "cfg" | "to" | "text"> = {},
@@ -52,6 +55,10 @@ function sendPoll(
 ) {
   return sendPollMSTeams({ ...destination, question: "Ship?", options: ["Yes", "No"], ...options });
 }
+function sendImage(options: Omit<Parameters<typeof mediaSender>[0], "cfg" | "to" | "mediaUrl">) {
+  return withInlineImage((media) => mediaSender({ ...destination, ...media, ...options }));
+}
+
 function holdResponse() {
   const submitted = createDeferred<ServerResponse>();
   fixture.setResponder((response) => submitted.resolve(response));
@@ -109,14 +116,11 @@ async function createConnectorFixture() {
     acceptMessage(response, `accepted-${requests.length}`);
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
+      const bodyBuffer = await consumeBuffer(request);
       requests.push({
         method: request.method ?? "",
         path: request.url ?? "",
-        activity: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+        activity: JSON.parse(bodyBuffer.toString("utf8")) as Record<string, unknown>,
       });
       respond(response);
     })().catch((error: unknown) => response.destroy(error as Error));
@@ -366,25 +370,29 @@ describe("registered Teams delivery handoff", () => {
       const submitted = holdResponse();
       const onPlatformSendDispatch = vi.fn(async () => {});
       const onDeliveryResult = vi.fn();
-      const id =
-        kind === "text"
-          ? "accepted-before-close"
-          : kind === "poll"
-            ? "accepted-poll-before-close"
-            : "accepted-image";
+      if (kind === "image") {
+        resolveMSTeamsSendContext.mockResolvedValue({
+          ...fixture.context,
+          conversationType: "personal",
+          ref: {
+            ...fixture.context.ref,
+            conversation: { id: conversationId, conversationType: "personal" },
+          },
+          sharePointSiteId: "configured-site",
+          tokenProvider: {
+            getAccessToken: async () => {
+              throw new Error("personal images must not upload to SharePoint");
+            },
+          },
+        });
+      }
+      const id = `accepted-${kind}`;
       const completion =
         kind === "text"
           ? sendText("already submitted", { ...handoff, onPlatformSendDispatch, onDeliveryResult })
           : kind === "poll"
             ? sendPoll(handoff)
-            : withInlineImage((media) =>
-                msteamsPlugin.message!.send!.media!({
-                  ...destination,
-                  text: "",
-                  ...media,
-                  ...handoff,
-                }),
-              );
+            : sendImage({ text: "", ...handoff });
       const response = await submitted;
       state.active = false;
       acceptMessage(response, id);
@@ -395,12 +403,7 @@ describe("registered Teams delivery handoff", () => {
         expect(result).toMatchObject({
           receipt: {
             ...(kind === "text" ? { platformMessageIds: [id] } : {}),
-            parts: [
-              expect.objectContaining({
-                platformMessageId: id,
-                kind: kind === "text" ? "text" : "media",
-              }),
-            ],
+            parts: [{ platformMessageId: id, kind: kind === "text" ? "text" : "media" }],
           },
         });
       }
@@ -414,8 +417,15 @@ describe("registered Teams delivery handoff", () => {
             activity: expect.objectContaining({ type: "message", text: "already submitted" }),
           },
         ]);
-      } else {
-        expect(fixture.requests).toHaveLength(1);
+      }
+      expect(fixture.requests).toHaveLength(1);
+      if (kind === "image") {
+        expect(fixture.requests[0]?.activity.attachments).toEqual([
+          expect.objectContaining({
+            contentType: "image/png",
+            contentUrl: expect.stringMatching(/^data:image\/png;base64,/),
+          }),
+        ]);
       }
     },
   );
@@ -450,6 +460,40 @@ describe("registered Teams delivery handoff", () => {
     }
   });
 
+  it.each([true, false])(
+    "opens a personal chat only while authority holds through the token wait (held=%s)",
+    async (held) => {
+      const { state, handoff } = createAuthority();
+      const { tokenStarted, releaseToken } = pauseToken();
+      const opening = createMSTeamsPersonalConversation(
+        fixture.app,
+        { serviceUrl, userId: "user-aad", tenantId: "fixture-tenant" },
+        handoff,
+      );
+      await awaitGateBeforeSettlement(tokenStarted.promise, opening, "SDK skipped token wait");
+      state.active = held;
+      releaseToken.resolve();
+      if (!held) {
+        await expect(opening).rejects.toThrow("delivery authority closed");
+        expect(fixture.requests).toEqual([]);
+        return;
+      }
+      await expect(opening).resolves.toMatchObject({ id: "accepted-1" });
+      expect(fixture.requests).toEqual([
+        {
+          method: "POST",
+          path: "/amer/v3/conversations",
+          activity: {
+            isGroup: false,
+            members: [{ id: "user-aad" }],
+            tenantId: "fixture-tenant",
+            channelData: { tenant: { id: "fixture-tenant" } },
+          },
+        },
+      ]);
+    },
+  );
+
   it("rejects a rate-limit retry after authority closes", async () => {
     const { state, handoff } = createAuthority();
     fixture.setResponder((response) => {
@@ -474,41 +518,37 @@ describe("registered Teams delivery handoff", () => {
 
   it.each([true, false])("retains accepted media parts (active=%s)", async (keepActive) => {
     const { state, handoff } = createAuthority();
-    await withInlineImage(async (media) => {
-      const progress: string[] = [];
-      const onPlatformSendDispatch = vi.fn(async () => {});
-      const completion = msteamsPlugin.message!.send!.media!({
-        ...destination,
-        text: "accepted caption",
-        ...media,
-        ...handoff,
-        onPlatformSendDispatch,
-        onDeliveryResult: (result) => {
-          progress.push(...result.receipt.platformMessageIds);
-          state.active = keepActive;
+    const progress: string[] = [];
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    const completion = sendImage({
+      text: "accepted caption",
+      ...handoff,
+      onPlatformSendDispatch,
+      onDeliveryResult: (result) => {
+        progress.push(...result.receipt.platformMessageIds);
+        state.active = keepActive;
+      },
+    });
+    if (keepActive) {
+      await expect(completion).resolves.toMatchObject({
+        receipt: { platformMessageIds: ["accepted-1", "accepted-2"] },
+      });
+      expect(progress).toEqual(["accepted-1", "accepted-2"]);
+    } else {
+      await expect(completion).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: {
+          visibleReplySent: true,
+          receipt: {
+            platformMessageIds: ["accepted-1"],
+            parts: [{ kind: "text" }],
+          },
         },
       });
-      if (keepActive) {
-        await expect(completion).resolves.toMatchObject({
-          receipt: { platformMessageIds: ["accepted-1", "accepted-2"] },
-        });
-        expect(progress).toEqual(["accepted-1", "accepted-2"]);
-      } else {
-        await expect(completion).rejects.toMatchObject({
-          code: "CHANNEL_PARTIAL_DELIVERY",
-          deliveryResult: {
-            visibleReplySent: true,
-            receipt: {
-              platformMessageIds: ["accepted-1"],
-              parts: [expect.objectContaining({ kind: "text" })],
-            },
-          },
-        });
-        expect(progress).toEqual(["accepted-1"]);
-      }
-      expect(fixture.requests).toHaveLength(keepActive ? 2 : 1);
-      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(keepActive ? 2 : 1);
-    });
+      expect(progress).toEqual(["accepted-1"]);
+    }
+    expect(fixture.requests).toHaveLength(keepActive ? 2 : 1);
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(keepActive ? 2 : 1);
   });
 
   it.each(["send", "upload-file"] as const)(

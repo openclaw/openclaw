@@ -42,6 +42,7 @@ import {
   preserveCodexNativeSubagentSubmissions,
   readCurrentCodexAppServerBinding,
   prepareCurrentCodexAppServerBindingRead,
+  prepareCodexNativeSubagentBindingGuard,
   readCurrentCodexAppServerBindingAsync,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
@@ -160,6 +161,10 @@ export type CodexAppServerBindingStore = {
   prepareRead(
     identity: CodexAppServerBindingIdentity,
   ): ReturnType<typeof prepareCurrentCodexAppServerBindingRead>;
+  prepareNativeSubagentGuard(
+    identity: CodexAppServerBindingIdentity,
+    owner: CodexNativeSubagentHistoryOwner,
+  ): ReturnType<typeof prepareCodexNativeSubagentBindingGuard>;
   /** Fresh worker-backed acquisition with row-ordered binding validation. */
   readMany: (
     identities: readonly CodexAppServerBindingIdentity[],
@@ -216,10 +221,8 @@ export type CodexAppServerBindingStore = {
 type CodexSessionGenerationReclaimParams = {
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
-  storePath?: string;
   assertCurrent?: () => void;
   bindingStore: CodexAppServerBindingStore;
-  reclaimStale?: boolean;
 };
 
 /** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
@@ -413,6 +416,8 @@ export function createCodexAppServerBindingStore(
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
     readAsync: (identity) => readCurrentCodexAppServerBindingAsync(state.asyncReads, identity),
     prepareRead: (identity) => prepareCurrentCodexAppServerBindingRead(state, identity),
+    prepareNativeSubagentGuard: (identity, owner) =>
+      prepareCodexNativeSubagentBindingGuard(state, identity, owner),
     readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
       readCurrentNativePendingAssignments(state.asyncReads, identity, owner),

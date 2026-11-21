@@ -3,7 +3,7 @@ import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-selection-normalize.js";
 import { resolveConfiguredPrimaryProviderFallback } from "../../../agents/model-selection-shared.js";
 import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-diagnostics.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
@@ -175,7 +175,6 @@ export function resolveRuntimeModelRef(params: {
     resolveConfiguredBareModelRef({
       cfg: params.cfg,
       modelRef: effectiveModelRef,
-      agentId: params.agentId,
     }) ??
     normalizeDefaultProviderModelRef(
       effectiveModelRef,
@@ -246,7 +245,6 @@ function resolveDefaultProviderForAliasContext(params: {
         resolveConfiguredBareModelRef({
           cfg: params.cfg,
           modelRef: effectivePrimaryModelRef,
-          agentId: params.agentId,
         }) ?? "",
       );
     return normalizeProviderId(parsed?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
@@ -292,7 +290,6 @@ function resolveAliasFromModelsMap(
 function resolveConfiguredBareModelRef(params: {
   cfg: OpenClawConfig;
   modelRef: string;
-  agentId?: string;
 }): string | undefined {
   const modelId = params.modelRef.trim();
   if (!modelId || modelId.includes("/")) {

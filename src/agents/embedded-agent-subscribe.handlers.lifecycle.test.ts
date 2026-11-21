@@ -87,7 +87,7 @@ describe("embedded lifecycle", () => {
     expectEvent(onAgentEvent, {
       phase: "error",
       error:
-        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+        "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
       errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "auth_html" }),
       livenessState: "blocked",
     });
@@ -256,26 +256,44 @@ describe("embedded lifecycle", () => {
     });
   });
 
-  it("delivers orphaned media before the terminal event and consumes it", async () => {
-    const onAgentEvent = vi.fn();
-    const ctx = createContext(undefined, { onAgentEvent });
-    Object.assign(ctx.state, {
-      pendingToolMediaUrls: ["/tmp/reply.opus"],
-      pendingToolAudioAsVoice: true,
-    });
-    vi.mocked(ctx.emitBlockReply).mockImplementation(
-      createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
-    );
-    await handleAgentEnd(ctx);
-    expect(ctx.emitBlockReply).toHaveBeenCalledExactlyOnceWith({
-      mediaUrls: ["/tmp/reply.opus"],
-      audioAsVoice: true,
-    });
-    expect(ctx.state).toMatchObject({ pendingToolMediaUrls: [], pendingToolAudioAsVoice: false });
-    expect(onAgentEvent.mock.invocationCallOrder[0]).toBeGreaterThan(
-      vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] ?? Infinity,
-    );
-  });
+  it.each([
+    ["ordinary voice", false, "/tmp/reply.opus", true, true],
+    ["silent image", true, "/tmp/private.png", false, false],
+    ["silent voice", true, "/tmp/reply.opus", true, true],
+  ] as const)(
+    "settles orphaned %s before the terminal event",
+    async (_name, silentExpected, mediaUrl, audioAsVoice, delivered) => {
+      const onAgentEvent = vi.fn();
+      const onBlockReply = vi.fn();
+      const ctx = createContext(undefined, { onAgentEvent, onBlockReply });
+      ctx.params.silentExpected = silentExpected;
+      Object.assign(ctx.state, {
+        pendingToolMediaUrls: [mediaUrl],
+        pendingToolAudioAsVoice: audioAsVoice,
+        visibleBlockReplyCount: 0,
+        hasToolMediaBlockReply: false,
+      });
+      vi.mocked(ctx.emitBlockReply).mockImplementation(
+        createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
+      );
+      await handleAgentEnd(ctx);
+      expect(onBlockReply).toHaveBeenCalledTimes(delivered ? 1 : 0);
+      if (delivered) {
+        expect(onBlockReply).toHaveBeenCalledWith(
+          expect.objectContaining({ mediaUrls: [mediaUrl], audioAsVoice: true }),
+        );
+        expect(onAgentEvent.mock.invocationCallOrder[0]).toBeGreaterThan(
+          onBlockReply.mock.invocationCallOrder[0] ?? Infinity,
+        );
+      }
+      expect(ctx.state).toMatchObject({
+        pendingToolMediaUrls: [],
+        pendingToolAudioAsVoice: false,
+        visibleBlockReplyCount: delivered ? 1 : 0,
+        hasToolMediaBlockReply: delivered,
+      });
+    },
+  );
   it("preserves orphaned media without a delivery callback", async () => {
     const ctx = createContext(undefined, { onBlockReply: undefined });
     Object.assign(ctx.state, {
@@ -307,7 +325,7 @@ describe("embedded lifecycle", () => {
       expectEvent(onAgentEvent, {
         phase: "error",
         error:
-          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
         errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
         livenessState: "blocked",
       });

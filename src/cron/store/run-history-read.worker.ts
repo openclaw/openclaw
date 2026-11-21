@@ -34,6 +34,7 @@ const RESPONSE_KEYS = [
   "completionStatus",
   "error",
   "summary",
+  "result",
   "errorReason",
   "delivered",
   "deliveryError",

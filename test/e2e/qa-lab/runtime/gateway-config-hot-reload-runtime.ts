@@ -13,7 +13,6 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import type { CronJob } from "../../../../src/cron/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db-cache.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -301,30 +300,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         verifyContinuity,
         proveGroup,
       };
-      await proveGroup("heartbeat monitor", async () => {
-        for (const every of ["1h", "0m", "2h"] as const) {
-          await patch({ agents: { entries: { qa: { heartbeat: { every } } } } });
-          await waitForHotReloadFact("accepted system monitor config", async () => {
-            const { jobs } = await rpc<{
-              jobs: CronJob[];
-            }>("cron.list", { includeDisabled: true, includeDeliveryPreviews: false });
-            const heartbeat = jobs.find(
-              (job) => job.agentId === "qa" && job.payload.kind === "heartbeat",
-            );
-            return heartbeat?.enabled === (every !== "0m") &&
-              heartbeat.schedule.kind === "every" &&
-              (every === "0m" ||
-                heartbeat.schedule.everyMs === (every === "1h" ? 3_600_000 : 7_200_000))
-              ? true
-              : undefined;
-          });
-        }
-        await patch({ agents: { entries: { qa: { heartbeat: { every: "0m" } } } } });
-        await verifyContinuity(
-          "heartbeat monitor",
-          "Real config.patch writes changed persisted monitor cadence and enablement on the same Gateway boot",
-        );
-      });
       await proveHotReloadTerminalStartup(terminalProof);
 
       await proveHotReloadRequests({

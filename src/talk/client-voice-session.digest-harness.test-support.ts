@@ -6,12 +6,12 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import {
   createCompletedMutationSession,
+  recordMutationEvents,
   seedSession,
 } from "./client-voice-session.fixture.test-support.js";
 import { closeClientVoiceSession, closeStaleClientVoiceSessions } from "./client-voice-session.js";
@@ -118,22 +118,7 @@ export function useClientVoiceDigestHarness() {
       }),
     recoverStale: (params: Partial<Parameters<typeof closeStaleClientVoiceSessions>[0]> = {}) =>
       closeStaleClientVoiceSessions({ agentId: "main", config: {}, ...params }),
-    recordEffect(this: void, runId: string, toolCallId: string) {
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        runId,
-        toolCallId,
-        toolName: "message",
-        mutatingAction: true,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.completed",
-        runId,
-        toolCallId,
-        toolName: "message",
-        durationMs: 5,
-      });
-    },
+    recordEffect: recordMutationEvents,
     get stateDir() {
       return stateDir;
     },

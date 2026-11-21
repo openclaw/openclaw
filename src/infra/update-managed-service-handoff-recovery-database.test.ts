@@ -118,7 +118,7 @@ it.each(["existing", "new"] as const)("preserves old-reader compatibility in %s 
   );
 });
 
-it("does not retain a rolled-back column admission and lets existing readers see its later publication", () => {
+it("retries rolled-back admission and publishes metadata to existing readers", () => {
   createOldStore();
   database(true, (db) => {
     const ensure = schemaHelpers.ensureColumn;
@@ -138,18 +138,15 @@ it("does not retain a rolled-back column admission and lets existing readers see
     databasePath,
     captureManagedUpdateLeaseDatabaseIdentity(databasePath),
   );
-  const retained = reader.retainReadConnection();
-  try {
-    for (const metadata of [null, retainedMetadata]) {
-      if (metadata) {
-        writeMetadata();
-      }
-      reader(false, (db) =>
-        expect(select(db, "recovery_json").get()).toEqual({ recovery_json: metadata }),
-      );
+  using retained = reader.retainReadConnection();
+  void retained;
+  for (const metadata of [null, retainedMetadata]) {
+    if (metadata) {
+      writeMetadata();
     }
-  } finally {
-    retained[Symbol.dispose]();
+    reader(false, (db) =>
+      expect(select(db, "recovery_json").get()).toEqual({ recovery_json: metadata }),
+    );
   }
 });
 

@@ -131,6 +131,28 @@ describe("memory index", () => {
     expect((third as unknown as { closed: boolean }).closed).toBe(false);
   });
 
+  it("separates cached query configuration without re-embedding unchanged documents", async () => {
+    const cfg = createCfg({ minScore: 0 });
+    const first = await acquire(cfg);
+    await first.sync({ reason: "test" });
+    await first.search("alpha");
+    const batchCalls = providerFixture.embedBatchCalls;
+    const changed = {
+      ...cfg,
+      memory: {
+        ...cfg.memory,
+        search: { ...cfg.memory?.search, queryInstruction: "search_query: " },
+      },
+    };
+    const second = await acquire(changed);
+    expect(second).not.toBe(first);
+    expect(await second.search("alpha")).not.toEqual([]);
+    await (second as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
+    expect(providerFixture.embeddedQueryTexts).toContain("search_query: alpha");
+    expect(providerFixture.embedBatchCalls).toBe(batchCalls);
+    expect(await acquire(changed)).toBe(second);
+  });
+
   it("canonicalizes agent ids before builtin manager acquisition", async () => {
     const cfg = createCfg({ model: "canonical-model" });
     const first = await RuntimeMemoryIndexManager.get({

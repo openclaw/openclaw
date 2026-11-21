@@ -12,6 +12,11 @@ import {
   openTrackedWs,
 } from "./device-authz.test-helpers.js";
 import {
+  BROWSER_ORIGIN,
+  TRUSTED_BROWSER_HEADERS,
+  browserProxyAuth,
+} from "./server.auth.test-helpers.js";
+import {
   connectOk,
   installGatewayTestHooks,
   rpcReq,
@@ -27,14 +32,6 @@ const CONTROL_UI_CLIENT = {
   platform: "web",
   mode: GATEWAY_CLIENT_MODES.WEBCHAT,
 };
-const TRUSTED_PROXY_ORIGIN = "https://localhost";
-const TRUSTED_PROXY_HEADERS = {
-  origin: TRUSTED_PROXY_ORIGIN,
-  "x-forwarded-for": "203.0.113.50",
-  "x-forwarded-proto": "https",
-  "x-forwarded-user": "operator@example.com",
-};
-
 async function withPairingSession(
   options: {
     name: string;
@@ -49,24 +46,17 @@ async function withPairingSession(
 ) {
   const callerScopes = options.admin ? ["operator.admin"] : ["operator.pairing"];
   let started: Awaited<ReturnType<typeof startServerWithClient>>;
-  const proxyHeaders = { ...TRUSTED_PROXY_HEADERS, "x-openclaw-scopes": callerScopes.join(",") };
+  const proxyHeaders = { ...TRUSTED_BROWSER_HEADERS, "x-openclaw-scopes": callerScopes.join(",") };
   if (options.auth === "proxy") {
     const { replaceConfigFile } = await import("../config/config.js");
-    const auth = {
-      mode: "trusted-proxy" as const,
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto"],
-        allowLoopback: true,
-      },
-    };
+    const auth = browserProxyAuth();
     testState.gatewayAuth = auth;
     await replaceConfigFile({
       nextConfig: {
         gateway: {
           auth,
           trustedProxies: ["127.0.0.1"],
-          controlUi: { allowedOrigins: [TRUSTED_PROXY_ORIGIN] },
+          controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
         },
       },
       afterWrite: { mode: "auto" },

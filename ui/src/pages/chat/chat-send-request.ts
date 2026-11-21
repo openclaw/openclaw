@@ -1,11 +1,10 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatAppContextAttachment } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
@@ -26,6 +25,7 @@ export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    appContext?: ChatAppContextAttachment[];
     workContext?: ChatWorkContext;
     mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
@@ -43,6 +43,9 @@ export async function requestChatSend(
     assertUploadsEnabled(state.uploadConfig);
   }
   const sessionKey = params.sessionKey ?? state.sessionKey;
+  if (sessionKey === state.sessionKey && state.isRouteSessionPending?.()) {
+    throw new Error(t("chat.thread.loading"));
+  }
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
     : resolveUiSelectedSessionAgentId(state);
@@ -85,6 +88,7 @@ export async function requestChatSend(
         ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
         message: params.message,
         ...(params.workContext ? { workContext: params.workContext } : {}),
+        ...(params.appContext ? { appContext: params.appContext } : {}),
         ...(params.mentions?.length ? { mentions: params.mentions } : {}),
         ...(params.intent ? { intent: params.intent } : {}),
         deliver: false,
@@ -122,13 +126,4 @@ export function resolveDisplayedLeafEntryId(state: ChatState): string | null | u
   }
   const leafEntryId = state.chatDisplayedLeafEntryId?.trim();
   return leafEntryId || undefined;
-}
-
-const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
-
-export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
-  );
 }

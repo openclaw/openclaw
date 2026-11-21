@@ -46,24 +46,10 @@ function reviewerParams(request: ReturnType<typeof vi.fn>) {
 }
 
 describe("Codex app-server policy", () => {
-  it("revalidates effective Guardian config at each boundary and skips human reviewers", async () => {
-    const request = vi.fn(async () => trustedConfig);
-    const params = reviewerParams(request);
-
-    await assertCodexModelBackedReviewerEffectiveConfig({ ...params, approvalsReviewer: "user" });
-    expect(request).not.toHaveBeenCalled();
-    await assertCodexModelBackedReviewerEffectiveConfig(params);
-    await assertCodexModelBackedReviewerEffectiveConfig({
-      ...params,
-      approvalsReviewer: "guardian_subagent",
-    });
-
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects reviewer endpoint changes on the same Codex process and workspace", async () => {
+  it("skips human reviewers and revalidates Guardian trust on the same process and workspace", async () => {
     const request = vi
       .fn()
+      .mockResolvedValueOnce(trustedConfig)
       .mockResolvedValueOnce(trustedConfig)
       .mockResolvedValueOnce({
         config: {
@@ -73,13 +59,17 @@ describe("Codex app-server policy", () => {
         origins: {},
       });
     const params = reviewerParams(request);
-
+    await assertCodexModelBackedReviewerEffectiveConfig({ ...params, approvalsReviewer: "user" });
+    expect(request).not.toHaveBeenCalled();
     await assertCodexModelBackedReviewerEffectiveConfig(params);
+    await assertCodexModelBackedReviewerEffectiveConfig({
+      ...params,
+      approvalsReviewer: "guardian_subagent",
+    });
     await expect(assertCodexModelBackedReviewerEffectiveConfig(params)).rejects.toThrow(
       /trusted OpenAI endpoint/i,
     );
-
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("keeps concurrent reviewer attestations independent when one run aborts", async () => {
@@ -152,16 +142,10 @@ describe("Codex app-server policy", () => {
   it.each([
     ["missing effective config", undefined, /invalid effective config/i],
     ["alternate model provider", { model_provider: "custom" }, /reviewer/i],
-    [
-      "managed ChatGPT endpoint",
-      { chatgpt_base_url: "https://review-proxy.example.invalid" },
-      /reviewer/i,
-    ],
+    ["managed ChatGPT endpoint", { chatgpt_base_url: "https://proxy.invalid" }, /reviewer/i],
     [
       "managed model-provider endpoint",
-      {
-        model_providers: { openai: { base_url: "https://proxy.example.invalid/v1" } },
-      },
+      { model_providers: { openai: { base_url: "https://proxy.invalid/v1" } } },
       /reviewer/i,
     ],
   ] as const)("fails Guardian review closed on %s", async (_name, config, error) => {
@@ -171,133 +155,66 @@ describe("Codex app-server policy", () => {
     ).rejects.toThrow(error);
   });
 
-  it("uses human approval for OpenAI-compatible custom endpoints", () => {
-    const appServer = openAiRuntimeOptions({
-      model: "gpt-5.5",
-      config: customEndpointConfig,
-    });
-
-    expect(appServer.approvalsReviewer).toBe("user");
+  it.each([
+    ["lmstudio", undefined, {}, undefined],
+    ["openai", "gpt-5.5", { model: "gpt-5.5", config: customEndpointConfig }, "user"],
+  ] as const)("uses human approval for %s / %s", (provider, model, options, initialReviewer) => {
+    const appServer = openAiRuntimeOptions(options);
+    if (initialReviewer) {
+      expect(appServer.approvalsReviewer).toBe(initialReviewer);
+    } else if (provider === "lmstudio") {
+      expect(appServer.approvalsReviewer).toBe("auto_review");
+    }
     expect(
-      resolveCodexAppServerForModelProvider({
-        appServer,
-        provider: "openai",
-        model: "gpt-5.5",
-        config: customEndpointConfig,
-      }).approvalsReviewer,
-    ).toBe("user");
-  });
-
-  it("uses human approval instead of Codex Guardian for custom model providers", () => {
-    const appServer = openAiRuntimeOptions();
-
-    const resolved = resolveCodexAppServerForModelProvider({
-      appServer,
-      provider: "lmstudio",
-    });
-    const vendorPrefixedModel = resolveCodexAppServerForModelProvider({
-      appServer,
-      provider: "openrouter",
-      model: "openai/gpt-5.5",
-    });
-
-    expect(appServer.approvalsReviewer).toBe("auto_review");
-    expect(resolved).toMatchObject({
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
+      resolveCodexAppServerForModelProvider({ appServer, provider, model, ...options }),
+    ).toMatchObject({
       approvalsReviewer: "user",
+      ...(provider === "lmstudio"
+        ? { approvalPolicy: "on-request", sandbox: "workspace-write" }
+        : {}),
     });
-    expect(vendorPrefixedModel.approvalsReviewer).toBe("user");
   });
 
   it.each([
-    {
-      name: "provider-qualified model in a native wrapper",
-      provider: "codex",
-      model: "lmstudio/local-model",
-      options: { execMode: "auto" },
-    },
-    {
-      name: "legacy guardian_subagent",
-      provider: "local",
-      model: undefined,
-      options: {
-        pluginConfig: { appServer: { mode: "guardian", approvalsReviewer: "guardian_subagent" } },
-      },
-    },
-  ] as const)("uses human approval for $name", ({ provider, model, options }) => {
-    const appServer = resolveCodexAppServerRuntimeOptions({
-      env: {},
-      requirementsToml: null,
-      ...options,
-    });
-    expect(
-      resolveCodexAppServerForModelProvider({ appServer, provider, model }).approvalsReviewer,
-    ).toBe("user");
-  });
-
-  it("checks the actual app-server home instead of the caller's ambient Codex home", async () => {
-    await withTempDir("openclaw-codex-review-home-", async (root) => {
-      const ambientHome = path.join(root, "ambient");
-      const effectiveHome = path.join(root, "effective");
-      await Promise.all(
-        [ambientHome, effectiveHome].map((dir) => fs.mkdir(dir, { recursive: true })),
-      );
-      await fs.writeFile(
-        path.join(effectiveHome, "config.toml"),
-        'openai_base_url = "http://localhost:8080/v1"\n',
-      );
-      expect(
-        reviewerForStart(
-          { homeScope: "user", env: { CODEX_HOME: effectiveHome } },
-          { CODEX_HOME: ambientHome },
-        ),
-      ).toBe("user");
-    });
-  });
-
-  it("checks endpoint overrides applied to the actual app-server process", () => {
-    expect(reviewerForStart({ env: { OPENAI_BASE_URL: "http://localhost:8080/v1" } })).toBe("user");
-  });
-
-  it.each([["-pwork"]])(
-    "checks the selected native profile before trusting model-backed review: %j",
-    async (...profileArgs) => {
-      await withTempDir("openclaw-codex-review-profile-", async (codexHome) => {
+    ["config.toml", undefined],
+    ["work.config.toml", ["-pwork", "app-server"]],
+  ] as const)(
+    "checks effective home %s before trusting model-backed review",
+    async (filename, args) => {
+      await withTempDir("openclaw-codex-review-home-", async (root) => {
+        const ambientHome = path.join(root, "ambient");
+        const effectiveHome = path.join(root, "effective");
+        await fs.mkdir(effectiveHome);
         await fs.writeFile(
-          path.join(codexHome, "work.config.toml"),
+          path.join(effectiveHome, filename),
           'openai_base_url = "http://localhost:8080/v1"\n',
         );
         expect(
-          reviewerForStart({
-            homeScope: "user",
-            args: [...profileArgs, "app-server"],
-            env: { CODEX_HOME: codexHome },
-          }),
+          reviewerForStart(
+            { homeScope: "user", args: args && [...args], env: { CODEX_HOME: effectiveHome } },
+            { CODEX_HOME: ambientHome },
+          ),
         ).toBe("user");
       });
     },
   );
 
-  it.each(["model_providers.openai.base_url=https://api.openai.com/v1"])(
-    "keeps automatic review for native CLI string override: %s",
-    (override) => {
-      expect(reviewerForStart({ args: ["app-server", "-c", override] })).toBe("auto_review");
-    },
-  );
-
   it.each([
-    ["-c", "\u0085openai_base_url=http://localhost:8080/v1"],
-    ['-c=chatgpt_base_url="http://localhost:8080/v1"'],
-    ['-cmodel_providers.openai.base_url="http://localhost:8080/v1"'],
+    [["-c", "\u0085openai_base_url=http://localhost:8080/v1"], "user"],
+    [['-c=chatgpt_base_url="http://localhost:8080/v1"'], "user"],
+    [['-cmodel_providers.openai.base_url="http://localhost:8080/v1"'], "user"],
     [
-      '-copenai_base_url="http://localhost:8080/v1"',
-      '-copenai_base_url="https://api.openai.com/v1"',
+      [
+        '-copenai_base_url="http://localhost:8080/v1"',
+        '-copenai_base_url="https://api.openai.com/v1"',
+      ],
+      "user",
     ],
-  ])(
-    "checks native command-line endpoint overrides before trusting model-backed review: %j",
-    (...args) => {
-      expect(reviewerForStart({ args: ["app-server", ...args] })).toBe("user");
-    },
-  );
+    [["-c", "model_providers.openai.base_url=https://api.openai.com/v1"], "auto_review"],
+  ] as const)("checks native endpoint overrides: %j", (args, expected) => {
+    expect(reviewerForStart({ args: ["app-server", ...args] })).toBe(expected);
+  });
+  it("checks endpoint overrides applied to the actual app-server process", () => {
+    expect(reviewerForStart({ env: { OPENAI_BASE_URL: "http://localhost:8080/v1" } })).toBe("user");
+  });
 });

@@ -15,15 +15,6 @@ const inboundClaimCtx = {
   accountId: "default",
   conversationId: "channel:1",
 };
-const forumEvent = { ...inboundClaimEvent, channel: "forum", conversationId: "123:topic:77" };
-const forumCtx = { ...inboundClaimCtx, channelId: "forum", conversationId: "123:topic:77" };
-
-function expectFirstErrorLog(
-  logger: { error: ReturnType<typeof vi.fn> },
-  expected: readonly unknown[],
-): void {
-  expect(logger.error.mock.calls).toEqual([expected]);
-}
 
 describe("inbound_claim hook runner", () => {
   const runTargeted = (
@@ -47,7 +38,7 @@ describe("inbound_claim hook runner", () => {
 
       const result = target
         ? await runner.runInboundClaimForPlugin(target, inboundClaimEvent, inboundClaimCtx)
-        : await runner.runInboundClaim(forumEvent, forumCtx);
+        : await runner.runInboundClaim(inboundClaimEvent, inboundClaimCtx);
 
       expect(result).toEqual({ handled: true });
       expect(first).toHaveBeenCalledTimes(target ? 0 : 1);
@@ -67,13 +58,12 @@ describe("inbound_claim hook runner", () => {
       { logger },
     );
 
-    const result = await runner.runInboundClaim(
-      { ...forumEvent, content: "hi", conversationId: "123", isGroup: false },
-      { ...forumCtx, conversationId: "123" },
-    );
+    const result = await runner.runInboundClaim(inboundClaimEvent, inboundClaimCtx);
 
     expect(result).toEqual({ handled: true });
-    expectFirstErrorLog(logger, ["[hooks] inbound_claim handler from test-plugin failed: boom"]);
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      "[hooks] inbound_claim handler from test-plugin failed: boom",
+    );
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
@@ -102,9 +92,9 @@ describe("inbound_claim hook runner", () => {
       await vi.advanceTimersByTimeAsync(5);
 
       await expect(run).resolves.toEqual({ status: "error", error: "timed out after 5ms" });
-      expectFirstErrorLog(logger, [
+      expect(logger.error).toHaveBeenCalledExactlyOnceWith(
         "[hooks] inbound_claim handler from test-plugin failed: timed out after 5ms",
-      ]);
+      );
     } finally {
       vi.useRealTimers();
     }

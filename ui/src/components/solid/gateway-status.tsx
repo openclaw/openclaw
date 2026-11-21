@@ -17,21 +17,35 @@ export function gatewayStatusLabel(kind: GatewayStatusKind | "connected", queued
 export function GatewayStatus(params: GatewayStatusProps & { row?: boolean }): JSX.Element {
   let retry: HTMLButtonElement | undefined;
   const canRetry = () => params.onRetry && canRetryGatewayStatus(params.kind);
+  const recovering = () =>
+    params.kind === "connecting" ||
+    params.kind === "starting" ||
+    params.kind === "restarting" ||
+    params.kind === "suspending" ||
+    params.kind === "reconnecting" ||
+    params.kind === "restoring";
   const label = () => (params.kind ? gatewayStatusLabel(params.kind, params.queuedCount) : "");
   const content = () => (
     <span class="gateway-status__state">
       <span class="gateway-status__icon" aria-hidden="true">
-        <Icon
-          name={
-            params.kind === "connected"
-              ? "check"
-              : params.kind === "suspending" || params.kind === "suspended"
-                ? "pause"
-                : params.kind === "offline"
-                  ? "alertTriangle"
-                  : "refresh"
+        <Show
+          when={recovering()}
+          fallback={
+            <Icon
+              name={
+                params.kind === "connected"
+                  ? "check"
+                  : params.kind === "suspended"
+                    ? "pause"
+                    : params.kind === "offline"
+                      ? "alertTriangle"
+                      : "refresh"
+              }
+            />
           }
-        />
+        >
+          <span class="session-run-spinner" />
+        </Show>
       </span>
       <span class="gateway-status__label">{label()}</span>
     </span>
@@ -60,19 +74,8 @@ export function GatewayStatus(params: GatewayStatusProps & { row?: boolean }): J
               type="button"
               class="gateway-status__retry"
               aria-label={`${label()} — ${t("connection.retryNow")}`}
-              aria-busy={params.retryPending ? "true" : "false"}
-              disabled={params.retryPending}
-              onClick={() => {
-                if (!params.retryPending) {
-                  params.onRetry?.();
-                }
-              }}
+              onClick={() => params.onRetry?.()}
             >
-              <Show when={params.retryPending}>
-                <span class="gateway-status__spinner" aria-hidden="true">
-                  <Icon name="refresh" />
-                </span>
-              </Show>
               {params.row ? t("common.retry") : content()}
             </button>
           ) : (

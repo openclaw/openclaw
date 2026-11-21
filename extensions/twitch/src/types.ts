@@ -27,7 +27,6 @@ export interface TwitchChatMessage {
 export type {
   ChannelAccountSnapshot,
   ChannelLogSink,
-  ChannelMessageActionAdapter,
   ChannelOutboundAdapter,
   ChannelResolveKind,
   ChannelResolveResult,

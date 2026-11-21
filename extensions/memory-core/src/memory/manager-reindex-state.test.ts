@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
+  canUpgradeMemoryIndexProviderKey,
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
@@ -51,15 +52,56 @@ function identity(overrides: Parameters<typeof createIdentityParams>[0] = {}) {
   return resolveMemoryIndexIdentityState(createIdentityParams(overrides));
 }
 
+const defaultMultimodal = { enabled: false, modalities: [], maxFileBytes: 20 * 1024 * 1024 };
+const scope = (
+  extraPaths: Parameters<typeof resolveConfiguredScopeHash>[0]["extraPaths"],
+  multimodal: Parameters<typeof resolveConfiguredScopeHash>[0]["multimodal"] = defaultMultimodal,
+) => resolveConfiguredScopeHash({ workspaceDir: "/tmp/workspace", extraPaths, multimodal });
+
 describe("memory reindex state", () => {
+  it.each<[string, Partial<MemoryIndexMeta>, boolean]>([
+    ["valid", {}, true],
+    ["older chunking", { chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }, true],
+    ["newer chunking", { chunkingVersion: MEMORY_CHUNKING_VERSION + 1 }, false],
+    ["older provenance", { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION - 1 }, false],
+    ["newer provenance", { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION + 1 }, false],
+    ["older format", { embeddingInputFormatVersion: 0 }, false],
+    ["newer format", { embeddingInputFormatVersion: 2 }, false],
+    [
+      "older chunking and format",
+      { chunkingVersion: MEMORY_CHUNKING_VERSION - 1, embeddingInputFormatVersion: 0 },
+      false,
+    ],
+    ["changed scope", { scopeHash: "other" }, false],
+    ["undeclared provider", { provider: "other" }, false],
+    ["undeclared model", { model: "other" }, false],
+    ["undeclared key", { providerKey: "other" }, false],
+    ["already canonical", { providerKey: "current" }, false],
+  ])("promotes only compatible published aliases: %s", (_name, overrides, eligible) => {
+    const provider = { id: "openai", model: "embeddinggemma" };
+    const alias = { model: provider.model, providerKey: "legacy" };
+    const meta = createMeta({
+      ...alias,
+      embeddingInputFormatVersion: 1,
+      ...overrides,
+    });
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({ provider, providerKey: "current", providerAliases: [alias], meta }),
+    );
+    expect(
+      canUpgradeMemoryIndexProviderKey(state, meta, [
+        { provider: provider.id, model: provider.model, providerKey: "current" },
+        { provider: provider.id, ...alias },
+      ]),
+    ).toBe(eligible);
+  });
+
   it("automatically upgrades raw EmbeddingGemma indexes before checking the changed cache key", () => {
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          meta: createMeta({ model: "embeddinggemma", providerKey: "raw-inputs" }),
-          provider: { id: "openai", model: "embeddinggemma" },
-        }),
-      ),
+      identity({
+        meta: createMeta({ model: "embeddinggemma", providerKey: "raw-inputs" }),
+        provider: { id: "openai", model: "embeddinggemma" },
+      }),
     ).toEqual({
       status: "mismatched",
       reason: "index embedding input format changed",
@@ -96,13 +138,11 @@ describe("memory reindex state", () => {
 
   it("keeps a model switch configuration-owned after an embedding format upgrade", () => {
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          meta: createMeta({ model: "embeddinggemma", embeddingInputFormatVersion: 1 }),
-        }),
-      ),
+      identity({
+        meta: createMeta({ model: "embeddinggemma", embeddingInputFormatVersion: 1 }),
+      }),
     ).toMatchObject({ status: "mismatched", code: "model", owner: "configuration" });
-    expect(resolveMemoryIndexIdentityState(createIdentityParams())).toEqual({ status: "valid" });
+    expect(identity()).toEqual({ status: "valid" });
   });
 
   it("does not serve a changed corpus while an embedding format rebuild is pending", () => {
@@ -134,7 +174,16 @@ describe("memory reindex state", () => {
       hashText(JSON.stringify({ provider: "local", model: "embeddinggemma" })),
     );
     expect(identities[1]?.providerKey).not.toBe(hashText(JSON.stringify(alias.cacheKeyData)));
-    // Host formatting must not overwrite an adapter's own cache settings.
+    expect(
+      resolveMemoryIndexProviderIdentities({
+        provider,
+        aliases: [alias],
+        documentPrefix: "title: none | text: ",
+      }),
+    ).not.toEqual(identities);
+    expect(
+      resolveMemoryIndexProviderIdentities({ provider, aliases: [alias], documentPrefix: "" }),
+    ).not.toEqual(identities);
     expect(
       resolveMemoryIndexProviderIdentities({
         provider,
@@ -151,13 +200,17 @@ describe("memory reindex state", () => {
     ).toMatchObject([
       { providerKey: hashText(JSON.stringify({ provider: "local", model: "other" })) },
     ]);
+    expect(
+      resolveMemoryIndexProviderIdentities({
+        provider: { id: "local", model: "other" },
+        documentPrefix: "",
+      }),
+    ).not.toEqual(
+      resolveMemoryIndexProviderIdentities({ provider: { id: "local", model: "other" } }),
+    );
   });
   it("invalidates indexes with missing provenance version as OpenClaw-owned", () => {
-    expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({ meta: createMeta({ provenanceVersion: undefined }) }),
-      ),
-    ).toEqual({
+    expect(identity({ meta: createMeta({ provenanceVersion: undefined }) })).toEqual({
       status: "mismatched",
       reason: "index provenance classifier changed",
       code: "provenance_version",
@@ -181,7 +234,7 @@ describe("memory reindex state", () => {
   );
 
   it("classifies missing metadata as OpenClaw-owned", () => {
-    expect(resolveMemoryIndexIdentityState(createIdentityParams({ meta: null }))).toEqual({
+    expect(identity({ meta: null })).toEqual({
       status: "missing",
       reason: "index metadata is missing",
       code: "metadata_missing",
@@ -210,12 +263,10 @@ describe("memory reindex state", () => {
 
   it("returns a mismatch reason when provider identity changes", () => {
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          provider: { id: "ollama", model: "mock-embed-v1" },
-          providerKey: "provider-key-ollama",
-        }),
-      ),
+      identity({
+        provider: { id: "ollama", model: "mock-embed-v1" },
+        providerKey: "provider-key-ollama",
+      }),
     ).toEqual({
       status: "mismatched",
       reason: "index was built for provider openai, expected ollama",
@@ -226,12 +277,10 @@ describe("memory reindex state", () => {
 
   it("can defer provider key comparison until provider initialization", () => {
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          providerKey: undefined,
-          providerKeyKnown: false,
-        }),
-      ),
+      identity({
+        providerKey: undefined,
+        providerKeyKnown: false,
+      }),
     ).toEqual({ status: "valid" });
   });
 
@@ -263,19 +312,17 @@ describe("memory reindex state", () => {
     const currentModel = "/models/custom/model.gguf";
 
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          provider: { id: "local", model: currentModel },
-          providerKey: "provider-key-current",
-          meta: createMeta({
-            provider: "local",
-            model: indexedModel,
-            providerKey: "provider-key-indexed",
-            vectorDims: 768,
-          }),
-          vectorReady: true,
+      identity({
+        provider: { id: "local", model: currentModel },
+        providerKey: "provider-key-current",
+        meta: createMeta({
+          provider: "local",
+          model: indexedModel,
+          providerKey: "provider-key-indexed",
+          vectorDims: 768,
         }),
-      ),
+        vectorReady: true,
+      }),
     ).toEqual({
       status: "mismatched",
       reason: `index was built for model ${indexedModel}, expected ${currentModel}`,
@@ -310,52 +357,27 @@ describe("memory reindex state", () => {
 
   it("does not mark identity dirty for vector dimensions before chunks exist", () => {
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          vectorReady: true,
-          hasIndexedChunks: false,
-          meta: createMeta({ vectorDims: undefined }),
-        }),
-      ),
+      identity({
+        vectorReady: true,
+        hasIndexedChunks: false,
+        meta: createMeta({ vectorDims: undefined }),
+      }),
     ).toEqual({ status: "valid" });
   });
 
   it("marks identity dirty when extraPaths change", () => {
-    const workspaceDir = "/tmp/workspace";
-    const firstScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/a"],
-      multimodal: {
-        enabled: false,
-        modalities: [],
-        maxFileBytes: 20 * 1024 * 1024,
-      },
-    });
-    const secondScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/b"],
-      multimodal: {
-        enabled: false,
-        modalities: [],
-        maxFileBytes: 20 * 1024 * 1024,
-      },
-    });
+    const firstScopeHash = scope(["/tmp/workspace/a"]);
+    const secondScopeHash = scope(["/tmp/workspace/b"]);
 
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          meta: createMeta({ scopeHash: firstScopeHash }),
-          configuredScopeHash: secondScopeHash,
-        }),
-      ),
+      identity({
+        meta: createMeta({ scopeHash: firstScopeHash }),
+        configuredScopeHash: secondScopeHash,
+      }),
     ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
   });
 
   it("includes extra path patterns in stable scope identity", () => {
-    const workspaceDir = "/tmp/workspace";
-    const multimodal = { enabled: false, modalities: [], maxFileBytes: 20 * 1024 * 1024 };
-    const scope = (extraPaths: Parameters<typeof resolveConfiguredScopeHash>[0]["extraPaths"]) =>
-      resolveConfiguredScopeHash({ workspaceDir, extraPaths, multimodal });
     const paths = [
       { path: "notes", pattern: "runbooks/**/*.md" },
       { path: "notes", pattern: "decisions/**/*.md" },
@@ -376,25 +398,8 @@ describe("memory reindex state", () => {
   });
 
   it("keeps scope identity stable when only extra-path recency policy changes", () => {
-    const workspaceDir = "/tmp/workspace";
-    const multimodal = {
-      enabled: false,
-      modalities: [],
-      maxFileBytes: 20 * 1024 * 1024,
-    };
-
-    expect(
-      resolveConfiguredScopeHash({
-        workspaceDir,
-        extraPaths: [{ path: "reference", pattern: "**/*.md", evergreen: true }],
-        multimodal,
-      }),
-    ).toBe(
-      resolveConfiguredScopeHash({
-        workspaceDir,
-        extraPaths: [{ path: "reference", pattern: "**/*.md" }],
-        multimodal,
-      }),
+    expect(scope([{ path: "reference", pattern: "**/*.md", evergreen: true }])).toBe(
+      scope([{ path: "reference", pattern: "**/*.md" }]),
     );
   });
 
@@ -407,33 +412,18 @@ describe("memory reindex state", () => {
   });
 
   it("marks identity dirty when multimodal settings change", () => {
-    const workspaceDir = "/tmp/workspace";
-    const firstScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/media"],
-      multimodal: {
-        enabled: false,
-        modalities: [],
-        maxFileBytes: 20 * 1024 * 1024,
-      },
-    });
-    const secondScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/media"],
-      multimodal: {
-        enabled: true,
-        modalities: ["image"],
-        maxFileBytes: 20 * 1024 * 1024,
-      },
+    const firstScopeHash = scope(["/tmp/workspace/media"]);
+    const secondScopeHash = scope(["/tmp/workspace/media"], {
+      ...defaultMultimodal,
+      enabled: true,
+      modalities: ["image"],
     });
 
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          meta: createMeta({ scopeHash: firstScopeHash }),
-          configuredScopeHash: secondScopeHash,
-        }),
-      ),
+      identity({
+        meta: createMeta({ scopeHash: firstScopeHash }),
+        configuredScopeHash: secondScopeHash,
+      }),
     ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
   });
 
@@ -448,22 +438,18 @@ describe("memory reindex state", () => {
 
   it("falls back to fts-only for a whitespace-only model", () => {
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          provider: { id: "openai", model: "  " },
-          meta: createMeta({ model: "fts-only" }),
-        }),
-      ),
+      identity({
+        provider: { id: "openai", model: "  " },
+        meta: createMeta({ model: "fts-only" }),
+      }),
     ).toEqual({ status: "valid" });
   });
 
   it("reports mismatch when empty-string expected model is compared to a non-fts index", () => {
-    const state = resolveMemoryIndexIdentityState(
-      createIdentityParams({
-        provider: { id: "openai", model: "" },
-        meta: createMeta({ model: "text-embedding-3-small" }),
-      }),
-    );
+    const state = identity({
+      provider: { id: "openai", model: "" },
+      meta: createMeta({ model: "text-embedding-3-small" }),
+    });
     expect(state.status).toBe("mismatched");
     if (state.status === "mismatched") {
       expect(state.reason).toContain("expected fts-only");

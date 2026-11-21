@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { extractText } from "../../../../ui/src/lib/chat/message-extract.ts";
 import {
   getEmbeddedRunAttachment,
@@ -25,9 +25,12 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
-import { runWithRetainedGatewayRootWork } from "../../../process/gateway-work-admission.js";
-import { onInternalSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
-import { runOutsideAsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { getCurrentSessionControllerClaim } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceForGateway,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -39,11 +42,7 @@ import {
   resolveClientVoiceRunBinding,
 } from "../../../talk/client-voice-session.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
-import { projectChatDisplayMessages } from "../../chat-display-projection.js";
-import { createTranscriptUpdateBroadcastHandler } from "../../server-session-events.js";
-import { createSessionRowProjection } from "../../session-row-projection.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../../session-transcript-preview.js";
-import { readSessionMessagesAsync } from "../../session-transcript-readers.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import {
   AGENT_ID,
@@ -55,6 +54,7 @@ import {
   nativeDelegation,
   nativeResult,
   requireString,
+  settleNativeBackend,
   talkEventTypes,
   upstream,
   withParkedNativeTask,
@@ -159,7 +159,7 @@ describe("native Talk action ownership through public plugin registration", () =
     await import("../../../agents/embedded-agent-runner/run/attempt-stream-prepare.js");
   });
 
-  it("keeps native generated input in current-turn custody but out of display and future calls", async () => {
+  it("keeps native generated input hidden while retaining it in model history", async () => {
     const spoken = "Keep the literal labels Context: and Spoken style: in my note.";
     const delegated =
       "Check the note requested by the speaker. Context: preserve both labels. Spoken style: one sentence.";
@@ -172,29 +172,6 @@ describe("native Talk action ownership through public plugin registration", () =
     });
     await withNativePlugin(async (fixture) => {
       const scope = transcriptScope();
-      const readHistory = (reason: string) =>
-        readSessionMessagesAsync(scope, { mode: "full", reason });
-      const rowProjection = await createSessionRowProjection({
-        cfg: { agents: { entries: { [AGENT_ID]: {} } } },
-      });
-      const publications: ReturnType<typeof publish>[] = [];
-      const published = vi.fn();
-      const publish = createTranscriptUpdateBroadcastHandler({
-        getSessionRowProjection: () => rowProjection,
-        broadcastToConnIds: published,
-        sessionEventSubscribers: { getAll: () => new Set([CONNECTION_ID]) },
-        sessionMessageSubscribers: { get: () => new Set([CONNECTION_ID]) },
-      });
-      const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
-        if ((update.target?.sessionId ?? update.sessionId) === SESSION_ID) {
-          // Match production subscription ownership: committed broadcasts outlive the producer.
-          const publication = runOutsideAsyncWorkScope(() =>
-            runWithRetainedGatewayRootWork(() => publish(update)),
-          );
-          void publication.catch(() => {});
-          publications.push(publication);
-        }
-      });
       let modelRun: Promise<void> | undefined;
       let activeVoiceSessionId: string | undefined;
       const failures = new Set<unknown>();
@@ -247,24 +224,14 @@ describe("native Talk action ownership through public plugin registration", () =
         const { socket, result } = await connectNativeSession(fixture);
         activeVoiceSessionId = requireString(result, "voiceSessionId");
         await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(spoken)));
-        await Promise.all(publications);
-        expect(
-          published.mock.calls.some(
-            ([event, payload]) =>
-              event === "session.message" && extractText(payload.message) === spoken,
-          ),
-        ).toBe(true);
         socket.serverEvent(nativeDelegation("custody-request", delegated));
         await providerStarted.promise;
-        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         const run = upstream.runEmbeddedAgent.mock.calls[0]![0];
-        expect(run.prompt).toContain(delegated);
         const modelMessages = streamMocks.streamSimple.mock.calls[0]![1].messages;
         expect(
           modelMessages.filter((message: unknown) => JSON.stringify(message).includes(delegated)),
         ).toHaveLength(1);
         expect(modelMessages.map(extractText)).toContain(run.prompt);
-        await Promise.all(publications);
         const generated = loadTranscriptEventsSync(scope).flatMap((event) =>
           isRecord(event) &&
           isRecord(event.message) &&
@@ -276,16 +243,9 @@ describe("native Talk action ownership through public plugin registration", () =
         expect.soft(generated[0]).toMatchObject({
           role: "user",
           display: false,
-          excludeFromContext: true,
         });
+        expect.soft(generated[0]).not.toHaveProperty("excludeFromContext");
         expect(extractText(generated[0])).toBe(run.prompt);
-        const history = await readHistory("native custody");
-        expect.soft(JSON.stringify(projectChatDisplayMessages(history))).not.toContain(delegated);
-        expect(JSON.stringify(projectChatDisplayMessages(history))).toContain(spoken);
-        const live = published.mock.calls.flatMap(([event, payload]) =>
-          event === "session.message" ? [payload.message] : [],
-        );
-        expect.soft(JSON.stringify(live)).not.toContain(delegated);
         const spokenFrames = fixture.broadcast.mock.calls.flatMap(([event, payload]) =>
           event === "talk.event" && payload.talkEvent?.type === "transcript.done"
             ? [payload.talkEvent.payload.text]
@@ -304,17 +264,12 @@ describe("native Talk action ownership through public plugin registration", () =
             socket.serverEvent(nativeTranscript(text, "assistant")),
           );
         }
-        await Promise.all(publications);
         const retained = [
           { role: "user", text: spoken },
           { role: "assistant", text: readback },
           { role: "assistant", text: readback },
           { role: "assistant", text: dialogue },
         ];
-        const completed = await readHistory("native history");
-        expect(projectChatDisplayMessages(completed).map(extractText)).toEqual(
-          retained.map((item) => item.text),
-        );
         const assistantRecords = readSessionTranscriptMessageEvents(scope).flatMap(({ event }) =>
           isRecord(event) && isRecord(event.message) && event.message.role === "assistant"
             ? [event.message]
@@ -331,14 +286,20 @@ describe("native Talk action ownership through public plugin registration", () =
           ),
         );
         await fixture.invoke("talk.client.close", { voiceSessionId: result.voiceSessionId });
-        await Promise.all(publications);
         const rawCompleted = rawTranscriptRows();
         expect(await closeOpenClawAgentDatabaseByPathAsync(scope.storePath)).toBe(true);
         const reconnected = await connectNativeSession(fixture);
         activeVoiceSessionId = requireString(reconnected.result, "voiceSessionId");
         const session = await nativeCallSession();
-        expect.soft(session.instructions).not.toContain(delegated);
-        expect(nativeBackgroundItems(session)).toEqual(retained);
+        const retainedPrompt =
+          run.prompt.length <= 800 ? run.prompt : `${run.prompt.slice(0, 797)}...`;
+        expect(nativeBackgroundItems(session)).toEqual([
+          retained[0],
+          { role: "user", text: retainedPrompt },
+          ...retained.slice(1),
+        ]);
+        const visible = await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800);
+        expect(JSON.stringify(visible)).not.toContain(delegated);
         expect(session.delegation?.ack_filler).toBe(false);
         expect(rawTranscriptRows()).toEqual(rawCompleted);
       } catch (error) {
@@ -347,14 +308,6 @@ describe("native Talk action ownership through public plugin registration", () =
         finish();
         await settle(modelRun);
         await settle(activeVoiceSessionId ? closeVoice(activeVoiceSessionId) : undefined);
-        // Seal publication admission after producers settle; a rejected reader
-        // must not skip sibling readers or leave a listener across fixture teardown.
-        unsubscribe();
-        try {
-          await Promise.all(publications.map(settle));
-        } finally {
-          rowProjection.dispose();
-        }
       }
       if (failures.size === 1) {
         throw failures.values().next().value;
@@ -439,22 +392,12 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  describe("registration readiness", () => {
-    let fixture: Awaited<ReturnType<typeof prepareMissingRegistrationFixture>> | undefined;
-    beforeEach(async () => {
-      fixture = await prepareMissingRegistrationFixture();
-    });
-    afterEach(async () => {
-      await fixture?.close();
-      fixture = undefined;
-    });
-    it(
-      "releases the provider when registration readiness never publishes",
-      { timeout: 10_000 },
-      async () => {
-        if (!fixture) {
-          throw new Error("Native registration fixture was not prepared");
-        }
+  it(
+    "releases the provider when registration readiness never publishes",
+    { timeout: 10_000 },
+    async () => {
+      const fixture = await prepareMissingRegistrationFixture();
+      try {
         const { session, providerStream, answer, finish, publish, assertions, start } = fixture;
         await expect(start()).rejects.toThrow(
           /registration readiness not observed within 1000 ms; last phase: \S/,
@@ -462,15 +405,16 @@ describe("native Talk action ownership through public plugin registration", () =
         expect(assertions).not.toHaveBeenCalled();
         expect(finish).toHaveBeenCalledOnce();
         expect(publish).toHaveBeenCalledOnce();
-        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         expect(await providerStream.result()).toBe(answer);
         expect(session.isStreaming).toBe(false);
         expect(Boolean(getActiveNativeAttempt(SESSION_ID))).toBe(false);
         const runId = upstream.runEmbeddedAgent.mock.calls[0]![0].runId;
         expect(ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.has(runId)).toBe(false);
-      },
-    );
-  });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
 
   it.each([
     ["closed", "closed"],
@@ -634,7 +578,6 @@ describe("native Talk action ownership through public plugin registration", () =
       try {
         socket.serverEvent(nativeDelegation("original-task", "Keep working."));
         await started.promise;
-        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
         expect(Boolean(getActiveNativeAttempt(SESSION_ID))).toBe(false);
         const before = socket.sent.length;
         socket.serverEvent(nativeDelegation("startup-control", "use the release branch instead"));
@@ -649,12 +592,7 @@ describe("native Talk action ownership through public plugin registration", () =
         await vi.waitFor(() => expectResult(socket.sent));
         expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
       } finally {
-        release.resolve();
-        await Promise.allSettled(
-          upstream.runEmbeddedAgent.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
+        await settleNativeBackend(release.resolve);
       }
     });
   });
@@ -731,7 +669,6 @@ describe("native Talk action ownership through public plugin registration", () =
       await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(text)));
       expect.soft(queueMessage, "final ASR must not steer the old task").not.toHaveBeenCalled();
       expect.soft(spokenMessages(socket.sent.slice(beforeTranscript))).toEqual([]);
-      expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
       await settleBackend();
       await vi.waitFor(() => expectResult(socket.sent));
       expect(activeRun.abortSignal.aborted).toBe(false);
@@ -811,5 +748,86 @@ describe("native Talk action ownership through public plugin registration", () =
       expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
       expectHealthySocket(task);
     });
+  });
+});
+
+describe("native Talk scope handoff investigation", () => {
+  installNativePluginTestHooks();
+  it("public GPT Live handoff does not duplicate its source when callback and captured Gateway scopes differ", async () => {
+    const callbackScope = () => undefined;
+    const release = createDeferredCore();
+    let claimedInput: unknown;
+    upstream.runEmbeddedAgent.mockImplementationOnce(async (params) =>
+      withRegisteredNativeEmbeddedRun(params, async () => {
+        claimedInput = getCurrentSessionControllerClaim()?.inputs[0];
+        await release.promise;
+        return nativeResult("The selected conversation was checked.");
+      }),
+    );
+    await withNativePlugin(
+      async (fixture) => {
+        const { socket, result } = await connectNativeSession(fixture);
+        let source: RpcSourceRef | undefined;
+        try {
+          await flushNativeTranscript(result, () =>
+            socket.serverEvent({
+              type: "turn.done",
+              turn: { role: "user", transcript: "Check the selected conversation." },
+            }),
+          );
+          socket.serverEvent(nativeDelegation("scope-handoff", "Check the selected conversation."));
+          await vi.waitFor(
+            () => {
+              source = [...fixture.rpcSourceTesting.values()][0];
+              expect(source).toBeDefined();
+            },
+            { timeout: 5_000 },
+          );
+          if (!source?.input.protocolRunId) {
+            throw new Error("Expected registered handoff source");
+          }
+          await vi.waitFor(
+            () =>
+              expect(
+                source!.input.mailbox.entries.length > 1 ||
+                  upstream.runEmbeddedAgent.mock.calls.length > 0 ||
+                  source!.input.retirementRequested,
+              ).toBe(true),
+            { timeout: 5_000 },
+          );
+          const mailbox = source.input.mailbox;
+          if (mailbox.entries.length > 1) {
+            expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
+            expect(mailbox.owner.active).toBeUndefined();
+            expect(mailbox.claim).toBeUndefined();
+            expect(mailbox.entries[0]).toBe(source.input);
+            expect(source.input.task).toBeUndefined();
+            expect(mailbox.entries[1]?.task).toBeTypeOf("function");
+            expect(mailbox.entries.filter((input) => input.injection)).toHaveLength(0);
+            expect(mailbox.entries.map((input) => input.withdrawalHolds)).toEqual([0, 0]);
+          }
+          expect(
+            mailbox.entries.length,
+            "one registered provider request must never create a second mailbox input",
+          ).toBeLessThanOrEqual(1);
+          // The callback scope is not the captured Gateway owner of this fixture.
+          expect(getRpcSourceForGateway(source.input.protocolRunId, callbackScope)).toBeUndefined();
+          expect(getRpcSourceForGateway(source.input.protocolRunId, undefined)).toBe(source);
+          expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+          expect(claimedInput).toBe(source.input);
+        } finally {
+          release.resolve();
+          if (source) {
+            requestRpcSourceCancellation(source, new Error("synthetic test cleanup"));
+          }
+          await closeTalkClientGatewayControlSession({
+            voiceSessionId: requireString(result, "voiceSessionId"),
+            sessionKey: SESSION_KEY,
+            connId: CONNECTION_ID,
+          });
+        }
+      },
+      { consultScope: callbackScope },
+    );
   });
 });

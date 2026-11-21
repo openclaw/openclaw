@@ -10,8 +10,10 @@ import {
   buildMultimodalChunkForIndexing,
   listMemoryFiles,
   readMemoryFile,
-  type MemoryWorkspaceFiles,
-  type MemoryWorkspaceWatchRequest,
+} from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import type {
+  MemoryWorkspaceFiles,
+  MemoryWorkspaceWatchRequest,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export async function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
@@ -25,9 +27,11 @@ type MaintenanceCommand = {
   [K in keyof MemoryWorkspaceMaintenance]: {
     operation: "maintenance";
     method: K;
-    args: K extends "writeDreams" | "appendCorpus"
-      ? [filePath: string, content: string]
-      : Parameters<MemoryWorkspaceMaintenance[K]>;
+    args: K extends "writeDreams"
+      ? Parameters<MemoryWorkspaceMaintenance["replaceReport"]>
+      : K extends "appendCorpus"
+        ? [filePath: string, content: string]
+        : Parameters<MemoryWorkspaceMaintenance[K]>;
   };
 }[keyof MemoryWorkspaceMaintenance];
 
@@ -254,11 +258,13 @@ async function runMaintenance(request: MaintenanceCommand, workspace: string): P
     }
     case "writeDreams": {
       const { writeDreamsFileAtomic } = await import("../dreaming-dreams-file.js");
-      return await writeDreamsFileAtomic(...request.args);
+      const [filePath, content, workspaceFileMode] = request.args;
+      return await writeDreamsFileAtomic(filePath, content, undefined, workspaceFileMode);
     }
     case "replaceReport": {
       const { replaceDreamingMarkdownFile } = await import("../dreaming-markdown.js");
-      return await replaceDreamingMarkdownFile(...request.args);
+      const [filePath, content, workspaceFileMode] = request.args;
+      return await replaceDreamingMarkdownFile(filePath, content, undefined, workspaceFileMode);
     }
     case "appendCorpus": {
       const { appendSessionCorpusText } = await import("../session-ingestion.js");

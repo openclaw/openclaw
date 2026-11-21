@@ -106,9 +106,7 @@ describe("Dockerfile", () => {
       const documents = parseAllDocuments(await readFile(join(appRoot, "pnpm-lock.yaml"), "utf8"));
       expect(documents.flatMap((document) => document.errors)).toEqual([]);
       const importers = documents.at(-1)?.get("importers", true);
-      if (!isMap(importers)) {
-        throw new Error("Application pnpm lockfile importers are missing");
-      }
+      assert(isMap(importers), "Application pnpm lockfile importers are missing");
       expect(importers.items.length).toBeGreaterThan(1);
       for (const importer of importers.items) {
         const manifest = join(String(importer.key), "package.json");
@@ -120,8 +118,7 @@ describe("Dockerfile", () => {
 
       const readPluginDirs = (kind: string) =>
         readFile(join(inputsRoot, `tmp/openclaw-${kind}-plugin-dirs`), "utf8");
-      const selected = await readPluginDirs("selected");
-      expect(selected).toBe(selection ? `${selection}\n` : "");
+      expect(await readPluginDirs("selected")).toBe(selection ? `${selection}\n` : "");
       const installed = (await readPluginDirs("workspace")).trim().split("\n");
       expect(installed).toContain("telegram");
       expect(installed).not.toContain("facetime");
@@ -212,17 +209,19 @@ describe("Dockerfile", () => {
     expectInOrder(slice, "docker_gpg_pub_count=", "actual_fingerprint=", "gpg --dearmor");
   });
 
-  it("pre-creates named-volume mount points before switching to the node user", async () => {
+  it("keeps the home traversable for custom UIDs and named-volume mount points private", async () => {
     const dockerfile = await readDockerfile();
     const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM base-runtime"));
     // #85968: the node-owned parent must precede the private leaf directories.
     expectInOrder(
       runtime,
       "FROM base-runtime",
+      "RUN chmod 0755 /home/node",
       "RUN install -d -m 0755 -o node -g node /home/node/.config",
       "install -d -m 0700 -o node -g node \\",
       "USER node",
     );
+    expect(runtime).not.toMatch(/chmod\s+(?:-R\s+0755|0755\s+-R)\s+\/home\/node/u);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
     expectContains(
       dockerfile,

@@ -105,8 +105,8 @@ export async function resolveIMessageRemoteHost(params: {
   }
 
   const key = cacheKey(params.cliPath);
-  if (detectedRemoteHosts.has(key)) {
-    const cached = detectedRemoteHosts.get(key);
+  const cached = detectedRemoteHosts.get(key);
+  if (cached !== undefined) {
     if (cached === ambiguousSshWrapper) {
       throwAmbiguousSshWrapper();
     }

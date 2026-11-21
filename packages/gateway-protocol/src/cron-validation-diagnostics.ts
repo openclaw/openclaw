@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type TSchema } from "typebox";
-import { Compile, type Validator } from "typebox/schema";
+import { Errors } from "typebox/schema";
 import { CronAddParamsSchema, CronUpdateParamsSchema } from "./schema/cron.js";
 import type { ValidationError } from "./validation-errors.js";
 
@@ -51,7 +51,7 @@ function cronDiagnostics(update: boolean) {
   const prefix = update ? "/patch" : "";
   const scheduleFor = taggedVariants(fields.schedule, `${prefix}/schedule`);
   const payloadFor = taggedVariants(fields.payload, `${prefix}/payload`);
-  const validators = new Map<TSchema, Map<TSchema, Validator>>();
+  const views = new Map<TSchema, Map<TSchema, TSchema>>();
   return (value: unknown): ValidationError[] | undefined => {
     const job = isRecord(value) ? (update ? value.patch : value) : undefined;
     if (!isRecord(job)) {
@@ -62,15 +62,14 @@ function cronDiagnostics(update: boolean) {
     if (schedule.schema === fields.schedule && payload.schema === fields.payload) {
       return undefined;
     }
-    let byPayload = validators.get(schedule.schema);
+    let byPayload = views.get(schedule.schema);
     if (!byPayload) {
       byPayload = new Map();
-      validators.set(schedule.schema, byPayload);
+      views.set(schedule.schema, byPayload);
     }
-    let validator = byPayload.get(payload.schema);
-    if (!validator) {
+    let view = byPayload.get(payload.schema);
+    if (!view) {
       const properties = { ...fields, schedule: schedule.schema, payload: payload.schema };
-      let view: TSchema;
       if (update) {
         const branches: TSchema[] = [];
         for (const branch of CronUpdateParamsSchema.anyOf) {
@@ -86,8 +85,7 @@ function cronDiagnostics(update: boolean) {
       } else {
         view = { ...CronAddParamsSchema, properties };
       }
-      validator = Compile(view);
-      byPayload.set(payload.schema, validator);
+      byPayload.set(payload.schema, view);
     }
     const invalidKinds = [schedule.invalidKind, payload.invalidKind].filter(
       (error): error is ValidationError => error !== undefined,
@@ -96,14 +94,12 @@ function cronDiagnostics(update: boolean) {
       ...(schedule.invalidKind ? [`${prefix}/schedule`] : []),
       ...(payload.invalidKind ? [`${prefix}/payload`] : []),
     ];
-    const errors = validator
-      .Errors(value)[1]
-      .filter(
-        (error) =>
-          !invalidPaths.some(
-            (path) => error.instancePath === path || error.instancePath?.startsWith(`${path}/`),
-          ),
-      );
+    const errors = Errors(view, value)[1].filter(
+      (error) =>
+        !invalidPaths.some(
+          (path) => error.instancePath === path || error.instancePath?.startsWith(`${path}/`),
+        ),
+    );
     const diagnostics = [...invalidKinds, ...errors];
     return diagnostics.length > 0 ? diagnostics : undefined;
   };

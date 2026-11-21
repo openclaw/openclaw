@@ -12,6 +12,7 @@ import {
   withTempCronHome as withTempHome,
   writeSessionStore,
 } from "./isolated-agent.test-harness.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import type { CronJob } from "./types.js";
 
 export { withTempHome };
@@ -28,13 +29,13 @@ export function makeDeps(): CliDeps {
 }
 
 export function mockEmbeddedOk() {
-  vi.mocked(runEmbeddedAgent).mockResolvedValue({
+  vi.mocked(runEmbeddedAgent).mockImplementation(async ({ sessionId }) => ({
     payloads: [{ text: "ok" }],
     meta: {
       durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+      agentMeta: { sessionId, provider: "p", model: "m" },
     },
-  });
+  }));
 }
 
 export async function readCronSessionEntry(storePath: string, key: string) {
@@ -66,6 +67,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
     message: DEFAULT_MESSAGE,
   };
   const res = await runCronIsolatedAgentTurn({
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     deliveryAttemptFence: null,
     cfg,
     deps,

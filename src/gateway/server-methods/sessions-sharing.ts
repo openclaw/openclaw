@@ -1,6 +1,5 @@
 import {
   ErrorCodes,
-  errorShape,
   validateSessionMemberAddParams,
   validateSessionMemberRemoveParams,
   validateSessionMembersListParams,
@@ -14,7 +13,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { addSessionMember, removeSessionMember } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import {
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-membership-facts.types.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
@@ -45,10 +47,12 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import { prepareManagedSessionAccess, sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import { knownSessionIdentities, type SharingActorFacts } from "./sessions-sharing-identities.js";
+import { projectSessionMemberPermissions } from "./sessions-sharing-permissions.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -252,27 +256,25 @@ function createSessionMembersListHandler(
           ? evidenceMembers
           : evidenceMembers.map(projectLegacySessionMember);
         if (!evidenceAware && members.some((member) => member === null)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "session membership includes actor evidence this client cannot represent",
-              {
-                details: {
-                  code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
-                  recommendedMethod: "session.members.listEvidence",
-                },
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "session membership includes actor evidence this client cannot represent",
+            {
+              details: {
+                code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
+                recommendedMethod: "session.members.listEvidence",
               },
-            ),
+            },
           );
           return;
         }
         const projectedMembers = members.filter((member) => member !== null);
+        const profiles = listResidentUserProfileDisplayFacts();
         const identities = knownSessionIdentities({
           creators: projection.listCreatedActors(),
           actor,
-          profiles: listResidentUserProfileDisplayFacts(),
+          profiles,
         });
         for (const member of projectedMembers) {
           if (!identities.some((identity) => identity.id === member.identityId)) {
@@ -286,7 +288,7 @@ function createSessionMembersListHandler(
         );
         // Persisted provenance deliberately has no current profile label or avatar.
         // Project it at the same display boundary as session rows; never change the access identity.
-        const storedOwner = entry.createdActor;
+        const storedOwner = resolveSessionCreatorActor(entry.createdActor);
         const owner = sessionCreatorProfileId(storedOwner)
           ? projectSessionActor(storedOwner, new Map(), currentCfg)
           : storedOwner
@@ -309,6 +311,18 @@ function createSessionMembersListHandler(
             ...(owner?.id ? { owner } : {}),
             members: projectedMembers,
             identities,
+            ...(evidenceAware
+              ? {
+                  permissions: projectSessionMemberPermissions({
+                    cfg: context.getCommittedRuntimeConfig?.() ?? currentCfg,
+                    client,
+                    target: { ...target, entry },
+                    members: evidenceMembers,
+                    identities,
+                    profiles,
+                  }),
+                }
+              : {}),
             role,
             allowedVisibilities: allowedSessionVisibilities(currentCfg),
           },
@@ -342,7 +356,7 @@ function createSessionMemberMutationHandler(
           profiles: listResidentUserProfileDisplayFacts(),
         });
         if (!known.some((identity) => identity.id === params.identityId)) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown identity"));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "unknown identity");
           return;
         }
       }
@@ -415,21 +429,18 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }, access) => {
       const managed = access.target;
       if (managed.entry.incognito || isIncognitoSessionKey(managed.canonicalKey)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Incognito sessions cannot be published."),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Incognito sessions cannot be published.",
         );
         return;
       }
       if (managed.entry.sessionId !== params.expectedSessionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Session changed; reopen sharing before publishing.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Session changed; reopen sharing before publishing.",
         );
         return;
       }
@@ -526,12 +537,13 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         }
       };
       if (!isSessionVisibilityAllowed(context.getRuntimeConfig(), visibility)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `session visibility is disabled: ${visibility}`, {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `session visibility is disabled: ${visibility}`,
+          {
             details: { code: "SESSION_VISIBILITY_DISABLED", visibility },
-          }),
+          },
         );
         return;
       }

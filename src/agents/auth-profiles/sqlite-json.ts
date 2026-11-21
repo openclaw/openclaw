@@ -112,6 +112,42 @@ export function readAuthProfileJsonCellText(
   )?.[cell.value];
 }
 
+/** Read admitted credential and health cells in one statement without classifying errors. */
+export function readAuthProfileJsonCellTexts(
+  database: EngineConnection,
+  databaseKind: "agent" | "shared-state",
+): { store: string | undefined; state: string | undefined } {
+  const rows =
+    databaseKind === "shared-state"
+      ? executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<SharedAuthProfileDatabase>(database)
+            .selectFrom("config_machine_state")
+            .select(["state_key as target", "value_json as contents"])
+            .where("state_key", "in", [SHARED_AUTH_CELL_KEYS.store, SHARED_AUTH_CELL_KEYS.state]),
+        ).rows
+      : executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+            .selectFrom("auth_profile_store")
+            .select("store_json as contents")
+            .select((expression) => expression.val("store").as("target"))
+            .where("store_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY)
+            .unionAll(
+              getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+                .selectFrom("auth_profile_state")
+                .select("state_json as contents")
+                .select((expression) => expression.val("state").as("target"))
+                .where("state_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY),
+            ),
+        ).rows;
+  const texts = new Map(rows.map((row) => [row.target, row.contents]));
+  return {
+    store: texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.store : "store"),
+    state: texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.state : "state"),
+  };
+}
+
 export function inspectAuthProfileJsonCell(
   db: EngineConnection,
   target: "store" | "state",
@@ -277,40 +313,9 @@ export function readAuthProfileRows(
   );
   if (hasBothTables) {
     try {
-      const rows =
-        databaseKind === "shared-state"
-          ? executeSqliteQuerySync(
-              database,
-              getNodeSqliteKysely<SharedAuthProfileDatabase>(database)
-                .selectFrom("config_machine_state")
-                .select(["state_key as target", "value_json as contents"])
-                .where("state_key", "in", [
-                  SHARED_AUTH_CELL_KEYS.store,
-                  SHARED_AUTH_CELL_KEYS.state,
-                ]),
-            ).rows
-          : executeSqliteQuerySync(
-              database,
-              getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
-                .selectFrom("auth_profile_store")
-                .select("store_json as contents")
-                .select((expression) => expression.val("store").as("target"))
-                .where("store_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY)
-                .unionAll(
-                  getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
-                    .selectFrom("auth_profile_state")
-                    .select("state_json as contents")
-                    .select((expression) => expression.val("state").as("target"))
-                    .where("state_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY),
-                ),
-            ).rows;
-      const texts = new Map(rows.map((row) => [row.target, row.contents]));
-      store = inspectAuthProfileJsonText(
-        texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.store : "store"),
-      );
-      state = inspectAuthProfileJsonText(
-        texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.state : "state"),
-      );
+      const texts = readAuthProfileJsonCellTexts(database, databaseKind);
+      store = inspectAuthProfileJsonText(texts.store);
+      state = inspectAuthProfileJsonText(texts.state);
     } catch (error) {
       if (databaseKind === "shared-state") {
         throw error;

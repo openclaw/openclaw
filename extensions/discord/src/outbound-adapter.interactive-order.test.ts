@@ -9,7 +9,7 @@ import {
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
 
-const { discordOutbound } = await import("./outbound-adapter.js");
+const { discordOutbound } = await import("./outbound-payload.js");
 
 type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
 

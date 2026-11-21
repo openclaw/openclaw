@@ -3,11 +3,13 @@ import fs from "node:fs/promises";
 import type { Server, RequestListener, IncomingMessage, ServerResponse } from "node:http";
 import type { Server as HttpsServer } from "node:https";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import {
-  serializeWorkerWorkspaceManifest,
+  serializeWorkerWorkspaceManifest as serializeManifest,
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
+import { listen } from "./node-worker-transfer-client.test-support.js";
 
 type TransferOptions = Parameters<typeof runNodeWorkerWorkspaceTransfer>[0];
 type TransferOverrides = Omit<
@@ -17,26 +19,15 @@ type TransferOverrides = Omit<
 
 export const digest = (body: string | Buffer) => createHash("sha256").update(body).digest("hex");
 
-export function fileEntry(filePath: string, body: Buffer, mode = 0o644) {
-  return {
-    path: filePath,
-    type: "file" as const,
-    mode,
-    size: body.byteLength,
-    sha256: digest(body),
-  };
+export function fileEntry(file: string, body: Buffer, mode = 0o644) {
+  return { path: file, type: "file" as const, mode, size: body.length, sha256: digest(body) };
 }
 
 export function manifestFixture(
   entries: WorkerWorkspaceManifest["entries"] = [],
   options: Partial<Omit<WorkerWorkspaceManifest, "version" | "entries">> = {},
 ) {
-  const rawManifest = serializeWorkerWorkspaceManifest({
-    version: 1,
-    baseCommit: null,
-    ...options,
-    entries,
-  });
+  const rawManifest = serializeManifest({ version: 1, baseCommit: null, ...options, entries });
   return { rawManifest, manifestRef: `sha256:${digest(rawManifest)}` };
 }
 
@@ -51,28 +42,27 @@ export async function writeManifest(root: string, raw: string) {
 export function transferFixture(root: string, environmentId: string) {
   const workspaceDir = path.join(root, "workspace");
   const context = { environmentId, workspaceDir, manifestHome: root };
+  const run = (
+    gatewayUrl: string,
+    transfer: TransferOptions["transfer"],
+    overrides: TransferOverrides,
+  ) => runNodeWorkerWorkspaceTransfer({ ...context, ...overrides, gatewayUrl, transfer });
   return {
     workspaceDir,
     read: (file: string) => fs.readFile(path.join(workspaceDir, file), "utf8"),
     download: (gatewayUrl: string, manifestRef: string, overrides: TransferOverrides = {}) =>
-      runNodeWorkerWorkspaceTransfer({
-        ...context,
-        ...overrides,
-        gatewayUrl,
-        transfer: { direction: "download", token: "download-token", manifestRef },
-      }),
+      run(gatewayUrl, { direction: "download", token: "download-token", manifestRef }, overrides),
     upload: (gatewayUrl: string, manifestRef: string, overrides: TransferOverrides = {}) =>
-      runNodeWorkerWorkspaceTransfer({
-        ...context,
-        ...overrides,
+      run(
         gatewayUrl,
-        transfer: {
+        {
           direction: "upload",
           token: "upload-token",
           baseManifestRef: manifestRef,
           referenceManifestRef: manifestRef,
         },
-      }),
+        overrides,
+      ),
   };
 }
 
@@ -87,14 +77,9 @@ export function transferHandler(
 }
 
 export async function readUpload(request: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const body = Buffer.concat(chunks);
+  const body = await buffer(request);
   const currentHeader = 4 + body.readUInt32BE(0);
-  const currentBytes = body.readUInt32BE(currentHeader);
-  const fileHeader = currentHeader + 4 + currentBytes;
+  const fileHeader = currentHeader + 4 + body.readUInt32BE(currentHeader);
   const currentRaw = body.subarray(currentHeader + 4, fileHeader).toString("utf8");
   return { body, fileHeader, currentRaw, currentRef: `sha256:${digest(currentRaw)}` };
 }
@@ -102,29 +87,23 @@ export async function readUpload(request: IncomingMessage) {
 export function workspaceTransferHandler(
   rawManifest: string,
   blobs: ReadonlyMap<string, Buffer>,
-  currentRef?: () => string | undefined,
+  currentRef?: (upload: Awaited<ReturnType<typeof readUpload>>) => string | undefined,
   contentLength = false,
 ) {
   return transferHandler(async (request, response) => {
-    let body: string | Buffer | undefined;
-    let json = false;
-    if (request.url?.endsWith("/manifest")) {
-      body = rawManifest;
-    } else if (
+    const manifest = request.url?.endsWith("/manifest");
+    const reconcile =
+      !manifest &&
       request.method === "POST" &&
       request.url?.includes("/reconciliations/") &&
-      currentRef
-    ) {
-      for await (const chunk of request) {
-        void chunk;
-      }
-      body = JSON.stringify({ manifestRef: currentRef() });
-      json = true;
-    } else {
-      body = blobs.get(request.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1] ?? "");
-    }
+      currentRef;
+    const body = manifest
+      ? rawManifest
+      : reconcile
+        ? JSON.stringify({ manifestRef: reconcile(await readUpload(request)) })
+        : blobs.get(request.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1] ?? "");
     response.writeHead(body === undefined ? 404 : 200, {
-      ...(json && contentLength ? { "content-type": "application/json" } : {}),
+      ...(reconcile && contentLength ? { "content-type": "application/json" } : {}),
       ...(contentLength && body !== undefined
         ? { "content-length": String(Buffer.byteLength(body)) }
         : {}),
@@ -135,7 +114,12 @@ export function workspaceTransferHandler(
 
 export async function closeServer(server: Server | HttpsServer) {
   server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  await server[Symbol.asyncDispose]();
+}
+
+export async function serveTransfer(server: Server | HttpsServer) {
+  return {
+    gatewayUrl: await listen(server),
+    [Symbol.asyncDispose]: () => closeServer(server),
+  };
 }

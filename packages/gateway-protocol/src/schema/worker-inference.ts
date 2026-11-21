@@ -82,7 +82,7 @@ export const WorkerInferenceModelRefSchema = closedObject({
   model: WorkerIdentifierSchema,
 });
 
-const WorkerInferenceContextSchema = closedObject({
+export const WorkerInferenceContextSchema = closedObject({
   systemPrompt: Type.Optional(InferenceTextSchema),
   messages: Type.Array(WorkerInferenceMessageSchema, {
     maxItems: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,

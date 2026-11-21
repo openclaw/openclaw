@@ -27,8 +27,10 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../server-shared-auth-generation.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { agentHandlers } from "./agent.js";
 import {
   describe1AfterEach1,
@@ -149,12 +151,7 @@ describe("gateway agent caller authority custody", () => {
                           isWebchatConnect: () => false,
                           client: {
                             ...operatorWriteCliClient(["operator.admin"]),
-                            authenticatedUserProfile: {
-                              profileId: "later-maintainer",
-                              displayName: null,
-                              hasAvatar: false,
-                              updatedAt: 1,
-                            },
+                            authenticatedUserProfile: gatewayProfile("later-maintainer"),
                           },
                           hasCurrentClientAuthority: () => false,
                         },
@@ -182,9 +179,16 @@ describe("gateway agent caller authority custody", () => {
                       } else {
                         invalidateGatewayDeviceRevocation(context, `device-${kind}`, "operator");
                       }
-                      await expect(callInProcessGatewayTool("config.get", {})).rejects.toThrow(
-                        "no longer active",
-                      );
+                      await expect(callInProcessGatewayTool("config.get", {})).resolves.toEqual({
+                        visible: true,
+                      });
+                      await expect(
+                        captureGatewayOperatorRunAuthority({
+                          client,
+                          context,
+                          hasCurrentClientAuthority: caller.isCurrent,
+                        }),
+                      ).rejects.toThrow("Gateway caller authority is no longer active");
                     }
                   }),
                 { inheritRequestScope: false },
@@ -422,7 +426,8 @@ describe("gateway agent caller authority custody", () => {
       );
       expect(runtime[Symbol.asyncDispose]).toHaveBeenCalledOnce();
       expect(preparedInput?.recorder?.finishPendingInput).toHaveBeenCalledExactlyOnceWith(
-        "interrupted",
+        "cancelled",
+        "failed",
       );
     } finally {
       caller.release();

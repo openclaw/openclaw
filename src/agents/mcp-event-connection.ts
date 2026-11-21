@@ -96,7 +96,7 @@ export async function prepareMcpEventCredentialConnection(
         const identity =
           transport.oauth?.identity === "per-requester" && selector.requesterScope
             ? requesterMcpOAuthIdentity(selector.serverName, transport.url, selector.requesterScope)
-            : operatorMcpOAuthIdentity(selector.serverName, transport.url);
+            : operatorMcpOAuthIdentity(selector.serverName, transport.url, selector.cfg);
         authority = await captureMcpOAuthAuthorization({
           identity,
           assertCurrent: assertCallerCurrent,

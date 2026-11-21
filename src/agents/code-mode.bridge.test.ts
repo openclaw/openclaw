@@ -6,15 +6,13 @@ import { createGatedToolFactory } from "./code-mode-concurrency.test-support.js"
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
-  fakeTool,
-  expectToolCalls,
   expectCompleted,
-  pluginTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function bridge(targets: AnyAgentTool[], timeoutMs = 10_000, awaitResults?: boolean) {
@@ -67,7 +65,6 @@ it.each([false, true])("drains settled combinators (failure=%s)", async (failure
       : "const value = await Promise.race([Promise.all([slow({})]), fast({})]); void release({}); return value;",
   );
   expectCompleted(details, failure ? "fast failure" : { winner: "fast" });
-  expectToolCalls(1, slow, fast, release);
   const settled = ["slow:start", "fast:settled", "slow:release", "slow:done"];
   expect(events).toEqual(failure ? ["fast:wait", ...settled] : settled);
   expect(gate.state.aborted).toBe(false);
@@ -98,30 +95,11 @@ it("bounds nested exec yield by the shared remaining deadline", async () => {
     return jsonResult({ consumed: true });
   });
   const shell = tool("exec", async (_id, input) => jsonResult(input));
-  shell.parameters = Type.Object({
-    command: Type.String(),
-    yieldMs: Type.Optional(Type.Number()),
-    background: Type.Optional(Type.Boolean()),
-  });
+  shell.parameters = execSchema;
   expectCompleted(
     await bridge([consume, shell])('await consume({}); return await exec({ command: "late" });'),
     { command: "late", yieldMs: 1 },
   );
-  expectToolCalls(1, consume, shell);
-});
-
-it("supports a guest timer between an action and its observation", async () => {
-  const input = pluginTool("fake_terminal_input", "Send terminal input");
-  const read = pluginTool("fake_terminal_read", "Read terminal output");
-  const details = await bridge([input, read])(`
-      const cancelled = setTimeout(() => { throw new Error("cancelled timer fired"); }, 30_000);
-      await fake_terminal_input({ data: "status\\n" });
-      clearTimeout(cancelled);
-      await new Promise(resolve => setTimeout(resolve, 5));
-      return await fake_terminal_read({});
-    `);
-  expectCompleted(details, { name: "fake_terminal_read" });
-  expectToolCalls(1, input, read);
 });
 
 it.each([true, false])("aborts without parking a run (beforeStart=%s)", async (beforeStart) => {

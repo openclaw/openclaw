@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { channel as diagnosticsChannel } from "node:diagnostics_channel";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { MessagePort } from "node:worker_threads";
@@ -9,6 +10,7 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admi
 import { closeWorkerTaskPoolResources } from "./worker-task-pool-registry.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import {
+  expectCalls,
   holdExit,
   reply,
   request,
@@ -40,15 +42,19 @@ vi.mock("./runtime-worker-url.js", () => ({ resolveRuntimeWorkerThreadExecArgv: 
 
 type Pool = ReturnType<typeof createOwnedWorkerTaskPool<string, string>>;
 type PoolOptions = Parameters<typeof createOwnedWorkerTaskPool<string, string>>[0];
+type OwnerOptions = Parameters<typeof createOwnedWorkerTaskPool>[1];
 const pools: Pool[] = [];
 
-function createPool(options: Partial<PoolOptions> = {}) {
-  const pool = createOwnedWorkerTaskPool<string, string>({
-    workerUrl: new URL("file:///fixture/owned-worker.js"),
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    ...options,
-  });
+function createPool(options: Partial<PoolOptions> = {}, owner?: OwnerOptions) {
+  const pool = createOwnedWorkerTaskPool<string, string>(
+    {
+      workerUrl: new URL("file:///fixture/owned-worker.js"),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+      ...options,
+    },
+    owner,
+  );
   pools.push(pool);
   return pool;
 }
@@ -66,6 +72,11 @@ async function completedWorker(pool: Pool) {
   const worker = workerFor("read");
   await finishTask(task, "read");
   return worker;
+}
+
+function startTask(pool: Pool, input: string, options: Parameters<Pool["runTask"]>[1] = {}) {
+  const task = pool.runTask(input, options);
+  return { task, worker: workerFor(input) };
 }
 
 async function finishTask(task: ReturnType<Pool["runTask"]>, input: string) {
@@ -88,8 +99,7 @@ function trackedTask(
   return {
     ...pool.runTask(input, { ...options, onInputConsumed: consumed, onExecutionSettled: settled }),
     expectHeld() {
-      expect(consumed).not.toHaveBeenCalled();
-      expect(settled).not.toHaveBeenCalled();
+      expectCalls(0, consumed, settled);
     },
     expectReleased(retired: boolean) {
       expect(consumed).toHaveBeenCalledOnce();
@@ -107,6 +117,43 @@ beforeEach(() => workers.splice(0));
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
   vi.useRealTimers();
+});
+
+it("keeps the newest idle worker warm without renewing expired surplus workers", async () => {
+  vi.useFakeTimers();
+  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000 }, { retainOneIdleWorker: true });
+  expect(workers).toHaveLength(0);
+  const first = pool.run("first", {});
+  const later = pool.run("later", {});
+  const previous = workerFor("first");
+  const newest = workerFor("later");
+  reply(previous, "first");
+  reply(newest, "later");
+  await Promise.all([first, later]);
+  const active = pool.run("recent", {});
+  void active.catch(() => undefined);
+  expect(workerFor("recent")).toBe(newest);
+  await vi.advanceTimersByTimeAsync(61_000);
+  expect(previous.terminate).not.toHaveBeenCalled();
+  reply(newest, "recent");
+  await active;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(previous.terminate).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(newest.terminate).not.toHaveBeenCalled();
+  for (const retirement of ["rotate", "close"] as const) {
+    const task = pool.run(retirement, {});
+    const worker = workerFor(retirement);
+    if (retirement === "rotate") {
+      expect(worker).toBe(newest);
+    }
+    reply(worker, retirement);
+    await task;
+    await pool[retirement]();
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(pool.getSnapshot().workers).toBe(0);
+    expect(workers).toHaveLength(retirement === "rotate" ? 2 : 3);
+  }
 });
 
 it("retires burst workers without extending the first worker's idle lifetime", async () => {
@@ -165,6 +212,44 @@ it("keeps the remaining worker's original idle deadline while the first worker s
   }
 });
 
+it("reuses one recurring burst worker across idle gaps and eventually retires it", async () => {
+  vi.useFakeTimers();
+  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 5_000 });
+  const wave = async (name: string) => {
+    const tasks = [pool.run(`${name}-primary`, {}), pool.run(`${name}-burst`, {})];
+    const primary = workerFor(`${name}-primary`);
+    const burst = workerFor(`${name}-burst`);
+    reply(primary, `${name}-primary`);
+    reply(burst, `${name}-burst`);
+    await Promise.all(tasks);
+    return { primary, burst };
+  };
+  const first = await wave("first");
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(first.burst.terminate).toHaveBeenCalledOnce();
+
+  const second = await wave("second");
+  await vi.advanceTimersByTimeAsync(8_000);
+  const third = await wave("third");
+  expect(third.primary).toBe(first.primary);
+  expect(third.burst).toBe(second.burst);
+  expect(pool.getSnapshot().workersCreated).toBe(3);
+
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(second.burst.terminate).toHaveBeenCalledOnce();
+  expect(first.primary.terminate).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(45_000);
+  expect(first.primary.terminate).toHaveBeenCalledOnce();
+  expect(pool.getSnapshot().workers).toBe(0);
+
+  await pool.rotate();
+  const rotated = await wave("rotated");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(rotated.burst.terminate).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(55_000);
+  expect(rotated.primary.terminate).toHaveBeenCalledOnce();
+});
+
 it("guards process-wide reader cleanup before dispatching to registered pools", async () => {
   createPool();
   await runQueuedStoreWrite({
@@ -187,29 +272,69 @@ it("guards process-wide reader cleanup before dispatching to registered pools", 
 });
 
 it("retires only idle slots on critical pressure, after result and resource custody settle", async () => {
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
   const pressure = diagnosticsChannel("openclaw.memory.critical");
-  const task = pool.runTask("read", {});
-  const worker = workerFor("read");
-  pressure.publish(undefined);
+  const { task, worker } = startTask(pool, "read");
+  pressure.publish(true);
   reply(worker, "read");
   await task.result;
-  pressure.publish(undefined);
+  pressure.publish(true);
   expect(worker.terminate).not.toHaveBeenCalled();
   await task.close();
   const cleanup = pool.closeResources("source");
-  pressure.publish(undefined);
+  pressure.publish(true);
   expect(worker.terminate).not.toHaveBeenCalled();
   acknowledgeCleanup(cleanupReceipt(worker));
   await cleanup;
-  pressure.publish(undefined);
+  clock.mockReturnValue(500);
+  pressure.publish(true);
   await nextTurn();
   expect(worker.terminate).toHaveBeenCalledOnce();
   expect(pool.getSnapshot().workers).toBe(0);
-  const next = pool.runTask("next", {});
-  const replacement = workerFor("next");
+  const { task: next, worker: replacement } = startTask(pool, "next");
   expect(replacement).not.toBe(worker);
   await finishTask(next, "next");
+});
+
+it("reclaims untimed burst workers under critical pressure", async () => {
+  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 0 });
+  const first = pool.run("primary", {});
+  const second = pool.run("burst", {});
+  const primary = workerFor("primary");
+  const burst = workerFor("burst");
+  reply(primary, "primary");
+  reply(burst, "burst");
+  await Promise.all([first, second]);
+  expect(primary.terminate).not.toHaveBeenCalled();
+  expect(burst.terminate).not.toHaveBeenCalled();
+  diagnosticsChannel("openclaw.memory.critical").publish(true);
+  await nextTurn();
+  expect(primary.terminate).toHaveBeenCalledOnce();
+  expect(burst.terminate).toHaveBeenCalledOnce();
+  expect(pool.getSnapshot().workers).toBe(0);
+});
+
+it("reuses recently active workers under repeated pressure and retires them after an idle gap", async () => {
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
+  const pressure = diagnosticsChannel("openclaw.memory.critical");
+  const worker = await completedWorker(pool);
+  for (const time of [500, 1_000, 1_500]) {
+    clock.mockReturnValue(time);
+    pressure.publish(undefined);
+    await nextTurn();
+    expect(worker.terminate).not.toHaveBeenCalled();
+    const input = `read-${time}`;
+    const next = startTask(pool, input);
+    expect(next.worker).toBe(worker);
+    await finishTask(next.task, input);
+  }
+  expect(pool.getSnapshot().workersCreated).toBe(1);
+  clock.mockReturnValue(2_500);
+  pressure.publish(undefined);
+  await nextTurn();
+  expect(worker.terminate).toHaveBeenCalledOnce();
 });
 
 it("reaches a cooperative exchange when earlier shared pressure has not released capacity", async () => {
@@ -335,11 +460,21 @@ it.each([false, true])(
 it.each(["receipts", "exit"] as const)(
   "bounds concurrent cleanup listeners until every receipt or native exit settles (%s)",
   async (settlement) => {
-    const pool = createPool();
+    const caller = new AsyncLocalStorage<number>();
+    const decodedIn: Array<number | undefined> = [];
+    const pool = createPool(
+      {},
+      {
+        decodeResourceError() {
+          decodedIn.push(caller.getStore());
+          return new Error("synthetic close failure");
+        },
+      },
+    );
     const worker = await completedWorker(pool);
     const listeners = worker.listenerCount("exit");
     const cleanups = Array.from({ length: 32 }, (_, index) =>
-      pool.closeResources(`source-${index}`),
+      caller.run(index, () => pool.closeResources(`source-${index}`)),
     );
     const results = Promise.allSettled(cleanups);
     const receipts = worker.posted.mock.calls
@@ -347,9 +482,15 @@ it.each(["receipts", "exit"] as const)(
       .map(([message]) => expectDefined(message.resourcePort, "cleanup receipt"));
     expect(worker.listenerCount("exit")).toBe(listeners + 1);
     for (const [index, receipt] of receipts.slice(0, 16).entries()) {
-      acknowledgeCleanup(receipt, index === 0 ? "synthetic close failure" : undefined);
+      if (index === 0) {
+        receipt.postMessage({ ok: false, detail: "synthetic close failure" }, []);
+        receipt.close();
+      } else {
+        acknowledgeCleanup(receipt);
+      }
     }
     const partial = await Promise.allSettled(cleanups.slice(0, 16));
+    expect(decodedIn).toEqual([0]);
     expect(partial.filter((result) => result.status === "fulfilled")).toHaveLength(15);
     expect(partial[0]).toMatchObject({
       status: "rejected",
@@ -369,6 +510,7 @@ it.each(["receipts", "exit"] as const)(
     if (settlement === "receipts") {
       expect(worker.terminate).not.toHaveBeenCalled();
     }
+    caller.disable();
   },
 );
 
@@ -409,9 +551,8 @@ it("holds a completed reply until acceptance and never retires its successor on 
 
 it("cancels a queued task without preparing its input or stopping the occupied worker", async () => {
   const pool = createPool();
-  const active = pool.runTask("active", {});
+  const { task: active, worker } = startTask(pool, "active");
   void active.result.catch(() => {});
-  const worker = workerFor("active");
   const controller = new AbortController();
   const reason = new Error("queued owner closed");
   const prepare = vi.fn(() => "must not dispatch");
@@ -421,9 +562,8 @@ it("cancels a queued task without preparing its input or stopping the occupied w
   await rejected;
   await queued.close();
 
-  expect(prepare).not.toHaveBeenCalled();
+  expectCalls(0, prepare, worker.terminate);
   queued.expectReleased(false);
-  expect(worker.terminate).not.toHaveBeenCalled();
   expect(worker.posted).toHaveBeenCalledOnce();
   await finishTask(active, "active");
 });
@@ -440,10 +580,7 @@ it("joins cancelled asynchronous preparation before releasing input custody", as
       preparing.resolve();
       return await prepared.promise;
     },
-    {
-      inputBytes: 8,
-      signal: controller.signal,
-    },
+    { inputBytes: 8, signal: controller.signal },
   );
   await preparing.promise;
   const rejected = expect(task.result).rejects.toBe(reason);
@@ -562,8 +699,7 @@ it("observes each failed stop once before a global close retries an owned task",
     },
   });
   const consumed = vi.fn();
-  const task = pool.runTask("failed", { inputBytes: 8, onInputConsumed: consumed });
-  const worker = workerFor("failed");
+  const { task, worker } = startTask(pool, "failed", { inputBytes: 8, onInputConsumed: consumed });
   const expectHeld = (attempts: number) => {
     expect(worker.terminate).toHaveBeenCalledTimes(attempts);
     expect(consumed).not.toHaveBeenCalled();
@@ -576,8 +712,7 @@ it("observes each failed stop once before a global close retries an owned task",
   try {
     await rejected;
     await automaticFailure.promise;
-    expect(worker.terminate).toHaveBeenCalledOnce();
-    expect(consumed).not.toHaveBeenCalled();
+    expectHeld(1);
     const excess = pool.runTask("capacity remains held", { inputBytes: 1 });
     await expect(excess.result).rejects.toMatchObject({ code: "overloaded" });
     await excess.close();
@@ -615,8 +750,7 @@ it("observes each failed stop once before a global close retries an owned task",
 
 it("joins native exit when global close reenters healthy task completion", async () => {
   const pool = createPool();
-  const task = pool.runTask("completed", {});
-  const worker = workerFor("completed");
+  const { task, worker } = startTask(pool, "completed");
   reply(worker, "completed", "accepted reply");
   await expect(task.result).resolves.toBe("accepted reply");
   const native = holdExit(worker);
@@ -665,8 +799,7 @@ it.each(["task-first", "pool-first"] as const)(
   async (order) => {
     const pool = createPool();
     const consumed = vi.fn();
-    const task = pool.runTask("active", { onInputConsumed: consumed });
-    const worker = workerFor("active");
+    const { task, worker } = startTask(pool, "active", { onInputConsumed: consumed });
     const native = holdExit(worker);
     const rejected = expect(task.result).rejects.toBeInstanceOf(Error);
     const closing =

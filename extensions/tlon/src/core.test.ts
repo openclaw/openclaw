@@ -38,9 +38,8 @@ const shipCredentials = {
 const configure = (prompter: WizardPrompter, cfg: OpenClawConfig = {}) =>
   runSetupWizardConfigure({ configure: tlonConfigure, cfg, prompter, options: {} });
 function promptText(answers: Record<string, string>) {
-  const byMessage = new Map(Object.entries(answers));
   return vi.fn(async ({ message }: { message: string }) => {
-    const answer = byMessage.get(message);
+    const answer = answers[message];
     if (answer === undefined) {
       throw new Error(`Unexpected prompt: ${message}`);
     }
@@ -68,23 +67,19 @@ describe("tlon core", () => {
   });
 
   it("preserves mention policy at root and account scope", () => {
-    expect(
-      tlonChannelConfigSchema.runtime?.safeParse({
-        implicitMentions: { threadParticipation: false },
-        requireMentionInBotThreads: true,
-        accounts: {
-          primary: {
-            implicitMentions: { replyToBot: false },
-            requireMentionInBotThreads: false,
-          },
+    const policy = {
+      implicitMentions: { threadParticipation: false },
+      requireMentionInBotThreads: true,
+      accounts: {
+        primary: {
+          implicitMentions: { replyToBot: false },
+          requireMentionInBotThreads: false,
         },
-      }),
-    ).toMatchObject({
-      success: true,
-      data: {
-        requireMentionInBotThreads: true,
-        accounts: { primary: { requireMentionInBotThreads: false } },
       },
+    };
+    expect(tlonChannelConfigSchema.runtime?.safeParse(policy)).toMatchObject({
+      success: true,
+      data: policy,
     });
   });
 

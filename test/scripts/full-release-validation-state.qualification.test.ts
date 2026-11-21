@@ -14,15 +14,7 @@ import {
 } from "../../scripts/release-qualification-coverage.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
-import {
-  SHA,
-  TRUSTED_MAIN,
-  canonicalCandidateRequest,
-  executionPlan,
-  sourceFact,
-  runCollector,
-} from "./full-release-validation-state.test-support.js";
-import { qualificationBaselinesJson } from "./release-qualification-admission.test-support.js";
+import { runCollector } from "./full-release-validation-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -83,10 +75,14 @@ describe("candidate-owned frozen qualification coverage", () => {
       const planPath = join(directory, "plan.json");
       const statePath = join(directory, "decision.json");
       const validator = join(directory, "verifier.mjs");
+      const evidencePath = join(directory, "evidence.json");
       writeFileSync(planPath, JSON.stringify(sealed));
+      // Keep full evidence out of environment entries, which have OS size limits.
+      writeFileSync(evidencePath, JSON.stringify(evidence));
       writeFileSync(
         validator,
-        `import { isDeepStrictEqual } from "node:util";
+        `import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 const args = process.argv;
 const value = (flag) => args[args.indexOf(flag) + 1];
 const expected = JSON.parse(process.env.FRV_EXPECTED_VERIFIER);
@@ -94,7 +90,7 @@ for (const [flag, wanted] of Object.entries(expected)) {
   const actual = flag === "--qualification-reuse-json" ? JSON.parse(value(flag)) : value(flag);
   if (!isDeepStrictEqual(actual, wanted)) throw new Error("Admitted verifier mismatch: " + flag);
 }
-console.log(process.env.FRV_VERIFIED_EVIDENCE);
+console.log(readFileSync(process.env.FRV_VERIFIED_EVIDENCE_PATH, "utf8"));
 `,
       );
       const responses: Record<string, string> = {};
@@ -153,14 +149,17 @@ console.log(response);
               }
             : {}),
         }),
-        FRV_VERIFIED_EVIDENCE: JSON.stringify(evidence),
+        FRV_VERIFIED_EVIDENCE_PATH: evidencePath,
         FRV_GITHUB_RESPONSES: JSON.stringify(responses),
         PATH: `${bin}:${process.env.PATH}`,
       });
       const decisionJson = existsSync(statePath)
         ? readFileSync(statePath, "utf8")
         : "<missing decision>";
-      expect(result.status, [result.stderr, result.stdout, decisionJson].join("\n")).toBe(0);
+      expect(
+        result.status,
+        [result.error, result.signal, result.stderr, result.stdout, decisionJson].join("\n"),
+      ).toBe(0);
       expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ state: "passed" });
     },
   );
@@ -188,38 +187,10 @@ console.log(response);
   });
 
   it("rejects changed or removed admitted children even after an attacker rehashes the plan", () => {
-    const coverage = resolveQualificationCoverage(policy, inputs);
-    const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
-    const baselines = qualificationBaselines.upgradeSurvivorBaselines.join(" ");
-    const sourceCoverage = {
-      ...sourceFact().coverage,
-      coverage_policy: "npm-stable-v1",
-      qualification_baselines_json: qualificationBaselinesJson,
-    };
-    const sourceAdmission = sourceFact(
-      Object.assign(
-        { candidateSha: SHA, coverage: sourceCoverage },
-        { qualificationAdmission: { artifactId: 123 } },
-      ),
-    );
-    const sealed = executionPlan(
-      { qualificationCoverage: coverage, childPhaseVersion: 3 },
-      {
-        attemptEvidenceVersion: 3,
-        qualificationCoverage: coverage,
-        qualificationInputs: inputs,
-        sourceAdmissionContract: "1",
-        sourceAdmission,
-        candidateRequest: canonicalCandidateRequest({
-          targetSha: SHA,
-          upgradeSurvivorBaseline: qualificationBaselines.upgradeBaseline,
-          upgradeSurvivorBaselines: baselines,
-        }),
-        coveragePolicy: "npm-stable-v1",
-        targetVersion: "2026.9.9",
-        expected: { targetSha: SHA },
-      },
-    );
+    const root = candidatePublicationFixture();
+    root.plan.sourceAdmission = JSON.parse(publicationSourceJson(root.plan.sourceAdmission));
+    const sealed = buildReleaseExecutionPlanArtifact({ ...root.plan, expected: root.plan });
+    const coverage = sealed.qualificationCoverage;
     expect(
       validateReleaseExecutionPlanArtifact(sealed, { qualificationCoverage: coverage }).sha256,
     ).toBe(sealed.sha256);
@@ -236,47 +207,30 @@ console.log(response);
       validateReleaseExecutionPlanArtifact(relabeled, { qualificationCoverage: coverage }),
     ).toThrow("required coverage changed");
 
-    const nextSha = "c".repeat(40);
-    const reused = structuredClone(sealed);
-    reused.targetSha = nextSha;
-    reused.workflowSha = nextSha;
-    reused.trustedWorkflow = { ...TRUSTED_MAIN, sha: nextSha };
-    reused.candidateRequest = canonicalCandidateRequest({
-      targetSha: nextSha,
-      toolingSha: nextSha,
-      upgradeSurvivorBaseline: qualificationBaselines.upgradeBaseline,
-      upgradeSurvivorBaselines: baselines,
-    });
-    reused.sourceAdmission = sourceFact(
-      Object.assign(
-        {
-          candidateSha: nextSha,
-          coverage: sourceCoverage,
-          tooling: { ref: "refs/heads/main", sha: nextSha },
-          workflow: { ref: "refs/heads/release-ci/tooling", sha: nextSha },
-        },
-        { qualificationAdmission: { artifactId: 456 } },
-      ),
-    );
+    const current = candidatePublicationFixture({ candidateSha: "c".repeat(40) });
+    current.plan.sourceAdmission = JSON.parse(publicationSourceJson(current.plan.sourceAdmission));
+    const reused = buildReleaseExecutionPlanArtifact({ ...current.plan, expected: current.plan });
     reused.evidenceReuse = {
       requested: true,
       changedPaths: ["CHANGELOG.md"],
-      evidenceSha: SHA,
+      evidenceSha: root.q,
       policy: "changelog-only-release-v1",
-      rootRunId: "76",
-      selectedRunId: "76",
+      rootRunId: root.runId,
+      selectedRunId: root.runId,
       runUrl: "",
       sourceManifest: {
-        workflowSha: SHA,
-        workflowRef: "release-ci/tooling",
+        workflowSha: root.q,
+        workflowRef: root.branch,
         qualificationCoverage: coverage,
       },
     };
-    reused.children = reused.children.map((child) => ({ ...child, source: "reused" }));
+    reused.children = sealed.children.map((child) =>
+      Object.assign({}, child, { source: "reused" }),
+    );
     reused.sha256 = releaseExecutionPlanSha256(reused);
     const restored = validateReleaseExecutionPlanArtifact(reused, {
       qualificationCoverage: coverage,
     });
-    expect(restored.children.every((child) => child.workflowSha === SHA)).toBe(true);
+    expect(restored.children.every((child) => child.workflowSha === root.q)).toBe(true);
   });
 });

@@ -179,7 +179,10 @@ export function createWorktreeDiskAdmission(params: {
 export async function estimateWorktreeGitBytes(
   repoRoot: string,
   ref: string,
-  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> & {
+  options: Pick<
+    GitWorkerOperationOptions,
+    "signal" | "assertCurrent" | "git" | "idleIoPriority"
+  > & {
     preparationKey?: string;
   } = {},
 ): Promise<number> {
@@ -221,11 +224,7 @@ export async function estimateWorktreeCheckoutTransitionBytes(
 /** Each call measures current files; allocation cannot use a settled directory-size cache. */
 export async function directorySizeBytes(
   root: string,
-  excludeGit = false,
   options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent"> = {},
 ): Promise<number> {
-  return await runGitWorkerOperation(
-    { type: "worktree.directory-size", input: { root, excludeGit } },
-    options,
-  );
+  return await runGitWorkerOperation({ type: "worktree.directory-size", input: { root } }, options);
 }

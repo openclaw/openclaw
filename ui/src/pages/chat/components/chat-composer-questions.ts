@@ -1,4 +1,6 @@
-import { createMemo, createStore } from "solid-js";
+import { createMemo, createStore, merge } from "solid-js";
+import { pathForSession } from "../../../app-session-path-builder.ts";
+import { composerInputHasFocus } from "../../../lib/composer-input.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
@@ -25,6 +27,8 @@ type QuestionInput = ChatComposerProps &
       | "getQueue"
       | "transcriptVisible"
       | "connectionEpoch"
+      | "basePath"
+      | "onOpenSessionLink"
     >
   >;
 
@@ -55,15 +59,17 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
     if (!props) {
       return null;
     }
-    const asyncQuestions = createAsyncQuestionPresentation(transcript, {
-      ...props,
-      queue: props.getQueue?.() ?? props.queue,
-      onReopen: (itemId, scope) => {
-        state.restoreComposerFocus ||= state.questionTakeoverActive;
-        state.questionTakeoverActive = false;
-        select(JSON.stringify([scope, itemId]));
-      },
-    });
+    const asyncQuestions = createAsyncQuestionPresentation(
+      transcript,
+      merge(props, {
+        queue: props.getQueue?.() ?? props.queue,
+        onReopen: (itemId, scope) => {
+          state.restoreComposerFocus ||= state.questionFocusActive;
+          state.questionFocusActive = false;
+          select(JSON.stringify([scope, itemId]));
+        },
+      } satisfies Partial<Parameters<typeof createAsyncQuestionPresentation>[1]>),
+    );
     const gatewayQuestions =
       props.gatewayQuestionPrompts?.filter((prompt) => prompt.status === "pending") ?? [];
     const asyncIdentity = (itemId: string) =>
@@ -72,25 +78,43 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       props.disabledBanner?.kind === "composer-replacement"
         ? []
         : [
-            ...gatewayQuestions.map((prompt) => ({
-              key: `gateway:${prompt.id}`,
-              asyncIdentity: null,
-              panel: (options: QuestionPanelOptions) =>
-                createGatewayQuestionPanelProps(prompt, {
-                  ...options,
-                  onChange: props.onGatewayQuestionChange,
-                  onSubmit: props.onGatewayQuestionSubmit
-                    ? (answers) => props.onGatewayQuestionSubmit?.(prompt.id, answers)
-                    : undefined,
-                  onSkip: props.onGatewayQuestionSkip
-                    ? () => props.onGatewayQuestionSkip?.(prompt.id)
-                    : undefined,
-                }),
-            })),
+            ...gatewayQuestions.map((prompt) => {
+              const sessionKey = prompt.sessionKey;
+              const agentId = prompt.agentId ?? props.currentAgentId;
+              const requestedBySession = props.gatewayQuestionSources?.get(prompt.id);
+              return {
+                key: `gateway:${prompt.id}`,
+                asyncIdentity: null,
+                restoreComposerOnClose: requestedBySession === undefined,
+                panel: (options: QuestionPanelOptions) =>
+                  createGatewayQuestionPanelProps(prompt, {
+                    ...options,
+                    requestedBySession,
+                    requestedBySessionHref:
+                      requestedBySession !== undefined && sessionKey
+                        ? (pathForSession("chat", agentId, sessionKey, props.basePath, {
+                            exactKey: true,
+                          }) ?? undefined)
+                        : undefined,
+                    onOpenSession:
+                      sessionKey && props.onOpenSessionLink
+                        ? () => props.onOpenSessionLink?.({ sessionKey, agentId })
+                        : undefined,
+                    onChange: props.onGatewayQuestionChange,
+                    onSubmit: props.onGatewayQuestionSubmit
+                      ? (answers) => props.onGatewayQuestionSubmit?.(prompt.id, answers)
+                      : undefined,
+                    onSkip: props.onGatewayQuestionSkip
+                      ? () => props.onGatewayQuestionSkip?.(prompt.id)
+                      : undefined,
+                  }),
+              };
+            }),
             ...(asyncQuestions.submit
               ? asyncQuestions.pending.map((question) => ({
                   key: JSON.stringify([asyncQuestions.scope, question.itemId]),
                   asyncIdentity: asyncIdentity(question.itemId),
+                  restoreComposerOnClose: false,
                   panel: (options: QuestionPanelOptions) =>
                     createAsyncQuestionPanelProps(question, asyncQuestions, options),
                 }))
@@ -105,7 +129,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       draftKey: composerDraftKey(props),
       editing:
         Boolean((props.draftSource?.read().draft ?? props.draft).trim()) ||
-        (state.composerTextarea !== null && document.activeElement === state.composerTextarea),
+        (state.composerTextarea !== null && composerInputHasFocus(state.composerTextarea)),
     };
   });
   const [disclosure, update] = createStore<QuestionDisclosure>(

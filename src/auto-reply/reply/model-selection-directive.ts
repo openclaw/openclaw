@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { modelKey, type ModelRef } from "../../agents/model-ref-shared.js";
 import {
   type ModelAliasIndex,
@@ -12,6 +13,7 @@ import {
 import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
+import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 export { modelKey };
 export type { ModelAliasIndex };
 
@@ -22,26 +24,6 @@ export type ModelDirectiveSelection = {
   resetToDefault?: true;
   alias?: string;
 };
-
-function formatNotAllowedError(params: {
-  modelRef: string;
-  policyPath: string;
-  rawRuntime?: string | undefined;
-}): string {
-  const rawRuntime = params.rawRuntime?.trim();
-  const retryCommand = rawRuntime
-    ? `/model ${params.modelRef} --runtime ${rawRuntime}`
-    : `/model ${params.modelRef}`;
-  const lines = [
-    `Model "${params.modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
-    `Add "${params.modelRef}" or its provider wildcard to ${params.policyPath}.`,
-    `Then retry: ${retryCommand}`,
-  ];
-  if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
-    lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
-  }
-  return lines.join("\n");
-}
 
 const FUZZY_VARIANT_TOKENS = [
   "lightning",
@@ -55,79 +37,6 @@ const FUZZY_VARIANT_TOKENS = [
   "nano",
 ];
 
-function scoreFuzzyMatch(params: {
-  provider: string;
-  model: string;
-  fragment: string;
-  aliasIndex: ModelAliasIndex;
-  defaultProvider: string;
-  defaultModel: string;
-}) {
-  const provider = normalizeProviderId(params.provider);
-  const model = params.model;
-  const fragment = params.fragment;
-  const modelLower = normalizeLowercaseStringOrEmpty(model);
-  const haystack = `${provider}/${modelLower}`;
-  const key = modelKey(provider, model);
-
-  const scoreFragment = (value: string, exact: number, starts: number, includes: number) => {
-    if (value === fragment) {
-      return exact;
-    }
-    if (value.startsWith(fragment)) {
-      return starts;
-    }
-    return value.includes(fragment) ? includes : 0;
-  };
-
-  let score =
-    scoreFragment(haystack, 220, 140, 110) +
-    scoreFragment(provider, 180, 120, 90) +
-    scoreFragment(modelLower, 160, 110, 80);
-
-  // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
-  // Bounded to keep this cheap across large model sets.
-  const distModel = levenshteinDistance(fragment, modelLower, 3);
-  if (distModel != null) {
-    score += (3 - distModel) * 70;
-  }
-
-  const aliases = params.aliasIndex.byKey.get(key) ?? [];
-  for (const alias of aliases) {
-    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), 140, 90, 60);
-  }
-
-  if (modelLower.startsWith(provider)) {
-    score += 30;
-  }
-
-  const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
-  const variantMatchCount = fragmentVariants.filter((token) => modelLower.includes(token)).length;
-  const variantCount = FUZZY_VARIANT_TOKENS.filter((token) => modelLower.includes(token)).length;
-  if (fragmentVariants.length === 0 && variantCount > 0) {
-    score -= variantCount * 30;
-  } else if (fragmentVariants.length > 0) {
-    score += variantMatchCount > 0 ? variantMatchCount * 40 : -20;
-  }
-
-  const defaultProvider = normalizeProviderId(params.defaultProvider);
-  const isDefault = provider === defaultProvider && model === params.defaultModel;
-  if (isDefault) {
-    score += 20;
-  }
-
-  return {
-    provider: params.provider,
-    model,
-    score,
-    isDefault,
-    variantCount,
-    variantMatchCount,
-    modelLength: modelLower.length,
-    key,
-  };
-}
-
 export function resolveModelDirectiveSelection(params: {
   raw: string;
   defaultProvider: string;
@@ -139,6 +48,8 @@ export function resolveModelDirectiveSelection(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   rawRuntime?: string | undefined;
+  /** Classify prose without manufacturing a model from an unknown bare word. */
+  requireKnownModel?: boolean;
 }): { selection?: ModelDirectiveSelection; error?: string } {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
   const policy =
@@ -209,9 +120,74 @@ export function resolveModelDirectiveSelection(params: {
     }
 
     const scored = candidates
-      .map((candidate) =>
-        scoreFuzzyMatch({ ...candidate, fragment, aliasIndex, defaultProvider, defaultModel }),
-      )
+      .map((candidate) => {
+        const provider = normalizeProviderId(candidate.provider);
+        const model = candidate.model;
+        const modelLower = normalizeLowercaseStringOrEmpty(model);
+        const haystack = `${provider}/${modelLower}`;
+        const key = modelKey(provider, model);
+
+        const scoreFragment = (value: string, exact: number, starts: number, includes: number) => {
+          if (value === fragment) {
+            return exact;
+          }
+          if (value.startsWith(fragment)) {
+            return starts;
+          }
+          return value.includes(fragment) ? includes : 0;
+        };
+
+        let score =
+          scoreFragment(haystack, 220, 140, 110) +
+          scoreFragment(provider, 180, 120, 90) +
+          scoreFragment(modelLower, 160, 110, 80);
+
+        // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
+        // Bounded to keep this cheap across large model sets.
+        const distModel = levenshteinDistance(fragment, modelLower, 3);
+        if (distModel != null) {
+          score += (3 - distModel) * 70;
+        }
+
+        const aliases = aliasIndex.byKey.get(key) ?? [];
+        for (const alias of aliases) {
+          score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), 140, 90, 60);
+        }
+
+        if (modelLower.startsWith(provider)) {
+          score += 30;
+        }
+
+        const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
+        const variantMatchCount = fragmentVariants.filter((token) =>
+          modelLower.includes(token),
+        ).length;
+        const variantCount = FUZZY_VARIANT_TOKENS.filter((token) =>
+          modelLower.includes(token),
+        ).length;
+        if (fragmentVariants.length === 0 && variantCount > 0) {
+          score -= variantCount * 30;
+        } else if (fragmentVariants.length > 0) {
+          score += variantMatchCount > 0 ? variantMatchCount * 40 : -20;
+        }
+
+        const isDefault =
+          provider === normalizeProviderId(defaultProvider) && model === defaultModel;
+        if (isDefault) {
+          score += 20;
+        }
+
+        return {
+          provider: candidate.provider,
+          model,
+          score,
+          isDefault,
+          variantCount,
+          variantMatchCount,
+          modelLength: modelLower.length,
+          key,
+        };
+      })
       .toSorted(
         (a, b) =>
           // Tie-break deterministically so repeated prompts pick the same model.
@@ -281,15 +257,77 @@ export function resolveModelDirectiveSelection(params: {
     }
   }
 
-  const selection =
-    resolveFuzzy({ fragment: rawTrimmed }) ?? (permitted ? explicitSelection : undefined);
-  return selection
-    ? { selection }
-    : {
-        error: formatNotAllowedError({
-          modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
-          policyPath: policy.allowRepairConfigPath,
-          rawRuntime: params.rawRuntime,
-        }),
-      };
+  const selection = resolveFuzzy({ fragment: rawTrimmed });
+  if (selection) {
+    return { selection };
+  }
+  if (params.requireKnownModel && !isExactSelection) {
+    const rawId = rawTrimmed.toLowerCase();
+    if (
+      !policy.catalog.some((entry) => entry.id.toLowerCase() === rawId) &&
+      !policy.configuredCatalog.some((entry) => entry.id.toLowerCase() === rawId)
+    ) {
+      return {};
+    }
+  }
+  if (permitted) {
+    return { selection: explicitSelection };
+  }
+  const modelRef = `${resolved.ref.provider}/${resolved.ref.model}`;
+  const rawRuntime = params.rawRuntime?.trim();
+  const retryCommand = rawRuntime
+    ? `/model ${modelRef} --runtime ${rawRuntime}`
+    : `/model ${modelRef}`;
+  const lines = [
+    `Model "${modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
+    `Add "${modelRef}" or its provider wildcard to ${policy.allowRepairConfigPath}.`,
+    `Then retry: ${retryCommand}`,
+  ];
+  if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
+    lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
+  }
+  return { error: lines.join("\n") };
+}
+
+/** Read-only matching must finish before a prose mention can affect session selection. */
+export async function prepareInlineModelDirectiveMatcher(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  defaultProvider: string;
+  defaultModel: string;
+  aliasIndex: ModelAliasIndex;
+  preparedModelCatalog?: ModelCatalogSnapshot;
+}) {
+  const { cfg, agentId, defaultProvider, defaultModel, aliasIndex } = params;
+  const preparedModelCatalog =
+    params.preparedModelCatalog ??
+    (await (
+      await import("../../agents/model-catalog.runtime.js")
+    ).loadPreparedModelCatalogSnapshot({ config: cfg, agentId, readOnly: true }));
+  const policy = createModelVisibilityPolicy({
+    cfg,
+    agentId,
+    catalog: preparedModelCatalog.entries,
+    defaultProvider,
+    defaultModel: { provider: defaultProvider, model: defaultModel },
+    ...resolveRuntimeNormalization(cfg),
+  });
+  return {
+    preparedModelCatalog,
+    isKnownInlineModel: (raw: string) => {
+      const resolved = resolveModelDirectiveSelection({
+        raw,
+        cfg,
+        agentId,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        allowedModelKeys: policy.allowedKeys,
+        modelPolicy: policy,
+        requireKnownModel: true,
+      });
+      // A recognized but disallowed model still belongs to command validation.
+      return Boolean(resolved.selection || resolved.error);
+    },
+  };
 }

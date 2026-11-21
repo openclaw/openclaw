@@ -11,13 +11,13 @@ type WorkContextField = keyof typeof CHAT_WORK_CONTEXT_LIMITS;
 
 function captureText(text: string, limit: number): string {
   let value = truncateUtf16Safe(text.trim(), limit);
-  while (JSON.stringify(value).length > limit) {
-    value = truncateUtf16Safe(
-      value,
-      Math.max(0, value.length - (JSON.stringify(value).length - limit)),
-    );
+  while (true) {
+    const excess = JSON.stringify(value).length - limit;
+    if (excess <= 0) {
+      return value;
+    }
+    value = truncateUtf16Safe(value, Math.max(0, value.length - excess));
   }
-  return value;
 }
 
 /** Freeze the same ordered and escaped-byte-bounded snapshot used by the model. */

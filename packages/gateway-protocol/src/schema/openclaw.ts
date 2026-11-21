@@ -378,7 +378,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
 
 /** Live verification of the Gateway's current default-agent inference route. */
 export const SystemAgentSetupVerifyParamsSchema = closedObject({
-  modelTarget: Type.Optional(Type.Literal("utility")),
+  /** Primary verification must not fall back to setup-only utility inference. */
+  modelTarget: Type.Optional(Type.Union([Type.Literal("primary"), Type.Literal("utility")])),
   /** Agent whose configured inference route is being verified. */
   agentId: Type.Optional(NonEmptyString),
 });

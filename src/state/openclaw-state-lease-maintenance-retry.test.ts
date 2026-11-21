@@ -14,9 +14,7 @@ const clock = vi.hoisted(() => ({ elapsed: 0 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
-  setTimeout: async (delay: number) => {
-    clock.elapsed += delay;
-  },
+  setTimeout: async (delay: number) => void (clock.elapsed += delay),
 }));
 
 beforeEach(() => {
@@ -34,70 +32,46 @@ const params = {
   database: { scope: "shared" as const },
 };
 const databasePath = "/synthetic-state/openclaw.sqlite";
-const pending = new StateDatabaseAdmissionPendingError(databasePath, "Synthetic admission pending");
-const maintenance = new StateDatabaseOfflineMaintenanceError(
-  databasePath,
-  "Synthetic offline maintenance",
-);
+const pending = new StateDatabaseAdmissionPendingError(databasePath, "admission pending");
+const maintenance = new StateDatabaseOfflineMaintenanceError(databasePath, "offline maintenance");
 
-it.each([pending, maintenance, new AggregateError([pending, maintenance])])(
-  "releases the original lease after temporary maintenance contention (%s)",
-  async (failure) => {
-    let held = true;
-    await releaseOpenClawStateLeaseBestEffort(params, async () => {
-      if (clock.elapsed === 0) {
-        throw failure;
-      }
-      held = false;
-    });
-    expect(held).toBe(false);
-    expect(clock.elapsed).toBeGreaterThan(0);
-    expect(clock.elapsed).toBeLessThanOrEqual(2_000);
-  },
-);
-
-it("retains the maintenance error when release exhausts its existing two-second budget", async () => {
-  await expect(
-    releaseOpenClawStateLeaseBestEffort(params, async () => {
-      throw maintenance;
-    }),
-  ).rejects.toBe(maintenance);
-  expect(clock.elapsed).toBe(2_000);
-});
-
-it.each([
-  new StateDatabaseMaintenanceScopeError(databasePath),
-  new AggregateError([maintenance, new Error("Synthetic cleanup failure")]),
-])("does not retry an unclassified release failure (%s)", async (failure) => {
-  await expect(
-    releaseOpenClawStateLeaseBestEffort(params, async () => {
-      throw failure;
-    }),
-  ).rejects.toBe(failure);
-  expect(clock.elapsed).toBe(0);
-});
-
-it("does not retry an ownership verification refusal from the persisted-owner guard", async () => {
+function ownershipRefusal() {
   const ownerPath = path.join(tempDirs.make("state-lease-refusal-"), "owner.json");
-  fs.writeFileSync(
-    ownerPath,
-    JSON.stringify({ pid: 0, createdAt: "fixture", configPath: "fixture" }),
-  );
+  fs.writeFileSync(ownerPath, JSON.stringify({ pid: 0, createdAt: "x", configPath: "x" }));
   let failure: unknown;
   try {
-    assertPersistedStateDatabaseAccessAllowed({
-      databasePath,
-      ownerPath,
-      assertMaintenance: () => {},
-    });
+    assertPersistedStateDatabaseAccessAllowed({ databasePath, ownerPath, assertMaintenance() {} });
   } catch (error) {
     failure = error;
   }
   expect(failure).toMatchObject({ name: "StateDatabaseAccessError" });
-  await expect(
-    releaseOpenClawStateLeaseBestEffort(params, async () => {
+  return failure;
+}
+
+it.each([
+  [pending, "once"],
+  [maintenance, "once"],
+  [new AggregateError([pending, maintenance]), "once"],
+  [maintenance, "exhaust"],
+  [new StateDatabaseMaintenanceScopeError(databasePath), "never"],
+  [new AggregateError([maintenance, new Error("cleanup failure")]), "never"],
+  [ownershipRefusal, "never"],
+] as const)("releases or retains %s with %s retry policy", async (sample, mode) => {
+  const failure = typeof sample === "function" ? sample() : sample;
+  let released = false;
+  const operation = releaseOpenClawStateLeaseBestEffort(params, async () => {
+    if (mode !== "once" || clock.elapsed === 0) {
       throw failure;
-    }),
-  ).rejects.toBe(failure);
-  expect(clock.elapsed).toBe(0);
+    }
+    released = true;
+  });
+  if (mode === "once") {
+    await operation;
+    expect(released).toBe(true);
+    expect(clock.elapsed).toBeGreaterThan(0);
+    expect(clock.elapsed).toBeLessThanOrEqual(2_000);
+  } else {
+    await expect(operation).rejects.toBe(failure);
+    expect(clock.elapsed).toBe(mode === "exhaust" ? 2_000 : 0);
+  }
 });

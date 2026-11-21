@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -35,13 +36,18 @@ async function fixture() {
   const version = "2026.8.28-beta.1";
   json("package.json", { name: "openclaw", version });
   mkdirSync(join(root, "preflight-tarball"));
-  const tarballs = packageNames.map((name, i) => {
+  const tarballs: { packageName: string; tarballName: string }[] = [];
+  for (const [i, name] of packageNames.entries()) {
     const tarballName = "package-" + i + ".tgz";
     json("package/package.json", { name, version });
-    const target = join(root, "preflight-tarball", tarballName);
-    execFileSync("tar", ["-czf", target, "-C", root, "package"]);
-    return { packageName: name, tarballName };
-  });
+    // Finish packing before the next identity rewrites the shared package directory.
+    await packToArchive({
+      pkgDir: join(root, "package"),
+      outDir: join(root, "preflight-tarball"),
+      outName: tarballName,
+    });
+    tarballs.push({ packageName: name, tarballName });
+  }
   json("preflight-tarball/preflight-manifest.json", { corePackageTarballs: tarballs.slice(0, 3) });
   json("full-release-validation/full-release-validation-manifest.json", f.manifest);
   // Candidate code must never run, including during historical/manual recovery.
@@ -63,7 +69,7 @@ async function fixture() {
     api["actions/runs/" + id + "/jobs"] = { total_count: parentJobs.length, jobs: parentJobs };
     const jobs = await f.client.getRunAttemptJobs(id);
     api["actions/runs/" + id + "/attempts/1/jobs"] = { total_count: jobs.length, jobs };
-    api["view/" + id] = f.client.getRunView(id);
+    api["view/" + id] = await f.client.getRunView(id);
     if (id === f.runId) {
       for (const job of parentJobs) {
         respondBytes("actions/jobs/" + job.id + "/logs", await f.client.getJobLog(job.id));
@@ -71,52 +77,47 @@ async function fixture() {
     }
   }
   respondBytes("actions/jobs/902/logs", await f.client.getJobLog(902));
-  api["actions/runs/40/attempts/1"] = f.admission.run;
-  api["actions/runs/40/attempts/1/jobs"] = f.admission.jobs;
-  api["actions/artifacts/70"] = f.admission.metadata;
   respondBytes("actions/artifacts/70/zip", f.admission.archive());
-  api["collaborators/" + f.admission.actor.login + "/permission"] = {
-    permission: "write",
-    user: f.admission.actor,
-  };
-  api["git/ref/tags/" + f.admission.producer.workflowHeadBranch] = {
-    ref: f.publisherFullRef,
-    object: { type: "commit", sha: f.p },
-  };
-  api["compare/" + f.p + "...main"] = { status: "ahead" };
+  const admissionResponse = (path: string) =>
+    JSON.parse(f.admission.runGh(["api", `repos/${f.repository}/${path}`]));
+  for (const path of [
+    "actions/runs/40/attempts/1",
+    "actions/runs/40/attempts/1/jobs?per_page=100",
+    "actions/artifacts/70",
+    "collaborators/" + f.admission.actor.login + "/permission",
+    "git/ref/tags/" + f.admission.producer.workflowHeadBranch,
+    "compare/" + f.p + "...main",
+  ]) {
+    api[path.replace(/\?.*$/u, "")] = admissionResponse(path);
+  }
   api["compare/" + f.p + "..." + f.p] = { status: "identical" };
   api["actions/runs/99"] = {
+    ...f.admission.run,
     id: 99,
-    run_attempt: 1,
-    event: "workflow_dispatch",
-    head_sha: f.p,
-    head_branch: f.admission.producer.workflowHeadBranch,
     path: ".github/workflows/openclaw-release-publish.yml",
-    repository: { full_name: f.repository },
     status: "in_progress",
     conclusion: null,
   };
-  for (const [key, source] of f.admission.sources) {
+  for (const key of f.admission.sources.keys()) {
     const separator = key.indexOf(":");
-    const sha = key.slice(0, separator);
-    const path = key.slice(separator + 1);
+    const path = `contents/${key.slice(separator + 1)}?ref=${key.slice(0, separator)}`;
+    api[path] = admissionResponse(path);
+  }
+  api[`contents/scripts/e2e/lib/upgrade-survivor?ref=${f.admission.receipt.request.candidateSha}`] =
+    f.client.getCandidateFileNames();
+  for (const [path, source] of f.qualificationSources) {
     const bytes = Buffer.from(source);
-    api["contents/" + path + "?ref=" + sha] = {
+    api[`contents/${path}?ref=${f.q}`] ??= {
       type: "file",
-      path,
       encoding: "base64",
+      path,
       size: bytes.length,
       content: bytes.toString("base64"),
-      sha: createHash("sha1")
-        .update("blob " + bytes.length + "\0")
-        .update(bytes)
-        .digest("hex"),
+      sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
     };
   }
-  const archive = (name: string, value: unknown) =>
-    makeStoredZip({ [name]: JSON.stringify(value) });
   const artifact = <T extends { id: number }>(metadata: T, name: string, value: unknown) => {
-    const zip = archive(name, value);
+    const zip = makeStoredZip({ [name]: JSON.stringify(value) });
     const result = { ...metadata, digest: "sha256:" + hash(zip), size_in_bytes: zip.length };
     api["actions/artifacts/" + metadata.id] = result;
     respondBytes("actions/artifacts/" + metadata.id + "/zip", zip);
@@ -129,10 +130,10 @@ async function fixture() {
   );
   const planArtifact = artifact(
     {
+      ...f.client.loadExecutionPlanEvidence().artifact,
       id: 903,
       name: "full-release-execution-plan-" + f.runId,
       expired: false,
-      created_at: "2026-08-28T12:01:02.000Z",
       workflow_run: { id: Number(f.runId), head_sha: f.q, head_branch: f.branch },
     },
     "full-release-execution-plan.json",
@@ -143,19 +144,14 @@ async function fixture() {
     artifacts: [manifestArtifact, planArtifact],
   };
   json("transport.json", { api, binary });
-  json("state.json", { writes: [], calls: [], revoked: false });
+  json("state.json", { writes: [], revoked: false });
 
   const preload = join(root, "transport.mjs");
   write(
     "transport.mjs",
     `
-import cp from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
-import { PassThrough } from 'node:stream';
 const root = process.env.NPM_AUTHORITY_FIXTURE;
-const isGh = command => command === 'gh' || command === root + '/bin/gh';
 const statePath = root + '/state.json';
 const readState = () => JSON.parse(readFileSync(statePath, 'utf8'));
 const save = state => writeFileSync(statePath, JSON.stringify(state));
@@ -163,8 +159,6 @@ if (process.argv[1] === root + '/bin/npm') {
   const state = readState();
   const args = process.argv.slice(2);
   if (args[0] === 'view') {
-    state.calls.push('registry:' + args[1]);
-    save(state);
     process.exit(state.reuseFirst && args[1].startsWith('@openclaw/ai@') ? 0 : 1);
   }
   if (args[0] !== 'publish') throw new Error('Unexpected npm command');
@@ -175,9 +169,7 @@ if (process.argv[1] === root + '/bin/npm') {
 }
 if (process.argv[1]?.endsWith('/openclaw-npm-extended-stable-release.mjs') && process.argv[2] === 'publish-plan') {
   const state = readState();
-  state.calls.push('prepare');
-  if (state.revokeAtPreparation) state.revoked = true;
-  save(state);
+  if (state.revokeAtPreparation) { state.revoked = true; save(state); }
 }
 const data = JSON.parse(readFileSync(root + '/transport.json', 'utf8'));
 function response(args) {
@@ -186,13 +178,10 @@ function response(args) {
   if (key && !key.startsWith('contents/')) key = key.split('?')[0];
   if (args[0] === 'run' && args[1] === 'view') key = 'view/' + args[2];
   if (!key) throw new Error('Unexpected GitHub transport: ' + JSON.stringify(args));
-  state.calls.push(key);
-  if (state.revokeAtParent && key === 'actions/runs/99') state.revoked = true;
-  save(state);
+  if (state.revokeAtParent && key === 'actions/runs/99') { state.revoked = true; save(state); }
   if (data.binary[key]) return Buffer.from(data.binary[key], 'base64');
-  let result = data.api[key];
+  const result = data.api[key];
   if (!result) throw new Error('Unexpected GitHub endpoint: ' + key);
-  result = structuredClone(result);
   if (state.revoked && key.startsWith('collaborators/')) result.permission = 'read';
   if (state.movedRef && key.startsWith('git/ref/tags/')) result.object.sha = 'd'.repeat(40);
   if ((state.parentCompleted || state.recovery) && key === 'actions/runs/99') {
@@ -200,37 +189,16 @@ function response(args) {
   }
   return Buffer.from(JSON.stringify(result));
 }
-const originalSync = cp.execFileSync;
-cp.execFileSync = (command, args, options = {}) => {
-  if (!isGh(command)) return originalSync(command, args, options);
-  const bytes = response(args);
-  if (Number.isInteger(options.stdio?.[1])) writeFileSync(options.stdio[1], bytes);
-  return options.encoding ? bytes.toString(options.encoding) : bytes;
-};
-const originalSpawn = cp.spawn;
-cp.spawn = (command, args, options) => {
-  if (!isGh(command)) return originalSpawn(command, args, options);
-  const child = Object.assign(new EventEmitter(), {
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-  });
-  queueMicrotask(() => {
-    let code = 0;
-    try { child.stdout.end(response(args)); }
-    catch (error) { code = 1; child.emit('error', error); child.stdout.end(); }
-    child.stderr.end();
-    child.emit('close', code, null);
-  });
-  return child;
-};
-syncBuiltinESMExports();
+if (process.argv[1] === root + '/bin/gh') {
+  process.stdout.write(response(process.argv.slice(2)));
+}
 `,
   );
-  write("bin/gh", "#!/bin/sh\necho 'GitHub transport escaped the fixture' >&2; exit 90\n", true);
+  write("bin/gh", "#!/usr/bin/env node\n", true);
   write("bin/npm", "#!/usr/bin/env node\n", true);
   write(
     "bin/git",
-    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.q + "'\n",
+    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.c + "'\n",
     true,
   );
   const env = {
@@ -242,11 +210,14 @@ syncBuiltinESMExports();
     OPENCLAW_GH_BIN: join(bin, "gh"),
     GH_TOKEN: "test-only",
     GITHUB_ACTIONS: "true",
+    // Publication receipts belong to this fixture, including under hosted Actions.
+    GITHUB_OUTPUT: join(root, "github-output"),
+    GITHUB_STEP_SUMMARY: join(root, "github-summary"),
     GITHUB_REPOSITORY: f.repository,
     WORKFLOW_SHA: f.p,
     WORKFLOW_REF: f.admission.producer.workflowHeadBranch,
     WORKFLOW_FULL_REF: f.publisherFullRef,
-    EXPECTED_RELEASE_SHA: f.q,
+    EXPECTED_RELEASE_SHA: f.c,
     PREFLIGHT_WORKFLOW_SHA: f.q,
     PREFLIGHT_WORKFLOW_BRANCH: f.branch,
     PREFLIGHT_WORKFLOW_PATH: ".github/workflows/full-release-validation.yml",
@@ -266,7 +237,6 @@ syncBuiltinESMExports();
   const state = () =>
     JSON.parse(readFileSync(statePath, "utf8")) as {
       writes: string[][];
-      calls: string[];
       revoked: boolean;
     };
   const change = (values: Record<string, unknown>) =>
@@ -280,7 +250,7 @@ syncBuiltinESMExports();
       ...Object.entries({
         "full-release-manifest": "full-release-validation/full-release-validation-manifest.json",
         repository: f.repository,
-        "source-sha": f.q,
+        "source-sha": f.c,
         "workflow-sha": f.q,
         "publisher-sha": f.p,
         "publisher-full-ref": f.publisherFullRef,
@@ -294,7 +264,7 @@ syncBuiltinESMExports();
 
 describe("npm final publication authority", () => {
   it.each([true, false])(
-    "publishes through trusted tooling with candidate admission: %s",
+    "publishes only through trusted tooling with candidate admission: %s",
     async (candidate) => {
       const f = await fixture();
       if (!candidate) {
@@ -303,6 +273,13 @@ describe("npm final publication authority", () => {
         f.env.PREFLIGHT_WORKFLOW_SHA = f.env.WORKFLOW_SHA;
       }
       const result = f.publish();
+      expect(result.stderr).not.toContain("CANDIDATE_");
+      if (!candidate) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Publication requires authenticated P admission");
+        expect(f.state().writes).toEqual([]);
+        return;
+      }
       expect(result.status, result.stderr).toBe(0);
       expect(f.state().writes.map((args) => args[1])).toEqual(
         [0, 1, 2, 3].map((i) => "./preflight-tarball/package-" + i + ".tgz"),
@@ -310,23 +287,22 @@ describe("npm final publication authority", () => {
       for (const args of f.state().writes) {
         expect(args.slice(2)).toEqual(["--access", "public", "--tag", "beta", "--provenance"]);
       }
-      expect(result.stderr).not.toContain("CANDIDATE_");
-      expect(f.state().calls.filter((key) => key === "actions/runs/99")).toHaveLength(4);
-      if (!candidate) {
-        expect(f.state().calls).not.toContain("actions/artifacts/70/zip");
-      }
+      const outputs = existsSync(f.env.GITHUB_OUTPUT)
+        ? readFileSync(f.env.GITHUB_OUTPUT, "utf8")
+        : "";
+      expect(outputs).not.toMatch(/^(?:openclaw|gateway_protocol)_publication=/m);
     },
   );
 
   const authorityError = "qualification authority";
-  it.each<[string, Record<string, unknown>, number[], string, string?]>([
-    ["preparation", { revokeAtPreparation: true }, [], authorityError, "prepare"],
-    ["publisher check", { revokeAtParent: true }, [], authorityError, "actions/runs/99"],
+  it.each<[string, Record<string, unknown>, number[], string]>([
+    ["preparation", { revokeAtPreparation: true }, [], authorityError],
+    ["publisher check", { revokeAtParent: true }, [], authorityError],
     ["companions", { revokeAfter: 3 }, [0, 1, 2], authorityError],
     ["moved ref", { movedRef: true }, [], "Protected publication tooling tag changed"],
     ["parent completion", { parentCompleted: true }, [], "parent run state"],
     ["manual recovery", { recovery: true, reuseFirst: true, revokeAfter: 1 }, [1], authorityError],
-  ])("stops publishing after %s revokes authority", async (_label, change, writes, error, call) => {
+  ])("stops publishing after %s revokes authority", async (_label, change, writes, error) => {
     const f = await fixture();
     if (change.revokeAtPreparation) {
       const preflight = f.preflight();
@@ -342,9 +318,6 @@ describe("npm final publication authority", () => {
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(error);
-    if (call) {
-      expect(f.state().calls).toContain(call);
-    }
     if (change.recovery) {
       expect(result.stdout).toContain("already published; reusing it");
     }

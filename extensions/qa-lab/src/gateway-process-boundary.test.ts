@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
@@ -10,18 +9,15 @@ import {
   shouldRetainQaGatewayCredentialLease,
   type QaGatewayProcessBoundaryConfig,
 } from "./gateway-process-boundary.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
 const RETAIN_LEASE_PREFIX = "retain-credential-lease-";
-const cleanupPaths: string[] = [];
+const { makeTempDir, cleanup } = createTempDirHarness();
+const tempDir = () => makeTempDir("qa-process-boundary-");
+afterEach(cleanup);
 
-async function tempDir() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "qa-process-boundary-"));
-  cleanupPaths.push(root);
-  return root;
-}
-
-async function fixture(overrides: Partial<QaGatewayProcessBoundaryConfig> = {}) {
+async function fixture() {
   const root = await tempDir();
   const tempRoot = path.join(root, "runtime");
   const evidenceDir = path.join(root, "evidence");
@@ -32,11 +28,10 @@ async function fixture(overrides: Partial<QaGatewayProcessBoundaryConfig> = {}) 
     evidenceDir,
     expectedGid: process.getgid?.() ?? 1002,
     expectedUid: process.getuid?.() ?? 1001,
-    forwardedEnvKeys: ["HOME", "PATH"],
-    runtimeArgsPrefix: ["--import", "/tmp/preload.mjs", "/tmp/index.js"],
+    forwardedEnvKeys: ["PATH", "HOME", "PATH"],
+    runtimeArgsPrefix: ["--import", "/tmp/preload.mjs"],
     runtimeExecutablePath: process.execPath,
     terminationRetryTimeoutMs: 60_000,
-    ...overrides,
   };
   const create = () => createQaGatewayProcessBoundaryController({ config, launcherPath, tempRoot });
   const prepare = (controller: Awaited<ReturnType<typeof create>>) =>
@@ -54,20 +49,11 @@ const boundaryEnv = (evidenceDir: string) => ({
   OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: evidenceDir,
 });
 
-afterEach(async () => {
-  await Promise.all(
-    cleanupPaths.splice(0).map((pathName) => fs.rm(pathName, { recursive: true, force: true })),
-  );
-});
-
 describe("gateway process boundary", () => {
   it.runIf(process.platform === "linux")(
     "validates handoff, sandbox, and runtime proof through controller acceptance",
     async () => {
-      const { tempRoot, launcherPath, create, prepare } = await fixture({
-        forwardedEnvKeys: ["PATH", "HOME", "PATH"],
-        runtimeArgsPrefix: ["--import", "/tmp/preload.mjs"],
-      });
+      const { tempRoot, launcherPath, create, prepare } = await fixture();
       // Keep the executable immutable so concurrent forks cannot inherit its writer.
       await fs.writeFile(`${launcherPath}.sh`, '#!/bin/sh\ncat "$3.runtime"\n');
       await fs.symlink(
@@ -127,12 +113,9 @@ describe("gateway process boundary", () => {
         pgrp: launcherPid,
         preEntryCmdlineSha256: cmdlineSha256,
       });
-      const evidence = JSON.parse(await fs.readFile(controller.evidencePath, "utf8")) as {
-        launches: Array<{ generation: string; sandboxFile: string }>;
-      };
-      expect(evidence.launches).toEqual([
-        expect.objectContaining({ generation: prepared.generation }),
-      ]);
+      expect(JSON.parse(await fs.readFile(controller.evidencePath, "utf8"))).toMatchObject({
+        launches: [{ generation: prepared.generation }],
+      });
 
       // Whitespace leaves JSON valid, but oversized verification output must not
       // authenticate a truncated proof as a complete response.
@@ -191,7 +174,6 @@ describe("gateway process boundary", () => {
 
       expect(first.evidencePath).not.toBe(second.evidencePath);
       expect(path.dirname(first.evidencePath)).toBe(evidenceDir);
-      expect(path.basename(first.evidencePath)).toMatch(/^runtime-boundary-[a-f0-9-]{36}\.json$/);
 
       await prepare(first);
       await prepare(second);

@@ -1,4 +1,3 @@
-// Tests session reset cleanup for stale files and persisted state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -55,6 +54,7 @@ afterEach(() => {
 const replySessionKey = "agent:main:slack:room:1";
 function clearArchived(keys = [replySessionKey, "old-session"]) {
   clearSessionResetRuntimeState(keys, {
+    cause: "reset",
     agentId: "main",
     sessionKey: replySessionKey,
     activeReplySessionId: "old-session",
@@ -91,6 +91,7 @@ describe("clearSessionResetRuntimeState", () => {
       await writeSettings(35_000);
 
       clearSessionResetRuntimeState([archivedSessionId], {
+        cause: "reset",
         agentId: "main",
         sessionKey: "agent:main:settings-reset",
         activeReplySessionId: archivedSessionId,
@@ -108,7 +109,6 @@ describe("clearSessionResetRuntimeState", () => {
   it("disposes prompt projections with the archived session", () => {
     using original = retainEmbeddedSessionPromptState("old-session");
     const state = original.state;
-    state.toolResults.frozen.add("sent-tool-result");
 
     clearArchived(["old-session"]);
 
@@ -140,6 +140,7 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("fresh gamma", withSystemEventOwner({ sessionKey: "gamma" }, "main"));
 
     clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
+      cause: "reset",
       agentId: "main",
       sessionKey: "alpha",
       assertCurrent: () => {},
@@ -156,6 +157,7 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("beta", withSystemEventOwner({ sessionKey: "global" }, "beta"));
 
     clearSessionResetRuntimeState(["global", "agent:beta:global"], {
+      cause: "reset",
       agentId: " Alpha ",
       sessionKey: "global",
       assertCurrent: () => {},
@@ -194,12 +196,16 @@ describe("clearSessionResetRuntimeState", () => {
     }
   });
 
-  it("does not clear a fresh active reply under the same key when only the archived id is reset", () => {
-    const operation = createOperation("new-session");
-    operation.setPhase("running");
-
+  it.each([
+    ["new-session", "running"],
+    ["old-session", "queued"],
+  ] as const)("preserves %s/%s while clearing archived runtime state", (sessionId, phase) => {
+    const operation = createOperation(sessionId);
+    if (phase === "running") {
+      operation.setPhase(phase);
+    }
     clearArchived();
-
+    expect(operation.phase).toBe(phase);
     expect(getSessionControllerOperation(replySessionKey)).toBe(operation);
   });
 
@@ -221,15 +227,6 @@ describe("clearSessionResetRuntimeState", () => {
 
     expect(replacement).toBeDefined();
     expect(getSessionControllerOperation(replySessionKey)).toBe(replacement);
-  });
-
-  it("leaves queued reservations for the archived id so session init can rebind them", () => {
-    const operation = createOperation();
-
-    clearArchived();
-
-    expect(operation.phase).toBe("queued");
-    expect(getSessionControllerOperation(replySessionKey)).toBe(operation);
   });
 
   it("clears queued sources without cancelling the executing reset turn that requested it", async () => {
@@ -306,6 +303,7 @@ it("keeps reset cleanup current through metadata writes and refuses a replacemen
       enqueueSystemEvent("replacement work", withSystemEventOwner({ sessionKey }, agentId));
       expect(() =>
         clearSessionResetRuntimeState([sessionKey, entry.sessionId], {
+          cause: "reset",
           agentId,
           sessionKey,
           activeReplySessionId: entry.sessionId,

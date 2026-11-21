@@ -1,31 +1,26 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import * as identity from "./openclaw-agent-db-identity.js";
+import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import * as proof from "./openclaw-agent-db-validation-cache.js";
 import * as agentDb from "./openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 let directory: string;
 let env: NodeJS.ProcessEnv;
 const claims: identity.OpenClawAgentDatabaseClaim[] = [];
-
-beforeEach(() => {
-  directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-db-identity-")));
-  env = { OPENCLAW_STATE_DIR: directory };
-});
-
-afterEach(() => {
+const directories = useAgentDatabaseDirectories(() => {
   for (const claim of claims.splice(0)) {
     claim.release();
   }
-  agentDb.closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  directory = directories.make("agent-db-identity-");
+  env = { OPENCLAW_STATE_DIR: directory };
 });
 
 function retain(databasePath: string) {
@@ -151,10 +146,15 @@ it("does not reuse a reopened connection claim", () => {
   const { path: databasePath } = open();
   const { claim } = retain(databasePath);
   agentDb.closeOpenClawAgentDatabaseByPath(databasePath);
+  expect(claim.isCurrent()).toBe(false);
+  expect(claim.assertCurrent).toThrow("no longer current");
   open(databasePath);
   const { claim: replacement } = retain(databasePath);
   expect(claim.incarnation).not.toBe(replacement.incarnation);
   expect(claim.isCurrent()).toBe(false);
   expect(replacement.isCurrent()).toBe(true);
   expect(claim.identity).toBe(replacement.identity);
+  claim.release();
+  claim.release();
+  expect(replacement.isCurrent()).toBe(true);
 });

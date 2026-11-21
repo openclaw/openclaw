@@ -1,11 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
-import "../../../components/modal-dialog.ts";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
+import "../../../components/modal-dialog.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { SettingsStatus } from "../../../components/solid/settings-ui.tsx";
 import { i18n } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { WikiImportInsights, WikiOverview } from "./dreaming.ts";
-import { DiaryEmpty, DreamingAction, formatCompactDateTime } from "./view-shared.tsx";
+import { DiaryEmpty, formatCompactDateTime } from "./view-shared.tsx";
 import type { DreamingProps } from "./view-types.ts";
 
 function formatWikiCount(
@@ -15,25 +18,8 @@ function formatWikiCount(
   return t(`dreaming.wiki.counts.${kind}${count === 1 ? "One" : "s"}`, { count: String(count) });
 }
 
-const WIKI_OVERVIEW_PAGE_GROUPS = [
-  ["source", "sources"],
-  ["synthesis", "syntheses"],
-  ["report", "reports"],
-  ["entity", "entities"],
-  ["concept", "concepts"],
-] as const;
-
-function formatWikiOverviewPageBreakdown(pageCounts: WikiOverview["pageCounts"]): string {
-  const parts = WIKI_OVERVIEW_PAGE_GROUPS.map(([kind, group]) => {
-    const count = pageCounts[kind];
-    return count > 0
-      ? t("dreaming.wiki.pageGroupSummary", {
-          label: t(`dreaming.wiki.pageGroups.${group}`),
-          count: formatWikiCount("page", count),
-        })
-      : null;
-  }).filter((entry): entry is string => entry !== null);
-  return parts.length > 0 ? parts.join("; ") : t("dreaming.wiki.noPagesYet");
+function formatImportCount(kind: "chat" | "signal", count: number): string {
+  return t(`dreaming.wiki.counts.${kind}${count === 1 ? "One" : "s"}`, { count: String(count) });
 }
 
 function formatWikiOverviewClusterSummary(cluster: WikiOverview["clusters"][number]): string {
@@ -64,12 +50,13 @@ function formatWikiOverviewClusterSummary(cluster: WikiOverview["clusters"][numb
   return parts.join(" · ");
 }
 
-export function renderWikiPreviewOverlay(props: DreamingProps) {
+export function WikiPreviewOverlay(props: DreamingProps) {
   const preview = createMemo(() => props.wikiPreview?.request);
   return (
     <Show when={preview()} keyed>
       {(request) => {
         const current = () => props.wikiPreview ?? request;
+        const readScope = createMemo(() => props.wikiPreview?.readKey);
         const updatedAtLabel = () => {
           const updatedAt = current().page.updatedAt;
           return updatedAt ? ` · ${formatCompactDateTime(updatedAt)}` : "";
@@ -92,24 +79,35 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
                 </div>
               </div>
               <div class="dreams-diary__preview-body">
-                {current().loading ? (
-                  <div class="dreams-diary__empty-text">{t("dreaming.wiki.loadingPage")}</div>
-                ) : current().error ? (
-                  <div class="dreams-diary__error">{current().error}</div>
-                ) : (
-                  <>
-                    {current().page.truncated === true ? (
-                      <div class="dreams-diary__preview-hint">
-                        {current().page.totalLines != null
-                          ? t("dreaming.wiki.previewTruncatedWithTotal", {
-                              count: String(current().page.totalLines),
-                            })
-                          : t("dreaming.wiki.previewTruncated")}
-                      </div>
-                    ) : undefined}
-                    <pre class="dreams-diary__preview-pre">{current().page.content}</pre>
-                  </>
-                )}
+                <Errored
+                  fallback={(error) => (
+                    <div class="dreams-diary__error">{formatUiError(error())}</div>
+                  )}
+                >
+                  <Loading
+                    on={readScope()}
+                    fallback={
+                      <div class="dreams-diary__empty-text">{t("dreaming.wiki.loadingPage")}</div>
+                    }
+                  >
+                    <Show when={props.wikiPreview?.readPage()}>
+                      {(page) => (
+                        <>
+                          {page().truncated === true ? (
+                            <div class="dreams-diary__preview-hint">
+                              {page().totalLines != null
+                                ? t("dreaming.wiki.previewTruncatedWithTotal", {
+                                    count: String(page().totalLines),
+                                  })
+                                : t("dreaming.wiki.previewTruncated")}
+                            </div>
+                          ) : undefined}
+                          <pre class="dreams-diary__preview-pre">{page().content}</pre>
+                        </>
+                      )}
+                    </Show>
+                  </Loading>
+                </Errored>
               </div>
               <openclaw-modal-actions class="dreams-diary__preview-footer">
                 <button
@@ -128,69 +126,59 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
   );
 }
 
-type ImportedInsightItem = WikiImportInsights["clusters"][number]["items"][number];
-
-type WikiPageItem = WikiOverview["clusters"][number]["items"][number];
-
 type WikiInsightCard =
-  | { kind: "import"; item: ImportedInsightItem }
-  | { kind: "wiki"; item: WikiPageItem };
+  | { kind: "import"; item: WikiImportInsights["clusters"][number]["items"][number] }
+  | { kind: "wiki"; item: WikiOverview["clusters"][number]["items"][number] };
 
 function renderInsightList(labelKey: string, entries: string[]) {
   return entries.length > 0 ? (
-    <div class="dreams-diary__insight-list">
+    <div class="dreams-review__wiki-list">
       <strong>{t(labelKey)}</strong>
-      <For each={entries} keyed={false}>
-        {(entry) => <p class="dreams-diary__insight-line">• {entry()}</p>}
-      </For>
+      <ul>
+        <For each={entries} keyed={false}>
+          {(entry) => <li>{entry()}</li>}
+        </For>
+      </ul>
     </div>
   ) : undefined;
 }
 
 function renderInsightDetail(labelKey: string, value: string | undefined) {
   return value ? (
-    <p class="dreams-diary__insight-line">
-      <strong>{t(labelKey)}</strong>
-      {value}
+    <p class="dreams-review__wiki-line">
+      <strong>{t(labelKey)}</strong> {value}
     </p>
   ) : undefined;
 }
 
-function renderWikiInsightBody(card: WikiInsightCard, expanded: boolean) {
+function renderWikiInsightBody(card: WikiInsightCard) {
   if (card.kind === "import") {
     const item = card.item;
     return (
       <>
-        <p class="dreams-diary__insight-line">{item.summary}</p>
         {renderInsightList("dreaming.wiki.candidateSignals", item.candidateSignals)}
         {renderInsightList("dreaming.wiki.corrections", item.correctionSignals)}
-        {expanded ? (
-          <div class="dreams-diary__insight-list">
-            <strong>{t("dreaming.wiki.importDetails")}</strong>
-            {renderInsightDetail("dreaming.wiki.startedWith", item.firstUserLine)}
-            {renderInsightDetail(
-              "dreaming.wiki.endedOn",
-              item.lastUserLine !== item.firstUserLine ? item.lastUserLine : undefined,
-            )}
-            {renderInsightDetail(
-              "dreaming.wiki.messages",
-              `${t("dreaming.wiki.counts.userMessages", {
-                count: String(item.userMessageCount),
-              })} · ${t("dreaming.wiki.counts.assistantMessages", {
-                count: String(item.assistantMessageCount),
-              })}`,
-            )}
-            {renderInsightDetail("dreaming.wiki.riskReasons", item.riskReasons.join(", "))}
-            {renderInsightDetail("dreaming.wiki.labels", item.labels.join(", "))}
-          </div>
-        ) : undefined}
         {item.preferenceSignals.length > 0 ? (
-          <div class="dreams-diary__insight-signals">
-            <For each={item.preferenceSignals} keyed={false}>
-              {(signal) => <span class="dreams-diary__insight-signal">{signal()}</span>}
-            </For>
-          </div>
+          <p class="dreams-review__wiki-line">{item.preferenceSignals.join(" · ")}</p>
         ) : undefined}
+        <div class="dreams-review__wiki-list">
+          <strong>{t("dreaming.wiki.importDetails")}</strong>
+          {renderInsightDetail("dreaming.wiki.startedWith", item.firstUserLine)}
+          {renderInsightDetail(
+            "dreaming.wiki.endedOn",
+            item.lastUserLine !== item.firstUserLine ? item.lastUserLine : undefined,
+          )}
+          {renderInsightDetail(
+            "dreaming.wiki.messages",
+            `${t("dreaming.wiki.counts.userMessages", {
+              count: String(item.userMessageCount),
+            })} · ${t("dreaming.wiki.counts.assistantMessages", {
+              count: String(item.assistantMessageCount),
+            })}`,
+          )}
+          {renderInsightDetail("dreaming.wiki.riskReasons", item.riskReasons.join(", "))}
+          {renderInsightDetail("dreaming.wiki.labels", item.labels.join(", "))}
+        </div>
       </>
     );
   }
@@ -198,214 +186,206 @@ function renderWikiInsightBody(card: WikiInsightCard, expanded: boolean) {
   const item = card.item;
   return (
     <>
-      {item.snippet ? <p class="dreams-diary__insight-line">{item.snippet}</p> : undefined}
       {renderInsightList("dreaming.wiki.claims", item.claims)}
       {renderInsightList("dreaming.wiki.openQuestions", item.questions)}
       {renderInsightList("dreaming.wiki.contradictions", item.contradictions)}
-      {expanded ? (
-        <div class="dreams-diary__insight-list">
-          <strong>{t("dreaming.wiki.pageDetails")}</strong>
-          {renderInsightDetail("dreaming.wiki.wikiPage", item.pagePath)}
-          {renderInsightDetail("dreaming.wiki.id", item.id)}
-        </div>
-      ) : undefined}
+      <div class="dreams-review__wiki-list">
+        <strong>{t("dreaming.wiki.pageDetails")}</strong>
+        {renderInsightDetail("dreaming.wiki.wikiPage", item.pagePath)}
+        {renderInsightDetail("dreaming.wiki.id", item.id)}
+      </div>
     </>
   );
 }
 
-function WikiInsightCard(props: { owner: DreamingProps; card: WikiInsightCard }) {
+/** Title, one-line gist and what needs a look; everything else is one press away. */
+function WikiInsightRow(props: { owner: DreamingProps; card: WikiInsightCard }) {
   const owner = () => props.owner;
   const item = () => props.card.item;
   const expandedBucket = () =>
     props.card.kind === "import" ? "expandedInsightCards" : "expandedWikiCards";
   const expanded = createMemo(() => owner().viewState[expandedBucket()][item().pagePath] === true);
-  const toggleExpanded = () => {
-    const bucket = expandedBucket();
-    const key = item().pagePath;
-    owner().onViewStateChange((draft) => {
-      draft[bucket][key] = !draft[bucket][key];
-    });
-  };
-  const badgeClass = () => {
+  const opensDirectly = () => props.card.kind === "wiki" && props.card.item.kind === "report";
+  const gist = () => {
     const card = props.card;
-    return card.kind === "import" ? card.item.riskLevel : "wiki";
+    return card.kind === "import" ? card.item.summary : card.item.snippet;
   };
-  const badgeLabel = () => {
+  const status = () => {
     const card = props.card;
-    return card.kind === "import"
-      ? t(
-          card.item.digestStatus === "withheld"
-            ? "dreaming.wiki.risk.needsReview"
-            : `dreaming.wiki.risk.${card.item.riskLevel}`,
-        )
-      : t(`dreaming.wiki.pageTypes.${card.item.kind}`);
+    if (card.kind !== "import") {
+      return null;
+    }
+    return card.item.digestStatus === "withheld"
+      ? { kind: "warn" as const, key: "dreaming.wiki.risk.needsReview" }
+      : card.item.riskLevel === "high"
+        ? { kind: "danger" as const, key: "dreaming.wiki.risk.high" }
+        : { kind: "muted" as const, key: `dreaming.wiki.risk.${card.item.riskLevel}` };
   };
   const metadata = () => {
     const card = props.card;
-    return card.kind === "import"
-      ? card.item.activeBranchMessages > 0
-        ? ` · ${t("dreaming.wiki.counts.messages", { count: String(card.item.activeBranchMessages) })}`
-        : ""
-      : ` · ${card.item.pagePath}`;
+    return [
+      item().updatedAt
+        ? formatCompactDateTime(item().updatedAt!)
+        : pathDisplayName(item().pagePath),
+      card.kind === "import" && card.item.activeBranchMessages > 0
+        ? t("dreaming.wiki.counts.messages", { count: String(card.item.activeBranchMessages) })
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   };
   return (
     <article
-      class="dreams-diary__insight-card dreams-diary__insight-card--clickable"
+      class="dreams-review__wiki-item"
       data-import-page={props.card.kind === "import" ? item().pagePath : undefined}
       data-wiki-page={props.card.kind === "wiki" ? item().pagePath : undefined}
-      onClick={() => {
-        const card = props.card;
-        if (card.kind === "wiki" && card.item.kind === "report") {
-          void owner().onOpenWikiPage(card.item.pagePath);
-          return;
-        }
-        toggleExpanded();
-      }}
     >
-      <div class="dreams-diary__insight-topline">
-        <div class="dreams-diary__insight-title">{item().title}</div>
-        <span
-          class={["dreams-diary__insight-badge", `dreams-diary__insight-badge--${badgeClass()}`]}
-        >
-          {badgeLabel()}
-        </span>
-      </div>
-      <div class="dreams-diary__insight-meta">
-        {item().updatedAt
-          ? formatCompactDateTime(item().updatedAt!)
-          : pathDisplayName(item().pagePath)}
-        {metadata()}
-      </div>
-      {renderWikiInsightBody(props.card, expanded())}
-      <div class="dreams-diary__insight-actions">
-        <DreamingAction
-          label={t(expanded() ? "dreaming.wiki.hideDetails" : "dreaming.wiki.details")}
-          disabled={false}
-          onClick={(event) => {
-            event.stopPropagation();
-            toggleExpanded();
-          }}
-        />
-        <DreamingAction
-          label={t(
-            props.card.kind === "import"
-              ? "dreaming.wiki.openSourcePage"
-              : "dreaming.wiki.openWikiPage",
-          )}
-          disabled={false}
-          onClick={(event) => {
-            event.stopPropagation();
+      <button
+        type="button"
+        class="settings-row settings-row--nav dreams-review__row"
+        aria-expanded={opensDirectly() ? undefined : expanded() ? "true" : "false"}
+        onClick={() => {
+          if (opensDirectly()) {
             void owner().onOpenWikiPage(item().pagePath);
-          }}
-        />
-      </div>
+            return;
+          }
+          const bucket = expandedBucket();
+          const key = item().pagePath;
+          owner().onViewStateChange((draft) => {
+            draft[bucket][key] = !draft[bucket][key];
+          });
+        }}
+      >
+        <span class="settings-row__text">
+          <span class="settings-row__title">{item().title}</span>
+          <Show when={gist()}>
+            <span class={["settings-row__desc", { "dreams-review__gist": !expanded() }]}>
+              {gist()}
+            </span>
+          </Show>
+        </span>
+        <span class="settings-row__control">
+          <Show when={status()}>
+            {(current) => <SettingsStatus kind={current().kind} label={t(current().key)} />}
+          </Show>
+          <span class="settings-row__chevron">
+            <Icon name="chevronRight" />
+          </span>
+        </span>
+      </button>
+      <Show when={expanded() && !opensDirectly()}>
+        <div class="dreams-review__wiki-detail">
+          <p class="dreams-review__meta">{metadata()}</p>
+          {renderWikiInsightBody(props.card)}
+          <div>
+            <button
+              type="button"
+              class="btn btn--sm"
+              onClick={() => void owner().onOpenWikiPage(item().pagePath)}
+            >
+              {t(
+                props.card.kind === "import"
+                  ? "dreaming.wiki.openSourcePage"
+                  : "dreaming.wiki.openWikiPage",
+              )}
+            </button>
+          </div>
+        </div>
+      </Show>
     </article>
   );
 }
 
-function WikiClusterArticle(props: {
-  date: string;
-  truncated: boolean;
-  returnedItems: number;
-  totalItems: number;
-  prose: JSX.Element;
-  children: JSX.Element;
-}) {
+function WikiCluster(props: { heading: string; note?: string; children: JSX.Element }) {
   return (
-    <article class="dreams-diary__entry">
-      <div class="dreams-diary__accent" />
-      <div class="dreams-diary__date">{props.date}</div>
-      <Show when={props.truncated}>
-        <p class="dreams-diary__para dreams-diary__bounded-result">
-          {t("dreaming.wiki.boundedResults", {
-            returned: props.returnedItems.toLocaleString(i18n.getLocale()),
-            total: props.totalItems.toLocaleString(i18n.getLocale()),
-          })}
-        </p>
+    <section class="dreams-review__cluster">
+      <h3 class="dreams-review__cluster-heading">{props.heading}</h3>
+      <Show when={props.note}>
+        <p class="dreams-review__meta">{props.note}</p>
       </Show>
-      <div class="dreams-diary__prose">{props.prose}</div>
-      <div class="dreams-diary__insights">{props.children}</div>
-    </article>
+      {props.children}
+    </section>
+  );
+}
+
+function BoundedResults(props: { truncated: boolean; returned: number; total: number }) {
+  return (
+    <Show when={props.truncated}>
+      <p class="dreams-review__meta dreams-review__bounded">
+        {t("dreaming.wiki.boundedResults", {
+          returned: props.returned.toLocaleString(i18n.getLocale()),
+          total: props.total.toLocaleString(i18n.getLocale()),
+        })}
+      </p>
+    </Show>
   );
 }
 
 export function ImportedInsightsContent(props: {
   owner: DreamingProps;
   data: WikiImportInsights | null;
-  selectedPage: number;
-  loading: boolean;
 }) {
-  const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
-  const returnedItems = createMemo(
-    () => props.data?.clusters.reduce((total, item) => total + item.itemCount, 0) ?? 0,
+  const clusters = () => props.data?.clusters ?? [];
+  const returnedItems = createMemo(() =>
+    clusters().reduce((total, item) => total + item.itemCount, 0),
   );
-  const date = (current: WikiImportInsights["clusters"][number]) => {
-    const metadata = [
-      t("dreaming.wiki.counts.chats", { count: String(current.itemCount) }),
+  const heading = (current: WikiImportInsights["clusters"][number]) =>
+    [
+      current.label,
+      formatImportCount("chat", current.itemCount),
       ...(current.highRiskCount > 0
         ? [t("dreaming.wiki.counts.sensitive", { count: String(current.highRiskCount) })]
         : []),
       ...(current.preferenceSignalCount > 0
-        ? [t("dreaming.wiki.counts.signals", { count: String(current.preferenceSignalCount) })]
+        ? [formatImportCount("signal", current.preferenceSignalCount)]
         : []),
-    ];
-    return `${current.label} · ${metadata.join(" · ")}`;
-  };
-  const summary = (current: WikiImportInsights["clusters"][number]) =>
-    [
-      t("dreaming.wiki.importedClusterSummary", { label: current.label.toLowerCase() }),
-      ...(current.withheldCount > 0
-        ? [
-            t(
-              current.withheldCount === 1
-                ? "dreaming.wiki.withheldDigestOne"
-                : "dreaming.wiki.withheldDigests",
-              { count: String(current.withheldCount) },
-            ),
-          ]
-        : []),
-    ].join(" ");
+    ].join(" · ");
+  const note = (current: WikiImportInsights["clusters"][number]) =>
+    current.withheldCount > 0
+      ? t(
+          current.withheldCount === 1
+            ? "dreaming.wiki.withheldDigestOne"
+            : "dreaming.wiki.withheldDigests",
+          { count: String(current.withheldCount) },
+        )
+      : undefined;
   return (
     <Show
-      when={cluster()}
+      when={clusters().length > 0}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingInsights" : "dreaming.wiki.noInsights")}
-          hint={props.loading ? undefined : t("dreaming.wiki.noInsightsHint")}
+          message={t("dreaming.wiki.noInsights")}
+          hint={t("dreaming.wiki.noInsightsHint")}
         />
       }
     >
-      {(current) => (
-        <WikiClusterArticle
-          date={date(current())}
-          truncated={props.data?.truncated ?? false}
-          returnedItems={returnedItems()}
-          totalItems={props.data?.totalItems ?? 0}
-          prose={<p class="dreams-diary__para">{summary(current())}</p>}
-        >
-          <For each={current().items} keyed={(item) => item.pagePath}>
-            {(item) => (
-              <WikiInsightCard owner={props.owner} card={{ kind: "import", item: item() }} />
-            )}
-          </For>
-        </WikiClusterArticle>
-      )}
+      <BoundedResults
+        truncated={props.data?.truncated ?? false}
+        returned={returnedItems()}
+        total={props.data?.totalItems ?? 0}
+      />
+      <For each={clusters()} keyed={(cluster) => cluster.key}>
+        {(cluster) => (
+          <WikiCluster heading={heading(cluster())} note={note(cluster())}>
+            <For each={cluster().items} keyed={(item) => item.pagePath}>
+              {(item) => (
+                <WikiInsightRow owner={props.owner} card={{ kind: "import", item: item() }} />
+              )}
+            </For>
+          </WikiCluster>
+        )}
+      </For>
     </Show>
   );
 }
 
-export function WikiOverviewContent(props: {
-  owner: DreamingProps;
-  data: WikiOverview | null;
-  selectedPage: number;
-  loading: boolean;
-}) {
-  const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
-  const returnedItems = createMemo(
-    () => props.data?.clusters.reduce((total, item) => total + item.itemCount, 0) ?? 0,
+export function WikiOverviewContent(props: { owner: DreamingProps; data: WikiOverview | null }) {
+  const clusters = () => props.data?.clusters ?? [];
+  const returnedItems = createMemo(() =>
+    clusters().reduce((total, item) => total + item.itemCount, 0),
   );
-  const date = () => {
-    const metadata = (
+  const vault = () =>
+    (
       [
         ["page", props.data?.totalPages ?? 0],
         ["claimRow", props.data?.totalClaims ?? 0],
@@ -414,52 +394,35 @@ export function WikiOverviewContent(props: {
       ] as const
     )
       .filter(([kind, count]) => kind === "page" || count > 0)
-      .map(([kind, count]) => formatWikiCount(kind, count));
-    return `${t("dreaming.wiki.vault")} · ${metadata.join(" · ")}`;
-  };
+      .map(([kind, count]) => formatWikiCount(kind, count))
+      .join(" · ");
   return (
     <Show
-      when={cluster()}
+      when={clusters().length > 0}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingWiki" : "dreaming.wiki.emptyWiki")}
-          hint={props.loading ? undefined : t("dreaming.wiki.emptyWikiHint")}
+          message={t("dreaming.wiki.emptyWiki")}
+          hint={t("dreaming.wiki.emptyWikiHint")}
         />
       }
     >
-      {(current) => (
-        <WikiClusterArticle
-          date={date()}
-          truncated={props.data?.truncated ?? false}
-          returnedItems={returnedItems()}
-          totalItems={props.data?.totalItems ?? 0}
-          prose={
-            <>
-              <p class="dreams-diary__para">
-                {t("dreaming.wiki.fullVaultBreakdown", {
-                  breakdown: props.data
-                    ? formatWikiOverviewPageBreakdown(props.data.pageCounts)
-                    : t("dreaming.wiki.noPagesYet"),
-                })}
-              </p>
-              <p class="dreams-diary__para">
-                {t("dreaming.wiki.selectedSection", {
-                  summary: formatWikiOverviewClusterSummary(current()),
-                })}
-                {current().updatedAt
-                  ? ` ${t("dreaming.wiki.latestUpdate", { date: formatCompactDateTime(current().updatedAt!) })}`
-                  : ""}
-              </p>
-            </>
-          }
-        >
-          <For each={current().items} keyed={(item) => item.pagePath}>
-            {(item) => (
-              <WikiInsightCard owner={props.owner} card={{ kind: "wiki", item: item() }} />
-            )}
-          </For>
-        </WikiClusterArticle>
-      )}
+      <p class="dreams-review__meta dreams-review__bounded">{vault()}</p>
+      <BoundedResults
+        truncated={props.data?.truncated ?? false}
+        returned={returnedItems()}
+        total={props.data?.totalItems ?? 0}
+      />
+      <For each={clusters()} keyed={(cluster) => cluster.key}>
+        {(cluster) => (
+          <WikiCluster heading={formatWikiOverviewClusterSummary(cluster())}>
+            <For each={cluster().items} keyed={(item) => item.pagePath}>
+              {(item) => (
+                <WikiInsightRow owner={props.owner} card={{ kind: "wiki", item: item() }} />
+              )}
+            </For>
+          </WikiCluster>
+        )}
+      </For>
     </Show>
   );
 }

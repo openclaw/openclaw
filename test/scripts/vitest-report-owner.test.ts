@@ -5,12 +5,18 @@ import { parseCLI, type CliOptions, type JsonTestResults } from "vitest/node";
 import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import type { VitestReportCapture } from "../../scripts/lib/vitest-report-capture.mts";
 import { canParallelizeVitestOutput } from "../../scripts/lib/vitest-report-owner.mts";
+import {
+  createVitestWorkerRun,
+  type VitestWorkerRun,
+} from "../../scripts/lib/vitest-worker-run.mts";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createVitestReportFixture, reportChunkTestFiles } from "./vitest-report-fixture.js";
 
 const text = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
@@ -28,7 +34,6 @@ const aggregateOf = (result: ReportResult): VitestReportCapture =>
   json(result.reportSet!, "aggregate.json.capture.json");
 const captureOf = (part: { json: string }): VitestReportCapture =>
   json(`${part.json}.capture.json`);
-const lastPart = (entry: ReportEntry) => entry.attempts.at(-1)!;
 const project = (
   root: string,
   name: string,
@@ -60,6 +65,8 @@ const expected: [string, string][] = [
   ["beta/skip", "skipped"],
   ["beta/todo", "todo"],
 ];
+const failedCases = (failedName: string | undefined, cases = expected): [string, string][] =>
+  cases.map(([name, status]) => [name, name === failedName ? "failed" : status]);
 function expectPublished(
   expect: TestContext["expect"],
   result: ReportResult,
@@ -83,35 +90,41 @@ it.for([
   [["--reporter=github-actions", "--coverage.enabled=false"], false, false],
   [["--reporter=json", "--reporter=verbose", "--coverage"], true, true],
   [["--reporter=json", "--reporter=github-actions"], true, false],
-] as const)(
-  "requires explicit native output ownership: %j owner=%s",
-  ([args, owner, admitted], { expect }) => {
-    const { options } = parseCLI(["vitest", "run", ...args]);
-    expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
-  },
-);
-
-it.for([
   [{ reporter: "dot", coverage: { enabled: false } }, false, true],
   [{ reporters: "verbose", coverage: { enabled: false } }, false, true],
   [{ reporter: ["dot", "verbose"], coverage: { enabled: false } }, false, true],
   [{ reporter: "github-actions" }, true, false],
   [{ reporters: "./custom-reporter.mjs" }, true, false],
   [{ reporters: [["json", { outputFile: "shared.json" }]] }, true, false],
-] satisfies [CliOptions, boolean, boolean][])(
-  "keeps native reporter shape ownership: %j",
-  ([options, owner, admitted], { expect }) => {
+] satisfies [string[] | CliOptions, boolean, boolean][])(
+  "requires explicit native output ownership: %j owner=%s",
+  ([input, owner, admitted], { expect }) => {
+    const options = Array.isArray(input) ? parseCLI(["vitest", "run", ...input]).options : input;
     expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
   },
 );
 
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const cacheLifetime = createFixtureLifetime();
-  let compileCache: string;
+  let cacheRoot: string;
   let receipts: FixtureReceiptChannel;
+  let workers: VitestWorkerRun;
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
-    compileCache = cacheLifetime.createTempDir("oc-report-compile-");
+    cacheRoot = cacheLifetime.createTempDir("oc-report-cache-");
+    // Compilation is setup, outside each report invocation's settlement deadline.
+    workers = createVitestWorkerRun(
+      testRunnerFixtureEnv(),
+      undefined,
+      "tooling",
+      resolveTestNodeExecPath(),
+    );
+    try {
+      await workers.prepare();
+    } catch (error) {
+      await workers.dispose();
+      throw error;
+    }
     vi.setConfig({ maxConcurrency: 2 });
     return () => vi.resetConfig();
   });
@@ -119,25 +132,31 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     try {
       await cacheLifetime.cleanup();
     } finally {
-      await receipts.close();
+      try {
+        await workers?.dispose();
+      } finally {
+        await receipts.close();
+      }
     }
   });
   type ReportRunner = ReturnType<typeof createVitestReportFixture>;
-  const reportTest = it.extend<{
-    reports: {
-      root: string;
-      run: ReportRunner;
-    };
-  }>({
+  const reportTest = it.extend<{ reports: { root: string; run: ReportRunner } }>({
     reports: async ({ onTestFinished, signal }, use) => {
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       const root = lifetime.createTempDir("oc-report-");
-      const invoke = createVitestReportFixture(root, { receipts, signal }, undefined, compileCache);
+      const invoke = createVitestReportFixture(
+        root,
+        { receipts, signal },
+        undefined,
+        cacheRoot,
+        workers,
+      );
       await use({
         root,
-        run: (...args) => {
-          const completion = lifetime.run(() => invoke(...args));
+        run: (mode, options) => {
+          const env = { XDG_CACHE_HOME: cacheRoot, ...options?.env };
+          const completion = lifetime.run(() => invoke(mode, { ...options, env }));
           void cacheLifetime.track(completion.then(() => undefined));
           return completion;
         },
@@ -181,16 +200,15 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "classifies the final index write after assertion-red publication: entry=%s",
     { timeout: 60000 },
     async (entry, { expect, reports }) => {
-      const result = await reports.run("failure", {
-        entry,
-        finalIndexFailure: true,
-      });
+      const result = await reports.run("failure", { entry, finalIndexFailure: true });
       expect(result, result.stderr).toMatchObject({ code: 2, signal: null });
       expect(result.stderr).toContain("owned final index write failure");
-      const published = json(result.output);
-      expect(inventory(published)).toEqual(
-        expected.map(([name, status]) => [name, name === "beta/one" ? "failed" : status]),
-      );
+      if (entry === "batch-cli") {
+        expect(text(reports.root, "batch-plan-used")).toBe("used");
+      } else if (entry === undefined) {
+        expect(text(reports.root, "shim-entry-used")).toBe("used");
+      }
+      expect(inventory(json(result.output))).toEqual(failedCases("beta/one"));
       const attempted = json(result.reportSet!, "index.json.final-write-attempt");
       expect(attempted).toMatchObject({
         complete: true,
@@ -246,7 +264,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         cases = expected.slice(2);
       }
       const index = expectPublished(expect, result, cases);
-      const parts: ReportPart[] = index.entries.map(lastPart);
+      const parts: ReportPart[] = index.entries.map((entry: ReportEntry) => entry.attempts.at(-1)!);
       expect(parts).toHaveLength(2);
       const captures = parts.map(captureOf);
       for (const [partIndex, part] of parts.entries()) {
@@ -286,12 +304,21 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(text(root, "reports/merge-after-joins")).toBe("joined");
         expect(captures.map((capture) => isPidDefinitelyDead(capture.pid))).toEqual([true, true]);
       }
+      if (
+        ["config-load-once", "serial", "grouped", "nested-shared-leaf", "empty-group"].includes(
+          mode,
+        )
+      ) {
+        expect(text(root, "node_modules/.vitest-cache/canary")).toBe("another cache owner");
+        expect(text(root, "node_modules/.vitest-cache/_metadata.json")).toBe(
+          '{"lockfileHash":"unrelated-owner"}',
+        );
+        expect(text(root, "node_modules/.vite/canary")).toBe("another result-cache owner");
+        expect(fs.readdirSync(path.join(root, "node_modules/.vite"))).toEqual(["canary"]);
+      }
       if (mode === "config-load-once") {
         expect(lines(root, "reports/config-loads.txt")).toEqual(["alpha", "beta"]);
         const replay = aggregateOf(result);
-        const defaultCache = path.join(root, "node_modules/.vitest-cache");
-        expect(text(defaultCache, "canary")).toBe("another cache owner");
-        expect(text(defaultCache, "_metadata.json")).toBe('{"lockfileHash":"unrelated-owner"}');
         for (const name of ["alpha", "beta"]) {
           expect(json(root, `fs-cache-${name}/_metadata.json`).lockfileHash).toBeTypeOf("string");
         }
@@ -312,10 +339,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
               "outer (inner)",
             ),
             project(root, "other (alpha)", "vitest.alpha.config.ts", "threads", "other"),
-            {
-              ...project(root, "beta", "vitest.beta.config.ts", "forks"),
-              root: path.join(root, "test/vitest"),
-            },
+            project(root, "beta", "vitest.beta.config.ts", "forks"),
           ]),
         );
         const modules = captures.flatMap((capture) => capture.modules);
@@ -330,6 +354,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(serialized(replay.modules)).toEqual(serialized(modules));
       }
       if (mode === "batch-real-home") {
+        expect(result.stderr).not.toContain("[vitest-workers] prepared ");
         expect(result.signal).toBeNull();
         expect(index.merge).toMatchObject({ code: 0, signal: null });
         expect(text(root, "home/canary")).toBe("synthetic caller home\n");
@@ -386,12 +411,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     async ({ expect, reports }) => {
       const result = await reports.run("watchdog");
       expect(result.code, result.stderr).toBe(143);
-      expect(
-        fs.readFileSync(
-          path.join(path.dirname(path.dirname(result.output)), "cold-started"),
-          "utf8",
-        ),
-      ).toBe("started");
+      expect(text(path.dirname(path.dirname(result.output)), "cold-started")).toBe("started");
       const index = indexOf(result);
       expect(index.complete).toBe(false);
       expect(index.entries[0].attempts).toHaveLength(1);
@@ -474,10 +494,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         }
       } else {
         const report: JsonTestResults = json(output);
-        const cases = (betaOnly ? expected.slice(2) : expected).map(([name, status]) => [
-          name,
-          name === "beta/one" ? "failed" : status,
-        ]);
+        const cases = failedCases("beta/one", betaOnly ? expected.slice(2) : expected);
 
         expect(inventory(report), result.stderr).toEqual(cases);
         const failed = report.testResults
@@ -510,10 +527,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           : mode === "failure" || mode === "batch-failure"
             ? "beta/one"
             : undefined;
-      const cases = expected.map(([name, status]): [string, string] => [
-        name,
-        name === failedName ? "failed" : status,
-      ]);
+      const cases = failedCases(failedName);
       if (mode === "suite-error") {
         cases.push(["broken suite body", "passed"]);
       }
@@ -755,6 +769,23 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         }
         if (kind === "native-error") {
           expect(result.stderr).toMatch(/No test tags found|standalone mode requires --watch/u);
+        }
+        if (kind === "idle") {
+          for (const name of ["alpha", "beta"]) {
+            expect(result.stdout).toContain(
+              `cleared fs module cache at ${path.join(reports.root, "fs-cache-" + name)}`,
+            );
+          }
+          expect(text(reports.root, "node_modules/.vitest-cache/canary")).toBe(
+            "another cache owner",
+          );
+          expect(text(reports.root, "node_modules/.vitest-cache/_metadata.json")).toBe(
+            '{"lockfileHash":"unrelated-owner"}',
+          );
+          expect(text(reports.root, "node_modules/.vite/canary")).toBe(
+            "another result-cache owner",
+          );
+          expect(fs.readdirSync(path.join(reports.root, "node_modules/.vite"))).toEqual(["canary"]);
         }
       }
       if (entry === "batch-cli") {

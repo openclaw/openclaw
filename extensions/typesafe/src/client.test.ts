@@ -1,159 +1,142 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { evaluate } from "./client.js";
+import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runtimeConfig } from "./config.js";
-import { MAX_JSON_BYTES, parseInput, parseResult } from "./schema.js";
+import {
+  mixedFixture,
+  mockJsonResponse,
+  registeredPreparedDecisionProvider,
+} from "./transport.test-support.js";
 
-const config = { apiKey: "synthetic-test-credential", timeoutMs: 1000 };
-const input = {
-  model: "jev-test",
-  state: { text: "synthetic state" },
-  questions: {
-    route: { type: "choice", instructions: "Choose", criteria: { keep: "Keep", skip: "Skip" } },
-    quality: { type: "score", instructions: "Rate", criteria: ["Low", "High"] },
-    relevant: { type: "noul", instructions: "Relevant?" },
-  },
-};
-const answer = {
-  model: "jev-test",
-  answers: {
-    route: {
-      type: "choice",
-      choice: "keep",
-      confidence: 0.75,
-      probabilities: { keep: 0.75, skip: 0.25 },
-    },
-    quality: {
-      type: "score",
-      score: 0.6,
-      confidence: 0.6,
-      legend: { 0: "Low", 1: "High" },
-      probabilities: { 0: 0.4, 1: 0.6 },
-    },
-    relevant: { type: "noul", noul: 0.3 },
-  },
-  usage: { input_tokens: 20, output_tokens: 10 },
-};
+// mock-isolation: the hosted plugin key comes from a fixture, not host secret state.
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
+  getPreparedPluginSecretInput: vi.fn(),
+}));
 
-function mockFetch(implementation: typeof globalThis.fetch) {
-  const fetch = vi.fn(implementation);
-  vi.stubGlobal("fetch", fetch);
-  return fetch;
+const { batch, input, response, result } = mixedFixture;
+const localUrl = "http://127.0.0.1:8009";
+const kev = (value: object) => ({ ...value, model: "kev-latest" });
+
+function registered(config: OpenClawConfig) {
+  return registeredPreparedDecisionProvider(() => config);
 }
+const plugin = (config: Record<string, unknown> = {}) =>
+  registered({ plugins: { entries: { typesafe: { config } } } });
+const context = (model = input.model, apiKey = "synthetic-key"): DecisionProviderContextV2 => ({
+  model: { provider: "typesafe", id: model, name: model },
+  config: {},
+  auth: { mode: "api-key", apiKey },
+  signal: new AbortController().signal,
+  deadlineMonotonicMs: performance.now() + 2000,
+  isAdmissible: () => true,
+});
+function sent(fetch: ReturnType<typeof mockJsonResponse>) {
+  const [url, init] = fetch.mock.calls[0]!;
+  if (typeof init?.body !== "string") {
+    throw new Error("Expected a serialized TypeSafe request");
+  }
+  return { url, headers: new Headers(init.headers), body: JSON.parse(init.body) };
+}
+
+beforeEach(() => {
+  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: "synthetic-key" });
+});
 afterEach(() => {
   vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
 });
 
-describe("TypeSafe HTTP evaluation", () => {
-  it("sanitizes transport errors, invalid JSON, and reflected credentials", async () => {
-    mockFetch(async () => {
-      throw new Error(config.apiKey);
-    });
-    await expect(evaluate(input, config)).rejects.toThrow("TypeSafe transport unavailable");
-    mockFetch(async () => new Response("not json"));
-    await expect(evaluate(input, config)).rejects.toMatchObject({ reason: "invalid-response" });
-    mockFetch(async () => new Response(JSON.stringify({ ...answer, model: config.apiKey })));
-    await expect(evaluate(input, config)).rejects.toThrow("TypeSafe evaluation failed");
+it("sends hosted Jev evaluations with the prepared bearer", async () => {
+  const fetch = mockJsonResponse({ ...response, metrics: { latency: 3 } });
+  await expect(plugin().evaluate(batch, context())).resolves.toEqual(result);
+  const { url, headers, body } = sent(fetch);
+  expect(url).toBe("https://api.typesafe.ai/v1/systemone");
+  expect(headers.get("authorization")).toBe("Bearer synthetic-key");
+  expect(body).toEqual(input);
+});
+
+it("encodes local Kev requests, strips latency and never sends a hosted key", async () => {
+  const fetch = mockJsonResponse(kev(mixedFixture.localResponse));
+  await expect(
+    plugin({ baseUrl: localUrl }).evaluate(batch, context("kev-latest", "hosted-secret")),
+  ).resolves.toEqual({ ...result, result: kev(result.result) });
+  const { url, headers, body } = sent(fetch);
+  expect(url).toBe(`${localUrl}/v1/systemone`);
+  expect(headers.has("authorization")).toBe(false);
+  expect(body).toEqual(kev(mixedFixture.localInput));
+});
+
+it.each([-1, "15"])("rejects invalid local latency metadata %s", async (latency_ms) => {
+  mockJsonResponse(kev({ ...mixedFixture.localResponse, latency_ms }));
+  await expect(
+    plugin({ baseUrl: localUrl }).evaluate(batch, context("kev-latest", "typesafe-local")),
+  ).resolves.toEqual({ status: "unavailable", reason: "invalid-response" });
+});
+
+it("refuses hosted dispatch for local Kev", async () => {
+  const fetch = mockJsonResponse(response);
+  await expect(plugin().evaluate(batch, context("kev-latest"))).resolves.toEqual({
+    status: "unavailable",
+    reason: "unsupported-input",
   });
-  it("requires prepared credentials instead of an ambient key or unresolved reference", async () => {
-    vi.stubEnv("TYPESAFE_API_KEY", "unused-synthetic-key");
-    const fetch = mockFetch(async () => new Response());
-    await expect(
-      evaluate(
-        input,
-        runtimeConfig({ apiKey: { source: "env", provider: "default", id: "TYPESAFE_API_KEY" } }),
-      ),
-    ).rejects.toThrow("API key is missing");
-    expect(fetch).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("omits the bearer when the configured provider disables its auth header", async () => {
+  const fetch = mockJsonResponse({ ...mixedFixture.localResponse, model: input.model });
+  const provider = registered({
+    models: {
+      providers: {
+        typesafe: {
+          baseUrl: "https://decision.example.com/v1",
+          apiKey: "synthetic-key",
+          authHeader: false,
+          models: [],
+        },
+      },
+    },
   });
-  it("cancels before dispatch without exposing the abort reason", async () => {
-    const controller = new AbortController();
-    controller.abort(config.apiKey);
-    const fetch = mockFetch(async () => new Response());
-    await expect(evaluate(input, config, controller.signal)).rejects.toThrow(
-      "TypeSafe evaluation cancelled.",
-    );
-    expect(fetch).not.toHaveBeenCalled();
-  });
-  it("propagates in-flight cancellation to the HTTP request", async () => {
-    const controller = new AbortController();
-    const fetch = mockFetch(async (_url, init) => {
-      controller.abort(config.apiKey);
-      init?.signal?.throwIfAborted();
-      return new Response(JSON.stringify(answer));
-    });
-    await expect(evaluate(input, config, controller.signal)).rejects.toThrow(
-      "TypeSafe evaluation cancelled.",
-    );
-    expect(fetch).toHaveBeenCalledOnce();
+  await expect(provider.evaluate(batch, context())).resolves.toEqual(result);
+  const { url, headers } = sent(fetch);
+  expect(url).toBe("https://decision.example.com/v1/systemone");
+  expect(headers.has("authorization")).toBe(false);
+});
+
+it.each([
+  { answers: { c: response.answers.c, s: response.answers.s } },
+  { answers: { ...response.answers, q: { type: "noul", noul: 1.01 } } },
+  { usage: { input_tokens: "12", output_tokens: 3 } },
+  { metrics: Array.from({ length: 65 }).reduce<unknown>((value) => [value], null) },
+])("rejects an invalid native response %#", async (invalid) => {
+  mockJsonResponse({ ...response, ...invalid });
+  await expect(plugin().evaluate(batch, context())).resolves.toEqual({
+    status: "unavailable",
+    reason: "invalid-response",
   });
 });
 
-const cyclic: unknown[] = [];
-cyclic.push(cyclic);
+it.each(["http://127.0.0.1:8009/", "https://localhost"])(
+  "accepts an explicit loopback origin %s",
+  (url) => {
+    expect(runtimeConfig({ baseUrl: url, apiKey: "ignored-secret" })).toEqual({
+      baseUrl: new URL(url).origin,
+      timeoutMs: 30000,
+    });
+  },
+);
 
-describe("bounded contracts", () => {
-  it.each([
-    { ...input, questions: {} },
-    { ...input, state: cyclic },
-    { ...input, state: "😀".repeat(MAX_JSON_BYTES / 4 + 1) },
-    { ...input, state: Array(262145) },
-    { ...input, state: { bad: Infinity } },
-    { ...input, questions: { bad: { type: "score", criteria: ["only"] } } },
-    {
-      ...input,
-      state: "private state",
-      questions: { "private ID": { type: "noul", instructions: 42 } },
-    },
-    {
-      ...input,
-      state: "private state",
-      questions: { "private ID": { type: "noul", criteria: { true: false } } },
-    },
-    {
-      ...input,
-      state: "private state",
-      questions: {
-        "private ID": { type: "choice", criteria: { a: { nested: undefined }, b: "B" } },
-      },
-    },
-  ])("rejects invalid input before dispatch without leaking content", async (value) => {
-    const fetch = mockFetch(vi.fn());
-    expect(() => parseInput(value)).toThrow();
-    const error = await evaluate(value, config).catch((caught: unknown) => caught);
-    expect(error).toMatchObject({ name: "EvaluationError", reason: "unsupported-input" });
-    expect(String(error)).not.toMatch(/private state|private ID/);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-  it.each([
-    { ...answer, answers: { ...answer.answers, relevant: { type: "noul", noul: 1.01 } } },
-    {
-      ...answer,
-      answers: { ...answer.answers, route: { ...answer.answers.route, choice: "other" } },
-    },
-    {
-      ...answer,
-      answers: {
-        ...answer.answers,
-        route: { ...answer.answers.route, probabilities: { keep: 0.5, other: 0.5 } },
-      },
-    },
-    {
-      ...answer,
-      answers: {
-        ...answer.answers,
-        route: { ...answer.answers.route, probabilities: { keep: 0, skip: 0 } },
-      },
-    },
-    { ...answer, answers: { ...answer.answers, quality: { ...answer.answers.quality, score: 2 } } },
-    {
-      ...answer,
-      answers: {
-        ...answer.answers,
-        quality: { ...answer.answers.quality, legend: { 0: "Wrong", 1: "High" } },
-      },
-    },
-  ])("rejects malformed or mismatched responses", (value) =>
-    expect(() => parseResult(value, parseInput(input))).toThrow("invalid evaluation response"),
-  );
+it.each([
+  "https://remote.example",
+  "http://localhost.example",
+  "http://localhost:8009/v1",
+  "http://localhost:8009?x=1",
+  "http://localhost:8009#x",
+  "file:///localhost",
+  "http://localhost:65536",
+  "http://127.1:8009",
+  "http://2130706433:8009",
+  "http://localhost.:8009",
+  null,
+])("rejects unsafe loopback endpoint %s", (url) => {
+  expect(() => runtimeConfig({ baseUrl: url })).toThrow("baseUrl");
 });

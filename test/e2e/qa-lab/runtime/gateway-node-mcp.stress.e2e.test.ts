@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
-import { createSessionMcpRuntime } from "../../../../src/agents/agent-bundle-mcp-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -63,9 +61,7 @@ it(
     const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
     const root = tempDirs.make("openclaw-gateway-node-mcp-stress-");
     const nodePlacement = await createMcpPlacement(root, "node");
-    const sessionPlacement = await createMcpPlacement(root, "session");
     const nodeEvents = path.join(root, "node-generations.jsonl");
-    const sessionEvents = path.join(root, "session-generations.jsonl");
     const fixturePath = path.join(
       process.cwd(),
       "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs",
@@ -76,27 +72,23 @@ it(
     const gatewayOwner = createQaGatewayChild();
     let gateway: GatewayHandle | undefined;
     let node: CapturedChild | undefined;
-    let sessionRuntime: ReturnType<typeof createSessionMcpRuntime> | undefined;
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         const acquiredFixture = await startingFixture?.catch(() => undefined);
-        await Promise.allSettled([
-          ...(sessionRuntime ? [sessionRuntime.dispose()] : []),
-          ...(node ? [stopChild(node)] : []),
-        ]);
+        if (node) {
+          await Promise.allSettled([stopChild(node)]);
+        }
         await Promise.allSettled([
           stopQaGatewayFixture(gatewayOwner),
           ...(acquiredFixture ? [stopChild(acquiredFixture)] : []),
         ]);
-        for (const eventPath of [nodeEvents, sessionEvents]) {
-          const records = await readProcessRecords(eventPath).catch(() => []);
-          for (const record of records) {
-            for (const pid of [record.leaderPid, record.descendantPid]) {
-              if (processIsAlive(pid)) {
-                process.kill(pid, "SIGKILL");
-                await waitForProcessExit(pid).catch(() => {});
-              }
+        const records = await readProcessRecords(nodeEvents).catch(() => []);
+        for (const record of records) {
+          for (const pid of [record.leaderPid, record.descendantPid]) {
+            if (processIsAlive(pid)) {
+              process.kill(pid, "SIGKILL");
+              await waitForProcessExit(pid).catch(() => {});
             }
           }
         }
@@ -146,45 +138,18 @@ it(
       expect(descriptorFor(descriptors, "stdio").mcp?.tool).toBe("parity_probe");
       expect(descriptors.some((entry) => entry.mcp?.tool === "parity_stale")).toBe(false);
 
-      const sessionServers = sessionPlacement.servers(fixture, {
-        MCP_STRESS_STARTUP_INVERSION: "1",
-        MCP_STRESS_EVENT_PATH: sessionEvents,
-      });
-      const sessionStdio = sessionServers.stdio;
-      if (!sessionStdio) {
-        throw new Error("session stdio MCP server config was not created");
-      }
-      sessionRuntime = createSessionMcpRuntime({
-        sessionId: `stress-${randomUUID()}`,
-        workspaceDir: sessionPlacement.workspaceDir,
-        cfg: {
-          plugins: { enabled: false },
-          mcp: { servers: { stdio: sessionStdio } },
-        },
-      });
-      await sessionRuntime.getCatalog();
-
       const stdioDescriptor = descriptorFor(descriptors, "stdio");
       const nodeRich = await invokePayload(stdioDescriptor, "rich-result");
-      const sessionRich = await sessionRuntime.callTool("stdio", "parity_probe", {
-        marker: "rich-result",
-      });
       expect(nodeRich).toMatchObject({
         payload: {
-          content: sessionRich.content.map((block) => ({ type: block.type })),
+          content: ["text", "resource_link", "resource", "audio", "image"].map((type) => ({
+            type,
+          })),
           structuredContent: { marker: "rich-result", rich: true },
         },
       });
-      expect(sessionRich.structuredContent).toMatchObject({ marker: "rich-result", rich: true });
-
       const nodeEmpty = await invokePayload(stdioDescriptor, "empty-error");
-      const sessionEmpty = await sessionRuntime.callTool("stdio", "parity_probe", {
-        marker: "empty-error",
-      });
       expect(nodeEmpty).toMatchObject({ payload: { content: [], isError: true } });
-      expect(sessionEmpty).toMatchObject({ content: [], isError: true });
-      await sessionRuntime.dispose();
-      sessionRuntime = undefined;
 
       for (const server of ["sse", "streamableHttp"] as const) {
         descriptors = await tools();

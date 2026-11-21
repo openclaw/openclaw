@@ -36,14 +36,15 @@ it("preserves valid legacy sources without letting unusable receipts veto discov
   await git(source, "config", "user.name", "OpenClaw Test");
   await git(source, "config", "user.email", "test@openclaw.invalid");
   await git(source, "config", "commit.gpgsign", "false");
-  await git(source, "commit", "--allow-empty", "-m", "installed");
-  const sha = await git(source, "rev-parse", "HEAD");
+  const commit = async (message: string) => {
+    await git(source, "commit", "--allow-empty", "-m", message);
+    return git(source, "rev-parse", "HEAD");
+  };
+  const sha = await commit("installed");
   await git(source, "branch", "old-stream");
-  await git(source, "commit", "--allow-empty", "-m", "available");
-  const customTarget = await git(source, "rev-parse", "HEAD");
+  const customTarget = await commit("available");
   await git(base, "clone", "--quiet", source, custom);
-  await git(source, "commit", "--allow-empty", "-m", "origin advances again");
-  const target = await git(source, "rev-parse", "HEAD");
+  const target = await commit("origin advances again");
   await git(base, "clone", "--quiet", source, root);
   await git(root, "checkout", "--detach", sha);
   await git(root, "branch", "-D", "main");
@@ -55,44 +56,31 @@ it("preserves valid legacy sources without letting unusable receipts veto discov
   await git(root, "fetch", "--quiet", "--no-tags", "upstream", "main", "HEAD");
   expect(await git(root, "rev-parse", "refs/status/main")).toBe(customTarget);
   expect(await git(root, "rev-parse", "refs/status/head")).toBe(customTarget);
-  const refsOnly = await git(root, "ls-remote", "--refs", "upstream", "HEAD");
-  expect(refsOnly.split("\n").map((line) => line.split("\t")[1])).not.toContain("HEAD");
-  expect((await git(root, "ls-remote", "upstream", "HEAD")).split("\n")).toContain(
-    customTarget + "\tHEAD",
-  );
   const config = await fs.readFile(path.join(root, ".git", "config"), "utf8");
   mocks.root.mockResolvedValue(root);
   const matching = { root, sha, upstreamRef: "upstream/main", installedAtMs: 1234 };
-  const receipts = [
+  const sourceCase = (name: string, upstream: string, upstreamSha = customTarget, behind = 1) => ({
+    name,
+    receipt: { ...matching, upstreamRef: upstream },
+    expected: { upstream, upstreamSha, behind },
+  });
+  const receipts: Array<{
+    name: string;
+    receipt: VerifiedGitUpdateReceipt | null;
+    expected?: ReturnType<typeof sourceCase>["expected"];
+  }> = [
     { name: "absent", receipt: null },
+    sourceCase("matching custom source", "upstream/main"),
+    sourceCase("abbreviated fetch source", "refs/status/main"),
+    sourceCase("HEAD fetch source", "refs/status/head"),
     {
-      name: "matching custom source",
-      receipt: matching,
-      expected: { upstream: "upstream/main", upstreamSha: customTarget, behind: 1 },
-    },
-    {
-      name: "abbreviated fetch source",
-      receipt: { ...matching, upstreamRef: "refs/status/main" },
-      expected: { upstream: "refs/status/main", upstreamSha: customTarget, behind: 1 },
-    },
-    {
-      name: "HEAD fetch source",
-      receipt: { ...matching, upstreamRef: "refs/status/head" },
-      expected: { upstream: "refs/status/head", upstreamSha: customTarget, behind: 1 },
-    },
-    {
-      name: "unambiguous short SHA",
+      ...sourceCase("unambiguous short SHA", "upstream/main"),
       receipt: { ...matching, sha: sha.slice(0, 8) },
-      expected: { upstream: "upstream/main", upstreamSha: customTarget, behind: 1 },
     },
     { name: "short stale SHA", receipt: { ...matching, sha: target.slice(0, 8) } },
     { name: "too short SHA", receipt: { ...matching, sha: sha.slice(0, 6) } },
     { name: "revision expression", receipt: { ...matching, sha: sha.slice(0, 8) + "^{commit}" } },
-    {
-      name: "valid older stream",
-      receipt: { ...matching, upstreamRef: "origin/old-stream" },
-      expected: { upstream: "origin/old-stream", upstreamSha: sha, behind: 0 },
-    },
+    sourceCase("valid older stream", "origin/old-stream", sha, 0),
     { name: "missing stream", receipt: { ...matching, upstreamRef: "origin/missing" } },
     { name: "malformed stream", receipt: { ...matching, upstreamRef: "bad ..ref" } },
     { name: "stale SHA", receipt: { ...matching, sha: target } },
@@ -119,15 +107,13 @@ it("preserves valid legacy sources without letting unusable receipts veto discov
       root,
     );
     expect
-      .soft(schedule.install?.git?.status, name)
-      .toBe(expected?.behind === 0 ? "current" : "behind");
-    expect
-      .soft(schedule.install?.git?.installedAtMs, name)
-      .toBe(
+      .soft([schedule.install?.git?.status, schedule.install?.git?.installedAtMs], name)
+      .toEqual([
+        expected?.behind === 0 ? "current" : "behind",
         receipt?.root === root && /^[0-9a-f]{7,}$/i.test(receipt.sha) && sha.startsWith(receipt.sha)
           ? 1234
           : undefined,
-      );
+      ]);
   }
   mocks.receipt.mockResolvedValue({ ...matching, upstreamRef: "refs/remotes/upstream/main" });
   await git(root, "update-ref", "-d", "refs/remotes/upstream/main");

@@ -3,6 +3,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveTimestampMsToIsoString,
@@ -13,6 +14,7 @@ import {
   resolveOpenClawCliInvocation,
 } from "../../cli-invocation.mjs";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { runExec } from "../process/exec.js";
 
 const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
@@ -45,7 +47,15 @@ export function resolveOpenClawCliProcessArgs(
   args: readonly string[],
   hasBuildOutput: boolean,
 ): string[] {
-  return [hasBuildOutput ? "openclaw.mjs" : "scripts/run-node.mjs", ...args];
+  return [
+    fileURLToPath(
+      resolveExternalPackageRuntimeEntrypointUrl(
+        hasBuildOutput ? "cliLauncher" : "sourceRunner",
+        process.cwd(),
+      ),
+    ),
+    ...args,
+  ];
 }
 
 /** Return true for live agents that expose Claude-style MCP tool names. */
@@ -109,36 +119,27 @@ export function buildLiveCronProbeMessage(params: {
   exactReply: string;
 }): string {
   const claudeLike = isClaudeLikeLiveAgent(params.agent);
+  const discoverTools =
+    "If it is not already visible, search/load MCP tools for `openclaw automations` or `automations`, " +
+    "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__automations`. " +
+    "Do not use Claude native `CronCreate`, `CronList`, or `CronDelete`; those are not OpenClaw proof. ";
   if (params.attempt === 0) {
     return (
       "Use the OpenClaw MCP automations tool from server `openclaw`. " +
-      "If it is not already visible, search/load MCP tools for `openclaw automations` or `automations`, " +
-      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__automations`. " +
-      "Do not use Claude native `CronCreate`, `CronList`, or `CronDelete`; those are not OpenClaw proof. " +
+      discoverTools +
       `Call it with JSON arguments ${params.argsJson}. ` +
       "Preserve the JSON exactly, including job.sessionTarget and job.sessionKey; do not omit, rename, or flatten those fields. " +
       "Do the actual tool call; I will verify externally with the OpenClaw cron CLI. " +
       `After the cron job is created, reply exactly: ${params.exactReply}`
     );
   }
-  if (claudeLike) {
-    return (
+  const retryIntro = claudeLike
+    ? "Retry the OpenClaw MCP automations tool from server `openclaw` now. " + discoverTools
+    : "Your previous OpenClaw automations MCP tool call was cancelled before the job was created. " +
       "Retry the OpenClaw MCP automations tool from server `openclaw` now. " +
-      "If it is not already visible, search/load MCP tools for `openclaw automations` or `automations`, " +
-      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__automations`. " +
-      "Do not use Claude native `CronCreate`, `CronList`, or `CronDelete`; those are not OpenClaw proof. " +
-      `Use these exact JSON arguments: ${params.argsJson}. ` +
-      "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
-      `If the cron job is created, reply exactly: ${params.exactReply}. ` +
-      "If the tool call is cancelled, the job is not created, or you cannot confirm creation, " +
-      "reply briefly saying that and ask me to retry. No markdown. " +
-      "I will verify externally with the OpenClaw cron CLI."
-    );
-  }
+      "If the harness shows Claude-style MCP names, use `mcp__openclaw__automations`. ";
   return (
-    "Your previous OpenClaw automations MCP tool call was cancelled before the job was created. " +
-    "Retry the OpenClaw MCP automations tool from server `openclaw` now. " +
-    "If the harness shows Claude-style MCP names, use `mcp__openclaw__automations`. " +
+    retryIntro +
     `Use these exact JSON arguments: ${params.argsJson}. ` +
     "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
     `If the cron job is created, reply exactly: ${params.exactReply}. ` +

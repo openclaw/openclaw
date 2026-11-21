@@ -1,10 +1,13 @@
 import "./doctor-retired-models.test-support.js";
 import path from "node:path";
+import { vi } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { repairCronCodexModelRefsAfterConfigWrite } from "./doctor/cron/legacy-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
@@ -51,11 +54,12 @@ export async function seedCronModel(id: string, model: string) {
 }
 
 export function repairConfig(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, providers = ["openai"]) {
-  return repairStaleAgentModelRefs(cfg, {
-    env,
-    pluginProviderIds: new Set(providers),
-    persistedProviderIdsByAgentId: new Map(),
-  });
+  if (cfg.models?.mode !== "replace") {
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValueOnce(
+      createPluginMetadataSnapshotFixture({ plugins: [{ id: "fixture", providers }] }),
+    );
+  }
+  return repairStaleAgentModelRefs(cfg, { env });
 }
 
 function sessionAddress(state: OpenClawTestState, sessionKey: string) {

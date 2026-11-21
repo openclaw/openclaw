@@ -1,8 +1,11 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
@@ -32,7 +35,12 @@ function forgetPreparedPaths(key: string) {
   }
 }
 
-function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = false): string {
+function registryPath(
+  agentDir: string,
+  env?: NodeJS.ProcessEnv,
+  registering = false,
+  preparedKey?: string,
+): string {
   const pathname = path.resolve(resolveUserPath(agentDir, env));
   // Repair can change paths itself; resolve them directly without retaining native watches.
   const maintenance = getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true;
@@ -40,7 +48,7 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
   if (cached) {
     return cached.key;
   }
-  const key = normalizeAgentDirRegistryPath(pathname, env);
+  const key = preparedKey ?? normalizeAgentDirRegistryPath(pathname, env);
   if (maintenance || !isMainThread || (!registering && !agentIdsByDir.has(key))) {
     return key;
   }
@@ -50,17 +58,26 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
     close: () => observations.forEach((observation) => observation.close()),
   };
   preparedPaths.set(pathname, prepared);
+  let observedThisTurn = false;
   // Each lexical ancestor can be a symlink replaced independently of the leaf.
   for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
     const basename = path.basename(child);
     observations.push(
       observeOwnedDirectory(path.dirname(child), (filename) => {
-        if (filename === undefined || filename === basename) {
-          if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
-            return;
-          }
-          preparedPaths.delete(pathname);
-          prepared.close();
+        if (!observedThisTurn && (filename === undefined || filename === basename)) {
+          // One recovery sweep notifies every ancestor; share its in-flight lookup.
+          observedThisTurn = true;
+          void resolveIdentityPathViaExistingAncestor(pathname)
+            .then((resolved) => {
+              if (preparedPaths.get(pathname) === prepared && resolved !== key) {
+                preparedPaths.delete(pathname);
+                prepared.close();
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              observedThisTurn = false;
+            });
         }
       }),
     );
@@ -125,6 +142,20 @@ export function resolveRegisteredAgentIdForDir(
   env?: NodeJS.ProcessEnv,
 ): string | undefined {
   const agentIds = agentIdsByDir.get(registryPath(agentDir, env));
+  return agentIds?.size === 1 ? agentIds.values().next().value : undefined;
+}
+
+export async function resolveRegisteredAgentIdForDirAsync(
+  agentDir: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const pathname = path.resolve(resolveUserPath(agentDir, env));
+  const cached =
+    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true
+      ? undefined
+      : preparedPaths.get(pathname);
+  const key = cached?.key ?? (await resolveIdentityPathViaExistingAncestor(pathname));
+  const agentIds = agentIdsByDir.get(registryPath(pathname, env, false, key));
   return agentIds?.size === 1 ? agentIds.values().next().value : undefined;
 }
 

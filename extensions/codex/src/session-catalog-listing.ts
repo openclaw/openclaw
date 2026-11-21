@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -28,17 +29,20 @@ import {
   createCodexTerminalNodeHostCommand,
   createCodexTerminalStartNodeHostCommand,
 } from "./session-catalog-terminal.js";
-import {
-  parseCodexCatalogTranscriptPage,
-  readCodexCatalogTranscriptPage,
-  readLegacyCodexTranscriptPage,
-} from "./session-catalog-transcript.js";
+import type { readCodexCatalogTranscriptPage } from "./session-catalog-transcript.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
   CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 import { listVisiblePage } from "./session-catalog-visible-page.js";
+
+const loadCatalogTranscript = createLazyRuntimeModule(
+  () => import("./session-catalog-transcript.js"),
+);
+const loadNodeContinue = createLazyRuntimeModule(
+  () => import("./session-catalog-node-continue.js"),
+);
 
 export function createCodexSessionCatalogNodeHostCommands(
   controlFactory: CodexSessionCatalogControlFactory,
@@ -88,7 +92,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         if (error instanceof CatalogParamsError) {
           throw error;
         }
-        throw new Error("Codex app-server transcript is unavailable", { cause: error });
+        throw new Error("Codex app-server chat history is unavailable", { cause: error });
       }
     },
   });
@@ -150,7 +154,10 @@ export function createCodexSessionCatalogNodeHostCommands(
         }),
       );
     }),
-    transcriptCommand(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, readCodexCatalogTranscriptPage),
+    transcriptCommand(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, async (control, action) => {
+      const { readCodexCatalogTranscriptPage } = await loadCatalogTranscript();
+      return readCodexCatalogTranscriptPage(control, action);
+    }),
     createCodexTerminalNodeHostCommand(bindRequest),
     createCodexTerminalStartNodeHostCommand(),
   ];
@@ -192,7 +199,7 @@ export async function readCodexSessionTranscript(params: {
   limit: number;
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
-  const cursor = readControlCursor(params.cursor, "transcript request");
+  const cursor = readControlCursor(params.cursor, "chat history request");
   // The read RPC leaves `limit` open-ended; every provider owns its own ceiling.
   const limit = normalizeLimit(
     params.limit,
@@ -200,6 +207,13 @@ export async function readCodexSessionTranscript(params: {
     DEFAULT_TRANSCRIPT_PAGE_LIMIT,
     MAX_TRANSCRIPT_PAGE_LIMIT,
   );
+  // Transcript presentation uses the harness runtime; listing/registration stays lightweight.
+  const {
+    parseCodexCatalogTranscriptPage,
+    readCodexCatalogTranscriptPage,
+    readLegacyCodexTranscriptPage,
+    projectCodexCatalogTranscriptPageForDisplay,
+  } = await loadCatalogTranscript();
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const page = await readCodexCatalogTranscriptPage(params.control, {
       threadId: params.threadId,
@@ -210,7 +224,7 @@ export async function readCodexSessionTranscript(params: {
       hostId: params.hostId,
       label: params.source?.label ?? "Local Codex",
       threadId: params.threadId,
-      ...page,
+      ...projectCodexCatalogTranscriptPageForDisplay(page),
     };
   }
 
@@ -253,11 +267,11 @@ export async function readCodexSessionTranscript(params: {
           }),
         { threadId: params.threadId, cursor, limit },
       );
-  const { nodeLabel } = await import("./session-catalog-node-continue.js");
+  const { nodeLabel } = await loadNodeContinue();
   return {
     hostId: params.hostId,
     label: nodeLabel(node),
     threadId: params.threadId,
-    ...page,
+    ...projectCodexCatalogTranscriptPageForDisplay(page),
   };
 }

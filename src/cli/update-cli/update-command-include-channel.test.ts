@@ -88,7 +88,6 @@ function revokeExecutor(control: string, root: string) {
 it("rolls back an include channel when config selection changes during refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { include, originalRoot, snapshot, persist } = await writeChannelFixture(state);
-    expect(snapshot.valid).toBe(true);
     setRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
     const previousRuntime = getRuntimeConfigSnapshot();
     const notified = vi.fn();
@@ -104,7 +103,6 @@ it("rolls back an include channel when config selection changes during refresh",
         name: "ConfigWritePostCommitError",
         rollbackStatus: "restored",
       });
-      expect(refresh).toHaveBeenCalledOnce();
       expect(notified).not.toHaveBeenCalled();
       expect(getRuntimeConfigSnapshot()).toBe(previousRuntime);
       expect(await readFiles(include, `${include}.bak`, state.configPath)).toEqual([
@@ -135,10 +133,8 @@ it("changes an include-owned requested update channel under a live executor", as
     );
     expect(snapshot).toMatchObject({ valid: true, config: { update: { channel: "stable" } } });
     await executor.run(async (fence) => {
-      fence.assertCurrent();
       const result = await persist(fence.assertCurrent);
       expect(result.config.update?.channel).toBe("beta");
-      fence.assertCurrent();
     });
     expect(JSON.parse(await fs.readFile(include, "utf8")).channel).toBe("beta");
     expect(await readFiles(state.configPath, unrelated, `${include}.bak`)).toEqual([
@@ -165,6 +161,7 @@ it.each([
     );
     const dir = path.dirname(include);
     const now = Date.now();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     let reached = false;
     let committed = "";
     const operation = executor.run(
@@ -210,18 +207,13 @@ it.each([
       preparing ? { activationTimeoutMs: 60_000 } : undefined,
     );
     if (!preparing) {
-      const failure = await operation.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(collectNestedErrorCandidates(failure)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "ConfigWritePostCommitError",
-            publication: "complete",
-            rollbackStatus: "unknown",
-          }),
-        ]),
+      const failure = await operation.catch((error: unknown) => error);
+      expect(collectNestedErrorCandidates(failure)).toContainEqual(
+        expect.objectContaining({
+          name: "ConfigWritePostCommitError",
+          publication: "complete",
+          rollbackStatus: "unknown",
+        }),
       );
       expect(JSON.parse(committed).channel).toBe("beta");
       expect(await readFiles(include, `${include}.bak`)).toEqual([committed, raw]);
@@ -284,7 +276,6 @@ it("migrates a nested internal sandbox fragment under the original executor", as
           unsetPaths: [["agents", "entries", "main", "sandbox", "browser", "enableNoVnc"]],
         },
       });
-      fence.assertCurrent();
     });
     expect(JSON.parse(await fs.readFile(fragment, "utf8"))).toEqual({
       sandbox: { browser: { noVncEnabled: true } },

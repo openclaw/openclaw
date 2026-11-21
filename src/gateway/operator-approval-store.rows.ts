@@ -4,10 +4,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import { validateApprovalPresentation } from "../../packages/gateway-protocol/src/approval-result-validators.js";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/schema/approvals.js";
-import {
-  buildApprovalResolutionRef,
-  isApprovalResolutionRef,
-} from "../infra/approval-resolution-ref.js";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   NewOperatorApproval,
@@ -255,7 +252,6 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
   if (
     !presentation ||
     !isWellFormedApprovalId(row.approval_id) ||
-    !isApprovalResolutionRef(row.resolution_ref) ||
     !bindings ||
     !kind ||
     (status !== "pending" &&
@@ -316,6 +312,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
     status,
     presentation,
     requester: {
+      ...(row.requested_by_profile_id ? { profileId: row.requested_by_profile_id } : {}),
       deviceId: row.requested_by_device_id,
       clientId: row.requested_by_client_id,
       deviceTokenAuth: row.requested_by_device_token_auth === 1,
@@ -382,6 +379,7 @@ export function inputMatchesExistingRow(
     row.status === "pending" &&
     row.kind === input.kind &&
     row.presentation_json === serialized.presentationJson &&
+    row.requested_by_profile_id === normalizeNullableString(input.requester?.profileId) &&
     row.requested_by_device_id === normalizeNullableString(input.requester?.deviceId) &&
     row.requested_by_client_id === normalizeNullableString(input.requester?.clientId) &&
     row.requested_by_device_token_auth === (input.requester?.deviceTokenAuth === true ? 1 : 0) &&

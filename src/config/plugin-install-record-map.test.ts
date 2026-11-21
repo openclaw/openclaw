@@ -29,6 +29,18 @@ describe("plugin install record maps", () => {
     expect(Object.getPrototypeOf(records)).toBeNull();
   });
 
+  it("validates retained context-engine ownership as structured install metadata", () => {
+    const value = {
+      demo: { source: "npm", contextEngineIdsByPlugin: { child: ["canonical-engine"] } },
+    };
+    expect(parsePluginInstallRecordMap(value)).toEqual(value);
+    expect(
+      parsePluginInstallRecordMap({
+        demo: { source: "npm", contextEngineIdsByPlugin: { child: [42] } },
+      }),
+    ).toBeNull();
+  });
+
   it("distinguishes missing maps from invalid maps", () => {
     expect(inspectPluginInstallRecordMap(undefined)).toEqual({ status: "missing" });
     expect(inspectPluginInstallRecordMap({ demo: { source: "bogus" } })).toEqual({
@@ -71,5 +83,28 @@ describe("plugin install record maps", () => {
     expect(serializePluginInstallRecordMap(records)).toBe(
       '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm"},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}',
     );
+  });
+
+  it("round-trips every own snapshot digest key while rejecting malformed maps", () => {
+    const digest = { contentDigest: "a".repeat(64), dependencyClosureDigest: "b".repeat(64) };
+    const sourceSnapshotDigests = Object.fromEntries(
+      ["__proto__", "constructor", "toString"].map((key) => [key, digest]),
+    );
+    const parsed = parsePluginInstallRecordMap({ demo: { source: "npm", sourceSnapshotDigests } });
+    expect(parsed?.demo?.sourceSnapshotDigests).toEqual(sourceSnapshotDigests);
+    expect(Object.hasOwn(parsed?.demo?.sourceSnapshotDigests ?? {}, "__proto__")).toBe(true);
+    expect(
+      parsePluginInstallRecordMap(JSON.parse(serializePluginInstallRecordMap(parsed!))),
+    ).toEqual(parsed);
+    for (const invalid of [
+      [],
+      new Map(),
+      { "": digest },
+      { demo: { ...digest, contentDigest: "bad" } },
+    ]) {
+      expect(
+        parsePluginInstallRecordMap({ demo: { source: "npm", sourceSnapshotDigests: invalid } }),
+      ).toBeNull();
+    }
   });
 });

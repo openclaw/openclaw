@@ -1,24 +1,8 @@
-import * as sessionKeyNormalization from "@openclaw/normalization-core/session-key-comparison";
 // @vitest-environment node
+import * as sessionKeyNormalization from "@openclaw/normalization-core/session-key-comparison";
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  areUiSessionKeysEquivalent,
-  normalizeDefaultMainSessionAliasForUi,
-  canArchiveSessionRow,
-  canDeleteSessionRows,
-  canonicalUiSessionKeyForPersistence,
-  isUiSelectedGlobalSessionKey,
-  isPinnableUiSessionRow,
-  normalizeSessionKeyForUiComparison,
-  parseAgentSessionKey,
-  parseSessionKeyParts,
-  resolveAgentIdFromSessionKey,
-  resolveUiSessionNavigationParentKey,
-  resolveUiConversationIdentity,
-  uiSessionEventMatches,
-  uiSessionRowMatchesSelectedChat,
-} from "./session-key.ts";
+import * as K from "./session-key.ts";
 
 const defaults = { defaultAgentId: "ops", mainKey: "home", mainSessionKey: "agent:ops:current" };
 
@@ -35,69 +19,62 @@ it.each([
   expect(parseAgentSessionKeyParts(key)).toEqual(
     rawRest === null ? null : { agentId, rest: rawRest },
   );
-  expect(parseAgentSessionKey(key)).toEqual(rest === null ? null : { agentId, rest });
-  expect(resolveAgentIdFromSessionKey(key)).toBe(agentId ?? "main");
+  expect(K.parseAgentSessionKey(key)).toEqual(rest === null ? null : { agentId, rest });
+  expect(K.resolveAgentIdFromSessionKey(key)).toBe(agentId ?? "main");
 });
 
+const work = { key: "agent:main:work" };
+const globalRow = { key: "global", kind: "global" };
 it.each([
-  ["active non-main", [{ key: "agent:main:work", hasActiveRun: true }], true, false],
+  ["active non-main", [{ ...work, hasActiveRun: true }], true, false],
   ["configured main", [{ key: "agent:main:home" }], false, false],
   ["literal main", [{ key: "main" }], false, false],
-  ["global", [{ key: "global", kind: "global" }], false, false],
+  ["global", [globalRow], false, false],
   ["unknown", [{ key: "unknown", kind: "unknown" }], false, false],
-  ["archived global", [{ key: "global", kind: "global", archived: true }], false, true],
-  ["missing identity", [{ key: "agent:main:work", sessionId: undefined }], false, true],
+  ["archived global", [{ ...globalRow, archived: true }], false, true],
+  ["missing identity", [{ ...work, sessionId: undefined }], false, true],
   [
     "mixed archived and idle",
     [
-      { key: "global", kind: "global", archived: true },
-      { key: "agent:main:work", archived: false },
+      { ...globalRow, archived: true },
+      { ...work, archived: false },
     ],
     false,
     false,
   ],
 ] as const)("classifies %s", (_name, rows, archiveAllowed, deleteAllowed) => {
-  expect(canArchiveSessionRow({ sessionId: "durable-session", ...rows[0] }, "home")).toBe(
+  expect(K.canArchiveSessionRow({ sessionId: "durable-session", ...rows[0] }, "home")).toBe(
     archiveAllowed,
   );
-  expect(canDeleteSessionRows(rows, "home")).toBe(deleteAllowed);
+  expect(K.canDeleteSessionRows(rows, "home")).toBe(deleteAllowed);
 });
 
 it.each([
   ["agent:m:telegram:u:1:x", { agentId: "m", channel: "telegram", accountId: "u:1:x" }],
   ["Agent:main:telegram:user", null],
 ] as const)("parses opaque channel accounts in %j", (key, expected) => {
-  expect(parseSessionKeyParts(key)).toEqual(expected);
+  expect(K.parseSessionKeyParts(key)).toEqual(expected);
 });
-
-afterEach(() => vi.restoreAllMocks());
 
 it.each([undefined, " \t\n", "main"])(
   "preserves nonblank equivalence for identical %j inputs",
-  (key) => expect(areUiSessionKeysEquivalent(key, key)).toBe(Boolean(key?.trim())),
+  (key) => expect(K.areUiSessionKeysEquivalent(key, key)).toBe(Boolean(key?.trim())),
 );
 
-it("reuses comparison keys until bounded eviction without changing their identities", () => {
+afterEach(() => vi.restoreAllMocks());
+it("reuses comparison keys and preserves identity across eviction", () => {
   const normalize = vi.spyOn(sessionKeyNormalization, "normalizeSessionKeyForComparison");
-  const keys = [
-    [" Agent:Cache:Matrix:Channel:!R:E.Org ", "agent:cache:matrix:channel:!R:E.Org"],
-    [" MAIN \t", "agent:main:main"],
-    ["Agent:MemoEviction:Signal:Group:AbC=", "agent:memoeviction:signal:group:AbC="],
-  ] as const;
-  for (const [key, expected] of keys) {
-    for (let i = 0; i < 10; i++) {
-      expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
-      expect(areUiSessionKeysEquivalent(key, expected)).toBe(true);
-    }
-    expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(1);
-  }
+  const key = " Agent:Cache:Matrix:Channel:!R:E.Org ";
+  const expected = "agent:cache:matrix:channel:!R:E.Org";
+  expect(K.normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  expect(K.normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(1);
+  expect(K.normalizeDefaultMainSessionAliasForUi(" MAIN \t")).toBe("agent:main:main");
   for (let i = 0; i < 4096; i++) {
-    normalizeSessionKeyForUiComparison(`Agent:MemoEviction:Dashboard:${i}`);
+    K.normalizeSessionKeyForUiComparison(`Agent:MemoEviction:Dashboard:${i}`);
   }
-  for (const [key, expected] of keys) {
-    expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
-    expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
-  }
+  expect(K.normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
 });
 
 it.each([
@@ -117,12 +94,12 @@ it.each([
     sessionKey: selectedKey,
   };
 
-  expect(areUiSessionKeysEquivalent(selectedKey, structuralAlias)).toBe(true);
-  expect(areUiSessionKeysEquivalent(selectedKey, distinctKey)).toBe(false);
-  expect(uiSessionEventMatches(host, structuralAlias)).toBe(true);
-  expect(uiSessionEventMatches(host, distinctKey)).toBe(false);
-  expect(canonicalUiSessionKeyForPersistence(host, structuralAlias)).toBe(selectedKey);
-  expect(canonicalUiSessionKeyForPersistence(host, distinctKey)).toBe(distinctKey);
+  expect(K.areUiSessionKeysEquivalent(selectedKey, structuralAlias)).toBe(true);
+  expect(K.areUiSessionKeysEquivalent(selectedKey, distinctKey)).toBe(false);
+  expect(K.uiSessionEventMatches(host, structuralAlias)).toBe(true);
+  expect(K.uiSessionEventMatches(host, distinctKey)).toBe(false);
+  expect(K.canonicalUiSessionKeyForPersistence(host, structuralAlias)).toBe(selectedKey);
+  expect(K.canonicalUiSessionKeyForPersistence(host, distinctKey)).toBe(distinctKey);
 });
 
 it.each([
@@ -143,12 +120,12 @@ it.each([
       assistantAgentId: agentId,
       hello: { snapshot: { sessionDefaults: defaults } },
     };
-    expect(resolveUiConversationIdentity(host, key, agentIdOverride)).toEqual({
+    expect(K.resolveUiConversationIdentity(host, key, agentIdOverride)).toEqual({
       sessionKey,
       agentId,
     });
-    expect(uiSessionEventMatches({ ...host, sessionKey }, key, agentId)).toBe(true);
-    expect(uiSessionEventMatches({ ...host, sessionKey }, key, "unrelated")).toBe(false);
+    expect(K.uiSessionEventMatches({ ...host, sessionKey }, key, agentId)).toBe(true);
+    expect(K.uiSessionEventMatches({ ...host, sessionKey }, key, "unrelated")).toBe(false);
   },
 );
 
@@ -157,7 +134,7 @@ it.each([
   ["  \t  ", "  agent:main:controller  ", "agent:main:controller"],
   [null, "  ", undefined],
 ])("resolves the first non-empty parent %j", (parentSessionKey, spawnedBy, expected) => {
-  expect(resolveUiSessionNavigationParentKey({ parentSessionKey, spawnedBy })).toBe(expected);
+  expect(K.resolveUiSessionNavigationParentKey({ parentSessionKey, spawnedBy })).toBe(expected);
 });
 
 function identityHost(
@@ -178,29 +155,29 @@ it("distinguishes targeted events from unscoped broadcasts", () => {
     [null, "work", true],
     ["", "work", true],
   ] as const) {
-    expect(uiSessionEventMatches(host, key, agent)).toBe(expected);
+    expect(K.uiSessionEventMatches(host, key, agent)).toBe(expected);
   }
-  expect(uiSessionRowMatchesSelectedChat(host, "global", host.sessionKey)).toBe(false);
+  expect(K.uiSessionRowMatchesSelectedChat(host, "global", host.sessionKey)).toBe(false);
 });
 
 it("uses configured main aliases in events, rows and persistence", () => {
   const host = identityHost("agent:ops:home", "ops", "home");
   for (const key of ["main", "agent:ops:main"]) {
-    expect(uiSessionEventMatches(host, key)).toBe(true);
-    expect(canonicalUiSessionKeyForPersistence(host, key)).toBe(host.sessionKey);
+    expect(K.uiSessionEventMatches(host, key)).toBe(true);
+    expect(K.canonicalUiSessionKeyForPersistence(host, key)).toBe(host.sessionKey);
   }
-  expect(uiSessionRowMatchesSelectedChat(host, "main", host.sessionKey)).toBe(true);
-  expect(uiSessionRowMatchesSelectedChat(host, "global", host.sessionKey)).toBe(false);
+  expect(K.uiSessionRowMatchesSelectedChat(host, "main", host.sessionKey)).toBe(true);
+  expect(K.uiSessionRowMatchesSelectedChat(host, "global", host.sessionKey)).toBe(false);
   for (const key of ["agent:ops:home", "agent:ops:main", "agent:ops:other"]) {
-    expect(isUiSelectedGlobalSessionKey(host, key)).toBe(false);
+    expect(K.isUiSelectedGlobalSessionKey(host, key)).toBe(false);
   }
 });
 
 it("keeps global events scoped to the selected agent", () => {
   const host = identityHost("agent:work:main", "main", "main", "global");
-  expect(uiSessionEventMatches(host, "global", "work")).toBe(true);
-  expect(uiSessionEventMatches(host, "global", "main")).toBe(false);
-  expect(uiSessionEventMatches(host, "agent:main:main")).toBe(false);
+  expect(K.uiSessionEventMatches(host, "global", "work")).toBe(true);
+  expect(K.uiSessionEventMatches(host, "global", "main")).toBe(false);
+  expect(K.uiSessionEventMatches(host, "agent:main:main")).toBe(false);
 });
 
 const pinRow = (key: string, parentSessionKey?: string, spawnedBy?: string) => ({
@@ -216,5 +193,5 @@ it.each([
   [pinRow("main:dashboard:spawned", mainRoot, mainRoot), false],
   [pinRow("main:subagent:spawned", mainRoot), false],
 ])("projects pin eligibility for %j", (row, expected) => {
-  expect(isPinnableUiSessionRow(row)).toBe(expected);
+  expect(K.isPinnableUiSessionRow(row)).toBe(expected);
 });

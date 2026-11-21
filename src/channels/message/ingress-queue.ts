@@ -419,6 +419,14 @@ export function createChannelIngressQueue<
   return {
     enqueue,
     enqueueBatch,
+    enqueueBatchAuthorized: (events, authorizedOptions) => {
+      if (typeof authorizedOptions.assertCurrent !== "function") {
+        return Promise.reject(
+          new TypeError("Authorized ingress requires a current-owner assertion"),
+        );
+      }
+      return enqueueBatch(events, authorizedOptions.assertCurrent);
+    },
     async enqueueAndClaim(id, payload, enqueueOptions) {
       const [entry] = await execute("channelIngress.enqueueAndClaim", {
         ...scope,

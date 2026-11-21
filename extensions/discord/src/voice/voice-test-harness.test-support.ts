@@ -1,8 +1,10 @@
 import { PassThrough } from "node:stream";
 import { VoiceOpcodes } from "discord-api-types/voice/v8";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { TranscriptStartRequest } from "openclaw/plugin-sdk/transcripts";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ChannelType } from "../internal/discord.js";
@@ -162,14 +164,15 @@ function buildVoiceTestHarness() {
   const createManager = (
     discordConfig: DiscordConfig = { voice: { enabled: true, mode: "stt-tts" } },
     clientOverride?: ReturnType<typeof createClient>,
-    cfgOverride: ManagerParams["cfg"] = {},
+    cfgOverride: OpenClawConfig = {},
     accountId = "default",
     botUserId?: string,
   ) => {
     const manager = new managerModule.DiscordVoiceManager({
       scheduler: createTestPluginServiceScheduler(),
       client: (clientOverride ?? createClient()) as never,
-      cfg: cfgOverride,
+      // Same reader the Discord monitor passes: follows the runtime snapshot when one is published.
+      readConfig: createRuntimeConfigReader(cfgOverride),
       discordConfig,
       accountId,
       runtime: createRuntime(),
@@ -187,9 +190,8 @@ function buildVoiceTestHarness() {
     voice: { enabled: true, mode: "stt-tts", ...voice },
   });
 
-  const makeAgentProxyConfig = (overrides: AgentProxyConfigOverrides = {}): DiscordConfig => {
-    const { voice, ...discord } = overrides;
-    return makeVoiceConfig(
+  const makeAgentProxyConfig = ({ voice, ...discord }: AgentProxyConfigOverrides = {}) =>
+    makeVoiceConfig(
       {
         mode: "agent-proxy",
         ...voice,
@@ -197,15 +199,11 @@ function buildVoiceTestHarness() {
       },
       { groupPolicy: "open", ...discord },
     );
-  };
-
-  const makeBidiConfig = ({ voice, ...discord }: AgentProxyConfigOverrides = {}) =>
-    makeAgentProxyConfig({ ...discord, voice: { mode: "bidi", ...voice } });
 
   const createAgentProxyManager = (
     client?: ReturnType<typeof createClient>,
     overrides?: AgentProxyConfigOverrides,
-    cfg?: ManagerParams["cfg"],
+    cfg?: OpenClawConfig,
     botUserId?: string,
   ) => createManager(makeAgentProxyConfig(overrides), client, cfg, "default", botUserId);
 
@@ -473,14 +471,16 @@ function buildVoiceTestHarness() {
       overrides: {
         client?: ReturnType<typeof createClient>;
         config?: AgentProxyConfigOverrides;
-        cfg?: ManagerParams["cfg"];
+        cfg?: OpenClawConfig;
       } = {},
     ) =>
       joinManagerFixture(
         createAgentProxyManager(overrides.client, overrides.config, overrides.cfg),
       ),
-    createJoinedBidiFixture: async (config: AgentProxyConfigOverrides = {}) =>
-      joinManagerFixture(createManager(makeBidiConfig(config))),
+    createJoinedBidiFixture: async ({ voice, ...config }: AgentProxyConfigOverrides = {}) =>
+      joinManagerFixture(
+        createAgentProxyManager(undefined, { ...config, voice: { mode: "bidi", ...voice } }),
+      ),
     lastAudioResourceInput: () => lastMockCall(mocks.createAudioResourceMock, "audio resource")[0],
     lastTtsArgs: () => callArgs(mocks.textToSpeechMock, "tts"),
     lastTtsStreamArgs: () => callArgs(mocks.textToSpeechStreamMock, "tts stream"),

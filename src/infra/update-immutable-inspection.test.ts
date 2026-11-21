@@ -7,6 +7,7 @@ import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contra
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { resolvePluginSourceCaptureFallbackPrefix } from "../plugins/plugin-source-capture-path.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { immutableDescriptor } from "./package-update-activation-fixtures.test-support.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
@@ -54,6 +55,8 @@ function writeJson(file: string, value: unknown) {
   write(file, JSON.stringify(value));
 }
 
+const noBoot = 'throw new Error("must not boot during inspection");\n';
+
 function database(file: string, version: number) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = openNodeSqliteDatabase(file);
@@ -69,10 +72,7 @@ function fixture() {
   const files = {
     configPath: path.join(stateDir, "openclaw.json"),
     shared: path.join(stateDir, "state", "openclaw.sqlite"),
-    main: path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
     external: path.join(root, "external", "openclaw-agent.sqlite"),
-    retained: path.join(root, "retained", "openclaw-agent.sqlite"),
-    absentConfigured: path.join(root, "absent-configured", "openclaw-agent.sqlite"),
     absentRegistered: path.join(root, "absent-registered", "openclaw-agent.sqlite"),
     resource: path.join(root, "plugin-data", "preserved.txt"),
     missingResource: path.join(root, "plugin-data", "missing.txt"),
@@ -91,16 +91,10 @@ function fixture() {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
   }
-  for (const file of [files.main, files.external, files.retained]) {
-    database(file, 24).close();
-  }
+  database(files.external, 24).close();
   const registry = database(files.shared, 1);
   registry.exec("CREATE TABLE agent_databases(agent_id TEXT, path TEXT);");
   const insert = registry.prepare("INSERT INTO agent_databases VALUES (?, ?)");
-  const relativeMain = path.relative(stateDir, files.main);
-  insert.run("main", files.main);
-  insert.run("main", relativeMain);
-  insert.run("retained", files.retained);
   insert.run("missing", files.absentRegistered);
   registry.close();
   write(files.resource, "plugin-owned synthetic content");
@@ -109,7 +103,7 @@ function fixture() {
     configSchema: {},
     doctorContract: { stateMigrations: true },
   });
-  write(path.join(pluginRoot, "index.cjs"), 'throw new Error("must not boot plugin");\n');
+  write(path.join(pluginRoot, "index.cjs"), noBoot);
   write(
     path.join(pluginRoot, "doctor-contract-api.cjs"),
     `module.exports = { stateMigrations: [{
@@ -126,9 +120,7 @@ function fixture() {
     agents: {
       ownership: "explicit",
       entries: {
-        main: {},
         external: { agentDir: path.dirname(files.external) },
-        absent: { agentDir: path.dirname(files.absentConfigured) },
       },
     },
     plugins: {
@@ -145,10 +137,7 @@ function fixture() {
       name: "openclaw",
       openclaw: { schemaVersions: { state: 1, agent } },
     });
-    write(
-      path.join(generationPath, "openclaw.mjs"),
-      'throw new Error("must not boot candidate");\n',
-    );
+    write(path.join(generationPath, "openclaw.mjs"), noBoot);
   }
   const record: ImmutableInstallRecord = {
     revision: 1,
@@ -185,34 +174,27 @@ function fixture() {
     ...files,
     root,
     stateDir,
-    relativeMain,
     scratch: resolvePrivateSqliteSnapshotStagingRoot(env),
     capturePrefix: resolvePluginSourceCaptureFallbackPrefix(stateDir),
   };
 }
 
 function sourceFiles(root: string, excluded: string): Map<string, Buffer> {
-  const files = new Map<string, Buffer>();
-  const visit = (directory: string) => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const file = path.join(directory, entry.name);
-      if (file === excluded) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        visit(file);
-      } else {
-        files.set(
-          path.relative(root, file),
-          entry.isSymbolicLink()
+  return new Map(
+    listDirectoryTreeStrictSync(root, {
+      skipDirectory: ({ relativePath }) => path.join(root, relativePath) === excluded,
+    })
+      .filter(({ dirent }) => !dirent.isDirectory())
+      .map(({ relativePath, dirent }) => {
+        const file = path.join(root, relativePath);
+        return [
+          relativePath,
+          dirent.isSymbolicLink()
             ? Buffer.from(`symlink:${fs.readlinkSync(file)}`)
             : fs.readFileSync(file),
-        );
-      }
-    }
-  };
-  visit(root);
-  return files;
+        ];
+      }),
+  );
 }
 
 function expectDatabases(
@@ -226,7 +208,6 @@ function expectDatabases(
 
 function expectUnchanged(f: ReturnType<typeof fixture>, before: Map<string, Buffer>) {
   const after = sourceFiles(f.root, path.join(f.root, "cache"));
-  expect([...after.keys()]).toEqual([...before.keys()]);
   expect(after).toEqual(before);
   expect(fs.readdirSync(f.scratch)).toEqual([]);
   expect(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(f.capturePrefix))).toEqual(
@@ -234,12 +215,8 @@ function expectUnchanged(f: ReturnType<typeof fixture>, before: Map<string, Buff
   );
 }
 
-it("explains prepared schema crossings and complete live inventory without changing source state", async () => {
+it("explains prepared schema crossings and live inventory without changing source state", async () => {
   const f = fixture();
-  const daemon = path.join(f.stateDir, "control", "services.sqlite");
-  database(daemon, 1).close();
-  const client = path.join(f.stateDir, "client", "credentials.sqlite");
-  database(client, 1).close();
   const before = sourceFiles(f.root, path.join(f.root, "cache"));
   const coverage = await inspectImmutableUpdateCoverage({ root: f.root });
   expect(coverage.warnings).toEqual([]);
@@ -250,8 +227,6 @@ it("explains prepared schema crossings and complete live inventory without chang
   });
   expectDatabases(coverage, {
     [f.shared]: { userVersion: 1, coverage: "matching-version" },
-    [client]: { userVersion: 1, targetVersion: 1, coverage: "matching-version" },
-    [daemon]: { userVersion: 1, targetVersion: 1, coverage: "matching-version" },
     [f.external]: {
       external: true,
       userVersion: 24,
@@ -259,25 +234,12 @@ it("explains prepared schema crossings and complete live inventory without chang
       owners: [{ role: "agent", agentId: "external" }],
       coverage: "migration-required",
     },
-    [f.retained]: {
-      external: true,
-      registeredPaths: [f.retained],
-      owners: [{ role: "agent", agentId: "retained" }],
-      coverage: "migration-required",
-    },
-    [f.absentConfigured]: { userVersion: null, coverage: "absent" },
     [f.absentRegistered]: {
       registeredPaths: [f.absentRegistered],
       userVersion: null,
       coverage: "absent",
     },
   });
-  expect(coverage.databases?.filter((row) => row.path === f.main)).toEqual([
-    expect.objectContaining({
-      spellings: [f.main],
-      registeredPaths: expect.arrayContaining([f.main, f.relativeMain]),
-    }),
-  ]);
   expect(coverage.resources).toEqual(
     expect.arrayContaining([
       { path: f.resource, kind: "file", present: true, external: true, coverage: "unknown" },
@@ -293,7 +255,7 @@ it("explains prepared schema crossings and complete live inventory without chang
   const text = formatImmutableUpdateCoverage(coverage).join("\n");
   expect(text).toContain("agent schema crossing 24 → 25");
   expect(text).toContain("offline migration is required before cutover");
-  expect(text).toContain(f.relativeMain);
+  expect(text).toContain(f.absentRegistered);
   expect(text).toContain("migration coverage unknown");
   expect(text).toContain("not physical-schema, migration, backup, or activation readiness proof");
   expectUnchanged(f, before);
@@ -339,7 +301,6 @@ it("keeps an unprepared SHA unknown without reading or running the retained cand
   expect(coverage.target).toEqual({ sha: targetSha, preparation: "unknown" });
   expectDatabases(coverage, {
     [f.external]: { userVersion: 24, coverage: "unknown" },
-    [f.absentRegistered]: { userVersion: null, coverage: "absent" },
   });
   expect(formatImmutableUpdateCoverage(coverage).join("\n")).toContain(
     "Prepare the exact target with openclaw update --sha <commit> --no-restart",

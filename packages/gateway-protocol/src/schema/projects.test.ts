@@ -1,153 +1,87 @@
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
-import {
-  PROJECTS_LIST_DEFAULT_LIMIT,
-  PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
-  ProjectRecordSchema,
-  ProjectsAddResultSchema,
-  ProjectSummarySchema,
-  ProjectsListResultSchema,
-  ProjectsSearchRemoteResultSchema,
-  validateProjectsAddParams,
-  validateProjectsListParams,
-  validateProjectsCheckoutOptionsParams,
-  validateProjectsRegisterParams,
-  validateProjectsRemoveParams,
-  validateProjectsSearchRemoteParams,
-  validateSessionsCreateParams,
-} from "../index.js";
+import { it } from "vitest";
+import * as S from "../index.js";
+import { check, copies, schemaValidation } from "./protocol-validation.test-support.js";
 
-describe("project protocol schemas", () => {
-  it("validates project method inputs as closed objects", () => {
-    expect(validateProjectsCheckoutOptionsParams({ projectId: "project", agentId: "main" })).toBe(
-      true,
-    );
-    expect(validateProjectsCheckoutOptionsParams({ projectId: "project" })).toBe(false);
-    expect(
-      validateProjectsCheckoutOptionsParams({
-        projectId: "project",
-        agentId: "main",
-        cwd: "/private",
-      }),
-    ).toBe(false);
-    expect(validateProjectsListParams({})).toBe(true);
-    expect(validateProjectsListParams({ includeObserved: true })).toBe(true);
-    expect(validateProjectsListParams({ includeObserved: false })).toBe(true);
-    expect(validateProjectsListParams({ includeObserved: "yes" })).toBe(false);
-    expect(validateProjectsListParams({ extra: true })).toBe(false);
-    expect(validateProjectsRegisterParams({ path: "/repo", name: "OpenClaw" })).toBe(true);
-    expect(validateProjectsRegisterParams({ path: "" })).toBe(false);
-    expect(validateProjectsAddParams({ gitUrl: "https://github.com/openclaw/openclaw.git" })).toBe(
-      true,
-    );
-    expect(validateProjectsAddParams({ gitUrl: "", unexpected: true })).toBe(false);
-    expect(validateProjectsSearchRemoteParams({ query: "openclaw" })).toBe(true);
-    expect(validateProjectsSearchRemoteParams({ query: "" })).toBe(false);
-    expect(validateProjectsRemoveParams({ id: "openclaw-2", deleteCheckout: true })).toBe(true);
-    expect(validateProjectsRemoveParams({ id: "workspace:main" })).toBe(false);
-  });
+const gitUrl = "https://github.com/openclaw/openclaw.git";
+const project = {
+  id: "openclaw",
+  displayName: "OpenClaw",
+  repoRoot: "/repo/openclaw",
+  originUrl: gitUrl,
+  source: "registered",
+};
+const listResult = schemaValidation(S.ProjectsListResultSchema);
+const summary = schemaValidation(S.ProjectSummarySchema);
 
-  it("accepts bounded remote search and clone results", () => {
-    const project = {
-      id: "openclaw",
-      displayName: "OpenClaw",
-      repoRoot: "/state/projects/fingerprint/openclaw",
-      originUrl: "https://github.com/openclaw/openclaw.git",
-      source: "cloned",
-    };
-    expect(Value.Check(ProjectsAddResultSchema, project)).toBe(true);
-    expect(
-      Value.Check(ProjectsSearchRemoteResultSchema, {
-        credential: "missing",
-        projects: [
-          {
-            name: "openclaw",
-            fullName: "openclaw/openclaw",
-            description: "Personal AI assistant",
-            cloneUrl: "https://github.com/openclaw/openclaw.git",
-            webUrl: "https://github.com/openclaw/openclaw",
-            defaultBranch: "main",
-            private: false,
-          },
-        ],
-      }),
-    ).toBe(true);
+it("validates closed project method inputs", () => {
+  check(
+    S.validateProjectsCheckoutOptionsParams,
+    [{ projectId: "project", agentId: "main" }],
+    [{ projectId: "project" }, { projectId: "project", agentId: "main", cwd: "/private" }],
+  );
+  check(
+    S.validateProjectsListParams,
+    [{}, { includeObserved: true }, { includeObserved: false }],
+    [{ includeObserved: "yes" }, { extra: true }],
+  );
+  check(S.validateProjectsRegisterParams, [{ path: "/repo", name: "OpenClaw" }], [{ path: "" }]);
+  check(S.validateProjectsAddParams, [{ gitUrl }], [{ gitUrl: "" }, { gitUrl, unexpected: true }]);
+  check(S.validateProjectsSearchRemoteParams, [{ query: "openclaw" }], [{ query: "" }]);
+  check(
+    S.validateProjectsRemoveParams,
+    [{ id: "openclaw-2", deleteCheckout: true }],
+    [{ id: "workspace:main" }],
+  );
+});
+it("accepts remote search results", () => {
+  schemaValidation(S.ProjectsSearchRemoteResultSchema).accepts({
+    credential: "missing",
+    projects: [
+      {
+        name: "openclaw",
+        fullName: "openclaw/openclaw",
+        cloneUrl: gitUrl,
+        webUrl: "https://github.com/openclaw/openclaw",
+        private: false,
+      },
+    ],
   });
-
-  it("accepts workspace and stored project records", () => {
-    expect(
-      Value.Check(ProjectRecordSchema, {
-        id: "workspace:main",
-        displayName: "openclaw",
-        source: "workspace",
-        agentId: "main",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(ProjectsListResultSchema, {
-        projects: [
-          {
-            id: "openclaw",
-            displayName: "OpenClaw",
-            repoRoot: "/repo/openclaw",
-            originUrl: "https://github.com/openclaw/openclaw.git",
-            source: "registered",
-          },
-        ],
-        defaultRepository: {
-          identity: "acme/private-repo",
-          url: "https://ghe.example.test/acme/private-repo.git",
-          ref: "main",
-          profileId: "example-azure",
-        },
-        recents: [
-          { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
-          { kind: "folder", folder: "/repo/scratch", displayName: "scratch" },
-        ],
-        observedProjects: [],
-      }),
-    ).toBe(true);
-    expect(Value.Check(ProjectsListResultSchema, { projects: [] })).toBe(true);
-    expect(Value.Check(ProjectsListResultSchema, { observedProjects: [] })).toBe(false);
+});
+it("accepts workspace and stored project records", () => {
+  listResult.accepts({ projects: [] });
+  listResult.accepts({
+    projects: [
+      project,
+      { ...project, source: "cloned" },
+      { id: "workspace:main", displayName: "openclaw", source: "workspace", agentId: "main" },
+    ],
   });
-
-  it("bounds observed projects and their checkout lists", () => {
-    const project = {
-      name: "openclaw",
-      originUrl: "https://github.com/openclaw/openclaw.git",
-      checkouts: [{ runnerId: "gateway", path: "/repo/openclaw" }],
-      lastUsedAt: 1,
-    };
-    expect(Value.Check(ProjectSummarySchema, project)).toBe(true);
-    expect(
-      Value.Check(ProjectSummarySchema, {
-        ...project,
-        checkouts: Array.from(
-          { length: PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT + 1 },
-          (_, index) => ({ runnerId: "gateway", path: `/repo/openclaw-${index}` }),
-        ),
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(ProjectsListResultSchema, {
-        projects: [],
-        observedProjects: Array.from({ length: PROJECTS_LIST_DEFAULT_LIMIT + 1 }, () => project),
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts bounded project identity and remote URL as additive sessions.create parameters", () => {
-    expect(validateSessionsCreateParams({ agentId: "main", projectId: "openclaw" })).toBe(true);
-    expect(validateSessionsCreateParams({ agentId: "main", projectId: "" })).toBe(false);
-    expect(
-      validateSessionsCreateParams({
-        agentId: "main",
-        projectGitUrl: "https://github.com/openclaw/openclaw.git",
-      }),
-    ).toBe(true);
-    expect(validateSessionsCreateParams({ agentId: "main", projectGitUrl: "" })).toBe(false);
-    expect(
-      validateSessionsCreateParams({ agentId: "main", projectGitUrl: "x".repeat(2_049) }),
-    ).toBe(false);
-  });
+  listResult.rejects({ observedProjects: [] });
+});
+it("bounds observed projects and checkout lists", () => {
+  const observed = {
+    name: "openclaw",
+    originUrl: gitUrl,
+    checkouts: [{ runnerId: "gateway", path: "/repo/openclaw" }],
+    lastUsedAt: 1,
+  };
+  summary.accepts(observed);
+  const checkouts = copies(observed.checkouts[0], S.PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT + 1);
+  summary.rejects({ ...observed, checkouts });
+  const observedProjects = copies(observed, S.PROJECTS_LIST_DEFAULT_LIMIT + 1);
+  listResult.rejects({ projects: [], observedProjects });
+});
+it("bounds additive session project IDs and remote URLs", () => {
+  check(
+    S.validateSessionsCreateParams,
+    [
+      { agentId: "main", projectId: "openclaw" },
+      { agentId: "main", projectGitUrl: gitUrl },
+    ],
+    [
+      { agentId: "main", projectId: "" },
+      { agentId: "main", projectGitUrl: "" },
+      { agentId: "main", projectGitUrl: "x".repeat(2_049) },
+    ],
+  );
 });

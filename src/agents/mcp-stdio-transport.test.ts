@@ -170,10 +170,27 @@ describe("OpenClawStdioClientTransport", () => {
     expect(closed).toHaveBeenCalledOnce();
   });
 
-  it("does not infer plugin data directory ownership from server environment", async () => {
-    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-    await startedFixture({ env: { PLUGIN_ROOT: "/plugin", PLUGIN_DATA: "/user-owned-file" } });
-    expect(mkdir).not.toHaveBeenCalled();
+  it("gracefully closes an admitted startup without aborting its cleanup owner", async () => {
+    const fixture = createFixture();
+    const admitted = createDeferred<AbortSignal>();
+    const starting = createDeferred<OwnedStdioProcess>();
+    spawnMock.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+      admitted.resolve(abortSignal);
+      return starting.promise;
+    });
+    const started = fixture.transport.start();
+    const signal = await admitted.promise;
+    const closing = fixture.transport.close();
+    try {
+      expect(signal.aborted).toBe(false);
+      expect(closeMock).not.toHaveBeenCalled();
+    } finally {
+      starting.resolve(fixture.child);
+      await started;
+      fixture.cleanup();
+      await closing;
+    }
+    expect(closeMock).toHaveBeenCalledExactlyOnceWith(fixture.child, { force: false });
   });
 
   it("forceClose retires startup while its owned data directory is being prepared", async () => {
@@ -421,20 +438,20 @@ describe("OpenClawStdioClientTransport", () => {
   });
 
   it("forwards owner stream errors and retains stderr diagnostics", async () => {
-    const fixture = createFixture({ stderr: "pipe" });
+    const fixture = createFixture();
     const { transport, onerror } = fixture;
     await transport.start();
     const failure = new Error("simulated pipe failure");
     fixture.emitError(failure);
     fixture.stderr.write("server diagnostic");
     expect(onerror).toHaveBeenCalledWith(failure);
-    expect(transport.stderr?.read()?.toString()).toBe("server diagnostic");
+    expect(transport.stderr.read()?.toString()).toBe("server diagnostic");
   });
 
   it("backpressures unread stderr and delivers every byte when the reader resumes", async () => {
-    const fixture = await startedFixture({ stderr: "pipe" });
+    const fixture = await startedFixture();
     const { transport } = fixture;
-    const destination = transport.stderr!;
+    const destination = transport.stderr;
     const chunk = Buffer.alloc(16 * 1024, 0xad);
     let completed = false;
     const writing = (async () => {

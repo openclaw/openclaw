@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 
@@ -38,16 +39,40 @@ suite.define(() => {
         content: ".sidebar-shell__body { scrollbar-width: auto; scrollbar-color: auto; }",
       });
       if (width === 390) {
-        await page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first()
-          .click();
+        await navigationDrawerToggle(page).click();
         // Navigation skips the closed drawer; geometry needs its full roster after opening.
         await waitForControlUiInitialRoster(page);
       }
       if (overflow) {
         await page.getByRole("button", { name: "Show more", exact: true }).click();
-        await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(20);
+        const body = page.locator(".sidebar-shell__body");
+        const toolbar = page.locator(".sidebar-session-toolbar");
+        const toolbarBefore = await toolbar.boundingBox();
+        const last = page.locator(
+          '.sidebar-recent-session[data-session-key="agent:main:dashboard:session-19"]',
+        );
+        await expect
+          .poll(async () => {
+            await body.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return last.isVisible();
+          })
+          .toBe(true);
+        // The session toolbar stays pinned and unobscured above the scrolled list.
+        expect(await toolbar.boundingBox()).toEqual(toolbarBefore);
+        expect(
+          await toolbar.evaluate((element) => {
+            const title = element.firstElementChild!;
+            const box = title.getBoundingClientRect();
+            return title.contains(
+              document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2),
+            );
+          }),
+        ).toBe(true);
+        await body.evaluate((element) => {
+          element.scrollTop = 0;
+        });
       }
       const active = page.locator(
         `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,
@@ -73,7 +98,8 @@ suite.define(() => {
         const listRect = row.closest(".sidebar-recent-sessions__list")!.getBoundingClientRect();
         const scrollerStyle = getComputedStyle(scroller);
         return {
-          leftInset: rowRect.left - sidebarRect.left,
+          // The panel's 1px hairline sits on its rail side only; measure inside it.
+          leftInset: rowRect.left - sidebarRect.left - sidebar.clientLeft,
           rightInset: sidebarRect.right - rowRect.right - scrollbarWidth,
           listLeft: listRect.left,
           listRight: listRect.right,
@@ -93,11 +119,12 @@ suite.define(() => {
       expect(geometry.rightInset, JSON.stringify(geometry)).toBeCloseTo(geometry.leftInset, 1);
       expect(geometry.rowLeft).toBeCloseTo(geometry.listLeft, 1);
       expect(geometry.rowRight).toBeCloseTo(geometry.listRight, 1);
-      expect(geometry.clearance).toBeGreaterThanOrEqual(8);
+      // The mobile rail reserves 6px gutters to preserve session title space.
+      expect(geometry.clearance).toBeGreaterThanOrEqual(width === 390 ? 6 : 8);
       if (overflow) {
         expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
         expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
-        expect(geometry.maskSize.split(", ")).toContain("12px 100%");
+        expect(geometry.maskSize.split(", ")).toContain(`${width === 390 ? 8 : 12}px 100%`);
       }
 
       const rtlMaskPosition = await active.evaluate((row) => {

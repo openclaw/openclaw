@@ -28,7 +28,6 @@ type ActiveNodePortalStream = {
   ticket?: ReturnType<NodeDesktopStreamBroker["mintPortal"]>;
   invocation?: ReturnType<NodeWorkerSupervisorTransport["invoke"]>;
   stream?: Duplex;
-  stopped: boolean;
 };
 
 const UNSUPPORTED_NODE_PORTAL_MESSAGE =
@@ -70,10 +69,6 @@ export function createWorkerNodePortalCarrier(options: {
   };
 
   const retireStream = (active: ActiveNodePortalStream): void => {
-    if (active.stopped) {
-      return;
-    }
-    active.stopped = true;
     active.ticket?.cancel();
     active.controller.abort(new Error("Worker environment node portal stream stopped"));
     active.stream?.destroy();
@@ -113,7 +108,6 @@ export function createWorkerNodePortalCarrier(options: {
     const active: ActiveNodePortalStream = {
       portal,
       controller: new AbortController(),
-      stopped: false,
     };
     // Publish the connection before node discovery yields so owner teardown can fence it.
     portal.streams.add(active);

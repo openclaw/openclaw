@@ -244,15 +244,6 @@ function scanPackageManagerOptions(
   return null;
 }
 
-function findFirstNonOptionIndex(
-  argv: string[],
-  startIdx: number,
-  params: PackageManagerOptions,
-  terminator: "skip" | "stop" | "reject" = "skip",
-): number | null {
-  return scanPackageManagerOptions(argv, startIdx, params, terminator);
-}
-
 function hasContextOption(
   argv: string[],
   startIdx: number,
@@ -276,7 +267,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
   if (hasContextOption(argv, 1, options)) {
     return true;
   }
-  const subcommandIdx = findFirstNonOptionIndex(argv, 1, options);
+  const subcommandIdx = scanPackageManagerOptions(argv, 1, options, "skip");
   if (subcommandIdx === null) {
     return false;
   }
@@ -309,12 +300,12 @@ function unwrapPackageExecArguments(
   params: PackageManagerOptions,
   terminator: "stop" | "reject",
 ): string[] | null {
-  const idx = findFirstNonOptionIndex(argv, startIdx, params, terminator);
+  const idx = scanPackageManagerOptions(argv, startIdx, params, terminator);
   return idx === null ? null : argv.slice(idx);
 }
 
 function unwrapNpmExecInvocation(argv: string[]): string[] | null {
-  const idx = findFirstNonOptionIndex(argv, 1, NPM_EXEC_OPTIONS, "reject");
+  const idx = scanPackageManagerOptions(argv, 1, NPM_EXEC_OPTIONS, "reject");
   if (idx === null || !NPM_EXEC_SUBCOMMANDS.has(argv[idx]?.trim() ?? "")) {
     return null;
   }
@@ -326,12 +317,13 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
 }
 
 function unwrapPnpmOrYarnExecInvocation(argv: string[], manager: "pnpm" | "yarn"): string[] | null {
-  const idx = findFirstNonOptionIndex(
+  const idx = scanPackageManagerOptions(
     argv,
     1,
     manager === "pnpm"
       ? PNPM_EXEC_OPTIONS
       : { optionsWithValue: YARN_OPTIONS_WITH_VALUE, flagOptions: YARN_FLAG_OPTIONS },
+    "skip",
   );
   if (idx === null) {
     return null;
@@ -394,7 +386,7 @@ export function resolveKnownPackageManagerExecInvocation(
   if (unwrapped) {
     return { kind: "unwrapped", argv: unwrapped };
   }
-  const subcommandIndex = findFirstNonOptionIndex(argv, 1, options);
+  const subcommandIndex = scanPackageManagerOptions(argv, 1, options, "skip");
   const firstSubcommand =
     subcommandIndex === null ? null : normalizeLowercaseStringOrEmpty(argv[subcommandIndex] ?? "");
   const knownExec =

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readActivitySummaryBatchFromReplica } from "../../gateway/session-activity-summary-replica.js";
 import { readActivitySummarySource } from "../../gateway/session-activity-summary-source.js";
@@ -28,16 +28,16 @@ import {
   readSessionActorTranscriptContext,
   seedSessionActorTranscriptContext,
 } from "./session-actor-transcript-replica.js";
+import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
-import {
-  mutateSessionColdTranscriptInWorker,
-  prepareSessionColdBatchInWorker,
-  prepareSessionColdRestoreInWorker,
-} from "./session-cold-storage-worker.js";
+import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
+import { restoreSessionColdTranscriptInWorker } from "./session-cold-storage-restore.js";
+import { mutateSessionColdTranscriptInWorker } from "./session-cold-storage-worker.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: The fixture owns its database and transcript maintenance lifetime.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -47,20 +47,14 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const limits = { maxBytes: 1024 * 1024, maxEvents: 100 };
-const question = {
-  type: "message",
-  id: "question",
-  parentId: null,
-  timestamp: "2026-01-01T00:00:01Z",
-  message: { role: "user", content: "Original question" },
-};
-const answer = {
-  type: "message",
-  id: "answer",
-  parentId: "question",
-  timestamp: "2026-01-01T00:00:02Z",
-  message: { role: "assistant", content: "Original answer" },
-};
+const question = timedMessageEvent("question", null, "2026-01-01T00:00:01Z", {
+  role: "user",
+  content: "Original question",
+});
+const answer = timedMessageEvent("answer", "question", "2026-01-01T00:00:02Z", {
+  role: "assistant",
+  content: "Original answer",
+});
 
 function transcript(f: Fixture) {
   return [
@@ -87,9 +81,10 @@ function replace(f: Fixture) {
 }
 
 function contextFixture(f: Fixture) {
-  if (f.target.database.kind !== "file") {
-    throw new Error("Transcript residency fixture requires a durable actor");
-  }
+  assert(
+    f.target.database.kind === "file",
+    "Transcript residency fixture requires a durable actor",
+  );
   const replica = createSessionActorReplica({
     target: { ...f.target, database: f.target.database },
     lifetime: { assertCurrent() {}, assertReadable() {} },
@@ -114,30 +109,22 @@ function contextFixture(f: Fixture) {
       { kind: "bounded", snapshot, residentRows },
       limits,
     );
-    if (!retained) {
-      throw new Error("Canonical bounded read did not seed transcript residency");
-    }
+    assert(retained, "Canonical bounded read did not seed transcript residency");
     retainSessionActorTranscriptReplica(hot, retained);
     return hot;
   };
+  const selection = { entryIds: ["question", "answer"], includeWatermark: true };
   return {
     replica,
     seed,
-    anchors() {
-      return readSessionActorTranscriptAnchorsFromReplica(
+    anchors: () =>
+      readSessionActorTranscriptAnchorsFromReplica(
         { ...f.scope, path: f.database.path },
-        { entryIds: ["question", "answer"], includeWatermark: true },
-      );
-    },
-    canonicalAnchors() {
-      return readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, {
-        entryIds: ["question", "answer"],
-        includeWatermark: true,
-      });
-    },
-    summary() {
-      return readActivitySummaryBatchFromReplica({ scope: f.scope });
-    },
+        selection,
+      ),
+    canonicalAnchors: () =>
+      readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, selection),
+    summary: () => readActivitySummaryBatchFromReplica({ scope: f.scope }),
     read() {
       const hot = replica.read();
       return (
@@ -212,8 +199,8 @@ const correlation = (steerTargetRunId: string) => ({
   message: { ...question.message, __openclaw: { steerTargetRunId } },
 });
 
-it("keeps settled append bodies in receipts and storage without evicting navigation", async () => {
-  await withActor((f) => {
+it("keeps settled append bodies in receipts and storage without evicting navigation", () =>
+  withActor((f) => {
     replace(f);
     const other = { ...f.target, sessionKey: "agent:main:other-resident" };
     runSqliteImmediateTransactionSync(f.database.db, () => {
@@ -281,8 +268,7 @@ it("keeps settled append bodies in receipts and storage without evicting navigat
         maxEvents: 100,
       }).serializedBytes,
     ).toBe(expectedBytes);
-  });
-});
+  }));
 
 it.each(["warm", "restarted"] as const)(
   "preserves tree cursors and complete append bodies in a %s actor",
@@ -384,8 +370,8 @@ it.each(["warm", "restarted"] as const)(
   },
 );
 
-it("advances retained context through native actor appends and preserves it through bookkeeping", async () => {
-  await withContext(async (f, context) => {
+it("advances retained context through native actor appends and preserves it through bookkeeping", () =>
+  withContext(async (f, context) => {
     const initial = context.seed();
     expect(context.read()?.snapshot.events).toEqual(transcript(f));
     const command: Mutation = {
@@ -393,28 +379,14 @@ it("advances retained context through native actor appends and preserves it thro
       input: {
         target: f.target,
         expected: initial.version,
-        commandId: "next-turn",
-        phaseId: "turn",
-        turn: {
-          agentId: "main",
-          sessionKey: f.target.sessionKey,
-          options: {
-            expectedSessionId: f.scope.sessionId,
-            sessionFile: "synthetic.jsonl",
-            messages: [
-              {
-                eventId: "next-question",
-                message: { role: "user", content: "Next question" },
-                now: 4,
-              },
-              {
-                eventId: "next-answer",
-                message: { role: "assistant", content: "Next answer" },
-                now: 5,
-              },
-            ],
+        ...transcriptTurnCommand(f.scope, "next-turn", [
+          { eventId: "next-question", message: { role: "user", content: "Next question" }, now: 4 },
+          {
+            eventId: "next-answer",
+            message: { role: "assistant", content: "Next answer" },
+            now: 5,
           },
-        },
+        ]),
       },
     };
     await f.prepare(command);
@@ -469,11 +441,10 @@ it("advances retained context through native actor appends and preserves it thro
       id: "next-answer",
       message: { content: "Next answer" },
     });
-  });
-});
+  }));
 
-it("settles a resident correlation rewrite once and leaves rollback payloads unchanged", async () => {
-  await withContext((f, context) => {
+it("settles a resident correlation rewrite once and leaves rollback payloads unchanged", () =>
+  withContext((f, context) => {
     const publications: unknown[] = [];
     const stop = sessionChanges.subscribeFacts((change) => {
       const fact = readPreparedSessionTranscriptChange(change);
@@ -534,11 +505,10 @@ it("settles a resident correlation rewrite once and leaves rollback payloads unc
     } finally {
       stop();
     }
-  });
-});
+  }));
 
-it("invalidates retained context for nonactor content and topology writer classes", async () => {
-  await withContext(async (f, context) => {
+it("invalidates retained context for nonactor content and topology writer classes", () =>
+  withContext(async (f, context) => {
     for (const change of [
       "append",
       "rewrite",
@@ -618,7 +588,10 @@ it("invalidates retained context for nonactor content and topology writer classe
       } else if (change === "replacement" || change === "suffix-trim") {
         expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(2);
       } else if (change === "rewind") {
-        expect(after.entry?.sessionId).not.toBe(before.entry?.sessionId);
+        // An in-place cut keeps the transcript identity and rotates the incarnation;
+        // retained context is invalidated by the assertions around this branch.
+        expect(after.entry?.sessionId).toBe(before.entry?.sessionId);
+        expect(after.entry?.lifecycleRevision).not.toBe(before.entry?.lifecycleRevision);
       } else if (change === "delete") {
         expect(after.entry).toBeUndefined();
       } else {
@@ -630,26 +603,8 @@ it("invalidates retained context for nonactor content and topology writer classe
         const scope = { ...f.scope, sessionId: after.entry!.sessionId };
         const source = await readActivitySummarySource({ scope, assertCurrent() {} });
         const canonical = readActivitySummaryBatch({ scope });
-        if (!source || !canonical) {
-          throw new Error(`Expected a summary source after ${change}`);
-        }
-        expect(source, change).toMatchObject({
-          previous: canonical.previous,
-          watermark: canonical.watermark,
-          covered: canonical.covered,
-          omitted: canonical.omitted,
-          snapshot: {
-            totalMessages: canonical.snapshot.totalMessages,
-            activeLeafEntryId: canonical.snapshot.activeLeafEntryId,
-            snapshot: { generation: canonical.snapshot.snapshot.generation },
-          },
-          page: { scannedMessages: canonical.page.scannedMessages },
-        });
-        expect(
-          source.page.events.map(({ event }) => event),
-          change,
-        ).toEqual(canonical.page.events.map(({ event }) => event));
-        expect(source.notes, change).toEqual(
+        expect(summaryFacts(source), change).toEqual(summaryFacts(canonical));
+        expect(source?.notes, change).toEqual(
           change === "rewind"
             ? []
             : [
@@ -659,11 +614,10 @@ it("invalidates retained context for nonactor content and topology writer classe
         );
       }
     }
-  });
-});
+  }));
 
-it("drops retained context on cold archival and leaves restoration to a fresh bounded read", async () => {
-  await withContext(async (f, context) => {
+it("drops retained context on cold archival and leaves restoration to a fresh bounded read", () =>
+  withContext(async (f, context) => {
     context.seed();
     const databaseOptions = { agentId: "main", path: f.database.path };
     const readColdMetadata = () =>
@@ -708,8 +662,13 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       sessionId: f.scope.sessionId,
       archive: prepared.prepared[0]!.archive,
     };
-    const records = await prepareSessionColdRestoreInWorker(plan);
-    expect(mutateSessionColdTranscriptInWorker(plan, records, () => {})).toMatchObject({
+    expect(
+      await restoreSessionColdTranscriptInWorker(
+        plan,
+        async (run) => run(),
+        () => {},
+      ),
+    ).toMatchObject({
       restored: true,
     });
     expectInvalidated(context);
@@ -718,5 +677,4 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
     expect(readColdMetadata()?.coldArchives).toEqual([]);
     expect(context.read()?.snapshot.events).toEqual(transcript(f));
     expectProjections(context);
-  });
-});
+  }));

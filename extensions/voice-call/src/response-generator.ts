@@ -12,7 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
@@ -36,13 +36,6 @@ type VoiceResponseParams = {
   userMessage: string;
   /** Delivers completed reply blocks while post-turn work is still running. */
   onEarlyText?: (text: string) => Promise<boolean>;
-};
-
-type VoiceResponseResult = {
-  text: string | null;
-  /** Whether the complete response was handed to the transport before compaction. */
-  deliveredEarly: boolean;
-  error?: string;
 };
 
 type VoiceResponsePayload = {
@@ -125,6 +118,26 @@ function normalizeSpokenText(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+const SPOKEN_CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f]+`, "g");
+// Consume escape pairs together so a valid escaped backslash is never repaired twice.
+const JSON_ESCAPE_SEQUENCE = new RegExp(String.raw`\\(u[0-9a-fA-F]{4}|["\\/bfnrt]|[\s\S]?)`, "g");
+const VALID_JSON_ESCAPE_BODY = new RegExp(String.raw`^(?:u[0-9a-fA-F]{4}|["\\/bfnrt])$`);
+const SPOKEN_FIELD_DECLARATIONS = new RegExp(String.raw`"spoken"\s*:`, "gi");
+const INLINE_SPOKEN_FIELD = new RegExp(String.raw`"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"`, "gi");
+
+function decodeInlineSpokenSegment(rawSegment: string): string | null {
+  // Literal control characters cannot appear in JSON strings; speech folds whitespace anyway.
+  const folded = rawSegment.replace(SPOKEN_CONTROL_CHARS, " ");
+  return (
+    safeParseJson<string>(`"${folded}"`) ??
+    safeParseJson<string>(
+      `"${folded.replace(JSON_ESCAPE_SEQUENCE, (sequence, body: string) =>
+        VALID_JSON_ESCAPE_BODY.test(body) ? sequence : body,
+      )}"`,
+    )
+  );
+}
+
 function tryParseSpokenJson(text: string): string | null {
   const candidates: string[] = [];
   const trimmed = text.trim();
@@ -145,28 +158,32 @@ function tryParseSpokenJson(text: string): string | null {
   }
 
   for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as { spoken?: unknown };
-      if (typeof parsed?.spoken !== "string") {
-        continue;
-      }
-      return normalizeSpokenText(parsed.spoken) ?? "";
-    } catch {
-      // Continue trying other candidates.
+    const parsed = safeParseJson<{ spoken?: unknown }>(candidate);
+    if (typeof parsed?.spoken !== "string") {
+      continue;
+    }
+    return normalizeSpokenText(parsed.spoken) ?? "";
+  }
+
+  const declaredSpokenFields = (trimmed.match(SPOKEN_FIELD_DECLARATIONS) ?? []).length;
+  if (declaredSpokenFields === 0) {
+    return null;
+  }
+  const segments: string[] = [];
+  let scannedSpokenFields = 0;
+  for (const match of trimmed.matchAll(INLINE_SPOKEN_FIELD)) {
+    scannedSpokenFields += 1;
+    const decoded = decodeInlineSpokenSegment(match[1] ?? "");
+    if (decoded === null) {
+      return null;
+    }
+    const normalized = normalizeSpokenText(decoded);
+    if (normalized) {
+      segments.push(normalized);
     }
   }
-
-  const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
-  if (!inlineSpokenMatch) {
-    return null;
-  }
-
-  try {
-    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
-    return normalizeSpokenText(decoded) ?? "";
-  } catch {
-    return null;
-  }
+  // Never let a later valid block conceal an unscannable earlier field.
+  return scannedSpokenFields === declaredSpokenFields ? segments.join(" ") : null;
 }
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
@@ -215,12 +232,12 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
     }
 
     const spoken = tryParseSpokenJson(rawText) ?? sanitizePlainSpokenText(rawText);
-    if (spoken) {
+    if (spoken !== null) {
       spokenSegments.push(spoken);
     }
   }
 
-  return spokenSegments.join(" ") || null;
+  return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
 }
 
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -231,9 +248,7 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   return `agent:${agentId}:${trimmed}`;
 }
 
-export async function generateVoiceResponse(
-  params: VoiceResponseParams,
-): Promise<VoiceResponseResult> {
+export async function generateVoiceResponse(params: VoiceResponseParams) {
   const {
     voiceConfig,
     callId,
@@ -273,7 +288,12 @@ export async function generateVoiceResponse(
           sessionKey: resolvedSessionKey,
         });
 
-        const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        const { provider, model } = resolveVoiceResponseModel({
+          cfg,
+          agentId,
+          voiceConfig,
+          agentRuntime,
+        });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
@@ -359,6 +379,7 @@ export async function generateVoiceResponse(
         const blockReplyPayloads: VoiceResponsePayload[] = [];
         let latestToolBoundaryMessageIndex: number | undefined;
         let blockReplyBoundariesReliable = true;
+        // Whether the complete response was handed to the transport before compaction.
         let deliveredEarly = false;
         let lastFlushedText: string | null = null;
 
@@ -455,11 +476,15 @@ export async function generateVoiceResponse(
           lastFlushedText ??
           extractSpokenTextFromPayloads(blockReplyPayloads);
 
-        if (!text && result.meta?.aborted) {
-          return { text: null, deliveredEarly: false, error: "Response generation was aborted" };
+        if (!text && (text === null || result.meta?.aborted)) {
+          return {
+            text: null,
+            deliveredEarly,
+            error: "Response generation produced no output",
+          };
         }
 
-        return { text, deliveredEarly };
+        return { text: text || null, deliveredEarly };
       },
     );
   } catch (err) {

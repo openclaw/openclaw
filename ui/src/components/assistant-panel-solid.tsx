@@ -34,7 +34,7 @@ defineSolidBridge<AssistantPanelProps, Methods>(
       openSessionKey: { configurable: true, get: () => panel.openSessionKey },
       assistantPanelOpen: { configurable: true, get: () => panel.dockLayout.open },
     });
-    return <AssistantPanelView state={state.read} />;
+    return <AssistantPanelView state={state.read} onContentLoaded={panel.notify} />;
   },
   {
     properties: {

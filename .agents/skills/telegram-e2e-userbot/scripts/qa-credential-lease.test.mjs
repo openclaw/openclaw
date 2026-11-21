@@ -599,6 +599,7 @@ async function launcherFixture(context, scripts) {
   const path = await import("node:path");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-convex-launchers-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "qa", "convex-credential-broker"), { recursive: true });
   const trace = path.join(root, "calls.jsonl");
   for (const [name, script] of Object.entries(scripts)) {
     fs.writeFileSync(
@@ -612,7 +613,7 @@ async function launcherFixture(context, scripts) {
   }
   return {
     env: { PATH: root },
-    convexProjectDir: root,
+    cwd: root,
     calls: () =>
       fs.existsSync(trace) ? fs.readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [],
   };

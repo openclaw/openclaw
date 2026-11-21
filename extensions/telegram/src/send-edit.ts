@@ -148,14 +148,13 @@ export async function editMessageTelegram(
           warn: (message) => sendLogger.warn(message),
           fallbackLimit: Number.MAX_SAFE_INTEGER,
           sender: {
-            sendPlain: (value, _fallback, label) =>
-              edit(
-                () =>
-                  Object.keys(commonTextParams).length
-                    ? api.editMessageText(chatId, messageId, value, commonTextParams)
-                    : api.editMessageText(chatId, messageId, value),
-                label,
-              ),
+            sendPlain: (value, _fallback, label, entities) =>
+              edit(() => {
+                const other = { ...commonTextParams, ...(entities?.length ? { entities } : {}) };
+                return Object.keys(other).length
+                  ? api.editMessageText(chatId, messageId, value, other)
+                  : api.editMessageText(chatId, messageId, value);
+              }, label),
             sendHtml: (value) =>
               edit(() =>
                 api.editMessageText(chatId, messageId, value, {
@@ -240,7 +239,6 @@ export async function editMessageTelegram(
 
       return { ok: true, messageId: String(messageId), chatId };
     },
-    (err) =>
-      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
+    (err) => isRecoverableTelegramNetworkError(err) || isTelegramServerError(err),
   );
 }

@@ -7,15 +7,13 @@ import {
 import { resolveGatewayCommandPath } from "./gateway-run-argv.js";
 import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
-type CliArgvInvocation = {
+export function resolveCliArgvInvocation(argv: string[]): {
   argv: string[];
   commandPath: string[];
   primary: string | null;
   hasHelpOrVersion: boolean;
   isRootHelpInvocation: boolean;
-};
-
-export function resolveCliArgvInvocation(argv: string[]): CliArgvInvocation {
+} {
   return {
     argv,
     commandPath:

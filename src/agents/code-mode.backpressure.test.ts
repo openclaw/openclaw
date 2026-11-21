@@ -30,9 +30,8 @@ function harness(headless: boolean, limit: number, tool: AnyAgentTool) {
   ): Promise<Record<string, unknown>> =>
     headless
       ? await runCodeModeScriptHeadless({
-          ctx: createHeadlessCodeModeHarness([tool]),
+          ctx: createHeadlessCodeModeHarness([tool], { codeMode: { maxPendingToolCalls: limit } }),
           code,
-          overrides: { maxPendingToolCalls: limit },
           maxToolCalls,
           signal,
         })

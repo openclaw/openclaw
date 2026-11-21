@@ -45,6 +45,7 @@ function registerNode(
   connId: string,
   pairingGeneration: string | undefined,
   nodeId = "node-a",
+  surface?: { platform: string; caps: string[]; commands: string[] },
 ) {
   const frames: string[] = [];
   const socket = {
@@ -60,7 +61,14 @@ function registerNode(
     connect: {
       role: "node",
       scopes: [],
-      client: { id: "node-host", version: "1.0.0", platform: "macos", mode: "node" },
+      client: {
+        id: "node-host",
+        version: "1.0.0",
+        platform: surface?.platform ?? "macos",
+        mode: "node",
+      },
+      caps: surface?.caps,
+      commands: surface?.commands,
       device: { id: nodeId },
     } as unknown as GatewayWsClient["connect"],
   };
@@ -615,4 +623,30 @@ test("preserves subscriptions for an exact live pairing generation promotion", a
   expect(runtime.nodeHasSessionSubscribers("main")).toBe(true);
   await runtime.nodeSendToSession("main", "chat", { ok: true });
   expect(frames).toHaveLength(1);
+});
+
+test("uses explicit Talk capability instead of platform names", async () => {
+  const runtime = createRuntime();
+  registerNode(runtime, "conn-android", "generation-a", "node-a", {
+    platform: "android",
+    caps: ["device"],
+    commands: [],
+  });
+  await expect(runtime.hasTalkNodeConnected()).resolves.toBe(false);
+  registerNode(runtime, "conn-linux", "generation-a", "node-a", {
+    platform: "linux",
+    caps: ["talk"],
+    commands: [],
+  });
+  await expect(runtime.hasTalkNodeConnected()).resolves.toBe(true);
+});
+
+test("accepts nodes that declare Talk command support", async () => {
+  const runtime = createRuntime();
+  registerNode(runtime, "conn-talk", "generation-a", "node-a", {
+    platform: "custom",
+    caps: [],
+    commands: ["talk.ptt.start"],
+  });
+  await expect(runtime.hasTalkNodeConnected()).resolves.toBe(true);
 });

@@ -20,7 +20,6 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
   codexHome: string;
   config: ResolvedCodexComputerUseConfig;
   bundledMarketplacePath?: string;
-  bundledMarketplacePathCandidates?: readonly string[];
   ownershipRoot?: string;
   assertCurrent?: () => void;
   forceRefresh?: boolean;
@@ -36,10 +35,7 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
 
   const bundledMarketplacePath =
     params.bundledMarketplacePath ??
-    resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
-      candidates: params.bundledMarketplacePathCandidates,
-    }) ??
-    params.bundledMarketplacePathCandidates?.[0] ??
+    resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath() ??
     DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH;
   const sourcePluginRoot = path.join(bundledMarketplacePath, "plugins", params.config.pluginName);
   const version = await readBundledPluginVersion(sourcePluginRoot);

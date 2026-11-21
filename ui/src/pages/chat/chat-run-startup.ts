@@ -2,9 +2,12 @@ import type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/
 import type { WorkerEnvironmentStartStatus } from "../../../../packages/gateway-protocol/src/schema/environments.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 
-registerNewSessionSetupEnglish();
+registerChatComposerEnglish();
+
+registerNewSessionRuntimeEnglish();
 
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
@@ -16,7 +19,12 @@ export type ChatRunStartupState =
       waitReason?: "response" | "slot";
       seq?: number;
     }
-  | { state: "status"; runId: string; phase: "answer" | "finishing"; seq?: number }
+  | {
+      state: "status";
+      runId: string;
+      phase: "answer" | "finishing" | "preparing_tool";
+      seq?: number;
+    }
   | {
       state: "status";
       runId: string;
@@ -68,6 +76,7 @@ export function reconcileChatRunStartup(
       (next.state === "status" &&
         next.phase !== "finishing" &&
         next.phase !== "answer" &&
+        next.phase !== "preparing_tool" &&
         !isModelWaitTransition &&
         !isChatRunRecoveryStatus(next) &&
         (current.state === "activity" ||
@@ -99,6 +108,7 @@ const STARTUP_LABEL_KEYS = {
   waiting_for_state: "chat.startupStatus.waitingForState",
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   naming_worktree: "chat.startupStatus.namingWorktree",
+  preparing_worktree_base: "chat.startupStatus.updatingRepository",
   creating_worktree: "chat.startupStatus.creatingWorktree",
   running_setup: "chat.startupStatus.runningSetup",
   provisioning_environment: "chat.startupStatus.provisioningEnvironment",
@@ -116,7 +126,6 @@ export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,
   environmentStartStatus: WorkerEnvironmentStartStatus | undefined = placement?.startStatus,
-  awaitingActivity = false,
 ): string | undefined {
   const startStatus = environmentStartStatus;
   if (
@@ -137,6 +146,9 @@ export function chatStartupStatusLabel(
   if (run) {
     if (run.phase === "waiting_for_model" && run.waitReason === "slot") {
       return t("chat.startupStatus.waitingForModelSlot");
+    }
+    if (run.phase === "preparing_tool") {
+      return t("chat.startupStatus.preparingTool");
     }
     if (run.phase === "finishing" || run.phase === "answer") {
       return undefined;
@@ -160,12 +172,9 @@ export function chatStartupStatusLabel(
       return t("chat.startupStatus.preparingWorkspace");
     case "starting":
       return t("newSession.starting");
-    case "active":
-    case "sending":
-      return t("chat.composer.sendingMessage");
     default:
-      // Queue custody and recovery can precede execution; only an explicit phase proves preparation.
-      return awaitingActivity ? t("chat.startupStatus.waitingForTurn") : undefined;
+      // Ordinary send latency uses the same working indicator as an active turn.
+      return undefined;
   }
 }
 

@@ -13,14 +13,18 @@ import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
+import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload-normalize.js";
 import {
   buildPayloadSummary,
   normalizePayloadsForChannelDelivery,
   normalizeTransformedPayloadForDelivery,
   resolveChannelHandlerParams,
-  stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
-import { createOutboundPayloadPlan, createStructuredOutboundPayloadPlan } from "./payloads.js";
+import {
+  createOutboundPayloadPlan,
+  createOutboundPayloadPlanWithAdmittedReasoning,
+  createStructuredOutboundPayloadPlan,
+} from "./payloads.js";
 import {
   PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
   type PreparedOutboundBatch,
@@ -116,6 +120,7 @@ function projectMarkdownImages(payload: ReplyPayload): ReplyPayload {
 }
 
 type OutboundPayloadPreparationOptions = {
+  admittedReasoning?: true;
   onBeforeFirstModifier?: () => Promise<void>;
   hookRunner?: HookRunner;
 };
@@ -128,18 +133,10 @@ export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
   options?: OutboundPayloadPreparationOptions,
 ): Promise<PreparedOutboundBatch> {
-  return await prepareOutboundPlan(params, undefined, options);
+  return await prepareStructuredOutboundPayloadBatch(params, undefined, options);
 }
 
 export async function prepareStructuredOutboundPayloadBatch(
-  params: DeliverOutboundPayloadsParams,
-  plan: readonly OutboundPayloadPlan[],
-  options?: OutboundPayloadPreparationOptions,
-): Promise<PreparedOutboundBatch> {
-  return await prepareOutboundPlan(params, plan, options);
-}
-
-async function prepareOutboundPlan(
   params: DeliverOutboundPayloadsParams,
   structuredPlan: readonly OutboundPayloadPlan[] | undefined,
   options?: OutboundPayloadPreparationOptions,
@@ -147,9 +144,12 @@ async function prepareOutboundPlan(
   const handler = await createChannelHandler(
     resolveChannelHandlerParams(params, normalizeOutboundReplyFacts(params), []),
   );
+  const createPlan = options?.admittedReasoning
+    ? createOutboundPayloadPlanWithAdmittedReasoning
+    : createOutboundPayloadPlan;
   let plan =
     structuredPlan ??
-    createOutboundPayloadPlan(params.payloads, {
+    createPlan(params.payloads, {
       extractMarkdownImages: handler.extractMarkdownImages,
     });
   if (structuredPlan && handler.extractMarkdownImages) {
@@ -180,7 +180,7 @@ async function prepareOutboundPlan(
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
   const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
-  const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const sessionKeyForHooks = params.session?.key;
   const modifiers = [
     {
       changedKey: "replyHookChanged",

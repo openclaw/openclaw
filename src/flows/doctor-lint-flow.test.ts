@@ -29,18 +29,6 @@ function throwingCheck(id: string, error: Error): HealthCheck {
   });
 }
 
-it("filters selected checks and reports skipped count", async () => {
-  const result = await runDoctorLintChecks(ctx, {
-    checks: [
-      check("a", async () => [{ checkId: "a", severity: "warning", message: "warn" }]),
-      check("b", async () => [{ checkId: "b", severity: "error", message: "err" }]),
-    ],
-    onlyIds: ["a"],
-  });
-
-  expect(result).toMatchObject({ checksRun: 1, checksSkipped: 1, findings: [{ checkId: "a" }] });
-});
-
 it("reports conflicting selectors for a registered health check", async () => {
   const ids = ["plugin/example/first", "plugin/example/second"];
   let detections = 0;

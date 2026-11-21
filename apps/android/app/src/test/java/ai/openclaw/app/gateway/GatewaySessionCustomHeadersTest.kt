@@ -178,8 +178,17 @@ class GatewaySessionCustomHeadersTest {
             assertEquals("gateway-token", params.getValue("auth").jsonObject.getValue("token").jsonPrimitive.content)
             assertEquals("node", params.getValue("role").jsonPrimitive.content)
             val config = requireNotNull(resolveGatewaySourcePreviewConfig(JsonObject(emptyMap()), server.url("/").toString(), 1))
+            val image = byteArrayOf(1, 2, 3, 4)
+            server.dispatcher = QueueDispatcher().apply {
+              enqueueResponse(MockResponse().setResponseCode(401))
+              enqueueResponse(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(image)))
+            }
             assertNull(session.loadSourceFavicon(endpoint.stableId, config, "example.com") { it() })
-            assertEquals("A source icon must not replace the proxy login with Gateway Bearer", 1, server.requestCount)
+            assertEquals("Basic YWxpY2U6c2VjcmV0", server.takeRequest().getHeader("Authorization"))
+            assertEquals("A rejected image must not retry with Gateway Bearer", 2, server.requestCount)
+            assertArrayEquals(image, session.loadSourceFavicon(endpoint.stableId, config, "allowed.example") { it() }?.bytes)
+            assertEquals("Basic YWxpY2U6c2VjcmV0", server.takeRequest().getHeader("Authorization"))
+            assertEquals(3, server.requestCount)
           }
           assertEquals(0, foreign.requestCount)
         } finally {
@@ -223,16 +232,25 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
+  @Test
+  fun sourceFaviconsRecoverAfterTransientHttpFailureWithoutReconnecting() {
+    runBlocking {
+      assertSourceFavicons(contextPath = "/socket", basePath = "/ui", recoverFailedFavicon = true)
+    }
+  }
+
   private suspend fun assertSourceFavicons(
     contextPath: String,
     basePath: String,
     proxyAcceptsRead: Boolean? = null,
     expectedBasePath: String = basePath.ifEmpty { contextPath },
+    recoverFailedFavicon: Boolean = false,
   ) = coroutineScope {
     val connected = CompletableDeferred<Unit>()
     val slowStarted = CompletableDeferred<Unit>()
     val releaseSlow = java.util.concurrent.CountDownLatch(1)
     val iconRequests = ConcurrentLinkedQueue<RecordedRequest>()
+    val failFirstRecoveryRequest = AtomicBoolean(true)
     val imageBytes = byteArrayOf(1, 2, 3, 4)
     val tls = if (proxyAcceptsRead != null) sourceFaviconTls() else null
     val proxyAuthorization = "Basic c3ludGhldGljOnByb3h5"
@@ -273,6 +291,9 @@ class GatewaySessionCustomHeadersTest {
               val authorization = request.getHeader("Authorization")
               if (proxyAcceptsRead == true && authorization != proxyAuthorization) return MockResponse().setResponseCode(401)
               if (proxyAcceptsRead != true && authorization != "Bearer shared-token") return MockResponse().setResponseCode(401)
+              if (request.path?.endsWith("recover.example") == true && failFirstRecoveryRequest.getAndSet(false)) {
+                return MockResponse().setResponseCode(503)
+              }
               return when {
                 request.path?.endsWith("redirect.example") == true -> {
                   MockResponse().setResponseCode(302).setHeader("Location", trap.url("/must-not-load"))
@@ -346,6 +367,15 @@ class GatewaySessionCustomHeadersTest {
       if (tls != null) assertTrue(iconRequests.all { it.getHeader("X-Proxy-Route") == "source-proof" })
       assertArrayEquals(imageBytes, load("example.com")?.bytes)
       assertEquals(expectedAuthorization.size, iconRequests.size)
+      if (recoverFailedFavicon) {
+        assertNull(load("recover.example"))
+        val recovered = load("recover.example")
+        assertArrayEquals("A transient HTTP failure must not poison the connection cache", imageBytes, recovered?.bytes)
+        val requestsAfterRecovery = iconRequests.size
+        val cached = load("recover.example")
+        assertArrayEquals(imageBytes, cached?.bytes)
+        assertEquals(requestsAfterRecovery, iconRequests.size)
+      }
       assertNull(load("redirect.example"))
       assertEquals(0, trap.requestCount)
       assertNull(load("large.example"))
@@ -363,6 +393,128 @@ class GatewaySessionCustomHeadersTest {
       trap.shutdown()
     }
   }
+
+  @Test
+  fun canonicalInboundPhotoUsesAuthenticatedAssistantMediaRouteAndImageBounds() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val requests = ConcurrentLinkedQueue<RecordedRequest>()
+      val retiringRequest = CompletableDeferred<Unit>()
+      val releaseRetiringRequest = CountDownLatch(1)
+      val imageBytes = byteArrayOf(5, 6, 7, 8)
+      val trap = MockWebServer().apply { start() }
+      val server =
+        MockWebServer().apply {
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path == "/socket") {
+                  return MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                      override fun onOpen(
+                        webSocket: WebSocket,
+                        response: Response,
+                      ) {
+                        webSocket.send(CONNECT_CHALLENGE_FRAME)
+                      }
+
+                      override fun onMessage(
+                        webSocket: WebSocket,
+                        text: String,
+                      ) {
+                        val frame = Json.parseToJsonElement(text).jsonObject
+                        if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                          val id = frame.getValue("id").jsonPrimitive.content
+                          webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"auth":{"deviceToken":"issued-device-token","role":"operator","scopes":["operator.read"]}}}""")
+                        }
+                      }
+                    },
+                  )
+                }
+                requests.add(request)
+                if (request.requestUrl?.queryParameter("source") == "media://inbound/retired.jpg") {
+                  retiringRequest.complete(Unit)
+                  check(releaseRetiringRequest.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                  return MockResponse().setResponseCode(401)
+                }
+                if (request.getHeader("Authorization") != "Bearer issued-device-token") return MockResponse().setResponseCode(401)
+                return when (request.requestUrl?.queryParameter("source")) {
+                  "media://inbound/large.jpg" -> MockResponse().setHeader("Content-Type", "image/jpeg").setChunkedBody(Buffer().write(ByteArray(12 * 1024 * 1024 + 1)), 65_536)
+                  "media://inbound/redirect.jpg" -> MockResponse().setResponseCode(302).setHeader("Location", trap.url("/must-not-load"))
+                  else -> MockResponse().setHeader("Content-Type", "image/jpeg").setBody(Buffer().write(imageBytes))
+                }
+              }
+            }
+          start()
+        }
+      val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, tlsEnabled = false, contextPath = "/socket")
+      val session =
+        GatewaySession(
+          scope = sessionScope,
+          identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
+          deviceAuthStore = NoopDeviceAuthStore(),
+          onConnected = { connected.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+          customHeadersProvider = { error("Cleartext transport must not read custom headers") },
+        )
+      try {
+        session.connect(
+          endpoint = endpoint,
+          token = "shared-token",
+          bootstrapToken = null,
+          password = null,
+          tls = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.read"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client = GatewayClientInfo("openclaw-android-test", "Android Test", "1.0.0-test", "android", "ui", "sent-image-test", "android", "test"),
+            ),
+        )
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+
+        val source = "media://inbound/photo---af3c4068.jpg"
+        val loaded = session.loadInboundImage(endpoint.stableId, null, "agent:main:node-1", "main", source)
+        assertArrayEquals(imageBytes, loaded?.bytes)
+        assertEquals("image/jpeg", loaded?.mimeType)
+        val request = requests.single()
+        assertEquals("/socket/__openclaw__/assistant-media", request.requestUrl?.encodedPath)
+        assertEquals(source, request.requestUrl?.queryParameter("source"))
+        assertEquals("agent:main:node-1", request.requestUrl?.queryParameter("sessionKey"))
+        assertEquals("main", request.requestUrl?.queryParameter("agentId"))
+        assertEquals("image/*", request.getHeader("Accept"))
+        assertArrayEquals(imageBytes, session.loadInboundImage(endpoint.stableId, "/ui", "main", null, source)?.bytes)
+        assertEquals("/ui/__openclaw__/assistant-media", requests.last().requestUrl?.encodedPath)
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/large.jpg"))
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/redirect.jpg"))
+        assertEquals(0, trap.requestCount)
+        val before = requests.size
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/.."))
+        assertNull(session.loadInboundImage("wrong-endpoint", null, "main", null, source))
+        assertEquals(before, requests.size)
+
+        val pendingImage =
+          async(Dispatchers.IO) {
+            runCatching { session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/retired.jpg") }.getOrNull()
+          }
+        withTimeout(TEST_TIMEOUT_MS) { retiringRequest.await() }
+        session.disconnect()
+        releaseRetiringRequest.countDown()
+        assertNull(withTimeout(TEST_TIMEOUT_MS) { pendingImage.await() })
+        assertEquals("A retired connection must not try the next read credential", before + 1, requests.size)
+      } finally {
+        releaseRetiringRequest.countDown()
+        session.disconnect()
+        sessionScope.cancel()
+        server.shutdown()
+        trap.shutdown()
+      }
+    }
 
   @Test
   fun managedMediaDownload_usesArtifactTicketWithoutGatewayBearer() = runBlocking { assertManagedMediaDownload(contextPath = "") }

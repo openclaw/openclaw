@@ -11,19 +11,7 @@ type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[numbe
 
 type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
 
-export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
-
-export type QaRuntimeToolCoverageMetadata = {
-  bucket: QaRuntimeToolBucket;
-  expectedLayer: QaRuntimeToolExpectedLayer;
-  capabilityLayer: QaRuntimeCapabilityLayer;
-  required: boolean;
-  tracking?: string;
-  reason?: string;
-  codexDefaultImpact?: string;
-  qaImpact?: string;
-  action?: string;
-};
+export type QaRuntimeToolCoverageMetadata = ReturnType<typeof readRuntimeToolCoverageMetadata>;
 
 const QA_RUNTIME_TOOL_BUCKETS = [
   "codex-native-workspace",
@@ -80,9 +68,7 @@ export function readRuntimeToolCoverageConfig(
   return isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
 }
 
-export function readRuntimeToolCoverageMetadata(params: {
-  config?: Record<string, unknown>;
-}): QaRuntimeToolCoverageMetadata {
+export function readRuntimeToolCoverageMetadata(params: { config?: Record<string, unknown> }) {
   const toolCoverage = readRuntimeToolCoverageConfig(params.config);
   const bucket = readRuntimeToolEnum(
     toolCoverage?.bucket,
@@ -122,9 +108,7 @@ export function readRuntimeToolCoverageMetadata(params: {
   };
 }
 
-export function readScenarioRuntimeToolCoverageMetadata(
-  scenario: QaSeedScenarioWithSource,
-): QaRuntimeToolCoverageMetadata {
+export function readScenarioRuntimeToolCoverageMetadata(scenario: QaSeedScenarioWithSource) {
   return readRuntimeToolCoverageMetadata({
     config: scenario.execution.config,
   });

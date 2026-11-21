@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals-allow-always.js";
-import { recordAllowlistMatchesUse } from "../infra/exec-approvals-authorization.js";
+import { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 import {
   prepareExecApprovalsCurrentRead,
   updateExecApprovals,
@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
@@ -26,12 +27,14 @@ import {
   getOperatorApprovalResolutionKey,
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
 } from "./operator-approval-store.rows.js";
+import { createExecApprovalPresentation } from "./operator-approval-store.test-support.js";
 import * as nativeTransitions from "./operator-approval-store.transitions.worker.js";
 import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
@@ -53,16 +56,7 @@ function approval(id: string): Parameters<typeof store.insertOperatorApproval>[0
     source: { agentId: "main", sessionKey: "agent:main:synthetic" },
     reviewerDeviceIds: ["reviewer"],
     audienceSessionKeys: ["agent:main:synthetic"],
-    presentation: {
-      kind: "exec",
-      commandText: "printf 'héllo  world'",
-      commandPreview: "printf 'héllo  world'",
-      warningText: null,
-      host: "gateway",
-      nodeId: null,
-      agentId: "main",
-      allowedDecisions: ["allow-once", "deny"],
-    },
+    presentation: createExecApprovalPresentation("printf 'héllo  world'", ["allow-once", "deny"]),
   };
 }
 
@@ -123,6 +117,7 @@ it("preserves serialized records, first-answer wins, consumption and history thr
 
 it("keeps Allow Once executable during approval bookkeeping but rejects a later policy denial", async () => {
   const databaseOptions = options();
+  vi.stubEnv("OPENCLAW_STATE_DIR", databaseOptions.env.OPENCLAW_STATE_DIR);
   const context = captureOpenClawStateWorkerContext(databaseOptions);
   const policy = await updateExecApprovals(
     { update: { kind: "replace", file: { version: 1, defaults: { security: "allowlist" } } } },
@@ -140,21 +135,18 @@ it("keeps Allow Once executable during approval bookkeeping but rejects a later 
       databaseOptions,
     }),
   ).toMatchObject({ outcome: "resolved", record: { decision: "allow-once" } });
-  const assertCurrent = await recordAllowlistMatchesUse(
-    {
-      agentId: "main",
-      matches: [],
-      command: "printf 'héllo  world'",
-      authorization: {
-        source: "explicit-approval",
-        security: "allowlist",
-        ask: "always",
-        allowlistSatisfied: false,
-        policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
-      },
+  const assertCurrent = await commitExecAuthorizationLocked({
+    agentId: "main",
+    matches: [],
+    command: "printf 'héllo  world'",
+    authorization: {
+      source: "explicit-approval",
+      security: "allowlist",
+      ask: "always",
+      allowlistSatisfied: false,
+      policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
     },
-    context,
-  );
+  });
   const stages: string[] = [];
   const failures: unknown[] = [];
   const admissionProbe = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -630,4 +622,19 @@ it("commits verdicts during a terminal history read and rejects revoked read aut
     signal.removeEventListener("abort", unblock);
     await Promise.allSettled([earlier, result]);
   }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  openOpenClawStateDatabase(databaseOptions);
+  using contention = probe.writerLock(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    contention.observe(request.stage);
+    admit(request, grant);
+  });
+  await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+  expect(await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions })).toEqual([
+    expect.objectContaining({ id: "contention" }),
+  ]);
 });

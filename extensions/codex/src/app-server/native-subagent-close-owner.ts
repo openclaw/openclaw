@@ -1,6 +1,7 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeIdentifier, readNativeSubagentThreadIds } from "./native-subagent-assignment.js";
+import { releaseNativeDirectChild } from "./native-subagent-model-source.js";
 import type {
   ChildState,
   KnownChild,
@@ -33,7 +34,6 @@ type NativeSubagentCloseCallbacks = {
   currentChild: (threadId: string) => ChildState | undefined;
   isRegisteredChild: (child: ChildState) => boolean;
   captureForget?: MonitorOptions["captureChildThreadForget"];
-  releaseDirectChild: (child: ChildState) => void;
   clearRecoveryTimers: (child: ChildState) => void;
   markTerminalThread: (threadId: string, parentThreadId: string) => void;
   unregisterChild: (child: ChildState) => void;
@@ -176,7 +176,7 @@ export class CodexNativeSubagentCloseOwner {
       // Closing the native child does not discard its already accepted result.
       // Keep its delivery owner, but never warm the closed subscription later.
       childState.subscriptionClosed = true;
-      this.callbacks.releaseDirectChild(childState);
+      releaseNativeDirectChild(childState);
       this.callbacks.clearRecoveryTimers(childState);
       releaseSubscription?.();
       this.callbacks.releaseClientRetentionIfIdle();

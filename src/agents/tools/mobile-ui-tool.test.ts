@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 
 const listNodesMock = vi.fn();
@@ -113,6 +114,26 @@ it("selects the connected Android node advertising mobileUI", async () => {
   await createMobileUiTool().execute("observe-1", { action: "observe" });
 
   expect(invokeBodies(OBSERVE)[0]).toMatchObject({ nodeId: "android-ready", params: {} });
+});
+
+it("keeps queued calls ordered after a failed observation", async () => {
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  const failure = new Error("node disconnected");
+  listNodesMock.mockImplementationOnce(async () => {
+    started.resolve();
+    await release.promise;
+    throw failure;
+  });
+  installGatewayBehavior();
+  const tool = createMobileUiTool();
+  const failed = expect(tool.execute("first", { action: "observe" })).rejects.toBe(failure);
+  await started.promise;
+  const next = tool.execute("second", { action: "observe" });
+  expect(listNodesMock).toHaveBeenCalledOnce();
+  release.resolve();
+  await failed;
+  await expect(next).resolves.toMatchObject({ details: { snapshotId: "snapshot-1" } });
 });
 
 it.each([
