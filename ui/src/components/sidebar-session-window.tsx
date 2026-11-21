@@ -71,8 +71,8 @@ export function createSidebarSessionWindow(
     return {
       bind: (element: HTMLDivElement) => (list = element),
       rows,
-      height: () => undefined,
-      item: (_key: string) => undefined,
+      trailingSpace: () => undefined,
+      spaceBefore: (_key: string) => undefined,
       focus: (_key: string) => {},
       rowRef: (_key: () => string) => (_element: HTMLDivElement) => {},
     };
@@ -226,8 +226,6 @@ export function createSidebarSessionWindow(
       };
     },
     {
-      // Commit archive geometry before its native exit animation can finish.
-      changeTiming: () => (list?.hasAttribute("data-sidebar-archive-exiting") ? "sync" : undefined),
       targets: () => [
         list,
         ...(scroll.element() ? [scroll.element()!] : []),
@@ -302,21 +300,30 @@ export function createSidebarSessionWindow(
       }),
     );
   });
-  const fullHeight = createMemo(() => {
-    view();
-    return Math.max(
-      0,
-      inputs().reduce((height, input) => {
+  // Let mounted siblings use their real block sizes. Estimates reserve only the
+  // rows omitted by windowing, including gaps around a retained focused row.
+  const spacing = createMemo(() => {
+    const visible = items();
+    const before = new Map<string, number>();
+    let gap = 0;
+    for (const input of inputs()) {
+      if (visible.has(input.row.key)) {
+        if (gap) {
+          before.set(input.row.key, gap);
+        }
+        gap = 0;
+      } else {
         const known = measured.get(input.row.key);
-        return height + (known?.signature === input.signature ? known.height : input.height);
-      }, 0),
-    );
+        gap += known?.signature === input.signature ? known.height : input.height;
+      }
+    }
+    return { before, trailing: gap };
   });
   return {
     bind: (element: HTMLDivElement) => (list = element),
     rows: () => rows().filter((row) => items().has(row.key)),
-    height: () => `${fullHeight()}px`,
-    item: (key: string) => items().get(key),
+    trailingSpace: () => `${spacing().trailing}px`,
+    spaceBefore: (key: string) => `${spacing().before.get(key) ?? 0}px`,
     focus: setFocusedKey,
     rowRef(key: () => string) {
       let element: HTMLDivElement;
