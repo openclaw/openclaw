@@ -463,8 +463,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // before setup or collection can evaluate their source modules.
     if (!this.config.isolate) {
       installCustomElementTracking();
-      installDomResourceTracking();
     }
+    // Per-test leak diagnostics also need tracking when CI isolates each file.
+    installDomResourceTracking();
     return super.importFile(...args);
   }
 
