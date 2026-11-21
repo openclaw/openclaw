@@ -79,6 +79,9 @@ vi.mock("./send.js", async (importOriginal) => ({
 }));
 vi.mock("./bot.js", () => ({
   handleFeishuMessage: mocks.handleMessage,
+}));
+vi.mock("./message-content.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./message-content.js")>()),
   parseFeishuMessageEvent: mocks.parseMessage,
 }));
 vi.mock("./thread-bindings.js", () => ({
