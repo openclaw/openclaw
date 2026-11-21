@@ -651,10 +651,15 @@ history. The candidate and installed updater must both contain this diagnostic
 fix to retain every reason there;
 older updaters still run the same repairs.
 
-Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
-the candidate contains the legacy database-generation adapter. Under maintenance
-custody, candidate Doctor verifies the older updater's entire physical database
-inventory and derives committed-content generations from the same observation.
+Direct updates from 2026.9.7–2026.9.9 and extended-stable
+2026.9.33–2026.9.37 are supported when the candidate contains the legacy
+database-generation adapter. Under maintenance custody, candidate Doctor
+verifies the older updater's entire physical database inventory and derives
+committed-content generations from the same observation. Unmarked rollback
+inspection reads the recorded parent and version from the captured shared-state
+image, including when the requested inventory omits that store, without reopening
+the live ledger during offline maintenance. Later unmarked updaters keep their
+committed-content format.
 Migration attribution and final settlement use those committed generations;
 receipts sent back to the older updater retain its physical fingerprint format.
 Each Doctor interval verifies its input again. Changed data, intervening commits,
