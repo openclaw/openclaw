@@ -492,6 +492,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Tests/Logic
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/TalkConfigParsingTests.swift
+        group: Shared
       - path: ShareExtension/ShareDraftComposer.swift
         group: ShareExtension
       - path: ShareExtension/ShareContentExtractor.swift
