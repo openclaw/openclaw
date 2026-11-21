@@ -449,14 +449,27 @@ export function isConfiguredAgentDatabaseTarget(
   pathname: string,
 ): boolean {
   // Only concrete files prove aliases; preserve exact configured claims for inspection.
-  return targets.some(
-    (target) =>
-      (agentId === undefined || target.agentId === undefined || target.agentId === agentId) &&
-      (target.path === pathname ||
-        (fsSync.statSync(target.path, { throwIfNoEntry: false }) &&
-          fsSync.statSync(pathname, { throwIfNoEntry: false }) &&
-          isSameOpenClawAgentDatabasePath(target.path, pathname))),
-  );
+  const owner = (target: { agentId?: string }) =>
+    agentId === undefined || target.agentId === undefined || target.agentId === agentId;
+  // The database preflight calls this per candidate row; stat each side once
+  // instead of once per non-matching target.
+  if (targets.some((target) => owner(target) && target.path === pathname)) {
+    return true;
+  }
+  let pathnameExists: boolean | undefined;
+  for (const target of targets) {
+    if (!owner(target) || !fsSync.statSync(target.path, { throwIfNoEntry: false })) {
+      continue;
+    }
+    pathnameExists ??= Boolean(fsSync.statSync(pathname, { throwIfNoEntry: false }));
+    if (!pathnameExists) {
+      return false;
+    }
+    if (isSameOpenClawAgentDatabasePath(target.path, pathname)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Resolves session store targets from explicit CLI-style selection options. */
