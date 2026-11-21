@@ -225,6 +225,73 @@ describe("cron stream output", () => {
     await watchers.stopAll("shutdown");
   });
 
+  it("retries a batch whose fire was rejected by a locked state database", async () => {
+    // node:sqlite reports SQLITE_BUSY as ERR_SQLITE_ERROR with errcode 5.
+    const locked = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
+    const fireBatch = vi
+      .fn<() => Promise<"fired">>()
+      .mockRejectedValueOnce(locked)
+      .mockResolvedValue("fired");
+    const { fake, updateState, watchers } = createCronStreamWatcherFixture({
+      minIntervalMs: 1,
+      fireBatch,
+    });
+    await watchers.reconcile([job()], true);
+    await settle();
+
+    fake.inputs[0]?.onStdout?.("turn ended\n");
+    await vi.advanceTimersByTimeAsync(50);
+    await settle();
+    expect(fireBatch).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(fireBatch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(100);
+    await settle();
+    expect(fireBatch).toHaveBeenCalledTimes(2);
+    expect(fireBatch).toHaveBeenLastCalledWith(...batchArgs("turn ended"));
+    expect(updateState).not.toHaveBeenCalledWith(...stateArgs({ streamDroppedBatches: 1 }));
+    await watchers.stopAll("shutdown");
+  });
+
+  it("counts a batch as lost after the database stays locked through every retry", async () => {
+    const locked = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
+    // A busy job between lock rejections must not refill the same batch's retry budget.
+    const fireBatch = vi
+      .fn<() => Promise<"fired" | "busy">>()
+      .mockRejectedValueOnce(locked)
+      .mockResolvedValueOnce("busy")
+      .mockRejectedValueOnce(locked)
+      .mockResolvedValueOnce("busy")
+      .mockRejectedValueOnce(locked)
+      .mockRejectedValue(locked);
+    const { fake, updateState, watchers } = createCronStreamWatcherFixture({
+      minIntervalMs: 1,
+      fireBatch,
+    });
+    await watchers.reconcile([job()], true);
+    await settle();
+
+    fake.inputs[0]?.onStdout?.("turn ended\n");
+    await vi.advanceTimersByTimeAsync(50);
+    for (let step = 0; step < 12; step += 1) {
+      await settle();
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    await settle();
+
+    // Four lock rejections and two busy settlements, then the batch is counted.
+    expect(fireBatch).toHaveBeenCalledTimes(6);
+    expect(updateState).toHaveBeenCalledWith(...stateArgs({ streamDroppedBatches: 1 }));
+    await watchers.stopAll("shutdown");
+  });
+
   it("fires a batch for an empty line accepted by match mode", async () => {
     const { fake, fireBatch, watchers } = fixture();
     await watchers.reconcile([createCronStreamMatchingJob("^$")], true);
