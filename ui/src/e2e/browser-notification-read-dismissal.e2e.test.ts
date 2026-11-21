@@ -239,7 +239,9 @@ suite.define(() => {
           await phase("active candidate code identity", async () => {
             await expect
               .poll(async () => {
-                const url = await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL);
+                const url = await page.evaluate(
+                  () => navigator.serviceWorker.controller?.scriptURL,
+                );
                 const worker = context.serviceWorkers().find((item) => item.url() === url);
                 return worker?.evaluate("EMBEDDED_CACHE_VERSION").catch(() => null);
               })

@@ -1,5 +1,5 @@
-# Issue #202178: 704 lines above the 400-line regression budget.
+# Issue #202178: 706 lines above the 400-line regression budget.
 # Producer/recipient, service-worker ordering, lazy admission, real transcript
 # layout and Chromium released-worker upgrade/view/foreground/late-push boundaries.
 # Historical worker fixture is pinned verbatim and is not test logic.
-704
+706
