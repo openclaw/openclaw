@@ -181,8 +181,8 @@ class OverviewLayoutTest {
           remoteIp = null,
           roles = listOf("node"),
           scopes = emptyList(),
-          tokens = emptyList(),
-          approvedAtMs = null,
+          tokenCount = 0,
+          activeTokenCount = 0,
         ),
       )
     val cases =

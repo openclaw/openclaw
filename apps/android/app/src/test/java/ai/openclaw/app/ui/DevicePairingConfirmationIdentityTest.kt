@@ -16,10 +16,13 @@ import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
+import android.graphics.Bitmap
 import android.os.Looper
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -27,6 +30,8 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onLast
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.core.os.LocaleListCompat
@@ -40,14 +45,47 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.util.ReflectionHelpers
+import java.io.File
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class DevicePairingConfirmationIdentityTest {
   @get:Rule
   val composeRule = createComposeRule()
+
+  @Test
+  fun pairedTokenCountsKeepStatusLabelsAndSubtitles() {
+    val devices =
+      listOf(
+        pairedDevice("paired", "Paired only"),
+        pairedDevice("active", "Active tokens").copy(tokenCount = 3, activeTokenCount = 2),
+        pairedDevice("revoked", "Revoked tokens").copy(tokenCount = 2, activeTokenCount = 0),
+      )
+    withScreen(GatewayNodesDevicesSummary(emptyList(), emptyList(), devices)) {
+      listOf("Paired", "Active", "Needs Token").forEach {
+        composeRule.onNodeWithText(it).performScrollTo().assertIsDisplayed()
+      }
+      listOf("0/0 active tokens", "2/3 active tokens", "0/2 active tokens").forEach {
+        composeRule.onNodeWithText(it, substring = true).performScrollTo().assertIsDisplayed()
+      }
+      val directory = File("build/outputs/device-token-proof")
+      check(directory.mkdirs() || directory.isDirectory)
+      val target = File(directory, "paired-token-statuses.png")
+      target.outputStream().use { stream ->
+        check(
+          composeRule
+            .onRoot()
+            .captureToImage()
+            .asAndroidBitmap()
+            .compress(Bitmap.CompressFormat.PNG, 100, stream),
+        )
+      }
+    }
+  }
 
   @Test
   fun removalNamesTheSelectedDeviceAndCancelRetiresItsIdentity() {
@@ -131,8 +169,8 @@ class DevicePairingConfirmationIdentityTest {
       remoteIp = null,
       roles = listOf("operator"),
       scopes = listOf("operator.read"),
-      tokens = emptyList(),
-      approvedAtMs = null,
+      tokenCount = 0,
+      activeTokenCount = 0,
     )
 
   private fun withScreen(
