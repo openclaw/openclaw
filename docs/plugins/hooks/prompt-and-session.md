@@ -329,9 +329,10 @@ When sender identity is available, agent hook contexts also include:
   under a channel-owned object plugins can extend with channel-specific
   fields.
 - `ctx.channelContext.voice.finalizedTranscript` - the completed utterance
-  supplied by Discord batch voice for this run. Hooks with conversation access
-  can use it with `ctx.senderId` and `ctx.runId` to correlate the words with the
-  speaker. It is absent on realtime delegations without a finalized utterance.
+  supplied by Discord batch voice or matched by the GPT-Live subscription
+  provider to this realtime delegation. Hooks with conversation access can use
+  it with `ctx.senderId` and `ctx.runId` to correlate the words with the speaker.
+  Realtime delegations without an explicit match omit this field.
 - `ctx.requesterDeviceId` - the paired device id of the Gateway connection
   that sent the turn, set only after the Gateway verified that device's
   signature. It never comes from request params or the client's declared

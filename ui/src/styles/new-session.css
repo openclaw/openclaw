@@ -1048,6 +1048,9 @@ span.new-session-page__select {
      page and the identity centers in the space above the draft. Auto margins
      yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome {
+    /* The member step replaces the composer and needs the same space below it. */
+    --member-welcome-gap: 10px;
+
     flex: 1 0 auto;
     min-height: auto;
     margin-block: 0;

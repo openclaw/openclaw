@@ -22,12 +22,14 @@ import { OpenAIQuicksilverTranscript } from "./realtime-quicksilver-transcript.j
 import {
   boundOpenAIQuicksilverDelegationResult,
   chunkOpenAIQuicksilverAppendText,
+  OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES,
   parseOpenAIQuicksilverEvent,
   type OpenAIQuicksilverInboundEvent,
 } from "./realtime-quicksilver-wire.js";
 import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 const WEBSOCKET_OPEN = 1;
+const MAX_FINALIZED_USER_TURNS = 32;
 const CONSULT_FAILURE_TEXT =
   "The agent task failed. Tell the user it did not complete and offer to try again.";
 // Keep the launch note in one append; it does not establish consultation admission.
@@ -44,6 +46,7 @@ const NATURAL_DELEGATION_ACK_MESSAGE = [
 type PendingDelegation = {
   id: string;
   prompt: string;
+  finalizedUserTranscript?: string;
 };
 
 type InternalAgentConsultRequest = Parameters<RealtimeVoiceAgentConsultRunner>[0] & {
@@ -128,6 +131,7 @@ export class OpenAIQuicksilverDelegationController {
   private stopped = false;
   private drainDisposition: "abort" | "detach" | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
+  private readonly finalizedUserTurns = new Map<string, string>();
   private readonly delegations: OpenAILiveDelegationQueue;
 
   constructor(
@@ -137,7 +141,7 @@ export class OpenAIQuicksilverDelegationController {
     this.delegations = new OpenAILiveDelegationQueue({
       isActive: () => !this.stopped && !this.drainDisposition && !options.signal.aborted,
       readInput: () => this.transcript.latestUserInput(),
-      dispatch: (id, input) => this.startDelegation(id, input),
+      dispatch: (id, input, finalized) => this.startDelegation(id, input, finalized),
       onExpired: (id) => {
         this.sendAppend(
           "Ask the user to repeat their request; no user transcript was received.",
@@ -229,6 +233,9 @@ export class OpenAIQuicksilverDelegationController {
       } else {
         this.transcript.append(event);
         this.options.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
+        if (event.kind === "transcript-done" && event.role === "user" && event.turnId) {
+          this.recordFinalizedUserTurn(event.turnId, event.text);
+        }
       }
       return;
     }
@@ -244,6 +251,9 @@ export class OpenAIQuicksilverDelegationController {
     }
     if (isOpenAIGptLiveApiModel(this.options.model)) {
       this.delegations.enqueue(event.id);
+    } else if (event.userTurnId) {
+      const userTurnId = event.userTurnId;
+      this.delegations.enqueue(event.id, () => this.finalizedUserTurns.get(userTurnId));
     } else {
       if (!this.delegations.claim(event.id)) {
         return;
@@ -306,7 +316,27 @@ export class OpenAIQuicksilverDelegationController {
     return snapshot.context;
   }
 
-  private startDelegation(id: string, input: string): void {
+  private recordFinalizedUserTurn(id: string, text: string): void {
+    if (
+      this.stopped ||
+      this.drainDisposition ||
+      !text.trim() ||
+      this.finalizedUserTurns.has(id) ||
+      Buffer.byteLength(text, "utf8") > OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES
+    ) {
+      return;
+    }
+    if (this.finalizedUserTurns.size >= MAX_FINALIZED_USER_TURNS) {
+      const oldest = this.finalizedUserTurns.keys().next();
+      if (!oldest.done) {
+        this.finalizedUserTurns.delete(oldest.value);
+      }
+    }
+    this.finalizedUserTurns.set(id, text);
+    this.delegations.resume();
+  }
+
+  private startDelegation(id: string, input: string, finalizedUserTranscript?: string): void {
     if (this.stopped || this.drainDisposition || this.options.signal.aborted || !input.trim()) {
       return;
     }
@@ -350,6 +380,7 @@ export class OpenAIQuicksilverDelegationController {
     const delegation = {
       id,
       prompt: buildOpenAIQuicksilverDelegationPrompt({ input, transcript }),
+      ...(finalizedUserTranscript ? { finalizedUserTranscript } : {}),
     };
     if (this.consultController) {
       this.pendingDelegation = delegation;
@@ -464,6 +495,7 @@ export class OpenAIQuicksilverDelegationController {
     this.options.signal.removeEventListener("abort", this.onSessionAbort);
     this.pendingDelegation = undefined;
     this.transcript.clear();
+    this.finalizedUserTurns.clear();
     return true;
   }
 
@@ -482,6 +514,9 @@ export class OpenAIQuicksilverDelegationController {
       }
       const result = await runner({
         prompt: delegation.prompt,
+        ...(delegation.finalizedUserTranscript
+          ? { finalizedUserTranscript: delegation.finalizedUserTranscript }
+          : {}),
         signal,
         requesterFinal: {
           append: (finalText) => this.appendRequesterFinal(generation, finalText),
