@@ -63,7 +63,8 @@ import {
   sessionKeyBelongsToAgent,
 } from "./sessions-abort-target.js";
 import { requireSessionKey } from "./sessions-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { withStopStateContention } from "./stop-state-contention.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function sessionAbortResult(abortedRunId: string | null, aborted: boolean, warning?: string) {
@@ -75,8 +76,8 @@ function sessionAbortResult(abortedRunId: string | null, aborted: boolean, warni
   };
 }
 
-export const sessionAbortHandlers: GatewayRequestHandlers = {
-  "sessions.abort": async (options) => {
+const unclassifiedSessionAbortHandlers = {
+  "sessions.abort": async (options: GatewayRequestHandlerOptions) => {
     const { params, respond, context, client, sessionMutationAuthorization } = options;
     const { requester, assertRequesterCurrent, narrow } = captureChatAbortAuthority(options);
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
@@ -608,4 +609,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       });
     }
   },
+};
+
+export const sessionAbortHandlers: GatewayRequestHandlers = {
+  // Recovered embedded runs can only be stopped here, so keep chat.abort's contention outcome.
+  "sessions.abort": (options) =>
+    withStopStateContention(options.respond, () =>
+      unclassifiedSessionAbortHandlers["sessions.abort"](options),
+    ),
 };
