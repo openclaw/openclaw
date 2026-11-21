@@ -3,7 +3,7 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareEmbeddedSessionState } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
@@ -84,6 +84,8 @@ import {
 } from "./test-helpers.js";
 
 describe("private subagent completion processing receipts", () => {
+  const runEmbeddedAgent = embeddedAgent.runEmbeddedAgent;
+  const execution = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
   let harness: GatewayServerHarness;
   let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
   let sequence = 0;
@@ -108,7 +110,17 @@ describe("private subagent completion processing receipts", () => {
       harness = await startGatewayServerHarness();
     });
   }
-  installGatewayTestHooks({ scope: "suite", setup: start, cleanup: async () => harness?.close() });
+  installGatewayTestHooks({
+    scope: "suite",
+    setup: start,
+    cleanup: async () => {
+      try {
+        await harness?.close();
+      } finally {
+        execution.mockRestore();
+      }
+    },
+  });
   beforeEach(async () => {
     sequence += 1;
     sessionKey = `agent:main:private-receipt-${sequence}`;
@@ -230,69 +242,115 @@ describe("private subagent completion processing receipts", () => {
     source,
     agentCommandMock,
   });
-  registerSessionsSendPrivateCompletionTests(() => ({
-    ...fixture(),
-    verifyChatSuccessor: async (signal) => {
-      const successorRunId = `chat-after-private-${sequence}`;
-      const entered = createDeferred();
-      const execution = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
-        entered.resolve();
-        return { payloads: [{ text: "Synthetic successor answer" }], meta: { durationMs: 0 } };
+  async function verifyChatSuccessor(signal: AbortSignal, onExecution?: () => Promise<void>) {
+    const successorRunId = `chat-after-private-${sequence}`;
+    const entered = createDeferred();
+    // Lazy reply modules retain this spy: keep its identity until the suite closes.
+    execution.mockClear().mockImplementation(async () => {
+      entered.resolve();
+      if (onExecution) {
+        await onExecution();
+      }
+      return { payloads: [{ text: "Synthetic successor answer" }], meta: { durationMs: 0 } };
+    });
+    gatewayReplyMock.mockImplementation(getReplyFromConfig);
+    const { ws } = await harness.openClient({
+      browserOrigin: "http://private-completion.test",
+      client: {
+        id: "openclaw-control-ui",
+        version: "test",
+        platform: "test",
+        mode: "webchat",
+      },
+    });
+    const terminal = onceMessage(
+      ws,
+      (frame) =>
+        frame.type === "event" &&
+        frame.event === "chat" &&
+        frame.payload?.runId === successorRunId &&
+        ["final", "error", "aborted"].includes(String(frame.payload?.state)),
+    );
+    void terminal.catch(() => undefined);
+    try {
+      const acknowledged = await rpcReq(ws, "chat.send", {
+        sessionKey,
+        message: "Please answer after the retained child completion.",
+        idempotencyKey: successorRunId,
       });
-      gatewayReplyMock.mockImplementation(getReplyFromConfig);
-      const { ws } = await harness.openClient({
-        browserOrigin: "http://private-completion.test",
-        client: {
-          id: "openclaw-control-ui",
-          version: "test",
-          platform: "test",
-          mode: "webchat",
-        },
+      expect(acknowledged).toMatchObject({
+        ok: true,
+        payload: { runId: successorRunId, status: "started" },
       });
-      const terminal = onceMessage(
-        ws,
-        (frame) =>
-          frame.type === "event" &&
-          frame.event === "chat" &&
-          frame.payload?.runId === successorRunId &&
-          ["final", "error", "aborted"].includes(String(frame.payload?.state)),
+      await createTestGate(signal)(
+        entered.promise,
+        terminal,
+        "Successor terminated before reaching the real runner's embedded-agent boundary",
       );
-      void terminal.catch(() => undefined);
+      const final = await withinTest(terminal, signal);
+      expect(final.payload?.state).toBe("final");
+      expect(execution).toHaveBeenCalledOnce();
+    } finally {
       try {
-        const acknowledged = await rpcReq(ws, "chat.send", {
-          sessionKey,
-          message: "Please answer after the retained child completion.",
-          idempotencyKey: successorRunId,
-        });
-        expect(acknowledged).toMatchObject({
-          ok: true,
-          payload: { runId: successorRunId, status: "started" },
-        });
-        await createTestGate(signal)(
-          entered.promise,
-          terminal,
-          "Successor terminated before reaching the real runner's embedded-agent boundary",
+        // A failed wait does not end the accepted run. Join its owner before restoring
+        // the runner or allowing the next case to replace the shared session store.
+        await withPluginRuntimeGatewayContextResolver(resolveGatewayContext(), () =>
+          captureSessionControllerSettlement({
+            scope: storePath,
+            identities: [sessionKey, sessionId],
+          }),
         );
-        const final = await withinTest(terminal, signal);
-        expect(final.payload?.state).toBe("final");
-        await withinTest(
-          withPluginRuntimeGatewayContextResolver(resolveGatewayContext(), () =>
-            captureSessionControllerSettlement({
-              scope: storePath,
-              identities: [sessionKey, sessionId],
-            }),
-          ) ?? Promise.resolve(),
-          signal,
-        );
-        expect(execution).toHaveBeenCalledOnce();
-        expect(pending()).toEqual([]);
       } finally {
         ws.close();
         gatewayReplyMock.mockReset();
-        execution.mockRestore();
+        execution.mockImplementation(runEmbeddedAgent);
       }
-    },
-  }));
+    }
+    expect(pending()).toEqual([]);
+  }
+  registerSessionsSendPrivateCompletionTests(() => ({ ...fixture(), verifyChatSuccessor }));
+
+  it("joins a cancelled chat successor before the next fixture mutation", async ({ signal }) => {
+    const cancelled = new AbortController();
+    const reason = new Error("synthetic successor test cancellation");
+    const entered = createDeferred();
+    const release = createDeferred();
+    let settled = false;
+    const successor = verifyChatSuccessor(cancelled.signal, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const result = observe(successor).then((outcome) => {
+      settled = true;
+      return outcome;
+    });
+    try {
+      await createTestGate(signal)(
+        entered.promise,
+        successor,
+        "Successor fixture ended before reaching the embedded-agent boundary",
+      );
+      cancelled.abort(reason);
+      await nextEventLoopTurn();
+      expect(settled, "cancelled fixture must join its running successor before returning").toBe(
+        false,
+      );
+      release.resolve();
+      expect(await withinTest(result, signal)).toEqual({ error: reason });
+      // Exercise the same store mutation used by the next case's beforeEach.
+      await writeSessionStore({ entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } } });
+    } finally {
+      // A red regression must also release and join the actual successor.
+      release.resolve();
+      await result;
+      await withPluginRuntimeGatewayContextResolver(resolveGatewayContext(), () =>
+        captureSessionControllerSettlement({
+          scope: storePath,
+          identities: [sessionKey, sessionId],
+        }),
+      );
+    }
+  });
 
   async function processPrivateInput(input: unknown) {
     await recorder(input).persistApproved();
