@@ -268,7 +268,7 @@ export async function loadModelsProviderData(
       }
       return resolveLogicalModelCatalogEntryState({
         evaluation,
-        authBacked: options.view === "all" || evaluation.availability === true,
+        authBacked: options.view === "all" ? true : undefined,
       });
     },
   });
