@@ -932,3 +932,98 @@ describe("Telegram preview send authority", () => {
     expect(api.editMessageText).toHaveBeenCalledOnce();
   });
 });
+
+describe("rich draft plain fallback limits", () => {
+  const RICH_REJECTION = "400: Bad Request: RICH_MESSAGE_ENTITIES_INVALID";
+
+  function oversizedRichAnswer(label: string): string {
+    return Array.from({ length: 900 }, (_, index) => `${label}${index}`).join(" ");
+  }
+
+  it("bounds an oversized rich preview send and edit fallback to one plain message", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValue(new Error(RICH_REJECTION));
+    api.raw.editMessageText.mockRejectedValue(new Error(RICH_REJECTION));
+    const stream = createDraftStream(api, { richMessages: true });
+    const firstAnswer = oversizedRichAnswer("preview");
+    expect(firstAnswer.length).toBeGreaterThan(4096);
+
+    stream.update(firstAnswer);
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledOnce();
+    const sendCall = api.sendMessage.mock.calls[0];
+    expect(sendCall?.[0]).toBe(123);
+    // One visible preview message, bounded by Telegram's plain text chunk limit.
+    const sentText = sendCall?.[1] ?? "";
+    expect(sentText.length).toBeLessThanOrEqual(4000);
+    expect(firstAnswer.startsWith(sentText)).toBe(true);
+    // A bounded fallback must not stop the live preview for the rest of the turn.
+    expect(stream.isStopped()).toBe(false);
+
+    const secondAnswer = oversizedRichAnswer("edited");
+    stream.update(secondAnswer);
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).toHaveBeenCalledOnce();
+    const editCall = api.editMessageText.mock.calls[0];
+    expect(editCall?.[1]).toBe(17);
+    const editedText = editCall?.[2] ?? "";
+    expect(editedText.length).toBeLessThanOrEqual(4000);
+    expect(secondAnswer.startsWith(editedText)).toBe(true);
+    expect(stream.isStopped()).toBe(false);
+    expect(api.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [5000, "already truncated"],
+    [4000, "fits until the append"],
+  ])(
+    "keeps the visible preview bounded when an unchanged fallback edit is accepted (%i chars, %s)",
+    async (size) => {
+      const api = createMockDraftApi();
+      api.raw.sendRichMessage.mockRejectedValue(new Error(RICH_REJECTION));
+      api.raw.editMessageText.mockRejectedValue(new Error(RICH_REJECTION));
+      const notModified = new Error("400: Bad Request: message is not modified");
+      let plainEditCalls = 0;
+      api.editMessageText.mockImplementation(async () => {
+        plainEditCalls += 1;
+        // The first plain edit is the unchanged bounded fallback; later ones are the
+        // final delivery and are accepted.
+        if (plainEditCalls === 1) {
+          throw notModified;
+        }
+        return true;
+      });
+      const stream = createDraftStream(api, { richMessages: true });
+      const preview = "a".repeat(size);
+      const answer = `${preview}b`;
+
+      stream.update(preview);
+      await stream.flush();
+      // One bounded plain preview is visible, never more than one chunk.
+      expect(api.sendMessage).toHaveBeenCalledOnce();
+      expect(stream.lastDeliveredText()).toHaveLength(4000);
+
+      stream.update(answer);
+      await stream.flush();
+      // The rich edit was rejected and the plain fallback was identical to the visible
+      // text, so Telegram answers "message is not modified". The visible snapshot must
+      // stay the bounded one and the truncation receipt must still be set, otherwise
+      // stop() treats the appended character as delivered.
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+      expect(stream.lastDeliveredText()).toHaveLength(4000);
+      expect(stream.isStopped()).toBe(false);
+
+      await stream.stop();
+
+      // Final delivery still reaches for the whole answer rather than trusting the
+      // truncated preview: a later plain edit carries text beyond the preview.
+      const delivered = api.editMessageText.mock.calls.map((call) => String(call[2] ?? ""));
+      expect(delivered.some((text) => text.length > 4000)).toBe(true);
+      expect(delivered.join("")).toContain("b");
+    },
+  );
+});

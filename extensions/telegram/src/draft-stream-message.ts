@@ -11,6 +11,7 @@ import {
   deliverTelegramTextPage,
   type TelegramTextDeliveryPage,
 } from "./telegram-text-delivery.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
 export type TelegramDraftPreview = {
   text: string;
@@ -45,6 +46,8 @@ async function deliverDraftPage<T>(params: {
   page: TelegramTextDeliveryPage;
   context: string;
   warn?: (message: string) => void;
+  /** A live preview replaces one visible message; its plain fallback stays one bounded send. */
+  previewFallback?: boolean;
   send: (
     content: Pick<TelegramDraftPreview, "text" | "parseMode" | "richMessage"> & {
       entities?: MessageEntity[];
@@ -61,14 +64,16 @@ async function deliverDraftPage<T>(params: {
     });
   }
   const send = async () => {
+    const deliveredPage = { ...page, degradationReasons: undefined };
     const [delivery] = await deliverTelegramTextPage({
       // Preview diagnostics precede request admission; do not emit them again inside it.
-      page: { ...page, degradationReasons: undefined },
+      page: deliveredPage,
       html: page.sourceTextMode === "html",
       context: params.context,
       warn: (message) => params.warn?.(message),
-      // A preview replaces one message; its fallback must remain a single send.
-      fallbackLimit: Number.MAX_SAFE_INTEGER,
+      // A preview replaces one message: bound its plain fallback to one chunk.
+      fallbackLimit: params.previewFallback ? TELEGRAM_TEXT_CHUNK_LIMIT : Number.MAX_SAFE_INTEGER,
+      ...(params.previewFallback ? { singleFallbackPart: true } : {}),
       sender: {
         sendPlain: (text, _fallback, _label, entities) =>
           params.send({ text, ...(entities?.length ? { entities } : {}) }),
@@ -76,7 +81,18 @@ async function deliverDraftPage<T>(params: {
         sendRich: (richMessage) => params.send({ text: page.plainText, richMessage }),
       },
     });
-    return { message: delivery!.result, snapshot: toDraftSnapshot(delivery!.page) };
+    return {
+      message: delivery!.result,
+      snapshot: toDraftSnapshot(delivery!.page),
+      // The preview shows only the first bounded plain chunk; the remaining
+      // content stays deliverable by the final answer's own pagination.
+      truncated: Boolean(
+        params.previewFallback &&
+        page.richMessage &&
+        page.plainText.length > TELEGRAM_TEXT_CHUNK_LIMIT &&
+        delivery!.page.plainText.length <= TELEGRAM_TEXT_CHUNK_LIMIT,
+      ),
+    };
   };
   return await (params.request ? params.request(send) : send());
 }
@@ -89,12 +105,14 @@ export async function editTelegramDraftMessage(params: {
   linkPreviewParams: NonNullable<Parameters<Bot["api"]["editMessageText"]>[3]>;
   request: <T>(send: () => Promise<T>) => Promise<T>;
   warn?: (message: string) => void;
-}): Promise<TelegramDraftMessageSnapshot> {
+  previewFallback?: boolean;
+}): Promise<{ snapshot: TelegramDraftMessageSnapshot; truncated: boolean }> {
   const delivery = await deliverDraftPage<unknown>({
     page: params.page,
     context: "stream preview edit",
     warn: params.warn,
     request: params.request,
+    previewFallback: params.previewFallback,
     send: ({ text, parseMode, richMessage, entities }) => {
       if (richMessage) {
         return params.api.raw.editMessageText({
@@ -114,7 +132,7 @@ export async function editTelegramDraftMessage(params: {
         : params.api.editMessageText(params.chatId, params.messageId, text);
     },
   });
-  return delivery.snapshot;
+  return { snapshot: delivery.snapshot, truncated: delivery.truncated };
 }
 
 export async function sendTelegramDraftMessage(params: {
@@ -125,6 +143,7 @@ export async function sendTelegramDraftMessage(params: {
   linkPreviewParams: Record<string, unknown>;
   assertCurrentSend: () => void;
   warn?: (message: string) => void;
+  previewFallback?: boolean;
 }) {
   const { chatId, linkPreviewParams, page, assertCurrentSend } = params;
   const sendPlannedMessage = (sendMessageParams: Record<string, unknown>) =>
@@ -132,6 +151,7 @@ export async function sendTelegramDraftMessage(params: {
       page,
       context: "stream preview",
       warn: params.warn,
+      previewFallback: params.previewFallback,
       send: ({ text, parseMode, richMessage, entities }) => {
         assertCurrentSend();
         return richMessage
