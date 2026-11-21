@@ -41,6 +41,15 @@ describe("web readability extractor", () => {
     }
   });
 
+  it.each([
+    ['<base target="_blank" />', "/next"],
+    ['<base href="/docs/guide/" />', "/docs/next"],
+    ['<base href="https://example.com/manual.html" />', "/next"],
+  ])("resolves article links against the first href base %s", async (base, next) => {
+    const result = await extractArticle(SAMPLE_HTML.replace("</head>", `${base}</head>`), "markdown");
+    expect(result.text).toContain(`[Continue reading](https://example.com${next})`);
+  });
+
   it("extracts readable markdown", async () => {
     const extracted = await extractArticle(SAMPLE_HTML, "markdown");
     expect(extracted.text).toContain("Main content starts here");
