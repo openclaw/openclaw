@@ -27,7 +27,7 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
-  resolveRecordedProjectRoot,
+  resolveRecordedProjectByRoot,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
@@ -297,15 +297,11 @@ async function prepareSpawnParentWorktreeSource(
       sessionRoot === spawnedCwd &&
       !execNode &&
       !deviceFolder
-        ? await resolveRecordedProjectRoot(sessionRoot)
+        ? await resolveRecordedProjectByRoot(sessionRoot)
         : undefined;
     const projectId =
       normalizeOptionalString(parent.entry.projectId) ??
-      (recordedRoot
-        ? (await listProjectRegistry(parent.cfg)).find(
-            (project) => project.source !== "workspace" && project.repoRoot === recordedRoot,
-          )?.id
-        : undefined);
+      (recordedRoot?.source !== "workspace" ? recordedRoot?.id : undefined);
     if (!projectId) {
       return undefined;
     }
