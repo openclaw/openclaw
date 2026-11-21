@@ -88,7 +88,7 @@ Classify a failure before changing Git state:
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
 - Qualification harness/contract defect: a tooling-only repair can preserve C
-  and select an explicit reviewed main-ancestor Q through a new admission and
+  and select an explicit reviewed exact Q through a new admission and
   successful parent. Missing contracts need a deliberate Q repair or candidate
   backport, not a moving-main fallback. Follow the
   [frozen-C recovery procedure](../../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate);

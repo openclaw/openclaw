@@ -5,6 +5,7 @@ import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import type { SystemdServiceStartRefusal } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { settleGitReleaseTrial } from "../../infra/git-release.js";
 import {
   normalizeUpdateFailureFacts,
@@ -32,6 +33,7 @@ import {
   renderRestartDiagnostics,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
+import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   createPluginUpdateWarning,
@@ -205,18 +207,74 @@ function updateGatewayHealthFacts(
   };
 }
 
+function verifiedLateGitSuccessor(
+  params: UpdateGatewayReadinessParams,
+  health: GatewayRestartSnapshot,
+  incumbentPid: number | undefined,
+  waitStartedAtMs: number,
+): boolean {
+  const { runtime, portUsage } = health;
+  if (
+    !incumbentPid ||
+    !params.expectedVersion ||
+    health.gatewayVersion !== params.expectedVersion ||
+    !params.expectedBuildId ||
+    health.gatewayBuildId !== params.expectedBuildId ||
+    runtime.status !== "running" ||
+    runtime.pid === undefined ||
+    portUsage.status !== "busy" ||
+    !allListenersOwnedByRuntimePid(portUsage.listeners, runtime.pid)
+  ) {
+    return false;
+  }
+  // A service PID may be a wrapper. The freshly bound Gateway owner itself must
+  // be the listener we probed, not merely a different PID in the same service.
+  const listenerPid = portUsage.listeners[0]?.pid;
+  if (
+    !listenerPid ||
+    listenerPid === incumbentPid ||
+    !portUsage.listeners.every((listener) => listener.pid === listenerPid)
+  ) {
+    return false;
+  }
+  try {
+    const owner = readGatewayOwnerLease({
+      env: params.serviceEnv,
+      port: params.gatewayPort,
+      current: true,
+    });
+    return Boolean(
+      owner?.owner &&
+      owner.state === "live" &&
+      !owner.expired &&
+      owner.pid === listenerPid &&
+      owner.listeningAt !== undefined &&
+      owner.listeningAt > waitStartedAtMs &&
+      owner.listeningAt <= Date.now(),
+    );
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return false; // An unavailable current lease cannot corroborate turnover.
+  }
+}
+
 /** Verify core activation while preserving plugin failures as separate notices. */
 export async function verifyUpdatedGateway(
   params: UpdateGatewayReadinessParams & {
     result: UpdateRunResult;
     opts: UpdateCommandOptions;
     onVerified?: (verifiedAtMs: number) => void;
+    unverifiedGitHandoff?: { incumbentPid?: number; waitStartedAtMs?: number };
     purpose?: "recovery" | "package-replacement";
   },
 ): Promise<{
   ok: boolean;
   summary: string;
-  stopReason?: string;
+  stopReason?: "still-starting" | "gateway-readiness-pending";
+  /** A terminal service/port observation, not a pending verification. */
+  serviceStoppedFree?: true;
   pluginWarnings?: PluginUpdateWarning[];
   serviceDefinitionRefusal?: SystemdServiceStartRefusal;
 }> {
@@ -258,20 +316,31 @@ export async function verifyUpdatedGateway(
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
+  const before = params.result.before;
+  const distinctCore =
+    (before?.version && params.expectedVersion && before.version !== params.expectedVersion) ||
+    (before?.buildId && params.expectedBuildId && before.buildId !== params.expectedBuildId);
+  // Matching a distinct target can prove core activation; an incumbent can serve the
+  // same build before and after a plugin change without ever loading that change.
+  const handoffPending =
+    health.healthy &&
+    params.unverifiedGitHandoff &&
+    (!distinctCore || params.result.postUpdate?.plugins?.changed) &&
+    !verifiedLateGitSuccessor(
+      params,
+      health,
+      params.unverifiedGitHandoff.incumbentPid,
+      params.unverifiedGitHandoff.waitStartedAtMs ?? startedAtMs,
+    );
+  const observed = updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady);
+  if (handoffPending) {
+    observed.settled = false; // Preserve the actual PID, build, and endpoint observations.
+  }
   assertCurrent();
   if (params.purpose === "recovery") {
-    params.result.verification = updateGatewayHealthFacts(
-      health,
-      params.gatewayPort,
-      readyz,
-      http?.coreReady,
-    );
+    params.result.verification = observed;
   } else if (proofOptions.run) {
-    recordUpdateRunVerification(
-      proofOptions.run.runId,
-      updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady),
-      proofOptions.run,
-    );
+    recordUpdateRunVerification(proofOptions.run.runId, observed, proofOptions.run);
   }
   const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
   if (
@@ -338,7 +407,7 @@ export async function verifyUpdatedGateway(
       }
     }
   };
-  if (health.healthy && serviceRunning && coreReady) {
+  if (health.healthy && serviceRunning && coreReady && !handoffPending) {
     const pluginFailures = new Map<string, string>();
     for (const failure of health.activatedPluginErrors ?? []) {
       pluginFailures.set(failure.id, failure.error);
@@ -384,9 +453,18 @@ export async function verifyUpdatedGateway(
       ...(pluginWarnings.length > 0 ? { pluginWarnings } : {}),
     };
   }
-  if (params.purpose !== "package-replacement" && gatewayReadinessPending(health)) {
+  if (
+    params.purpose !== "package-replacement" &&
+    (handoffPending || gatewayReadinessPending(health))
+  ) {
+    const summary = handoffPending
+      ? "Gateway is serving, but the cooperative Git release restart remains unverified."
+      : "Gateway is still starting; readiness remains unverified.";
+    const incumbentPid = params.unverifiedGitHandoff?.incumbentPid;
     const detail = [
-      "Gateway readiness is pending; leaving the observed running process starting without another recovery restart or rollback.",
+      handoffPending
+        ? `${summary}${incumbentPid ? ` Previous Gateway PID: ${incumbentPid}.` : ""} No second restart was requested.`
+        : "Gateway readiness is pending; leaving the observed running process starting without another recovery restart or rollback.",
       ...renderRestartDiagnostics(health),
       ...(http ? [`Last HTTP readiness response: ${http.readyz ?? "unavailable"}.`] : []),
       `Keep recovery backups and check progress with \`${formatCliCommand("openclaw gateway status --deep")}\`.`,
@@ -395,7 +473,7 @@ export async function verifyUpdatedGateway(
     defaultRuntime.error(detail);
     return {
       ok: false,
-      summary: "Gateway is still starting; readiness remains unverified.",
+      summary,
       stopReason:
         health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
     };
@@ -504,7 +582,15 @@ export async function verifyUpdatedGateway(
       defaultRuntime.log(theme.muted(line));
     }
   }
-  return { ok: params.purpose === "package-replacement", summary: reason };
+  return {
+    ok: params.purpose === "package-replacement",
+    summary: reason,
+    ...(health.waitOutcome === "stopped-free" &&
+    health.runtime.status === "stopped" &&
+    health.portUsage.status === "free"
+      ? { serviceStoppedFree: true }
+      : {}),
+  };
 }
 
 export { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";

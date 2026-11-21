@@ -396,7 +396,13 @@ it.for([
                 if (!retainedDowngrade) {
                   throw error;
                 }
-                expect(String(error)).toMatch(/authority|permission|active|configuration changed/i);
+                if (change === "retained-database-replacement") {
+                  expect(error).toMatchObject({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" });
+                } else {
+                  expect(String(error)).toMatch(
+                    /authority|permission|active|configuration changed/i,
+                  );
+                }
                 retainedWriteRejected = true;
               }
             }

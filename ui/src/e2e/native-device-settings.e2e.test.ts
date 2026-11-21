@@ -379,8 +379,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["voicewake.get", "voicewake.set"],
-          deferredMethods: ["voicewake.set"],
-          methodResponses: { "voicewake.get": { triggers: ["openclaw"] } },
+          deferredMethods: ["voicewake.get", "voicewake.set"],
         });
         for (const route of ["device", "device/permissions"]) {
           expect((await page.goto(`${suite.server.baseUrl}settings/${route}`))?.status()).toBe(200);
@@ -402,9 +401,17 @@ suite.define(() => {
         }
         await page.goto(`${suite.server.baseUrl}settings/talk`);
         const triggers = page.getByRole("textbox", { name: "Trigger words", exact: true });
+        await gateway.waitForRequest("voicewake.get");
+        await triggers.waitFor();
+        expect(await triggers.isDisabled()).toBe(true);
+        const editorWidth = () => triggers.evaluate((el) => el.getBoundingClientRect().width);
+        const pendingWidth = await editorWidth();
+        await gateway.resolveDeferred("voicewake.get", { triggers: ["openclaw"] });
         await expect.poll(() => triggers.inputValue()).toBe("openclaw");
+        expect(await editorWidth()).toBe(pendingWidth);
         await triggers.fill("first phrase");
         await gateway.waitForRequest("voicewake.set");
+        expect(await editorWidth()).toBe(pendingWidth);
         expect(await triggers.isEnabled()).toBe(true);
         expect(await triggers.evaluate((element) => element === document.activeElement)).toBe(true);
         await triggers.fill("second phrase");

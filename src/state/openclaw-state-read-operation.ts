@@ -122,7 +122,7 @@ type Selection = {
   mapError: OpenClawStateReadOptions["mapError"];
 };
 
-/** One async owner joins the query and native cleanup before releasing its snapshot. */
+/** Adopts the producer's command and joins the query and cleanup before releasing its snapshot. */
 export function startOpenClawStateReadOperation(
   command: OpenClawStateReadCommand,
   selection: Selection,

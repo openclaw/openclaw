@@ -251,6 +251,7 @@ function* updateSqliteMigrationSteps<T>(
       if (before !== expected) {
         capture.accept(key, expected, before);
       }
+      options?.beforeExclusive?.();
       if (mode !== "exclusive") {
         // Start WAL in normal mode before retaining exclusion so it can be released.
         db.prepare("PRAGMA schema_version").get(); // sqlite-allow-raw -- Attach native WAL coordination before retaining exclusion.

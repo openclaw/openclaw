@@ -32,6 +32,7 @@ const catalog = {
     },
     sessionAutomation: {
       created: "Created",
+      removed: "Removed",
       unavailable: "Automation unavailable",
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
