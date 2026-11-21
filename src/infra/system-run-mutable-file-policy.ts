@@ -2,10 +2,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { realpathForExec } from "./exec-command-resolution.js";
+import { resolveFilesystemPathCandidate } from "./executable-path.js";
 
 function pathComponentsFromRoot(targetPath: string): string[] {
   const parts: string[] = [];
-  let cursor = path.resolve(targetPath);
+  let cursor = resolveFilesystemPathCandidate(targetPath);
   while (true) {
     parts.unshift(cursor);
     const parent = path.dirname(cursor);
@@ -87,7 +88,7 @@ export async function resolvesToExistingFile(
     return false;
   }
   try {
-    return (await fsp.stat(path.resolve(cwd ?? process.cwd(), rawOperand))).isFile();
+    return (await fsp.stat(resolveFilesystemPathCandidate(rawOperand, cwd))).isFile();
   } catch {
     return false;
   }
