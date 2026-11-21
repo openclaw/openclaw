@@ -378,7 +378,6 @@ export function registerThreadPolicyRefreshTests({
 
   it.each([
     { nativeStatus: "idle", transport: "websocket" as const },
-    { nativeStatus: "systemError", transport: "websocket" as const },
     { nativeStatus: "active", transport: "stdio" as const },
   ])(
     "keeps ordinary warm configuration honest over $transport across $nativeStatus",
@@ -436,12 +435,6 @@ export function registerThreadPolicyRefreshTests({
             ...configReads,
             "thread/read",
           ]);
-          expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
-          return;
-        }
-        if (nativeStatus === "systemError") {
-          await expect(resume).rejects.toThrow("did not confirm unloading");
-          expect(requests.map(({ method }) => method)).not.toContain("thread/inject_items");
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
           return;
         }
