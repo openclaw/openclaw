@@ -29,6 +29,7 @@ import type { Model } from "../../llm/types.js";
 import { logWarn } from "../../logger.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 
@@ -64,6 +65,10 @@ export async function prepareWorkerTurnPrompt(params: {
   assertCurrent: () => void;
 }) {
   const { turn, agentId, model, transcriptPolicy } = params;
+  // Raw worker input must use the same timestamp for first delivery and replay.
+  const userTurnMessage =
+    turn.userTurnTranscriptRecorder?.message ??
+    buildPersistedUserTurnMessage({ text: turn.transcriptPrompt ?? turn.prompt });
   const bootstrapWorkspaceDir =
     turn.bootstrapWorkspaceDir ?? resolveAgentWorkspaceDir(turn.config ?? {}, agentId);
   const preparedModelRuntime = Object.freeze({
@@ -239,7 +244,7 @@ export async function prepareWorkerTurnPrompt(params: {
     boundaryTimezone: resolveUserTimezone(turn.config?.agents?.defaults?.userTimezone),
     includeBoundaryTimestamp: !isRawModelRun,
     isRawModelRun,
-    preparedUserTurnMessage: turn.userTurnTranscriptRecorder?.message,
+    preparedUserTurnMessage: userTurnMessage,
     replaceSessionMessages: (messages) => {
       params.history = messages;
     },
@@ -256,6 +261,7 @@ export async function prepareWorkerTurnPrompt(params: {
   params.assertCurrent();
   return {
     contextEngineTurn,
+    userTurnTimestamp: userTurnMessage.timestamp,
     systemPromptText,
     systemPromptReport: prompt.systemPromptReport,
     history,
