@@ -92,4 +92,12 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
     expect(cleaner.push("\n[[tts:Visible speech]]")).toBe("\nVisible speech");
     expect(cleaner.flush()).toBe("");
   });
+
+  it("recognizes a TTS directive after a code-span delimiter split across chunks", () => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    const chunks = ["``open", "`", "`[[tts:voice]] after"];
+
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe("``open``voice after");
+    expect(cleaner.flush()).toBe("");
+  });
 });
