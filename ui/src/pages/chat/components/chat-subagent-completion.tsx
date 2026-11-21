@@ -48,7 +48,7 @@ function CompletionSentence(props: {
     return t(`chat.toolCards.${props.sentenceKey}`, { names: marker }).split(marker);
   });
   return (
-    <div class="chat-tool-msg-collapse">
+    <div class="chat-tool-msg-collapse chat-tool-msg-collapse--completion">
       <div
         class="chat-tool-msg-summary chat-tool-row chat-tool-row--subagent"
         aria-label={t(`chat.toolCards.${props.sentenceKey}`, { names: names() })}

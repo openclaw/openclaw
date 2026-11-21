@@ -199,8 +199,6 @@ export type SidebarRecentSession = Readonly<{
   startedAt?: number;
   updatedAt?: number | null;
   endedAt?: number;
-  runtimeMs?: number;
-  runtimeSampledAt?: number;
   childSessionKeys: readonly string[];
   /** Detail queries retain their original parents when hidden runs are skipped. */
   childLoadParentKeys?: readonly string[];

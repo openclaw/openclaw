@@ -238,6 +238,17 @@ suite.define(() => {
       await folderChoice.click();
       await expect.poll(() => input.evaluate((el) => el === document.activeElement)).toBe(true);
       await input.fill("/workspace/manual");
+      const offset = await input.evaluate((field) => {
+        const label = field.closest("label")!;
+        const text = document.createTreeWalker(label, NodeFilter.SHOW_TEXT).nextNode()!;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const textStart =
+          field.getBoundingClientRect().left +
+          Number.parseFloat(getComputedStyle(field).paddingInlineStart);
+        return Math.abs(range.getBoundingClientRect().left - textStart);
+      });
+      expect(offset).toBeLessThanOrEqual(1);
       await input.press("Enter");
       await expect.poll(() => project.textContent()).toContain("manual");
       expect(await gateway.getRequests("fs.listDir")).toHaveLength(0);

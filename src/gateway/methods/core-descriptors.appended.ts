@@ -15,6 +15,7 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["sessions.steerTarget", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
+  ["skills.categories", "skills", "operator.read", "2026.11"],
   [
     "projects.moveSessionOptions",
     "projects-session-move",
