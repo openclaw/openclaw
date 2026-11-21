@@ -6,15 +6,20 @@ import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "open
 import {
   type AnyAgentTool,
   type SandboxContext,
+  finalizeToolTerminalPresentation,
+  runAgentHarnessAfterToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createContractToolTerminalObserver,
   createOwnerBackedContractTool,
+  createTerminalPresentationContractTool,
+  setHostToolFactoryForTest,
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
@@ -109,6 +114,138 @@ function memoryTool() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("createCopilotToolBridge", () => {
+  it.each([
+    "formatter",
+    "plain",
+    "structured-error",
+    "observer-error",
+    "source-error",
+    "aborted-outcome",
+  ] as const)("finalizes direct SDK terminal presentation (%s)", async (kind) => {
+    const runId = "direct-terminal-" + kind;
+    const sessionId = "session-" + runId;
+    const sessionKey = "agent:main:" + runId;
+    const toolCallId = "call-" + kind;
+    const toolName = "fixture_direct";
+    const failure = new Error("terminal fixture failed");
+    const result = textToolResult(
+      "Fixture completed",
+      kind === "structured-error" ? { status: "error", error: failure.message } : {},
+    );
+    const config = { tools: { codeMode: false, toolSearch: false } } as const;
+    const controller = new AbortController();
+    const onToolOutcome = vi.fn<NonNullable<Attempt["onToolOutcome"]>>((outcome) => {
+      if (kind === "aborted-outcome" && !outcome.presentationOnly) {
+        controller.abort(failure);
+      }
+    });
+    const host = await createAdmittedHostCapabilityTestFixture({
+      agentId: "main",
+      runId,
+      sessionId,
+      sessionKey,
+      config,
+      onToolOutcome,
+      allocateToolOutcomeOrdinal: () => 7,
+      abortSignal: controller.signal,
+    });
+    const source =
+      kind === "plain"
+        ? makeTool({ name: toolName }, result)
+        : createTerminalPresentationContractTool({
+            name: toolName,
+            result,
+            format: () => "Fixture completed",
+          });
+    if (kind === "source-error") {
+      source.execute = async () => {
+        throw failure;
+      };
+    }
+    const terminalObserver = createContractToolTerminalObserver(runId);
+    const completed = createDeferred<void>();
+    let bridge: Bridge | undefined;
+    let sdkResult: unknown;
+    let rejected: unknown;
+    let beforeCleanup: Parameters<NonNullable<Attempt["onToolOutcome"]>>[0][];
+    let afterCleanupCount: number;
+    try {
+      // Only construction is substituted; the admitted host installs the real wrapper.
+      await setHostToolFactoryForTest({ runId }, () => [source]);
+      bridge = await createBridge({
+        agentId: "main",
+        sessionId,
+        attemptParams: {
+          config,
+          runId,
+          sessionKey,
+          onToolOutcome,
+          abortSignal: controller.signal,
+          observeToolTerminal: (observation) => {
+            if (kind === "observer-error") {
+              throw failure;
+            }
+            return terminalObserver(observation);
+          },
+          hostCapabilities: host.hostCapabilities,
+        },
+        onToolCompleted: async (completion) => {
+          try {
+            await runAgentHarnessAfterToolCallHook({
+              ...completion,
+              runId,
+              sessionId,
+              sessionKey,
+              startArgs: completion.args,
+            });
+          } finally {
+            completed.resolve();
+          }
+        },
+      });
+      try {
+        sdkResult = await invoke(
+          sdkToolNamed(bridge, toolName),
+          { label: kind },
+          makeInvocation({ toolCallId, toolName, sessionId }),
+        );
+        await completed.promise;
+      } catch (error) {
+        rejected = error;
+      }
+    } finally {
+      // Record all phases before asserting, including the exact-ID late-finalizer check.
+      beforeCleanup = onToolOutcome.mock.calls.map(([outcome]) => outcome);
+      bridge?.cleanup?.();
+      host.closeHost();
+      host.closeAdmission();
+      afterCleanupCount = onToolOutcome.mock.calls.length;
+      finalizeToolTerminalPresentation({ toolCallId, runId, result, isError: false });
+    }
+    const published = kind !== "source-error" && kind !== "aborted-outcome";
+    const successful = kind === "formatter" || kind === "plain";
+    if (kind === "observer-error") {
+      expect(rejected).toBe(failure);
+    } else {
+      expect(rejected).toBeUndefined();
+      expect(sdkResult).toMatchObject({ resultType: successful ? "success" : "failure" });
+    }
+    expect(beforeCleanup.filter((outcome) => !outcome.presentationOnly)).toHaveLength(1);
+    expect(beforeCleanup.filter((outcome) => outcome.presentationOnly)).toEqual(
+      published
+        ? [
+            expect.objectContaining({
+              toolName,
+              toolCallOrdinal: 7,
+              terminalPresentation: kind === "formatter" ? "Fixture completed" : undefined,
+            }),
+          ]
+        : [],
+    );
+    expect(afterCleanupCount).toBe(beforeCleanup.length);
+    expect(onToolOutcome).toHaveBeenCalledTimes(afterCleanupCount);
+  });
+
   it("returns empty arrays for unsupported providers without calling the seam", async () => {
     const createOpenClawCodingTools = vi.fn(() => [makeTool()]);
 
