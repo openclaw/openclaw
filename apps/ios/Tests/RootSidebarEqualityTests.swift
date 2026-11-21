@@ -24,6 +24,7 @@ struct RootSidebarEqualityTests {
             selected: Bool = false,
             main: String = "main",
             categories: [String] = [],
+            canChangePlacement: Bool = true,
             connected: Bool = true,
             minute: Int = 1) throws -> RootSidebarSessionButton
         {
@@ -32,6 +33,7 @@ struct RootSidebarEqualityTests {
                 isSelected: selected,
                 mainSessionKey: main,
                 categories: categories,
+                canChangePlacement: canChangePlacement,
                 isConnected: connected,
                 minute: minute,
                 open: { _ in },
@@ -43,6 +45,7 @@ struct RootSidebarEqualityTests {
         #expect(try base != button(selected: true))
         #expect(try base != button(main: "other"))
         #expect(try base != button(categories: ["Work"]))
+        #expect(try base != button(canChangePlacement: false))
         #expect(try base != button(connected: false))
         #expect(try base != button(minute: 2))
         var changed = session

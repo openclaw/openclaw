@@ -63,6 +63,18 @@ struct CommandSessionGroupingTests {
         }
     }
 
+    @MainActor
+    @Test func `stored child placement follows its parent after upgrade`() {
+        var parent = self.entry("parent", category: "Research", activity: 1)
+        parent.childSessions = ["child"]
+        let child = self.entry("child", category: "Other", pinned: true, activity: 9)
+        let sections = CommandSessionGrouping.sections(from: [child, parent])
+        #expect(!sections.contains { $0.id == .pinned })
+        #expect(sections.first { $0.id == .category("Research") }?.entries.map(\.key) == ["parent", "child"])
+        #expect(child.pinned == true)
+        #expect(child.category == "Other")
+    }
+
     @Test func `groups pinned categories and ungrouped in display order`() {
         let sections = CommandSessionGrouping.sections(from: [
             self.entry("ungrouped", activity: 2),

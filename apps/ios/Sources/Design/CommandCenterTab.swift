@@ -396,6 +396,8 @@ struct CommandCenterTab: View {
                                 session: session,
                                 mainSessionKey: self.appModel.mainSessionKey,
                                 categories: self.sessionCategories,
+                                canChangePlacement: !ChatSessionSidebarModel.childSessionKeys(
+                                    in: self.effectiveRecentChatSessions).contains(session.key),
                                 isEnabled: self.sessionControlsAvailable,
                                 canArchive: ChatSessionSidebarModel.canArchiveSession(
                                     session,
@@ -1087,6 +1089,8 @@ struct CommandSessionsScreen: View {
             session: session,
             mainSessionKey: mainSessionKey,
             categories: self.sessionCategories,
+            canChangePlacement: !ChatSessionSidebarModel.childSessionKeys(
+                in: self.visibleSessions).contains(session.key),
             isArchived: session.archived == true,
             isEnabled: self.sessionControlsAvailable,
             canArchive: ChatSessionSidebarModel.canArchiveSession(

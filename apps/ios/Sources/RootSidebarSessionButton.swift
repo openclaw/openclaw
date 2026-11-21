@@ -9,6 +9,7 @@ struct RootSidebarSessionButton: View, Equatable {
     let isSelected: Bool
     let mainSessionKey: String
     let categories: [String]
+    let canChangePlacement: Bool
     let isConnected: Bool
     /// Minute-bucket invalidation on parent refresh, not an idle timer or exact threshold clock.
     let minute: Int
@@ -19,6 +20,7 @@ struct RootSidebarSessionButton: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.node == rhs.node && lhs.isSelected == rhs.isSelected &&
             lhs.mainSessionKey == rhs.mainSessionKey && lhs.categories == rhs.categories &&
+            lhs.canChangePlacement == rhs.canChangePlacement &&
             lhs.isConnected == rhs.isConnected && lhs.minute == rhs.minute
     }
 
@@ -97,6 +99,7 @@ struct RootSidebarSessionButton: View, Equatable {
             session: session,
             mainSessionKey: self.mainSessionKey,
             categories: self.categories,
+            canChangePlacement: self.canChangePlacement,
             isEnabled: self.isConnected,
             canArchive: ChatSessionSidebarModel.canArchiveSession(
                 session,
