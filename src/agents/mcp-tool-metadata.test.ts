@@ -136,3 +136,40 @@ it("filters excluded tools before compiling their output schemas", () => {
   expect(normalized.metadata.validatorForCall("healthy")).toBeTypeOf("function");
   expect(normalized.metadata.validatorForCall("excluded")).toBeUndefined();
 });
+
+it("compiles an output schema on its first call only, never at catalog load (#199327)", () => {
+  const schemaValidator = createMcpJsonSchemaValidator();
+  const getValidator = vi.spyOn(schemaValidator, "getValidator");
+  const normalized = normalizeMcpToolCatalog(
+    [
+      tool("used", { outputSchema: { type: "object", required: ["ok"] } }),
+      tool("unused", { outputSchema: { type: "object" } }),
+    ],
+    schemaValidator,
+  );
+  expect(getValidator).not.toHaveBeenCalled();
+
+  const validate = normalized.metadata.validatorForCall("used")!;
+  expect(normalized.metadata.validatorForCall("used")).toBe(validate);
+  expect(getValidator).toHaveBeenCalledTimes(1);
+  expect(() => validate({ content: [], structuredContent: {} })).toThrow(
+    "Structured content does not match the tool's output schema",
+  );
+});
+
+it("resolves a reference to another tool's schema whichever tool is called first", () => {
+  const normalized = catalog([
+    tool("base", {
+      outputSchema: { $id: "https://example.test/base", type: "object", required: ["ok"] },
+    }),
+    tool("derived", {
+      outputSchema: { type: "object", allOf: [{ $ref: "https://example.test/base" }] },
+    }),
+  ]);
+
+  const validate = normalized.metadata.validatorForCall("derived")!;
+  expect(() => validate({ content: [], structuredContent: { ok: true } })).not.toThrow();
+  expect(() => validate({ content: [], structuredContent: {} })).toThrow(
+    "Structured content does not match the tool's output schema",
+  );
+});
