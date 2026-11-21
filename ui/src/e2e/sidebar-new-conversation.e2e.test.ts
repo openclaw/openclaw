@@ -66,10 +66,16 @@ suite.define(() => {
           .getByRole("link", { name: "New session", exact: true });
         await railCreate.waitFor();
         expect(await create.isVisible()).toBe(true);
-        const mobilePlus = (await railCreate.boundingBox())!;
-        const home = (await nav.locator(".sidebar-footer-bar__home").boundingBox())!;
-        expect(mobilePlus.x).toBe(home.x);
-        expect(mobilePlus.y + mobilePlus.height).toBeLessThanOrEqual(home.y);
+        // Measure both controls in the same frame while the drawer slides in.
+        const alignment = await nav.evaluate((element) => {
+          const plus = element
+            .querySelector(".sidebar-rail .sidebar-new-session")!
+            .getBoundingClientRect();
+          const home = element.querySelector(".sidebar-footer-bar__home")!.getBoundingClientRect();
+          return { plusX: plus.x, homeX: home.x, plusBottom: plus.bottom, homeTop: home.top };
+        });
+        expect(alignment.plusX).toBe(alignment.homeX);
+        expect(alignment.plusBottom).toBeLessThanOrEqual(alignment.homeTop);
         await nav.locator('[data-navigation-view="online"]').click();
         await nav.locator(".sidebar-online").waitFor();
         await railCreate.focus();
