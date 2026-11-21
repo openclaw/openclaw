@@ -87,6 +87,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     const released: string[] = [];
     const oldClient = {
       getInstanceId: () => "client-old",
+      getCloseError: () => undefined,
       request: vi.fn(async (method: string, requestParams: { threadId?: string }) => {
         if (method === "thread/unsubscribe" && requestParams.threadId) {
           released.push(requestParams.threadId);
@@ -131,6 +132,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     });
     const currentClient = {
       getInstanceId: () => "client-current",
+      getCloseError: () => undefined,
       request: currentRequest,
       addNotificationHandler: () => () => undefined,
       addRequestHandler: () => () => undefined,
@@ -307,6 +309,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       });
       const client = {
         getInstanceId: () => "client-failure",
+        getCloseError: () => undefined,
         request,
         addNotificationHandler: () => () => undefined,
         addRequestHandler: () => () => undefined,

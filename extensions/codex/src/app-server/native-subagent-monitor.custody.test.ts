@@ -500,7 +500,7 @@ it.each([true, false])(
         threadId: "parent-thread",
         lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
       });
-    await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+    await expect(releaseForResume()).rejects.toThrow("background work or live resources");
     const receipt = structuredClone(await submissionStore.read());
     await completeTurn(client, "turn-b", "result B");
 

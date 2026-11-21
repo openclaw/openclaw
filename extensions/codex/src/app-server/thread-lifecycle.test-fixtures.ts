@@ -490,6 +490,10 @@ function stubEmptyCodexSkillCatalog(client: CodexAppServerClient): void {
     const instanceId = randomUUID();
     client.getInstanceId = () => instanceId;
   }
+  // Minimal lifecycle doubles represent an open transport unless they supply a close receipt.
+  if (typeof client.getCloseError !== "function") {
+    client.getCloseError = () => undefined;
+  }
   clientsWithEmptySkillCatalog.add(client);
 }
 

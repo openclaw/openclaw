@@ -168,7 +168,7 @@ export async function startOrResumeThread(
       threadId: string,
       ownerClientId = initialBoundClientId,
       assertCurrent?: () => void,
-      { afterThreadWrite = false, waitForBackgroundCleanup = false } = {},
+      { afterThreadWrite = false } = {},
     ) =>
       releaseCodexBoundLiveThread({
         client: params.client,
@@ -181,7 +181,6 @@ export async function startOrResumeThread(
         withCurrent: authority.withCurrent,
         signal: params.signal,
         onExitWaitCancelled: afterThreadWrite ? undefined : params.onPrewriteHandoffCancelled,
-        waitForBackgroundCleanup,
       });
     if (binding?.pendingSupervisionBranch) {
       if (params.params.providerReviewAcknowledgment) {
@@ -647,7 +646,6 @@ export async function startOrResumeThread(
                 resumeBinding.threadId,
                 resumeBinding.clientId,
                 assertCurrent,
-                { waitForBackgroundCleanup: true },
               );
             },
           });

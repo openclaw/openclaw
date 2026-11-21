@@ -756,7 +756,8 @@ describe("native background process source authority", () => {
         // A cleanup-only physical claim is still protected native work. A
         // new source must not change its configuration before peer settlement.
         await expect(f.begin("maintainer")).rejects.toMatchObject({
-          name: "CodexAdoptedThreadActiveError",
+          name: "AgentHarnessPreflightError",
+          message: expect.stringContaining("background work or live resources"),
         });
         expect(peer.terminal.alive).toBe(true);
         expect(f.harness.requests.filter(({ method }) => method === "thread/unsubscribe")).toEqual(

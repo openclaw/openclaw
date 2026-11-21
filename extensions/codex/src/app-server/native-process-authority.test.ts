@@ -5,7 +5,7 @@ import {
   getCodexNativeProcessClient,
 } from "./native-process-authority.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
 
 const cleanups: (() => void)[] = [];
 const closes: (() => void)[] = [];
@@ -174,6 +174,157 @@ describe("native process custody", () => {
     // Idle unload drops the listener first, so no item/completed reaches this client.
     client.send({ method: "thread/closed", params: { threadId: command.threadId } });
     expect(origin.released).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "completion",
+    "termination failure",
+    "reused handle",
+    "completion during inventory",
+    "completion during retry",
+    "pending registration",
+    "pending Stop",
+    "client close",
+    "empty inventory",
+    "negative acknowledgment",
+  ] as const)("keeps revoked native custody until an exact final receipt: %s", async (scenario) => {
+    const origin = source();
+    origin.owner.bindTurn(origin.client.client, command.threadId, command.turnId);
+    const pending = scenario.startsWith("pending");
+    const confirm = origin.owner.prepareBackgroundCommands(
+      origin.client.client,
+      command,
+      new Map([[command.itemId, scenario === "pending Stop" ? null : "process"]]),
+    );
+    if (!pending) {
+      confirm(new Map([[command.itemId, "process"]]));
+      origin.owner.release();
+    }
+    let cancellation: Promise<void> | undefined;
+    if (scenario === "pending Stop" || scenario === "completion during retry") {
+      cancellation = getCodexNativeProcessClient(origin.client.client).cancelTurn(
+        command.threadId,
+        command.turnId,
+      );
+      void cancellation.catch(() => undefined);
+    } else {
+      origin.abort.abort();
+    }
+    if (pending) {
+      confirm(new Map());
+      origin.owner.release();
+    }
+    expect(origin.released).not.toHaveBeenCalled();
+    expect(origin.owner.commands.size).toBe(1);
+    const complete = () =>
+      origin.client.send(
+        itemNotification("item/completed", {
+          type: "commandExecution",
+          id: command.itemId,
+          processId: "process",
+        }),
+      );
+    const list = await waitForHarnessRequest(origin.client, "thread/backgroundTerminals/list");
+    if (scenario === "client close") {
+      origin.client.send(
+        itemNotification("item/started", {
+          type: "commandExecution",
+          id: command.itemId,
+          processId: "process",
+        }),
+      );
+      const closed = await origin.client.client.closeAndWait({ exitTimeoutMs: 100 });
+      expect(closed.cleanup).toBe("uncertain");
+      await vi.waitFor(() => expect(origin.failed).toHaveBeenCalled());
+      expect(origin.released).not.toHaveBeenCalled();
+      expect(origin.owner.commands.size).toBe(1);
+      return;
+    }
+    if (scenario === "completion during inventory") {
+      complete();
+    }
+    origin.client.send({
+      id: list.id,
+      result: {
+        data:
+          scenario === "empty inventory"
+            ? []
+            : [
+                {
+                  itemId: scenario === "reused handle" ? "successor-item" : command.itemId,
+                  processId: "process",
+                },
+              ],
+      },
+    });
+    let retry: Promise<void> | undefined;
+    if (!["reused handle", "completion during inventory", "empty inventory"].includes(scenario)) {
+      let terminate = await waitForHarnessRequest(
+        origin.client,
+        "thread/backgroundTerminals/terminate",
+      );
+      expect(terminate.params).toEqual({ threadId: command.threadId, processId: "process" });
+      if (scenario === "termination failure") {
+        origin.client.send({
+          id: terminate.id,
+          error: { code: -32602, message: "termination failed" },
+        });
+        await vi.waitFor(() => expect(origin.failed).toHaveBeenCalledOnce());
+        expect(origin.released).not.toHaveBeenCalled();
+        const start = origin.client.writes.length;
+        retry = getCodexNativeProcessClient(origin.client.client).cancelTurn(
+          command.threadId,
+          command.turnId,
+        );
+        void retry.catch(() => undefined);
+        const nextList = await waitForHarnessRequest(
+          origin.client,
+          "thread/backgroundTerminals/list",
+          start,
+        );
+        origin.client.send({
+          id: nextList.id,
+          result: { data: [{ itemId: command.itemId, processId: "process" }] },
+        });
+        terminate = await waitForHarnessRequest(
+          origin.client,
+          "thread/backgroundTerminals/terminate",
+          start,
+        );
+      }
+      if (scenario === "completion during retry") {
+        origin.client.send({
+          id: terminate.id,
+          error: { code: -32001, message: "Server overloaded" },
+        });
+        complete();
+      } else {
+        origin.client.send({
+          id: terminate.id,
+          result: { terminated: scenario !== "negative acknowledgment" },
+        });
+        expect(origin.released).not.toHaveBeenCalled();
+      }
+    }
+    if (scenario === "empty inventory") {
+      await vi.waitFor(() => expect(origin.failed).toHaveBeenCalledOnce(), { timeout: 7_000 });
+      expect(origin.released).not.toHaveBeenCalled();
+    }
+    if (scenario !== "completion during inventory" && scenario !== "completion during retry") {
+      complete();
+    }
+    await vi.waitFor(() => expect(origin.released).toHaveBeenCalledOnce());
+    await cancellation;
+    await retry;
+    expect(origin.owner.commands.size).toBe(0);
+    const terminationWrites = origin.client.writes.filter((line) =>
+      line.includes('"thread/backgroundTerminals/terminate"'),
+    );
+    if (["reused handle", "completion during inventory", "empty inventory"].includes(scenario)) {
+      expect(terminationWrites).toHaveLength(0);
+    } else if (scenario === "completion during retry") {
+      expect(terminationWrites).toHaveLength(1);
+    }
   });
 
   it("reports failed background settlement and refuses to replace its unsettled command", async () => {

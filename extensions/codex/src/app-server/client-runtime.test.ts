@@ -383,6 +383,7 @@ it.each([
     });
     const client = {
       request,
+      getInstanceId: () => "transition-client",
       addCloseHandler: vi.fn(),
       addNotificationHandler: vi.fn(),
       addRequestHandler: vi.fn(),

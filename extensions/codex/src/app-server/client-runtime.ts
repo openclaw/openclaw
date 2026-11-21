@@ -11,9 +11,10 @@ import {
 import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
+  acquireThreadProtection,
+  type CodexThreadProtectionOwner,
   isThreadBackgroundOnly,
   waitForThreadBackgroundCleanup,
-  releaseThreadProtection,
   forgetThreadOwnership,
   hasSiblingThreadWork,
   hasThreadOwnership,
@@ -745,27 +746,24 @@ export async function releaseCodexAppServerLiveThread(
     : false;
 }
 
-/** Native child work pins its parent's subscription even after the foreground parent turn ends. */
+/** Service-owned work pins its subscription until its exact owner releases it. */
 export function protectCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
+  owner: CodexThreadProtectionOwner = "unspecified",
 ): () => void {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
     return () => undefined;
   }
-  runtime.protectedThreads.set(threadId, (runtime.protectedThreads.get(threadId) ?? 0) + 1);
+  const unprotect = acquireThreadProtection(runtime, threadId, client.getInstanceId(), owner);
   updateThreadOwnership(client, runtime);
-  let protectedThread = true;
   return () => {
-    if (!protectedThread) {
+    const released = unprotect();
+    if (released === undefined) {
       return;
     }
-    protectedThread = false;
-    if (runtime.closed) {
-      return;
-    }
-    if (releaseThreadProtection(runtime, threadId)) {
+    if (released) {
       const retained = runtime.retainedThreads.get(threadId);
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal

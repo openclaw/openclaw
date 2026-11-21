@@ -186,7 +186,11 @@ export function createNativeMcpRuntime(params: {
       if (!releaseClient) {
         throw new Error("Native MCP App client is no longer current");
       }
-      const unprotect = protectCodexAppServerLiveThread(params.client, params.threadId);
+      const unprotect = protectCodexAppServerLiveThread(
+        params.client,
+        params.threadId,
+        "mcp-app-view",
+      );
       return () => {
         unprotect();
         releaseClient();

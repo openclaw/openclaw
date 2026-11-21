@@ -7,7 +7,10 @@ import {
   usesManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
-import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
+import {
+  isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadBackgroundOnly,
+} from "./client-runtime.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
@@ -295,7 +298,11 @@ function captureCodexThreadResumeAuthority(
     params.assertCurrent?.();
     params.signal?.throwIfAborted();
     assertClient();
-    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
+    // Cleanup-only custody must reach the common waiter; foreground work still refuses.
+    if (
+      isCodexAppServerLiveThreadClaimed(params.client, binding.threadId) &&
+      !isCodexAppServerLiveThreadBackgroundOnly(params.client, binding.threadId)
+    ) {
       throw new CodexAdoptedThreadActiveError();
     }
   };
