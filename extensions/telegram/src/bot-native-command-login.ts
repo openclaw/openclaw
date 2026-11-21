@@ -26,6 +26,8 @@ import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import { buildTelegramRoutingTarget } from "./bot/helpers.js";
+import type { TelegramInlineButtons } from "./button-types.js";
+import { buildProviderListCallbackData } from "./model-buttons.js";
 import { applyPendingTelegramPickerSelection } from "./model-picker-selection.js";
 import { takePendingPickerSelection } from "./picker-pending-selection.js";
 import { loadTelegramSendModule } from "./send-runtime.js";
@@ -54,6 +56,7 @@ export async function executeTelegramLoginCommand(params: {
   dispatch: TelegramCommandDispatch;
   commandText: string;
   currentProvider?: string;
+  currentModel?: string;
 }): Promise<boolean> {
   const { dispatch } = params;
   const threadKey =
@@ -171,6 +174,7 @@ export async function executeTelegramLoginCommand(params: {
   // reservation and account signal still own polling through completion.
   const completion = (async () => {
     let terminalMessage: string;
+    let terminalButtons: TelegramInlineButtons | undefined;
     try {
       const targetSessionEntryAtStart = await dispatch.nativeCommandRuntime.getSessionEntryAsync({
         agentId: dispatch.route.agentId,
@@ -298,6 +302,29 @@ export async function executeTelegramLoginCommand(params: {
       }
       const blockedRef =
         blockedSelection && `${blockedSelection.provider}/${blockedSelection.model}`;
+      const otherProviderModel =
+        params.currentProvider &&
+        params.currentModel &&
+        normalizeLowercaseStringOrEmpty(params.currentProvider) !==
+          normalizeLowercaseStringOrEmpty(loginChoice.providerId)
+          ? `${params.currentProvider}/${params.currentModel}`
+          : undefined;
+      // Signing in leaves a chat on another provider where it was; one tap opens
+      // this provider's models in the picker.
+      if (
+        otherProviderModel &&
+        !blockedSelectionApplied &&
+        loginResult.authRefresh === "refreshed"
+      ) {
+        terminalButtons = [
+          [
+            {
+              text: `${loginChoice.providerLabel} models`,
+              callback_data: buildProviderListCallbackData(loginChoice.providerId, 1),
+            },
+          ],
+        ];
+      }
       terminalMessage = [
         blockedSelectionApplied
           ? `${loginChoice.providerLabel} login complete. Model changed to ${blockedRef}.`
@@ -310,6 +337,7 @@ export async function executeTelegramLoginCommand(params: {
                 nextProfileId && sessionModel
                   ? { model: sessionModel, profileId: nextProfileId }
                   : undefined,
+                otherProviderModel,
               ),
         loginResult.modelAccess?.message,
       ]
@@ -338,6 +366,7 @@ export async function executeTelegramLoginCommand(params: {
           cfg: dispatch.runtimeCfg,
           token: dispatch.opts.token,
           accountId: dispatch.route.accountId,
+          ...(terminalButtons ? { buttons: terminalButtons } : {}),
         },
       );
       await dispatch.recordDeliveredReply(

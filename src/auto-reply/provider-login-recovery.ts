@@ -17,18 +17,25 @@ import {
 } from "../shared/provider-auth-result.js";
 import { formatProviderLoginCommand } from "../shared/provider-login-command.js";
 
+// `otherProviderModel` is the chat's model ref when it runs on another provider:
+// signing in never switches the chat, so the reply says so instead of
+// suggesting a retry. (Line comment keeps it out of the plugin SDK d.ts budget.)
 export function formatProviderLoginCompletion(
   choice: ProviderChannelLoginChoice,
   authRefresh: ModelAuthRefreshOutcome,
   sessionSwitchFailed = false,
   selection?: { model: string; profileId: string },
+  otherProviderModel?: string,
 ): string {
   const sessionFailure = selection
     ? `This chat kept its previous account. To use the new sign-in, send \`/model ${JSON.stringify(`${choice.providerId}/${selection.model}`)}@${JSON.stringify(selection.profileId)} -s\`.`
     : "This chat kept its previous account. Send /models to review the available models.";
   if (authRefresh === "refreshed") {
-    return sessionSwitchFailed
-      ? `${choice.providerLabel} login complete. ${sessionFailure}`
+    if (sessionSwitchFailed) {
+      return `${choice.providerLabel} login complete. ${sessionFailure}`;
+    }
+    return otherProviderModel
+      ? `${choice.providerLabel} login complete. This chat still uses ${otherProviderModel}. To use ${choice.providerLabel} here, send /models.`
       : `${choice.providerLabel} login complete. Try your request again now.`;
   }
   const message = `${choice.providerLabel} credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again.`;

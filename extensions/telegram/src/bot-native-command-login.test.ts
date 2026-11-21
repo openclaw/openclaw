@@ -708,13 +708,43 @@ describe("Telegram /login after the picker sign-in gate", () => {
     expect(pickerMocks.applySessionModelSelection).not.toHaveBeenCalled();
   });
 
-  it("reports plain completion when no picker selection is waiting", async () => {
+  it("says a chat on another provider keeps its model and offers that provider's models", async () => {
     sessionStore = { "agent:main:main": onDeepseek() };
-    const { handler, sendMessage } = await registerSessionLogin(savedLogin("openai:codex"));
+    const { handler, sendMessage, sendMessageTelegram } = await registerSessionLogin(
+      savedLogin("openai:codex"),
+    );
+
+    await handler(ownerContext());
+
+    const notice =
+      "OpenAI login complete. This chat still uses deepseek/deepseek-flash. To use OpenAI here, send /models.";
+    await vi.waitFor(() => expect(messages(sendMessage)).toContain(notice));
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      expect.anything(),
+      notice,
+      expect.objectContaining({
+        buttons: [[{ text: "OpenAI models", callback_data: "mdl_list_openai_1" }]],
+      }),
+    );
+    expect(messages(sendMessage)).not.toContain(completed);
+    expect(pickerMocks.applySessionModelSelection).not.toHaveBeenCalled();
+  });
+
+  it("keeps the retry hint and no button when the chat already uses the provider", async () => {
+    sessionStore = {
+      "agent:main:main": sessionEntry({ providerOverride: "openai", modelOverride: "gpt-6" }),
+    };
+    const { handler, sendMessage, sendMessageTelegram } = await registerSessionLogin(
+      savedLogin("openai:codex"),
+    );
 
     await handler(ownerContext());
 
     await vi.waitFor(() => expect(messages(sendMessage)).toContain(completed));
-    expect(pickerMocks.applySessionModelSelection).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      expect.anything(),
+      completed,
+      expect.not.objectContaining({ buttons: expect.anything() }),
+    );
   });
 });
