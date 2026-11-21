@@ -5,6 +5,7 @@ import type { WebSocket } from "ws";
 import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
   BROWSER_ORIGIN,
@@ -94,6 +95,7 @@ test("a session-scoped browser starts the main conversation without broader acce
   await configure();
   await withGatewayServer(async ({ port }) => {
     const { ws } = await connect(port, IDENTITY);
+    const execution = await observeGatewayRunExecution();
     try {
       const subscribed = await rpcReq(ws, "sessions.messages.subscribe", {
         key: MAIN,
@@ -131,7 +133,11 @@ test("a session-scoped browser starts the main conversation without broader acce
         error: { code: "FORBIDDEN", details: { missingScope: "operator.read" } },
       });
     } finally {
-      ws.close();
+      try {
+        await execution.restore();
+      } finally {
+        ws.close();
+      }
     }
   });
 });
@@ -143,6 +149,7 @@ test("an admitted subscriber to absent main receives only what it may currently 
     const member = await connect(port, MEMBER);
     // The owner may also change sharing.
     const owner = await connect(port, OWNER, "operator.read,operator.write");
+    const execution = await observeGatewayRunExecution();
     let turns = 0;
     // The member's main-session frames written while the owner runs one turn.
     const ownerTurn = async (open = true) => {
@@ -181,8 +188,12 @@ test("an admitted subscriber to absent main receives only what it may currently 
       expect(await waitForWsClose(member.ws, 5_000)).toBe(true);
       expect(await ownerTurn(false)).toEqual([]);
     } finally {
-      member.ws.close();
-      owner.ws.close();
+      try {
+        await execution.restore();
+      } finally {
+        member.ws.close();
+        owner.ws.close();
+      }
     }
   });
 });
