@@ -14,6 +14,20 @@ title: "Install"
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
+<Warning>
+**Home Assistant OS:** The Terminal & SSH app (formerly an add-on) runs inside
+a container. Installing the OpenClaw CLI there does not create a persistent
+Gateway service: OpenClaw's Linux service installer expects systemd, which is
+not available in the SSH app. Files outside the app's persistent mounts,
+including CLI binaries and `~/.openclaw` state, can be lost when the container
+is recreated or updated.
+
+Run the Gateway on a separate Linux host or VM. Follow the
+[Docker VM runtime](/install/docker-vm-runtime) guide for persistent configuration,
+workspace, and credential storage, then use [Remote access](/gateway/remote)
+to connect.
+</Warning>
+
 ## Download the desktop app
 
 Prefer a normal app download over the CLI? OpenClaw ships desktop companions:
