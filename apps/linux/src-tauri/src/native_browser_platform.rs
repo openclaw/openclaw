@@ -115,6 +115,19 @@ async fn native<T: Send + 'static>(
     .await
 }
 
+/// Install consent before the registered dashboard begins navigation.
+#[cfg(target_os = "linux")]
+pub async fn install_dashboard_microphone(
+    webview: &Webview,
+    admit: impl Fn(&tauri::Url) -> bool + Send + 'static,
+) -> Result<(), String> {
+    native(webview, move |platform| {
+        crate::microphone_linux::install(&platform.inner(), admit);
+        Ok(())
+    })
+    .await
+}
+
 /// Capture one native navigation state on the UI thread so overlapping events cannot mix pages.
 pub async fn navigation_state(webview: &Webview) -> Result<(String, String, bool, bool), String> {
     native(webview, |platform| {
