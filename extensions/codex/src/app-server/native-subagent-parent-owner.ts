@@ -22,6 +22,8 @@ import type {
   ParentState,
 } from "./native-subagent-monitor-types.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
+import type { ReceiptObservation } from "./native-subagent-receipt-observation.js";
+import { observeNativeReceiptsBeforeRetirement } from "./native-subagent-receipt-retirement.js";
 import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
@@ -51,6 +53,8 @@ export type NativeParentRegistration = Pick<
     modelSource?: NativeModelSource;
     assertCurrent?: () => void;
     assertCurrentAsync?: () => Promise<void>;
+    /** Requester lifecycle validation after model execution has settled. */
+    assertReceiptObservationCurrent?: () => Promise<void>;
     unqualifiedModelExecution?: true;
     onUnqualifiedModelCancelled?: (reason: unknown) => void;
   };
@@ -68,6 +72,11 @@ type ParentDependencies = {
   >;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
   deliverDetached: (state: ParentState) => void;
+  reconcileDelivered: (
+    state: ParentState,
+    owner: ParentOwner,
+    observation: ReceiptObservation,
+  ) => Promise<void>;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
   clearAdmissions: () => void;
   prune: (state: ParentState) => void;
@@ -109,14 +118,17 @@ export function observeNativeParentTurn(
   if (notification.method === "turn/started") {
     state.turnIds.add(turnId);
   } else if (notification.method === "turn/completed") {
+    const succeeded =
+      isJsonObject(params?.turn) && readString(params.turn, "status") === "completed";
     for (const owner of state.owners.values()) {
       if (owner.turnId === turnId) {
         owner.modelExecutionSettled = true;
+        owner.modelExecutionSucceeded = succeeded ? true : undefined;
         owner.nativeReviewRequirement = undefined;
       }
     }
     if ([...state.owners.values()].some((owner) => !owner.turnId)) {
-      (state.completedModelTurnsBeforeBinding ??= new Set()).add(turnId);
+      (state.completedModelTurnsBeforeBinding ??= new Map()).set(turnId, succeeded);
     }
   }
 }
@@ -318,6 +330,9 @@ export async function registerNativeSubagentParent(
           modelExecutionSettled: registeredState.completedModelTurnsBeforeBinding?.has(turnId)
             ? true
             : undefined,
+          modelExecutionSucceeded: registeredState.completedModelTurnsBeforeBinding?.get(turnId)
+            ? true
+            : undefined,
           nativeReviewRequirement: undefined,
         };
         owner = current;
@@ -325,6 +340,11 @@ export async function registerNativeSubagentParent(
       }
       if (!current.turnId && registeredState.completedModelTurnsBeforeBinding?.has(turnId)) {
         current.modelExecutionSettled = true;
+        current.modelExecutionSucceeded = registeredState.completedModelTurnsBeforeBinding.get(
+          turnId,
+        )
+          ? true
+          : undefined;
       }
       current.turnId = turnId;
       if (![...registeredState.owners.values()].some((candidate) => !candidate.turnId)) {
@@ -364,30 +384,42 @@ export async function registerNativeSubagentParent(
         return settlement ?? Promise.resolve();
       }
       registered = false;
-      releaseRootModelBinding();
-      releaseCompletionCustody(owner);
-      owner.nativeReviewRequirement = undefined;
-      const current = dependencies.states.get(parentThreadId);
-      if (current === registeredState) {
-        current.owners.delete(ownerKey);
-        dependencies.closes.prune(current);
-        if (owner.turnId) {
-          current.turnIds.delete(owner.turnId);
-        }
-        if (current.owners.size === 0) {
-          current.turnIds.clear();
-          current.deliveryReceipts = new CodexNativeSubagentDeliveryReceipts();
-        }
-        if (![...current.owners.values()].some((candidate) => !candidate.turnId)) {
-          current.completedModelTurnsBeforeBinding = undefined;
-        }
-        dependencies.clearAdmissions();
-        dependencies.deliverDetached(current);
-      }
-      owner.modelSource?.release();
-      notifyNativeModelSourceWaiters(registeredState);
-      dependencies.prune(registeredState);
       settlement = (async () => {
+        const receiptObservation = observeNativeReceiptsBeforeRetirement({
+          state: registeredState,
+          owner,
+          ownerKey,
+          isCurrent,
+          assertLifecycleCurrent: params.assertReceiptObservationCurrent,
+          reconcile: (observation) =>
+            dependencies.reconcileDelivered(registeredState, owner, observation),
+        });
+        if (receiptObservation) {
+          await receiptObservation;
+        }
+        releaseRootModelBinding();
+        releaseCompletionCustody(owner);
+        owner.nativeReviewRequirement = undefined;
+        const current = dependencies.states.get(parentThreadId);
+        if (current === registeredState) {
+          current.owners.delete(ownerKey);
+          dependencies.closes.prune(current);
+          if (owner.turnId) {
+            current.turnIds.delete(owner.turnId);
+          }
+          if (current.owners.size === 0) {
+            current.turnIds.clear();
+            current.deliveryReceipts = new CodexNativeSubagentDeliveryReceipts();
+          }
+          if (![...current.owners.values()].some((candidate) => !candidate.turnId)) {
+            current.completedModelTurnsBeforeBinding = undefined;
+          }
+          dependencies.clearAdmissions();
+          dependencies.deliverDetached(current);
+        }
+        owner.modelSource?.release();
+        notifyNativeModelSourceWaiters(registeredState);
+        dependencies.prune(registeredState);
         // A confirmed close can enqueue writes after unregister starts.
         await Promise.allSettled([ready, ...dependencies.closes.settlements(registeredState)]);
         await Promise.allSettled([dependencies.submissions.drain(registeredState)]);

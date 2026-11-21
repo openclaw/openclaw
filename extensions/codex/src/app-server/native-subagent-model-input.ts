@@ -20,6 +20,7 @@ import type {
   ParentOwner,
   ParentState,
 } from "./native-subagent-monitor-types.js";
+import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
 
 /** Equality joins input to one live source; it never grants another source's models. */
 export function assertNativeModelInputCompatible(sender: ParentOwner, receiver: ParentOwner): void {
@@ -104,6 +105,12 @@ export class RetiredNativeChildPaths {
   /** Native child thread IDs an earlier registration of this native parent observed. */
   childThreadIds(nativeParentThreadId: string): Iterable<string> {
     return this.byParent.get(nativeParentThreadId)?.values() ?? [];
+  }
+
+  agentPaths(nativeParentThreadId: string, childThreadId: string): string[] {
+    return [...(this.byParent.get(nativeParentThreadId) ?? [])].flatMap(([path, threadId]) =>
+      threadId === childThreadId ? [path] : [],
+    );
   }
 }
 
@@ -590,5 +597,50 @@ export function drainNativeChildModelAdmissions(
     if (observeActivity && child && child !== previous && child.nativeTurnState === "active") {
       dependencies.observeActivity(child);
     }
+  }
+}
+
+/** Read-only eligibility; transferring observation still needs fresh native lineage. */
+export function canPrepareNativeReceiverChild(params: {
+  state: ParentState;
+  threadId: string;
+  child: KnownChild | undefined;
+  previous: ParentState | undefined;
+  isCurrent: boolean;
+  retiredParents: Pick<WeakSet<ParentState>, "has">;
+  hasChildCustody: (state: ParentState, threadId: string) => boolean;
+}): boolean {
+  const { state, threadId, child, previous, isCurrent, retiredParents, hasChildCustody } = params;
+  if (previous === state) {
+    return true;
+  }
+  if (
+    !isCurrent ||
+    (child &&
+      (!child.assignment.terminal ||
+        child.pendingTurns.length > 0 ||
+        hasChildCustody(child.parent, threadId)))
+  ) {
+    return false;
+  }
+  if (!previous) {
+    return true;
+  }
+  if (
+    retiredParents.has(previous) ||
+    !state.requesterSessionKey ||
+    previous.requesterSessionKey !== state.requesterSessionKey ||
+    !previous.historyOwner ||
+    !state.historyOwner ||
+    !matchesNativeAssignmentLifecycle(previous.historyOwner, state.historyOwner) ||
+    ![...state.owners.values()].some((owner) => owner.completionCustody?.isCurrent())
+  ) {
+    return false;
+  }
+  try {
+    state.assignmentStore?.assertCurrent();
+    return true;
+  } catch {
+    return false;
   }
 }

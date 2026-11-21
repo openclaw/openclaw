@@ -1,0 +1,3 @@
+# Preserve detached completion fallback after failed or interrupted parent turns,
+# including completion before turn binding and the successful-turn control.
+29

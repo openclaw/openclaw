@@ -1,5 +1,9 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexNativeSubagentNotification } from "./native-subagent-notification.js";
+import {
+  readCodexNativeSubagentNotification,
+  type CodexNativeSubagentNotification,
+} from "./native-subagent-notification.js";
+import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
 type ReceiptParent = Readonly<{
   parentThreadId: string;
@@ -74,6 +78,45 @@ export class CodexNativeSubagentDeliveryReceipts {
     outcome.result = receiptResultKey(result);
     this.outcomes.set(runId, outcome);
     return this.track(runId, []);
+  }
+
+  /** Exact owned history can select an immutable outcome without weakening live ambiguity rules. */
+  acknowledgeOwnedReceipt(
+    runId: string,
+    notification: CodexServerNotification,
+    parentThreadId: string,
+    turnId: string,
+  ): string[] {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const item = isJsonObject(params?.item) ? params.item : undefined;
+    const outcome = this.outcomes.get(runId);
+    if (
+      !outcome ||
+      outcome.received ||
+      outcome.result === undefined ||
+      !item ||
+      item.type !== "agent_message" ||
+      params?.threadId !== parentThreadId ||
+      params.turnId !== turnId ||
+      !isJsonObject(item.internal_chat_message_metadata_passthrough) ||
+      item.internal_chat_message_metadata_passthrough.turn_id !== turnId
+    ) {
+      return [];
+    }
+    const receipts = readCodexNativeSubagentNotification(notification).receipts;
+    const receipt = receipts.length === 1 ? receipts[0] : undefined;
+    if (
+      !receipt ||
+      !outcome.paths.has(receipt.agentPath) ||
+      receiptResultKey(receipt.result) !== outcome.result ||
+      this.seen.has(receipt.id)
+    ) {
+      return [];
+    }
+    this.seen.add(receipt.id);
+    outcome.received = true;
+    outcome.receiptResults.add(outcome.result);
+    return [runId];
   }
 
   track(runId: string, paths: Iterable<string>): string[] {

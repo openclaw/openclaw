@@ -32,6 +32,7 @@ import {
 } from "./native-subagent-assignment-store.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { createNativeSubagentRegistrationGuards } from "./native-subagent-receipt-retirement.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import {
@@ -302,15 +303,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
               authority: parentWriteAuthority,
             })
           : undefined;
-      const assertRegistrationCurrent = () => {
-        runAbortController.signal.throwIfAborted();
-        params.hostCapabilities.assertActive();
-        connection.assertCurrent();
-        if (submissionStore) {
-          submissionStore.assertCurrent();
-        }
-        thread.liveThreadOwnership?.assertCurrent();
-      };
+      const registrationGuards = createNativeSubagentRegistrationGuards({
+        signal: runAbortController.signal,
+        hostCapabilities: params.hostCapabilities,
+        connection,
+        submissionStore,
+        thread,
+        parent,
+      });
       const retainModelSource = params.hostCapabilities.retainSourceAuthority;
       const modelSource = retainModelSource?.();
       try {
@@ -335,7 +335,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           submissionStore,
           assignmentStore,
           agentId: sessionAgentId,
-          assertCurrent: assertRegistrationCurrent,
+          ...registrationGuards,
           assertCurrentAsync: assertParentSessionCurrent,
           isTurnYielded: () => attemptTools.toolState.yieldDetected,
           retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
@@ -356,7 +356,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         try {
           await registration.ready;
           await assertParentSessionCurrent();
-          assertRegistrationCurrent();
+          registrationGuards.assertCurrent();
           if (!submissionStore) {
             const unregister = registration.unregister;
             registration.unregister = () =>
