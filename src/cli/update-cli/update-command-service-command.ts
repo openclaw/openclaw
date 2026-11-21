@@ -405,6 +405,9 @@ export async function runUpdatedInstallGatewayCommand(
             input: JSON.stringify({
               executor: grant,
               action,
+              ...(installing && params.definitionRecovery && process.platform === "darwin"
+                ? { allowUnchangedDefinitionReceipt: true }
+                : {}),
               ...(installing && params.originalManagedServiceRuntime
                 ? {
                     originalDefinition: params.originalManagedServiceRuntime.definition.fingerprint,

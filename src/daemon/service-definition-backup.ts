@@ -277,7 +277,7 @@ function mutationHooks(
 
 /** Capture and use the hooks while holding the native operation lock. */
 export async function captureGatewayServiceDefinitionBackup(
-  params: Context & { inspect?: () => Promise<void> },
+  params: Context & { inspect?: () => Promise<void>; allowUnchangedReceipt?: boolean },
 ) {
   params.assertCurrent();
   const paths = definitionFiles(params);
@@ -322,25 +322,46 @@ export async function captureGatewayServiceDefinitionBackup(
   // Bind audit facts to these bytes before any backup or installer publication.
   await params.inspect?.();
   await hooks.beforeWrite();
-  const backupPaths = await Promise.all(
-    originals.map(async ({ sourcePath, contents }) => {
+  const backupPaths: string[] = [];
+  let backupsReady = false;
+  const writeBackups = async () => {
+    for (const { sourcePath, contents } of originals) {
       const file = backupPath(sourcePath, receipt.id);
       hooks.assertCurrent();
       await fs.writeFile(file, contents, { flag: "wx", mode: 0o600, flush: true });
-      return file;
-    }),
-  );
-  await checkpointReceipt(params, receipt);
-  backupPaths.push(receiptPath(receipt));
-  await hooks.beforeWrite();
+      backupPaths.push(file);
+    }
+    await checkpointReceipt(params, receipt);
+    backupPaths.push(receiptPath(receipt));
+    await hooks.beforeWrite();
+    backupsReady = true;
+  };
+  // Only compatible Darwin updaters can validate a receipt with no saved bytes.
+  const deferBackup = process.platform === "darwin" && params.allowUnchangedReceipt;
+  let backupWrite = deferBackup ? undefined : writeBackups();
+  await backupWrite;
   return {
     backupPaths,
-    hooks,
+    hooks: deferBackup
+      ? {
+          ...hooks,
+          filePrepared: async (sourcePath: string, temporaryPath: string | null) => {
+            backupWrite ??= writeBackups();
+            await backupWrite;
+            await hooks.filePrepared(sourcePath, temporaryPath);
+          },
+        }
+      : hooks,
     finish: async () => {
       await hooks.beforeWrite();
-      return receipt;
+      return backupWrite ? receipt : { ...receipt, unchanged: true as const };
     },
     compensate: async (): Promise<boolean> => {
+      // No file could have been published before the backups settled.
+      if (!backupsReady) {
+        await hooks.beforeWrite();
+        return false;
+      }
       const prepared = await prepareGatewayServiceDefinitionRestore({ ...params, receipt });
       const changed =
         prepared.receipt.files.some((file) => !isDeepStrictEqual(file.before, file.after)) ||
@@ -361,6 +382,16 @@ async function prepareGatewayServiceDefinitionRestore(
 ) {
   const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(params.receipt);
   assertInventory(params, receipt);
+  if (
+    receipt.unchanged &&
+    (process.platform !== "darwin" ||
+      receipt.task ||
+      receipt.files.some(
+        (file) => file.prepared !== undefined || !isDeepStrictEqual(file.before, file.after),
+      ))
+  ) {
+    throw new Error("Invalid unchanged LaunchAgent definition receipt.");
+  }
   const hooks = mutationHooks(params, receipt);
   await hooks.beforeWrite();
   if (process.platform === "linux") {
@@ -368,6 +399,10 @@ async function prepareGatewayServiceDefinitionRestore(
   }
   if (process.platform === "darwin") {
     await assertNoSystemLaunchDaemonOwnership(resolveLaunchAgentLabel(params.env));
+  }
+  if (receipt.unchanged) {
+    await hooks.beforeWrite();
+    return { receipt, hooks, contents: receipt.files.map(() => null), task: null };
   }
   const readBackup = async (file: string, hash: string) => {
     const target = backupPath(file, receipt.id);
