@@ -83,7 +83,7 @@ class VoiceE2eService : Service() {
       if (connect) {
         configureGateway(runtime = runtime, intent = intent)
       }
-      if (connect || !runtime.isConnected.value) {
+      if (connect || !runtime.gatewayConnectionDisplay.value.isConnected) {
         awaitGateway(runtime = runtime, timeoutMs = connectTimeoutMs)
       }
 
@@ -167,7 +167,7 @@ class VoiceE2eService : Service() {
   ) {
     try {
       withTimeout(timeoutMs) {
-        while (!runtime.isConnected.value) {
+        while (!runtime.gatewayConnectionDisplay.value.isConnected) {
           voiceE2eTerminalGatewayFailure(runtime.gatewayConnectionDisplay.value.problem)?.let { error(it) }
           delay(100L)
         }

@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -88,9 +89,9 @@ class SkillsGatewayScopeTest {
       findTestField(runtime, "connectedEndpoint").set(runtime, gatewayA)
       findTestField(runtime, "operatorConnected").set(runtime, true)
       @Suppress("UNCHECKED_CAST")
-      val connected =
-        findTestField(runtime, "_isConnected").get(runtime) as MutableStateFlow<Boolean>
-      connected.value = true
+      val display =
+        findTestField(runtime, "_gatewayConnectionDisplay").get(runtime) as MutableStateFlow<GatewayConnectionDisplay>
+      display.value = display.value.copy(isConnected = true)
       @Suppress("UNCHECKED_CAST")
       val scopes =
         findTestField(runtime, "_operatorScopes").get(runtime) as MutableStateFlow<List<String>>
