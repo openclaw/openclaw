@@ -129,6 +129,7 @@ export function createTranscriptMessageOptions(
     replyNavigationId: props.replyMessageAccess?.navigationId,
     onOpenSidebar: actions.onOpenSidebar,
     sessionKey: props.sessionKey,
+    transcriptVisible: props.transcriptVisible,
     boardProvider: props.boardProvider,
     widgetLayout: props.widgetLayout,
     displayFacts: actions.displayFacts,

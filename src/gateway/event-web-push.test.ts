@@ -17,6 +17,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HumanMentionWebPush } from "./event-web-push.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
+import { projectChatTerminalMessage } from "./server-chat-live-text.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
@@ -281,6 +282,99 @@ describe("event Web Push classification", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it("carries native final identity from the authorized session, not the navigation hint", async () => {
+    setCompletionSession();
+    finishAgent(
+      undefined,
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+          __openclaw: { id: "answer-1", runId: "run-1", seq: 4 },
+        },
+      },
+      researchContext,
+    );
+    await expectPayload({
+      completion: {
+        version: 1,
+        agentId: "research",
+        sessionKey: "agent:research:thread.1",
+        runId: "run-1",
+        messageId: "id:answer-1",
+        profileId: null,
+      },
+    });
+  });
+
+  it("matches an ordinary terminal's committed key before history supplies its ID", async () => {
+    setCompletionSession();
+    finishAgent(
+      undefined,
+      {
+        message: projectChatTerminalMessage({
+          runId: "run-1",
+          text: "Done",
+          timestamp: 1,
+          canvasBlocks: [],
+          idempotencyKey: "final-receipt-1",
+        }),
+      },
+      researchContext,
+    );
+    await expectPayload({
+      completion: expect.objectContaining({ messageId: "key:final-receipt-1", runId: "run-1" }),
+    });
+  });
+
+  it("recognizes the CLI persisted key and keeps recipient descriptors separate", async () => {
+    setCompletionSession();
+    setRecipients(makeSubscription("alice-device", "alice"), makeSubscription("bob-device", "bob"));
+    finishAgent(
+      undefined,
+      {
+        message: {
+          role: "assistant",
+          api: "cli",
+          stopReason: "stop",
+          content: "Done",
+          __openclaw: { id: "cli-row", idempotencyKey: "cli-assistant:run-1" },
+        },
+      },
+      researchContext,
+    );
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2));
+    for (const profileId of ["alice", "bob"]) {
+      expectSend({
+        subscriptions: [expect.objectContaining({ userProfileId: profileId })],
+        payload: expect.objectContaining({
+          completion: expect.objectContaining({
+            runId: "run-1",
+            messageId: "key:cli-assistant:run-1",
+            profileId,
+          }),
+        }),
+      });
+    }
+  });
+
+  it.each([
+    {},
+    { id: "answer-1", runId: "another-run" },
+    { id: "answer-1", runId: "run-1", importedFrom: "external", cliSessionId: "cli" },
+  ])("retains finals without unambiguous native identity: %j", async (metadata) => {
+    setCompletionSession();
+    finishAgent(
+      undefined,
+      {
+        message: { role: "assistant", content: "Done", __openclaw: metadata },
+      },
+      researchContext,
+    );
+    await expectPayload({ tag: "openclaw-agent-finished-run-1" });
+    expect(mocks.send.mock.calls[0][0].payload).not.toHaveProperty("completion");
+  });
 
   it("includes the selected avatar only for identified agent notifications", async () => {
     const identified = makeSubscription("identified");

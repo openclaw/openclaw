@@ -11,6 +11,8 @@ export const uiIsolatedTestFiles = [
   // The rejected update card import must not poison the shared module registry.
   "ui/src/app/navigation-surface-view.stale-build.test.tsx",
   "ui/src/app/router-outlet.test.tsx",
+  // The mocked lazy push owner must not replace the runtime in other UI suites.
+  "ui/src/app/web-push-read-admission.test.ts",
   "ui/src/components/app-sidebar-native-gateways.test.ts",
   // The cold-view proof holds imports that other sidebar suites already load.
   "ui/src/components/app-sidebar-lazy-views.test.tsx",

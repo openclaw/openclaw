@@ -16,6 +16,7 @@ import {
 } from "../solid-render-lifecycle.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
+  TranscriptReadPresentation,
   TranscriptRowKeyContext,
   type TranscriptContent,
   type TranscriptLayoutProps,
@@ -85,6 +86,7 @@ function TranscriptRows(props: {
   snapshot: TranscriptLayoutProps;
   measureRowRefFor: TranscriptLayoutProps["measureRowRefFor"];
   columnRef: (element: HTMLDivElement) => void;
+  readPresented: (key: string) => boolean;
 }) {
   const presented = useContext(ContentPresentation);
   const virtualRows = createMemo(() => {
@@ -204,7 +206,11 @@ function TranscriptRows(props: {
                   >
                     <TranscriptRowKeyContext value={() => row()?.key}>
                       <ContentPresentation value={() => presented() && (active() || preparing())}>
-                        <RowContent value={content()} />
+                        <TranscriptReadPresentation
+                          value={() => active() && props.readPresented(row()?.key ?? "")}
+                        >
+                          <RowContent value={content()} />
+                        </TranscriptReadPresentation>
                       </ContentPresentation>
                     </TranscriptRowKeyContext>
                   </div>
@@ -232,6 +238,7 @@ export class ChatTranscriptRenderer {
   private committed?: TranscriptLayoutProps;
   private lifecycle?: SolidRenderLifecycle<TranscriptLayoutProps>;
   private publishPresentation?: () => void;
+  private publishPosition?: () => void;
   private disposeRoot?: () => void;
   private binding?: PresentationBinding;
   private stopPresentation?: () => void;
@@ -317,6 +324,7 @@ export class ChatTranscriptRenderer {
   syncInitialPosition(): void {
     if (this.element && this.accepted) {
       this.element.style.visibility = this.accepted.initialPositionPending() ? "hidden" : "";
+      this.publishPosition?.();
     }
   }
 
@@ -416,6 +424,19 @@ export class ChatTranscriptRenderer {
           const [presented, setPresented] = createSignal(this.isPresented(), { ownedWrite: true });
           this.publishPresentation = () => setPresented(this.isPresented());
           const active = () => presented() && this.isPresented();
+          // Project the layout owner's readiness when it changes outside a render snapshot.
+          const [positionSettled, setPositionSettled] = createSignal(
+            !next.initialPositionPending(),
+            { ownedWrite: true },
+          );
+          this.publishPosition = () =>
+            setPositionSettled(this.accepted?.initialPositionPending() === false);
+          const readPresented = (key: string) =>
+            active() &&
+            positionSettled() &&
+            this.element?.style.visibility === "" &&
+            this.accepted?.initialPositionPending() === false &&
+            this.accepted.activeRowKeys.has(key);
           const source = projectOwner(this, (owner) => {
             if (!owner.accepted) {
               throw new Error("Transcript render snapshot was read after disposal");
@@ -438,6 +459,7 @@ export class ChatTranscriptRenderer {
                 <ContentPresentation value={active}>
                   <TranscriptRows
                     snapshot={snapshot()}
+                    readPresented={readPresented}
                     measureRowRefFor={next.measureRowRefFor}
                     columnRef={(column) => {
                       this.column = column;
@@ -476,6 +498,7 @@ export class ChatTranscriptRenderer {
     this.disposeRoot?.();
     this.disposeRoot = undefined;
     this.publishPresentation = undefined;
+    this.publishPosition = undefined;
     this.lifecycle = undefined;
     this.accepted = undefined;
     this.contentSource = undefined;

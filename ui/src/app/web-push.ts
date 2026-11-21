@@ -2,6 +2,7 @@ import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
+import type { ViewedWebPushCompletion } from "./web-push-read.runtime.ts";
 import type {
   WebPushCapabilityAction,
   WebPushCapabilityPatch,
@@ -37,6 +38,7 @@ export function createWebPushCapability(
     "PushManager" in globalThis &&
     "Notification" in globalThis;
   let owner: WebPushCapabilityRuntime | undefined;
+  let disposed = false;
   const snapshot: WebPushSnapshot = {
     supported,
     ...readWebPushAccess(gateway.snapshot),
@@ -93,9 +95,35 @@ export function createWebPushCapability(
         render = undefined;
       };
     },
+    viewed(completion: ViewedWebPushCompletion, stillPresented: () => boolean) {
+      // Bind the receipt before awaiting the lazy owner: a retained bubble must
+      // not grant a read to a replacement connection or authenticated profile.
+      const client = gateway.snapshot.client;
+      const profile = gateway.snapshot.selfUser;
+      const revision = gateway.connectionRevision;
+      const url = gateway.connection.gatewayUrl;
+      if (disposed || !client || profile === undefined || gateway.snapshot.phase !== "connected") {
+        return;
+      }
+      const isCurrent = () =>
+        !disposed &&
+        gateway.snapshot.phase === "connected" &&
+        gateway.snapshot.client === client &&
+        gateway.snapshot.selfUser?.id === profile?.id &&
+        gateway.snapshot.selfUser !== undefined &&
+        gateway.connectionRevision === revision &&
+        gateway.connection.gatewayUrl === url &&
+        stillPresented();
+      void runtime?.then((runtimeOwner) => {
+        if (isCurrent()) {
+          runtimeOwner?.viewed(completion, isCurrent);
+        }
+      });
+    },
     run: (action: WebPushCapabilityAction) =>
       runtime ? runtime.then((runtimeOwner) => runtimeOwner?.run(action)) : Promise.resolve(),
     dispose(this: void) {
+      disposed = true;
       stopGateway();
       void runtime?.then((runtimeOwner) => runtimeOwner?.dispose());
       render = undefined;
