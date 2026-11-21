@@ -1063,11 +1063,12 @@
     display: none;
   }
 
-  .sw-hub-header :is(.hub-page-header__actions, .sw-learning) {
+  .sw-hub-header .hub-page-header__actions {
     width: 100%;
   }
 
   .sw-hub-header .sw-learning {
+    width: 100%;
     justify-content: space-between;
   }
 
