@@ -71,6 +71,25 @@ private final class DashboardWindowGestureSpy: NSWindow {
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardWindowSmokeTests {
+    @Test func `dashboard pane preserves the frame assigned by a docked inspector`() {
+        let webView = NSView()
+        let pane = BrowserProfileImportBannerView.makeDashboardPane(webView: webView)
+        pane.setFrameSize(NSSize(width: 1000, height: 700))
+        pane.layoutSubtreeIfNeeded()
+        #expect(webView.frame == pane.bounds)
+
+        // WebKit changes the inspected view's frame when it docks at the bottom.
+        let dockedFrame = NSRect(x: 0, y: 230, width: 1000, height: 470)
+        webView.frame = dockedFrame
+        pane.needsLayout = true
+        pane.layoutSubtreeIfNeeded()
+        #expect(webView.frame == dockedFrame)
+
+        pane.setFrameSize(NSSize(width: 950, height: 650))
+        pane.layoutSubtreeIfNeeded()
+        #expect(webView.frame == NSRect(x: 0, y: 230, width: 950, height: 420))
+    }
+
     @Test func `dashboard frame routes single click to drag and double click to zoom`() throws {
         let window = DashboardWindowGestureSpy(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
