@@ -84,6 +84,16 @@ export async function applyNonInteractiveGatewayConfig(params: {
           "Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.",
       );
     }
+    // An explicit "--gateway-auth token" cannot survive Funnel: the switch below
+    // would silently replace it, so name the real requirement instead of
+    // pretending the token was honored.
+    if (explicitAuthMode === "token") {
+      return reject(
+        'Tailscale Funnel requires password auth and cannot use "--gateway-auth token". ' +
+          "Re-run with --gateway-auth password and pass --gateway-password or set OPENCLAW_GATEWAY_PASSWORD, " +
+          "or keep Tailscale exposure off.",
+      );
+    }
     authMode = "password";
   }
 
@@ -142,8 +152,12 @@ export async function applyNonInteractiveGatewayConfig(params: {
           normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD))
         : normalizeOptionalString(input);
     if (!password) {
+      // Funnel always ends on password auth, so the token suggestion can never
+      // work there; point at the two inputs that do.
       return reject(
-        "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
+        tailscaleMode === "funnel"
+          ? "Tailscale Funnel requires password auth. Pass --gateway-password or set OPENCLAW_GATEWAY_PASSWORD."
+          : "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
       );
     }
     auth = {
