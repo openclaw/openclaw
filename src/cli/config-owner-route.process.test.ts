@@ -393,8 +393,11 @@ describe("config mutations against a running Gateway", () => {
 
   it("previews then applies a batch file, and unsets the written paths", async () => {
     const batchFile = path.join(env.HOME!, "local-ai.batch.json");
+    // Without a models list, the Gateway's runtime view of ollama holds a default `models: []`.
+    const ollama = { baseUrl: "http://127.0.0.1:11434", api: "ollama", apiKey: "ollama-local" };
     await writeFixtureJson(batchFile, [
       { path: "models.providers.llamacpp", value: provider },
+      { path: "models.providers.ollama", value: ollama },
       { path: "agents.defaults.model.primary", value: "llamacpp/local" },
     ]);
     const preview = await run(env, ["config", "set", "--batch-file", batchFile, "--dry-run"]);
@@ -402,18 +405,22 @@ describe("config mutations against a running Gateway", () => {
     expect((await readConfig()).models).toBeUndefined();
     const apply = await run(env, ["config", "set", "--batch-file", batchFile]);
     expect(apply.code, apply.stderr).toBe(0);
-    expect(apply.stdout).toContain("Updated 2 config paths.");
+    expect(apply.stdout).toContain("Updated 3 config paths.");
     const applied = await gatewayConfig();
     expect(applied.models.providers.llamacpp).toMatchObject({ baseUrl: provider.baseUrl });
     expect(applied.agents.defaults.model.primary).toBe("llamacpp/local");
 
-    for (const unsetPath of ["agents.defaults.model.primary", "models.providers.llamacpp"]) {
+    for (const unsetPath of [
+      "agents.defaults.model.primary",
+      "models.providers.llamacpp",
+      "models.providers.ollama",
+    ]) {
       const unset = await run(env, ["config", "unset", unsetPath]);
       expect(unset.code, unset.stderr).toBe(0);
       expect(unset.stdout).toContain(`Removed ${unsetPath}.`);
     }
     const removed = await readConfig();
-    expect(removed.models?.providers?.llamacpp).toBeUndefined();
+    expect(removed.models?.providers).toEqual({});
     expect(removed.agents?.defaults?.model?.primary).toBeUndefined();
   });
 
