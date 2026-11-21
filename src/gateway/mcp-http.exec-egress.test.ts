@@ -201,59 +201,63 @@ it("routes a command started by a conversation's completion turn back to that co
   ]);
 });
 
-it("reviews an auto-mode command with the CLI run's admitted user turn", async () => {
-  const runId = "mcp-exec-review";
-  const target = {
-    agentId: "probe",
-    sessionId: "review-session",
-    sessionKey: "agent:probe:review",
-    storePath: path.join(state.sessionsDir("probe"), "sessions.json"),
-  };
-  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-  const recorder = createUserTurnTranscriptRecorder({
-    input: { text: "Publish the reviewed synthetic evidence.", senderIsOwner: true },
-    target,
-  });
-  await recorder.persistApproved();
-  const runtime = mcp.runtime();
-  const admission = mcp.prepareAdmission(runId, "cli.agent", { cfg: config, agentId: "probe" });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("gateway");
-  const finalized = finalizeCliMcpGrant(
-    {
-      sessionKey: target.sessionKey,
-      sessionId: target.sessionId,
+it.skipIf(process.platform === "win32")(
+  "reviews an auto-mode command with the CLI run's admitted user turn",
+  async () => {
+    const runId = "mcp-exec-review";
+    const target = {
       agentId: "probe",
-      runId,
-      workspaceDir: state.workspaceDir,
-      cwd: state.workspaceDir,
-      senderIsOwner: true,
-      execOverrides: { mode: "auto" },
-    },
-    ["exec"],
-    false,
-    { config, admittedRunContext, userTurnTranscriptRecorder: recorder },
-  );
-  const grant = mcp.captureGrant(
-    { ...expectDefined(finalized, "CLI grant"), runtimeOwnerToken: runtime.ownerToken },
-    "capture-" + runId,
-    (token) => grants.push(token),
-  );
+      sessionId: "review-session",
+      sessionKey: "agent:probe:review",
+      storePath: path.join(state.sessionsDir("probe"), "sessions.json"),
+      sessionEntry: undefined,
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "Publish the reviewed synthetic evidence.", senderIsOwner: true },
+      target,
+    });
+    await recorder.persistApproved();
+    const runtime = mcp.runtime();
+    const admission = mcp.prepareAdmission(runId, "cli.agent", { cfg: config, agentId: "probe" });
+    admissions.push(admission);
+    const admittedRunContext = await admission.admit("gateway");
+    const finalized = finalizeCliMcpGrant(
+      {
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId,
+        agentId: "probe",
+        runId,
+        workspaceDir: state.workspaceDir,
+        cwd: state.workspaceDir,
+        senderIsOwner: true,
+        execOverrides: { mode: "auto" },
+      },
+      ["exec"],
+      false,
+      { config, admittedRunContext, userTurnTranscriptRecorder: recorder },
+    );
+    const grant = mcp.captureGrant(
+      { ...expectDefined(finalized, "CLI grant"), runtimeOwnerToken: runtime.ownerToken },
+      "capture-" + runId,
+      (token) => grants.push(token),
+    );
 
-  const response = await mcp.request(
-    runtime,
-    mcp.toolCall("exec", { command: "/usr/bin/printf mcp-review" }),
-    grant,
-  );
+    const response = await mcp.request(
+      runtime,
+      mcp.toolCall("exec", { command: "/usr/bin/printf mcp-review" }),
+      grant,
+    );
 
-  expect(await mcp.json(response)).toMatchObject({ result: { isError: true } });
-  expect(reviewer.mock.calls.map(([input]) => input.transcript)).toEqual([
-    {
-      entries: [
-        { kind: "user", origin: "operator", text: "Publish the reviewed synthetic evidence." },
-      ],
-      omittedEntries: 0,
-      truncated: false,
-    },
-  ]);
-});
+    expect(await mcp.json(response)).toMatchObject({ result: { isError: true } });
+    expect(reviewer.mock.calls.map(([input]) => input.transcript)).toEqual([
+      {
+        entries: [
+          { kind: "user", origin: "operator", text: "Publish the reviewed synthetic evidence." },
+        ],
+        omittedEntries: 0,
+        truncated: false,
+      },
+    ]);
+  },
+);

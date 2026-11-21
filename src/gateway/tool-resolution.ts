@@ -12,6 +12,7 @@ import { filterToolsByMessageProvider } from "../agents/agent-tools.message-prov
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
@@ -92,6 +93,8 @@ export async function resolveGatewayScopedTools(
     messageActionTurnCapability?: string;
     /** Host-minted audience from a run-bound loopback grant; ignored on other surfaces. */
     memoryAudience?: MemoryAudience;
+    /** Exec review evidence from a run-bound loopback grant. */
+    reviewTranscript?: ExecToolDefaults["reviewTranscript"];
     authProfileStore?: AuthProfileStore;
     agentDir?: string;
     onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
@@ -536,6 +539,7 @@ export async function resolveGatewayScopedTools(
                 ask: execDefaults.ask,
                 node: execDefaults.node,
                 elevated: params.bashElevated,
+                reviewTranscript: params.reviewTranscript,
               }
             : undefined,
           scheduledToolPolicy: params.scheduledToolPolicy,
@@ -579,6 +583,7 @@ export async function resolveGatewayScopedTools(
             safeBinTrustedDirs: execConfig?.safeBinTrustedDirs,
             safeBinProfiles: execConfig?.safeBinProfiles,
             reviewer: execConfig?.reviewer,
+            reviewTranscript: params.reviewTranscript,
             config: params.cfg,
             agentId: policyAgentId,
             elevated: params.bashElevated,

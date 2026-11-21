@@ -5,6 +5,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
   type PairedComputerUseAvailability,
@@ -76,6 +77,8 @@ type McpLoopbackScopeParams = {
   messageActionTurnCapability?: string;
   /** Memory audience of the authenticating run-bound grant; cached per grant token. */
   memoryAudience?: MemoryAudience;
+  /** Exec review evidence of the authenticating run-bound grant; cached per grant token. */
+  reviewTranscript?: ExecToolDefaults["reviewTranscript"];
   grantToken?: string;
   /**
    * Liveness of the authenticating client grant. Deliberately absent from the
@@ -340,6 +343,7 @@ async function constructMcpLoopbackTools(
     ...context,
     messageActionTurnCapability: params.messageActionTurnCapability,
     memoryAudience: params.memoryAudience,
+    reviewTranscript: params.reviewTranscript,
     toolsAllow,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,

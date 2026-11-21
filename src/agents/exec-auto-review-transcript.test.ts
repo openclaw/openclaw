@@ -3,7 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import * as loggingConfig from "../logging/config.js";
-import { buildExecAutoReviewTranscript } from "./exec-auto-review-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  buildExecAutoReviewTranscript,
+  createAdmittedTurnReviewTranscript,
+} from "./exec-auto-review-transcript.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const user = (content: string, metadata: Record<string, unknown> = {}): AgentMessage =>
@@ -341,5 +345,23 @@ describe("buildExecAutoReviewTranscript", () => {
     });
     expect(transcript.entries[1]?.text).toBe("[media omitted]");
     expect(transcript.entries[2]?.text).toBe("[media omitted]");
+  });
+});
+
+describe("createAdmittedTurnReviewTranscript", () => {
+  it("gives the reviewer no turn when its transcript write was blocked", () => {
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "Send the synthetic report.", senderIsOwner: true },
+      target: {
+        agentId: "main",
+        sessionId: "review-session",
+        sessionKey: "agent:main:review",
+        storePath: "/nonexistent/sessions.json",
+        sessionEntry: undefined,
+      },
+    });
+    recorder.markBlocked();
+
+    expect(createAdmittedTurnReviewTranscript(recorder)?.()).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ import {
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
+import { createAdmittedTurnReviewTranscript } from "../exec-auto-review-transcript.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { captureRequesterOrigin } from "../requester-origin.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
@@ -33,6 +34,7 @@ export function finalizeCliMcpGrant(
     | "abortSignal"
     | "toolAuthorityFingerprint"
     | "replyOperation"
+    | "userTurnTranscriptRecorder"
   > = {},
 ) {
   if (!context) {
@@ -58,6 +60,7 @@ export function finalizeCliMcpGrant(
     abortSignal: source.abortSignal,
     assertCurrent: source.assertCurrent,
     ...(personalToolParticipants ? { personalToolParticipants } : {}),
+    reviewTranscript: createAdmittedTurnReviewTranscript(source.userTurnTranscriptRecorder),
   };
 }
 

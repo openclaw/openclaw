@@ -40,6 +40,7 @@ it.skipIf(process.platform === "win32")(
         sessionId: "review-session",
         sessionKey: "agent:main:review",
         storePath: path.join(state.sessionsDir(), "sessions.json"),
+        sessionEntry: undefined,
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const recorder = createUserTurnTranscriptRecorder({

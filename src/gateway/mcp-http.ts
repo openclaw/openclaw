@@ -330,6 +330,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
                   // Only a run-bound CLI grant carries a verified turn sender's audience.
                   memoryAudience: boundClientGrant?.memoryAudience,
+                  reviewTranscript: boundClientGrant?.reviewTranscript,
                   cfg: boundClientGrant?.toolPolicyConfig ?? cfg,
                   signal: requestAbort.signal,
                   authProfileStore: boundClientGrant?.toolAuth?.store,
