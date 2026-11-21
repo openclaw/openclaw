@@ -127,8 +127,8 @@ export async function removeManagedWorktreeWithAllocation(
     }
   }
   const claimToken = params.claimToken ?? (await claimManagedRemoval(context.env, record, params));
-  createWorktreeRemovalClaimsGuard(context.env, [record.id], claimToken)();
   try {
+    createWorktreeRemovalClaimsGuard(context.env, [record.id], claimToken)();
     const { withSettledLocalWorkspace } =
       await import("../../gateway/worker-environments/local-workspace-projection.js");
     return await withSettledLocalWorkspace(

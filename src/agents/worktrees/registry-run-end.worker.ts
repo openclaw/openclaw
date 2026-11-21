@@ -1,10 +1,6 @@
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Selectable } from "kysely";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -36,6 +32,8 @@ import {
 import {
   assertRegistryMutationCustody,
   collectLiveRunLeases,
+  prepareWorktreeRemovalClaimsCheck,
+  readWorktreeRemovalClaim,
   worktreeRunLeaseScope,
   WORKTREE_REMOVING_LEASE_KEY,
 } from "./run-lease-owner.js";
@@ -204,15 +202,7 @@ export type WorktreeRunEndInput<T> = Pick<
 };
 
 function assertRemovalToken(db: EngineConnection, id: string, token: string) {
-  const row = executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom("state_leases")
-      .select("owner")
-      .where("scope", "=", worktreeRunLeaseScope(id))
-      .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY),
-  ).rows[0];
-  if (row?.owner !== token) {
+  if (readWorktreeRemovalClaim(db, id)?.owner !== token) {
     throw new WorktreeRemovalContentionError(
       "busy",
       "Worktree removal claim changed; checkout preserved",
@@ -228,26 +218,7 @@ function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredic
     return assertRemovalToken(db, predicate.id, predicate.token);
   }
   if (predicate.kind === "removal-claims") {
-    const ids = [...new Set(predicate.ids)];
-    if (ids.length === 0) {
-      return;
-    }
-    const held = executeSqliteQuerySync(
-      db,
-      query(db)
-        .selectFrom("state_leases")
-        .select((eb) => eb.fn.countAll<number>().as("held"))
-        .where("scope", "in", sqliteStringSet(ids.map(worktreeRunLeaseScope)))
-        .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
-        .where("owner", "=", predicate.token),
-    ).rows[0]?.held;
-    if (held !== ids.length) {
-      throw new WorktreeRemovalContentionError(
-        "busy",
-        "Worktree removal claim changed; checkout preserved",
-      );
-    }
-    return;
+    return prepareWorktreeRemovalClaimsCheck(predicate.ids, predicate.token)?.(db);
   }
   const observed = "record" in predicate ? predicate.record : predicate;
   const current =
