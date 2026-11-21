@@ -111,6 +111,26 @@ describe("subagent maintenance protection", () => {
     },
   );
 
+  it("protects no session for a suspended outcome restart custody left unbound", async () => {
+    // Continuation (karmaterminal, 🌊's T1): restored or live, its child entry is gone and nothing
+    // at its requester key is owed it. A bound suspended outcome keeps both.
+    const run = createRun({
+      delivery: { status: "suspended", suspendedAt: 3 },
+      continuationRecipientAuthorityBinding: {
+        version: 1,
+        selection: "pending",
+        fanoutMode: "all",
+      },
+      continuationLineageMissing: { recordedAt: 3, unresolved: "requester-session-missing" },
+    });
+    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    expect(await protectedKeys()).toEqual([]);
+    subagentRuns.set(run.runId, run);
+    expect(await protectedKeys()).toEqual([]);
+    subagentRuns.set(run.runId, { ...run, continuationLineageMissing: undefined });
+    expect(await protectedKeys()).toEqual([run.requesterSessionKey, run.childSessionKey]);
+  });
+
   it("does not revisit settled live facts while capturing current protection", async () => {
     const pending = createRun();
     const rows = new Map([[pending.runId, pending]]);

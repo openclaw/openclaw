@@ -5,6 +5,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
+import { countPendingDescendantRuns } from "./subagent-registry-read.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -172,6 +173,26 @@ it("counts retained children without preparing unrelated descendant graphs", asy
   } finally {
     read.mockRestore();
   }
+});
+
+it("counts no pending descendant for a suspended outcome restart custody left unbound", async () => {
+  // Continuation (karmaterminal, 🌊's T1): the persisted session-list read carries the record.
+  const suspended = (runId: string, overrides: Partial<SubagentRunRecord> = {}) =>
+    createRun(runId, {
+      collect: false,
+      swarmRequesterSessionKey: undefined,
+      collectorCompletion: undefined,
+      completion: { required: true },
+      delivery: { status: "suspended", suspendedAt: 300, lastError: "requester unavailable" },
+      ...overrides,
+    });
+  const unbound = suspended("unbound", {
+    continuationLineageMissing: { recordedAt: 300, unresolved: "requester-session-missing" },
+  });
+  saveSubagentRegistryToSqlite(
+    new Map([suspended("bound"), unbound].map((row) => [row.runId, row])),
+  );
+  expect(await countPendingDescendantRuns("agent:main:main", () => {})).toBe(1);
 });
 
 it("keeps live alias changes authoritative", async () => {
