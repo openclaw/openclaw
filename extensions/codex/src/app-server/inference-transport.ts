@@ -1,14 +1,15 @@
 export const CODEX_INFERENCE_TRANSPORT_FAILURE =
   "Codex parent-local inference transport failed; retry on a fresh connection.";
 
-/** Native HTTP errors wrap the private relay's exact body; other 502s are unrelated. */
+/** Native transport errors wrap the private relay's exact body; other 502s are unrelated. */
 export function isCodexInferenceTransportFailure(error: unknown): boolean {
   const message = typeof error === "string" ? error : error instanceof Error ? error.message : "";
   const nativePrefix = `unexpected status 502 Bad Gateway: ${CODEX_INFERENCE_TRANSPORT_FAILURE}`;
   return (
     message === CODEX_INFERENCE_TRANSPORT_FAILURE ||
     message === nativePrefix ||
-    message.startsWith(`${nativePrefix}, url: http://127.0.0.1:`)
+    message.startsWith(`${nativePrefix}, url: http://127.0.0.1:`) ||
+    message.startsWith(`${nativePrefix}, url: ws://127.0.0.1:`)
   );
 }
 

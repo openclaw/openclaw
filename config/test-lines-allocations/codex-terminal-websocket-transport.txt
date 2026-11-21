@@ -1,0 +1,3 @@
+# Real attempt lifecycle covers terminal loopback WebSocket502 recovery,
+# a foreign-host near miss, and successful native fallback without retirement.
+11
