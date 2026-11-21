@@ -279,6 +279,52 @@ describe("openclaw channel mcp server", () => {
     });
   });
 
+  test("refuses Claude permission requests past the pending limit", async () => {
+    const limit = 1_000;
+    const mcp = await connectMcpWithoutGateway("on");
+    const permissions = notifications(
+      mcp.client,
+      "notifications/claude/channel/permission",
+      permissionParams,
+    );
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    // Claude request ids are five letters from a-z without l.
+    const ids = Array.from({ length: limit + 1 }, (_, index) =>
+      [0, 1, 2, 3, 4]
+        .map((digit) => "abcdefghijkmnopqrstuvwxyz".charAt(Math.floor(index / 25 ** digit) % 25))
+        .join(""),
+    );
+    const request = (requestId: string) =>
+      mcp.client.notification({
+        method: "notifications/claude/channel/permission_request",
+        params: { request_id: requestId, tool_name: "Bash", description: "", input_preview: "" },
+      });
+    const overflow = ids.at(-1)!;
+    const refused = `openclaw mcp: refused Claude permission ${overflow}: ${limit} already pending\n`;
+    const requestEvents = () =>
+      mcp.bridge
+        .pollEvents({ afterCursor: 0 }, limit + 1)
+        .events.filter((event) => event.type === "claude_permission_request");
+
+    for (const id of ids) {
+      await request(id);
+    }
+    await vi.waitFor(() => expect(writeSpy).toHaveBeenCalledWith(refused));
+    expect(requestEvents()).toHaveLength(limit);
+
+    await mcp.receive(userMessage(`yes ${overflow}`));
+    await mcp.receive(userMessage(`no ${ids[0]}`));
+    await flushMcpNotifications();
+    expect(permissions).toEqual([{ request_id: ids[0], behavior: "deny" }]);
+
+    // A delivered reply frees its slot for the next request.
+    await request(overflow);
+    await vi.waitFor(() => expect(requestEvents().at(-1)).toMatchObject({ requestId: overflow }));
+    await mcp.receive(userMessage(`yes ${overflow}`));
+    await flushMcpNotifications();
+    expect(permissions.at(-1)).toEqual({ request_id: overflow, behavior: "allow" });
+  });
+
   test.each(["get", "send"] as const)(
     "%s uses the described conversation route",
     async (action) => {
