@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -50,12 +49,14 @@ import {
 } from "./openclaw-state-db-schema-policy.js";
 import {
   admitStateSchemaFacts,
+  requireStatePostgresPhysicalFacts,
   assertSupportedStateSchemaVersion,
 } from "./openclaw-state-db-schema-version.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 
 type ExistingWriteOptions = OpenClawStateDatabaseOptions & { busyTimeoutMs?: number };
 type ExistingWriteContract = Pick<SqliteTransactionOptions, "beginLockFailureReporting"> & {
@@ -357,29 +358,38 @@ function createExistingPostgresStateWriter(
       if (resolveDatabasePath({ path: options.path, env }) !== pathname) {
         throw new Error("Existing-state writer cannot change its database path.");
       }
+      let callbackEntered = false;
       return withEngineStoreAdmission(() =>
-        runManagedStateTransaction(
+        withPostgresSchemaAdmissionRetry(
           db,
-          () => {
-            assertSameFile();
-            assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
-            const catalog = getPostgresPhysicalFacts(db)!.catalog;
-            for (const table of tables) {
-              if (contract.initializeAdditiveSchema) {
-                ensureStatePostgresFragment(db, table);
-              } else if (!catalog.some((fact) => fact.kind === "table" && fact.table === table)) {
-                throw new Error(`Existing PostgreSQL state schema is missing ${table}`);
-              }
-            }
-            const value = operation({ db, path: pathname, recoveryChanges: [] });
-            assertSameFile();
-            return value;
-          },
-          {
-            databaseLabel: pathname,
-            operationLabel: contract.operationLabel,
-            beginLockFailureReporting: contract.beginLockFailureReporting,
-          },
+          () =>
+            runManagedStateTransaction(
+              db,
+              () => {
+                assertSameFile();
+                assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+                const catalog = requireStatePostgresPhysicalFacts(db).catalog;
+                for (const table of tables) {
+                  if (contract.initializeAdditiveSchema) {
+                    ensureStatePostgresFragment(db, table);
+                  } else if (
+                    !catalog.some((fact) => fact.kind === "table" && fact.table === table)
+                  ) {
+                    throw new Error(`Existing PostgreSQL state schema is missing ${table}`);
+                  }
+                }
+                callbackEntered = true;
+                const value = operation({ db, path: pathname, recoveryChanges: [] });
+                assertSameFile();
+                return value;
+              },
+              {
+                databaseLabel: pathname,
+                operationLabel: contract.operationLabel,
+                beginLockFailureReporting: contract.beginLockFailureReporting,
+              },
+            ),
+          () => !callbackEntered,
         ),
       );
     },
