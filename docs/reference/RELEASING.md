@@ -64,7 +64,8 @@ validation even when first published to beta.
   same Release SHA at most twice. Never re-cut, change tooling, or restart FRV
   solely to clear a flake. An intentional
   [release-tooling waiver](/reference/full-release-validation/evidence#release-tooling-waivers)
-  is reviewed policy requiring validation with new pinned tooling, unchanged candidate.
+  is operator-approved Q grant data requiring a new qualification request with
+  pinned Q, unchanged candidate, and reevaluation of eligible raw receipts.
 - Blocking coverage: CI coverage gate, seal/evidence, Build Artifacts, install
   smoke, survivor lanes, `update-first-hop-compat*`, pack/npm qualification,
   package integrity, and all Linux/Windows/macOS Gateway checks, including
@@ -219,8 +220,8 @@ remains available for diagnostic summaries, not qualification or publication.
 | Identity                | Owns                                                                                                                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **C — candidate**       | Exact tested/published commit, package bytes, version, upgrade baselines.                                                                                                                                 |
-| **Q — qualification**   | Complete workflow/reusable-workflow/action/script/planner/contract/coverage closure; defaults to C. An independent Q requires review and verified main ancestry.                                          |
-| **P — trusted tooling** | Admission, aggregate validation, verification, publication, checked-in waivers, FRV verdict; independently trusted main revision or protected publication tag. May differ from C/Q; C need not precede P. |
+| **Q — qualification**   | Complete qualification closure and pinned grant ledger; defaults to C. Executable tooling requires review and verified lineage; authorized grants are committed directly to Q.                            |
+| **P — trusted tooling** | Admission, aggregate validation, verification, publication, Q-grant evaluation, FRV verdict; independently trusted main revision or protected publication tag. May differ from C/Q; C need not precede P. |
 
 [Dispatch](/reference/full-release-validation/dispatch) defines P's immutable
 operator-attestation/input/coverage admission before Q's `release-ci/*` dispatch.

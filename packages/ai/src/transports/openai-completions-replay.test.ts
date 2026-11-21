@@ -198,10 +198,11 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(message).toEqual({ role: "assistant", content: "Answer", reasoning_content: expected });
   });
 
-  it.each(["reasoning_text"])(
-    "strips %s from stock OpenAI Chat Completions assistant replay",
-    (thinkingSignature) => {
-      const assistant = getAssistantMessage(buildReplayParams(openAIModel, thinkingSignature));
+  it.each(["openai", "custom-openai-name"])(
+    "strips reasoning from stock OpenAI Chat Completions under provider name %s",
+    (provider) => {
+      const model = { ...openAIModel, provider };
+      const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_text"));
 
       expect(assistant).not.toHaveProperty("reasoning_details");
       expect(assistant).not.toHaveProperty("reasoning_content");
@@ -209,6 +210,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       expect(assistant).not.toHaveProperty("reasoning_text");
     },
   );
+
+  it("keeps streamed reasoning on a Foundry Chat Completions model", () => {
+    const model = makeCompletionsModel({
+      provider: "microsoft-foundry",
+      baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      id: "custom-reasoner",
+      reasoning: true,
+    });
+    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
 
   it("normalizes OpenRouter string reasoning_details to reasoning", () => {
     const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_details"));

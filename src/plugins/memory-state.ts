@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type {
+  MemoryBackendRegistration,
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
   MemoryFlushFilePlanDraft,
@@ -445,6 +446,11 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
 
 export function getMemoryProviderRuntime() {
   return getMemoryCapability()?.capability.providerRuntime;
+}
+
+/** Passive backends published beside the slot owner in the same registry. */
+export function listMemoryBackendRegistrations(): readonly MemoryBackendRegistration[] {
+  return getPluginRegistryForContext()?.memoryBackends ?? [];
 }
 
 let standaloneMemoryManagerActive = false;

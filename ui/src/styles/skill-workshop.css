@@ -1053,16 +1053,22 @@
     grid-template-areas: "actions";
   }
 
+  /* Keep the page heading accessible when the learning state replaces its row. */
   .sw-hub-header .hub-page-header__title {
+    position: absolute;
+    clip-path: inset(50%);
+  }
+
+  .sw-hub-header .page-subtitle {
     display: none;
   }
 
-  .sw-hub-header .hub-page-header__actions,
-  .sw-hub-header .sw-learning {
+  .sw-hub-header .hub-page-header__actions {
     width: 100%;
   }
 
   .sw-hub-header .sw-learning {
+    width: 100%;
     justify-content: space-between;
   }
 
