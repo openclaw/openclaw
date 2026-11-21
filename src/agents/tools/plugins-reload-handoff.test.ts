@@ -70,6 +70,7 @@ import {
   reloadOrder,
   runAdversarialReloadHandoff,
   runningOperation,
+  respondToReloadHandoff,
 } from "./plugins-reload-handoff.test-support.js";
 import { createPluginsTool } from "./plugins-tool.js";
 
@@ -93,6 +94,7 @@ it.each([
   ["adversarial native", '"generation":2'],
   ["code mode", '"generation":2'],
   ["host system", '"generation":2'],
+  ["sibling drain", '"generation":2'],
   ["same-ID without run ID", ""],
   ["same-ID callback", '"generation":2'],
   ["same-ID late construction", '"generation":2'],
@@ -127,14 +129,9 @@ it.each([
     const resumed = createDeferredCore<string>();
     const order: string[] = [];
     let successorAdmitted = false;
-    const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(successorAdmitted).toBe(false);
-      order.push("reload");
-      respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
-    });
+    const endpoint = vi.fn<GatewayRequestHandler>((input) =>
+      respondToReloadHandoff(input, outcome, order, () => successorAdmitted),
+    );
     const context = createContext([["plugins.reload", "operator.admin", "plugins", endpoint]]);
     context.getRuntimeConfig = () => config;
     context.resolveGatewayContext = () => context;
