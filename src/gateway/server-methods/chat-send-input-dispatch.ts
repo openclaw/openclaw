@@ -191,7 +191,6 @@ export async function handleChatSendWithStorage(
   try {
     const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
-      requestAuthority.assertAdmittedInputCurrent?.();
       if (sessionRoutingChanged(context.getRuntimeConfig())) {
         throw new Error("Session routing changed before input admission; refresh and retry.");
       }
@@ -273,9 +272,7 @@ export async function handleChatSendWithStorage(
           });
           needsSessionCreationBinding = false;
         }
-        if (options?.stageCreatedInput) {
-          assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
-        }
+        assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
         admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       });
     const persistGatewayUserTurnTranscript = (
@@ -399,11 +396,9 @@ export async function handleChatSendWithStorage(
       if (!staged) {
         throw new Error("Chat input was not durably admitted; refresh and retry.");
       }
-      if (options?.stageCreatedInput) {
-        // Only committed input custody can outlive the originating tool, while
-        // the retained operator, destination and Gateway authority stay live.
-        assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
-      }
+      // Committed input keeps its destination and cancellation fences, not the
+      // submitting invocation's permission or transport checks.
+      assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
       admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(
@@ -645,10 +640,7 @@ export async function handleChatSendWithStorage(
         owner: {
           client,
           context,
-          sessionMutationCommitGuard: () => {
-            sessionMutationCommitGuard?.();
-            admission.assertWorkAdmissionCurrent();
-          },
+          sessionMutationCommitGuard: assertInputAdmissionCurrent,
         },
         isHumanTurn:
           !options &&

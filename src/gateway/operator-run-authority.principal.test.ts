@@ -390,6 +390,9 @@ describe("canonical membership role admission", () => {
     agents: ["main"],
     sessions: { others: "none" as const },
   };
+  const memberConfig: OpenClawConfig = {
+    gateway: { openclawId: { enabled: true }, roles: { definitions: { reader } } },
+  };
   afterEach(() => setOpenClawIdMemberAccountLookup(undefined));
 
   it("keeps the global default switch separate from per-person catalog enforcement", () => {

@@ -116,6 +116,27 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
           expect(JSON.stringify(loadTranscriptEventsSync(fixture.scope))).toContain(
             "Run the setup skill for plugin demo.",
           );
+          if (scenario === "caller-revoked") {
+            const refused = vi.fn();
+            await expect(
+              handleGatewayRequest({
+                req: {
+                  type: "req",
+                  id: "onboarding-after-revocation",
+                  method: "mcp.app.onboard",
+                  params: { ...params, idempotencyKey: "onboarding-after-revocation" },
+                },
+                client,
+                context: fixture.context,
+                isWebchatConnect: () => true,
+                respond: refused,
+                hasCurrentClientAuthority: () => callerCurrent,
+                methodRegistry: registry,
+              }),
+            ).rejects.toThrow("Gateway requester authority changed");
+            expect(chatHandler).toHaveBeenCalledOnce();
+            expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+          }
         } else {
           expect(
             JSON.stringify(

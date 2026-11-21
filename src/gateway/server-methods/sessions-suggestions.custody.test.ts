@@ -152,6 +152,12 @@ it.each([
       });
       expect(recorder.getAdmissionReceipt()).toBeDefined();
       expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      const refused = await resolveSuggestion();
+      expect(refused.mock.calls[0]).toMatchObject([
+        false,
+        undefined,
+        { details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "not_started" } },
+      ]);
       const retry = await resolveSuggestion(mergedProfile.id);
       expect(retry.mock.calls[0]).toMatchObject([
         false,

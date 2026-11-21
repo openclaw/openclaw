@@ -154,14 +154,13 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         c.scenario === "before-start" &&
         !c.preparedHeld &&
         followup?.prompt.includes(c.queuedText) &&
-        (c.row.credential === "channel" || followup !== c.original) &&
         ["principal", "channel"].includes(c.row.credential) &&
         "snapshot" in args[0] &&
         args[0].snapshot.profileId === c.profileId
       ) {
         c.preparedHeld = true;
-        c.prepared.resolve();
-        await c.releasePrepared.promise;
+        // Revoke inside the held preparation, without requiring replay's ACK to finish first.
+        await revokeAdmissionSource(fixture, c);
       }
       return facts;
     });
@@ -177,7 +176,6 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
           c &&
           ["principal", "channel"].includes(c.row.credential) &&
           c.scenario === "before-start" &&
-          (c.row.credential === "channel" || run !== c.original) &&
           run.prompt.includes(c.queuedText)
         ) {
           c.finalAdmissionError = error;
@@ -188,8 +186,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
         if (
           c &&
           ["principal", "channel"].includes(c.row.credential) &&
-          run.prompt.includes(c.queuedText) &&
-          (c.row.credential === "channel" || run !== c.original)
+          run.prompt.includes(c.queuedText)
         ) {
           c.finalAdmissionSettled.resolve();
         }

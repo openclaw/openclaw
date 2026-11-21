@@ -117,8 +117,11 @@ export async function prepareReplyTurnExecution(params: AgentTurnParams, runId: 
         standingGrantAuthority: cronAdmission.standingGrantAuthority,
       });
     }
-    const controllerAbortSignal = params.replyOperation?.abortSignal;
-    const callerAbortSignal = params.opts?.abortSignal;
+    const abortSignals = [
+      params.replyOperation?.abortSignal,
+      params.opts?.abortSignal,
+      resolveFollowupAbortSignal(params.followupRun),
+    ].filter((signal): signal is AbortSignal => signal !== undefined);
     const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
       replyOperation: params.replyOperation,
       runId,
@@ -126,13 +129,8 @@ export async function prepareReplyTurnExecution(params: AgentTurnParams, runId: 
       sessionId: params.followupRun.run.sessionId,
       sessionKey: params.sessionKey,
       sessionFile: params.followupRun.run.sessionFile,
-      abortSignal: resolveFollowupAbortSignal({
-        abortSignal:
-          controllerAbortSignal && callerAbortSignal
-            ? AbortSignal.any([controllerAbortSignal, callerAbortSignal])
-            : (controllerAbortSignal ?? callerAbortSignal),
-        operatorAuthority: params.followupRun.operatorAuthority,
-      }),
+      // Retained turns keep their own source/controller cancellation, not admission policy.
+      abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
     });
     return {
       preparedRunAdmission,

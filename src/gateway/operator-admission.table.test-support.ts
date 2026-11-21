@@ -58,11 +58,10 @@ export class AdmissionCase {
   readonly firstReached = createDeferred();
   readonly releaseFirst = createDeferred();
   readonly enqueued = createDeferred();
-  readonly prepared = createDeferred();
-  readonly releasePrepared = createDeferred();
   readonly finalAdmissionSettled = createDeferred();
   readonly recoveredReached = createDeferred();
   readonly releaseRecovered = createDeferred();
+  readonly providerCancelled = createDeferred();
   readonly consent = new AbortController();
   readonly service = new AbortController();
   readonly deliveries: unknown[] = [];
@@ -168,6 +167,11 @@ export class AdmissionFixture {
     const queued = body.includes(c.queuedText);
     if (queued) {
       c.queuedCalls++;
+      response.once("close", () => {
+        if (!response.writableEnded) {
+          c.providerCancelled.resolve();
+        }
+      });
       c.recoveredReached.resolve();
       await c.releaseRecovered.promise;
     } else if (!c.restarting) {
@@ -250,23 +254,23 @@ export class AdmissionFixture {
     const running = c.latestRunId;
     const admin = await this.admin(c.signal);
     if (c.scenario === "stop") {
-      const operation =
-        c.row.credential === "channel"
-          ? c.original?.controllerInput?.mailbox.owner.active
-          : undefined;
       const stopped =
         c.row.credential === "channel"
           ? await admin.request("sessions.abort", { key: c.sessionKey })
           : await admin.request("chat.abort", { sessionKey: c.sessionKey });
-      expect(stopped).toMatchObject({ aborted: true });
-      c.releaseRecovered.resolve();
+      // sessions.abort reports session status; chat.abort reports a run cancellation.
+      expect(stopped).toMatchObject(
+        c.row.credential === "channel" ? { ok: true, status: "aborted" } : { aborted: true },
+      );
       if (c.row.credential === "channel") {
         const claim = c.original?.controllerInput?.claim;
         assert(claim);
-        assert(operation);
+        // Stop must cancel the real provider while its response is still held.
+        await c.wait(c.providerCancelled.promise);
+        c.releaseRecovered.resolve();
         await c.wait(claim.settlement.promise);
-        expect(operation.abortSignal.aborted).toBe(true);
       } else {
+        c.releaseRecovered.resolve();
         expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
       }
     } else {

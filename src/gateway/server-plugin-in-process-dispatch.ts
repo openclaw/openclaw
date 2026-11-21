@@ -383,7 +383,10 @@ export async function dispatchGatewayMethodInProcessRaw(
         },
       },
     );
-    const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+    // Accepted chat input belongs to its host, independently of this invocation.
+    const assertCreatedInputSourceCurrent =
+      resolved.assertCreatedInputSourceCurrent ??
+      (method === "chat.send" ? resolved.assertSourceCurrent : undefined);
     const sessionMutationCommitGuard = composeSessionSourceAssertion([
       resolved.assertContextCurrent,
       resolved.assertInvocationCurrent,

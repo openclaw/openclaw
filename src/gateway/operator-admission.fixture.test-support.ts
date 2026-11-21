@@ -6,11 +6,13 @@ import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixt
 import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import * as queueLifecycle from "../auto-reply/reply/queue/lifecycle.js";
+import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
+import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import {
-  createHostIngressFixture,
   ingressInput,
   ingressMessage,
 } from "../channels/message-access/host-ingress.test-support.js";
+import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureSessionQueuedInputsForRestart,
@@ -97,10 +99,16 @@ async function prepareNativeSend(fixture: AdmissionFixture, c: AdmissionCase) {
   }
   await publishCanonicalUserChannelPolicy(fixture.config.gateway);
   assert(fixture.kernel);
-  const host = createHostIngressFixture(
-    "discord",
-    fixture.config,
-    fixture.kernel.gatewayRequestContext,
+  // Native work and sessions.abort must share the real Gateway owner, not a synthetic host.
+  const owner = {
+    channelId: "discord",
+    isLive: () => !c.service.signal.aborted,
+    resolveGatewayContext: fixture.kernel.resolvePluginGatewayContext,
+  };
+  const ingress = createHostChannelIngressRuntime(owner);
+  const buildContext = createHostChannelInboundEventContextBuilder(
+    buildChannelInboundEventContext,
+    owner,
   );
   return async () => {
     // Keep the owner last: the collector's source carries the command-owner capability.
@@ -112,26 +120,29 @@ async function prepareNativeSend(fixture: AdmissionFixture, c: AdmissionCase) {
         ...(mixed ? { conversation: { kind: "group", id: "admission-group" } } : {}),
         message: { body: c.queuedText, rawBody: c.queuedText },
       });
-      const channelIngress = await host.ingress.resolveStable(
+      const channelIngress = await ingress.resolveStable(
         ingressInput(message, {
           identity: { authentication: "verified" },
           ...(mixed ? { groupPolicy: "open" } : {}),
         }),
       );
-      await dispatchInboundMessageWithBufferedDispatcher({
-        ctx: host.buildContext({ ...message, channelIngress }),
-        cfg: fixture.config,
-        dispatchReplyFromConfig: dispatchLowLevelChannelReplyFromConfig,
-        dispatcherOptions: {
-          deliver: async (payload) => {
-            c.deliveries.push(payload);
+      const ctx = await buildContext({ ...message, channelIngress });
+      await withPluginRuntimeGatewayContextResolver(owner.resolveGatewayContext, () =>
+        dispatchInboundMessageWithBufferedDispatcher({
+          ctx,
+          cfg: fixture.config,
+          dispatchReplyFromConfig: dispatchLowLevelChannelReplyFromConfig,
+          dispatcherOptions: {
+            deliver: async (payload) => {
+              c.deliveries.push(payload);
+            },
           },
-        },
-        replyOptions: {
-          queueModeOverride: mixed ? "collect" : "followup",
-          disableBlockStreaming: true,
-        },
-      });
+          replyOptions: {
+            queueModeOverride: mixed ? "collect" : "followup",
+            disableBlockStreaming: true,
+          },
+        }),
+      );
     }
   };
 }
@@ -442,10 +453,10 @@ export async function runCase(
       expect(await c.wait(c.terminal(started.runId).promise)).toBe("final");
       const drained = await c.wait(waitForGatewayActiveWork(30_000));
       expect(drained.drained, JSON.stringify(drained.snapshot.blockers)).toBe(true);
+      // The admitted turn finishes; refusing its next start is not a Goal runtime error.
       expect((await readSessionEntryReadOnlyInWorker(c.target))?.goal).toMatchObject({
-        status: "paused",
+        status: "active",
         continuationTurns: 0,
-        lastStatusNote: "Paused after an error. Resume to continue.",
       });
       expect(c.queuedCalls).toBe(1);
       expect(fixture.providerErrors).toEqual([]);
@@ -543,10 +554,8 @@ export async function runCase(
     // Durable replay queues another source. Revoke at its final memory admission,
     // so a second preparation cannot mask removal of the synchronous credential check.
     if (scenario === "before-start" && ["principal", "channel"].includes(row.credential)) {
-      await c.wait(c.prepared.promise);
-      await revokeAdmissionSource(fixture, c);
-      c.releasePrepared.resolve();
       await c.wait(c.finalAdmissionSettled.promise);
+      expect(c.preparedHeld).toBe(true);
       expect(c.finalAdmissionError).toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
     }
     if (
@@ -636,7 +645,6 @@ export async function runCase(
   } finally {
     fallbackEnv.restore();
     c.releaseFirst.resolve();
-    c.releasePrepared.resolve();
     c.releaseRecovered.resolve();
     try {
       const observer = await fixture.admin();
