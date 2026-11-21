@@ -72,6 +72,7 @@ function expectCall(mock: { mock: { calls: unknown[][] } }, ...args: unknown[]) 
 }
 
 type Api = (...args: unknown[]) => Promise<unknown>;
+type MessageMetadataPost = { metadata?: { event_payload?: Record<string, unknown> } };
 const uploadLocation = (upload_url = "https://files.slack.com/upload") => ({
   ok: true,
   upload_url,
@@ -225,6 +226,42 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(error).toMatchObject({ retryable: false, cause: rejection });
     expect(globalThis.fetch).not.toHaveBeenCalled();
+    expectNoCompletion(onPlatformSendDispatch);
+  });
+
+  it("posts the reply text with a note when Slack rejects the attachment upload", async () => {
+    client.files.getUploadURLExternal.mockRejectedValueOnce(slackPlatformError("missing_scope"));
+    const onPlatformSendDispatch = vi.fn();
+    await sendUpload(client, {
+      message: "here is your chart",
+      threadTs: "171.222",
+      deliveryQueueId: "queue-1",
+      onPlatformSendDispatch,
+    });
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+    const posts = client.chat.postMessage.mock.calls.map(([args]) => args);
+    expect(posts).toMatchObject([
+      { channel: "C123CHAN", text: "here is your chart", thread_ts: "171.222" },
+      { text: expect.stringContaining("Ask a Slack workspace admin"), thread_ts: "171.222" },
+    ]);
+    expect(
+      posts.map((post) => (post as MessageMetadataPost).metadata?.event_payload),
+    ).toMatchObject([
+      { openclaw_delivery_part_index: 0, openclaw_delivery_part_count: 2 },
+      { openclaw_delivery_part_index: 1, openclaw_delivery_part_count: 2 },
+    ]);
+  });
+
+  it.each([
+    { label: "a transient rejection", code: "internal_error", message: "here is your chart" },
+    { label: "no reply text", code: "missing_scope", message: "" },
+  ])("keeps the upload rejection for $label", async ({ code, message }) => {
+    const rejection = slackPlatformError(code);
+    client.files.getUploadURLExternal.mockRejectedValueOnce(rejection);
+    const { error, onPlatformSendDispatch } = await captureFailure({ message });
+    expect(error).toBe(rejection);
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
     expectNoCompletion(onPlatformSendDispatch);
   });
 

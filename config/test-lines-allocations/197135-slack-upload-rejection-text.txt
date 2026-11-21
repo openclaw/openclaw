@@ -1,0 +1,4 @@
+# Regression tests for Slack replies whose attachment upload is permanently rejected: the
+# reply text still posts with its delivery markers, and transient or text-less rejections still throw.
+# Exact net growth for PR #197135.
+37
