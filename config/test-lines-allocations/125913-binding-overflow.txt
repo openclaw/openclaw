@@ -1,0 +1,3 @@
+1540
+# Exact net growth for overflow recovery, registered-plugin and Doctor coverage.
+# Current-main merge tree has zero slack; the shared baseline is unchanged.
