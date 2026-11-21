@@ -520,7 +520,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded={host.sidebarMenus.identityMenuPosition !== null ? "true" : "false"}
-          title={flagOpen() ? "" : identityLabel()}
+          title={flagOpen() ? "" : (statusLabel() ?? "")}
           data-connection-status={connectionStatus() ?? (host.connected ? "connected" : undefined)}
           aria-label={identityLabel()}
           onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}

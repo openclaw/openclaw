@@ -82,6 +82,9 @@ the exact SQLite database has a verified live owner. This bounded read does not
 copy the database. Ordinary artifact-preserving shared-state inspection also
 reads directly and read-only when that database has a verified live owner;
 offline inspection retains private copies to avoid creating or changing sidecars.
+Admitted in-process readers reuse the owner's published path custody without
+filesystem identity polling. Owner loss, release, and maintenance clear that fact;
+CLI and worker readers without local custody still verify the persisted owner.
 Explicit frozen inspection scopes, including `openclaw update status`, and Doctor's
 schema repair admission still use private snapshots.
 
