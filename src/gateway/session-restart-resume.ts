@@ -54,10 +54,7 @@ import {
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
-import {
-  selectLiveRestartResumeSessions,
-  type SessionIdentity,
-} from "./session-restart-resume-selection.js";
+import { selectRestartSessions, type SessionIdentity } from "./session-restart-resume-selection.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
@@ -86,11 +83,9 @@ async function persistRunningSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
-  // Enumeration is synchronous; persistence checks custody again at the write boundary.
-  assertCurrent();
-  const sessions = selectLiveRestartResumeSessions(params.cfg, summary);
+  const sessions = await selectRestartSessions(params, summary);
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
-  for (const session of sessions.values()) {
+  for (const session of sessions) {
     const key = JSON.stringify([session.agentId, session.storePath]);
     const group = selectors.get(key) ?? { first: session, batch: [] };
     group.batch.push(session);
@@ -405,7 +400,9 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
+            const skip = restartResumeSkipReason(sessionKey, selected);
             let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            parked = parked === "unreachable" && !skip ? "resume" : parked;
             if (
               parked &&
               (await hasInterruptedCommittedRequesterSettleInput(
@@ -415,7 +412,6 @@ async function resumeRestartStore(
             ) {
               parked = undefined;
             }
-            const skip = restartResumeSkipReason(sessionKey, selected);
             const orphanedRun =
               (!parked || parked === "resume") &&
               selected.lifecycleRunId &&

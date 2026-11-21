@@ -1,6 +1,9 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -78,6 +81,60 @@ describe("persisted subagent requester wakes", () => {
   }
 
   registerRequesterWakeOwnershipTests({ database: () => db.value, persistOwner });
+  it("keeps delete-cleanup results until the visible restart failure notice commits", async () => {
+    const batch = wakeBatch("optional", "delivered", "required");
+    const optional = expectDefined(batch[0], "optional child");
+    const delivered = expectDefined(batch[1], "delivered child");
+    const input = expectDefined(batch[2], "required child");
+    optional.subagent.expectsCompletionMessage = false;
+    optional.subagent.delivery = { status: "not_required" };
+    optional.subagent.requesterSettleWake!.retireAfterSettle = true;
+    delivered.subagent.delivery = { status: "delivered" };
+    input.subagent.requesterSettleWake!.retireAfterSettle = true;
+    input.subagent.cleanup = "delete";
+    input.subagent.execution.outcome = { status: "error", error: "Gateway stopped" };
+    input.subagent.requesterStorePath = path.join(process.env.OPENCLAW_STATE_DIR!, "sessions.json");
+    const scope = {
+      agentId: "main",
+      sessionKey: input.subagent.requesterSessionKey,
+      storePath: input.subagent.requesterStorePath,
+      sessionId: "restart-requester",
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+    persistOwner(input);
+    persistOwner(optional);
+    persistOwner(delivered);
+    const append = vi
+      .spyOn(sessionAccessor, "appendSessionTranscriptReport")
+      .mockRejectedValueOnce(new Error("synthetic notice write failure"));
+    onTestFinished(() => append.mockRestore());
+    const outcome = {
+      delivered: false,
+      path: "direct",
+      reason: "requester_aborted",
+      disposition: "permanent_failure",
+    } as const;
+    const settle = () =>
+      settleRequesterCompletionBatch({
+        entries: batch.map(({ subagent }) => subagent),
+        outcome,
+        databaseOptions: { database: db.value },
+      });
+    await expect(settle()).rejects.toThrow("synthetic notice write failure");
+    expect(stored(input)?.requesterSettleWake).toBeDefined();
+    append.mockRestore();
+    await settle();
+    expect(stored(input)).toBeUndefined();
+    const notices = (await loadTranscriptEvents(scope)).filter(
+      (event) => isRecord(event) && event.type === "custom_message" && event.display === true,
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      excludeFromContext: false,
+      content: expect.stringContaining(input.subagent.childSessionKey),
+    });
+    expect(notices[0]).toMatchObject({ content: expect.stringContaining("Gateway restart") });
+  });
   it("reconciles an acknowledged retirement without even a no-op data write", async () => {
     const input = armRequesterWake(records());
     input.subagent.expectsCompletionMessage = false;
@@ -222,6 +279,65 @@ describe("persisted subagent requester wakes", () => {
         expect(currentRun(input).requesterSettleWake).toBeUndefined();
         expect(currentRun(input).delivery?.status).toBe("delivered");
         expect(currentRun(input).execution.lifecycleGeneration).toBe("cleaned-lifecycle");
+      }
+    },
+  );
+
+  it.each([
+    ["parent", true],
+    ["public", true],
+    ["yielded", true],
+    ["public", false],
+  ] as const)(
+    "records delayed delivery before settlement (target=%s, delivered=%s)",
+    async (kind, delivered) => {
+      const input = records();
+      input.subagent.completionTarget = kind === "parent" ? "parent" : undefined;
+      if (kind === "yielded") {
+        armRequesterWake(input);
+        input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      }
+      input.subagent.delivery = { status: "pending", generation: 1 };
+      input.subagent.requesterStorePath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "sessions.json",
+      );
+      const scope = {
+        agentId: input.subagent.requesterAgentId,
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: input.subagent.requesterStorePath,
+        sessionId: "resumed-requester-session",
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+      persistOwner(input);
+      await blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        reason: "subagent announce delivery expired",
+        suspendedReason: "expiry",
+        databaseOptions: { database: db.value },
+      });
+      db.value = await reopenOwners();
+      expect(currentRun(input).delivery?.status).toBe("suspended");
+      const notices = (await loadTranscriptEvents(scope)).filter(
+        (event) => isRecord(event) && event.type === "custom_message",
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ customType: "subagent-delivery-delayed", display: true });
+      input.subagent = currentRun(input);
+      await settleOne(input, {
+        delivered,
+        path: "direct",
+        error: delivered ? undefined : "requester failed",
+      });
+      db.value = await reopenOwners();
+      expect(currentRun(input).delivery?.status).toBe(delivered ? "delivered" : "failed");
+      const settled = (await loadTranscriptEvents(scope)).filter(
+        (event) => isRecord(event) && event.type === "custom_message",
+      );
+      expect(settled).toHaveLength(delivered ? 1 : 2);
+      expect(settled[0]).toEqual(notices[0]);
+      if (!delivered) {
+        expect(settled[1]).toMatchObject({ customType: "run-failed-before-reply", display: true });
       }
     },
   );

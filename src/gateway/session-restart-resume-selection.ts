@@ -1,5 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { subagentRegistryLog } from "../agents/subagents/registry/subagent-registry-lifecycle-log.js";
 import {
   listLiveSubagentRootSessions,
   listYieldWaitingSessions,
@@ -38,21 +39,37 @@ export type SessionIdentity = {
 };
 
 /** Select live work by its execution owner before shutdown aborts those owners. */
-export function selectLiveRestartResumeSessions(
-  cfg: OpenClawConfig,
+export async function selectRestartSessions(
+  params: { cfg: OpenClawConfig; signal?: AbortSignal },
   summary: ReturnType<typeof createRestartResumeSummary>,
-): Map<string, SessionIdentity> {
+): Promise<SessionIdentity[]> {
+  params.signal?.throwIfAborted();
   const sessions = new Map<string, SessionIdentity>();
-  const add = (input: Partial<SessionIdentity> & { sessionKey: string }) => {
+  const inputs: Array<Partial<SessionIdentity> & { sessionKey: string }> = [];
+  const add = (input: (typeof inputs)[number]) => inputs.push(input);
+  const select = async (input: (typeof inputs)[number]) => {
     const root = input.parked
       ? input
-      : resolveRootSubagentRequester(input.sessionKey, input.agentId);
+      : await resolveRootSubagentRequester(input.sessionKey, input.agentId).catch(
+          (error: unknown) => {
+            subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
+              sessionKey: input.sessionKey,
+              error,
+            });
+            return undefined;
+          },
+        );
+    if (!root) {
+      return;
+    }
     const agentId =
-      root.agentId ?? parseAgentSessionKey(root.sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
+      root.agentId ??
+      parseAgentSessionKey(root.sessionKey)?.agentId ??
+      resolveDefaultAgentId(params.cfg);
     const storePath =
       root.storePath ??
       (root.sessionKey === input.sessionKey ? input.storePath : undefined) ??
-      resolveSessionStorePathCore(cfg.session?.store, { agentId });
+      resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
     const skip =
       (resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId })
         ? "incognito"
@@ -92,7 +109,7 @@ export function selectLiveRestartResumeSessions(
       summary.record(
         operation.agentId ??
           parseAgentSessionKey(operation.key)?.agentId ??
-          resolveDefaultAgentId(cfg),
+          resolveDefaultAgentId(params.cfg),
         operation.key,
         "already-aborted",
       );
@@ -138,11 +155,16 @@ export function selectLiveRestartResumeSessions(
       add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
     }
   }
-  for (const root of listLiveSubagentRootSessions()) {
+  const roots = listLiveSubagentRootSessions();
+  const waiting = [...listYieldWaitingSessions()];
+  for (const root of await roots) {
     add(root);
   }
-  for (const session of listYieldWaitingSessions()) {
+  for (const session of waiting) {
     add(session);
   }
-  return sessions;
+  for (const input of inputs) {
+    await select(input);
+  }
+  return [...sessions.values()];
 }

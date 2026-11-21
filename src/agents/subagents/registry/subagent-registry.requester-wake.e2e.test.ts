@@ -444,6 +444,127 @@ describe("requester settle wake product flow", () => {
     },
   );
 
+  it("fans actual leaf completions into their coordinator before waking the root", async () => {
+    const context = createGatewayContext();
+    await registry.initSubagentRegistry();
+    await registry.activateSubagentRegistry(() => context);
+    const coordinator = visibleChild("fan-in-coordinator");
+    const rootTurn = "fan-in-root";
+    await spawnVisibleChild({ ...coordinator, requesterTurnRunId: rootTurn });
+    await createRequesterYieldTool(MAIN_REQUESTER_SESSION_KEY, rootTurn).execute("root-yield", {});
+    await settleTurn(rootTurn, [coordinator]);
+    const leaves = createRequesterWakeSessionFixture({
+      requesterSessionKey: coordinator.childSessionKey,
+      getSessionStore: () => sessionStore,
+      getSessionStorePath: () => sessionStorePath,
+    });
+    const children = [
+      visibleChild("fan-in-alpha"),
+      visibleChild("fan-in-beta"),
+      visibleChild("fan-in-gamma"),
+    ];
+    for (const child of children) {
+      await leaves.spawnVisibleChild({ ...child, requesterTurnRunId: coordinator.runId });
+    }
+    await createRequesterYieldTool(coordinator.childSessionKey, coordinator.runId).execute(
+      "leaf-yield",
+      {},
+    );
+    const { withLocalSessionPlacementTurnSettlement } =
+      await import("../../session-placement-admission.js");
+    await withLocalSessionPlacementTurnSettlement(
+      {
+        sessionId: sessionStore[coordinator.childSessionKey]!.sessionId,
+        sessionKey: coordinator.childSessionKey,
+        agentId: "main",
+        runId: coordinator.runId,
+      },
+      async () => ({
+        payloads: [],
+        acceptedSessionSpawns: children,
+        meta: { durationMs: 1, yielded: true },
+      }),
+    );
+    const ordinaryGatewayCall = callGatewayMock.getMockImplementation()!;
+    const coordinatorInputs: GatewayRequest[] = [];
+    callGatewayMock.mockImplementation(async (request) => {
+      const response = await ordinaryGatewayCall(request);
+      if (
+        request.method !== "agent" ||
+        request.params?.sessionKey !== coordinator.childSessionKey
+      ) {
+        return response;
+      }
+      coordinatorInputs.push(request);
+      const { reactivateCompletedSubagentSession } =
+        await import("../../../gateway/session-subagent-reactivation.js");
+      expect(
+        await reactivateCompletedSubagentSession({
+          sessionKey: coordinator.childSessionKey,
+          runId: request.params?.idempotencyKey,
+          continuesPausedTask: true,
+        }),
+      ).toBe(true);
+      // The model boundary returns one aggregate only after receiving all real leaf results.
+      return {
+        ...response,
+        // A bound nested requester needs the completed Gateway outcome, not just payloads.
+        status: "ok",
+        inputProcessingCompleted: true,
+        result: {
+          ...response.result,
+          payloads: [{ text: "findings 0; findings 1; findings 2" }],
+          meta: { durationMs: 1, finalAssistantVisibleText: "findings 0; findings 1; findings 2" },
+        },
+      };
+    });
+    try {
+      for (const [index, child] of children.entries()) {
+        emitCompleted(child.runId, child.childSessionKey, "findings " + index);
+
+        await flushOwnedWork();
+
+        if (index < children.length - 1) {
+          expect(getRequesterWakeCalls()).toHaveLength(0);
+        }
+      }
+    } finally {
+      callGatewayMock.mockImplementation(ordinaryGatewayCall);
+    }
+    const coordinatorWakes = getRequesterWakeCalls().filter(
+      (request) => request.params?.sessionKey === coordinator.childSessionKey,
+    );
+    expect(coordinatorWakes).toHaveLength(1);
+    expect(coordinatorInputs).toHaveLength(1);
+    expect(coordinatorInputs[0]?.params?.inputProvenance?.sourceTool).toBe("subagent_settle");
+    expectLargeRequesterWakeFindings(coordinatorInputs[0], 3);
+
+    for (const child of children) {
+      expect(subagentRuns.get(child.runId)).toMatchObject({
+        delivery: { status: "delivered" },
+        cleanupCompletedAt: expect.any(Number),
+      });
+    }
+
+    // The mock model returns a reply but, unlike the runner, emits no lifecycle completion.
+    emitCompleted(
+      coordinatorInputs[0]!.params!.idempotencyKey!,
+      coordinator.childSessionKey,
+      "findings 0; findings 1; findings 2",
+    );
+    await flushOwnedWork();
+
+    await waitForDeliveredCleanup(coordinatorInputs[0]!.params!.idempotencyKey!);
+    const rootWakes = getRequesterWakeCalls().filter(
+      (request) => request.params?.sessionKey === MAIN_REQUESTER_SESSION_KEY,
+    );
+    expect(rootWakes).toHaveLength(1);
+    expectLargeRequesterWakeFindings(rootWakes[0], 3);
+    await registry.testing.sweepOnceForTests();
+    await flushOwnedWork();
+    expect(getRequesterWakeCalls()).toHaveLength(2);
+  });
+
   registerRequesterWakeReceiptBoundaryTests({
     ...requesterFixture,
     sendMessageMock,
