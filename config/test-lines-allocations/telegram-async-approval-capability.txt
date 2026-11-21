@@ -1,0 +1,2 @@
+# Telegram approval capability loads without the deprecated sync factory and keeps approver auth.
+37
