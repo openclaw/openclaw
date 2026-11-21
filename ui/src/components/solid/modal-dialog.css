@@ -34,7 +34,8 @@ openclaw-modal-dialog {
 .oc-modal-dialog[open] {
   display: flex;
   opacity: 1;
-  scale: 1;
+  /* An identity transform still captures fixed-position descendant anchors. */
+  scale: none;
   transition-duration: var(--openclaw-modal-show-duration);
 }
 
