@@ -981,6 +981,35 @@ describe("gatherDaemonStatus", () => {
     expect(output.errors).toContain(`this OpenClaw command is version ${VERSION}`);
   });
 
+  it.each([
+    { args: ["--port", "19001"], port: 19002, role: "diagnostic-only" },
+    { args: [], port: 19002, role: "diagnostic-only" },
+    { args: ["--port", "19001"], port: 19001, role: "target" },
+  ])(
+    "probes the dashboard port $port with installed args $args ($role)",
+    async ({ args, port, role }) => {
+      daemonLoadedConfig = { gateway: { port: 19001, auth: { token: "daemon-token" } } };
+      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+      resolveGatewayPort.mockImplementationOnce((cfg, env) => {
+        const configPort = (cfg as { gateway?: { port?: number } }).gateway?.port;
+        const envPort = (env as NodeJS.ProcessEnv).OPENCLAW_GATEWAY_PORT;
+        return envPort ? Number(envPort) : (configPort ?? 18789);
+      });
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "run", ...args],
+        environment: daemonEnvironment,
+      });
+
+      const probeUrl = "ws://127.0.0.1:" + port;
+      const status = await gatherStatus({ dashboardTarget: { port, probeUrl } });
+
+      expect(status.rpc?.url).toBe(probeUrl);
+      expect(status.service.targetRole).toBe(role);
+      expect(probeInput().url).toBe(probeUrl);
+      expect(probeInput().token).toBe(role === "target" ? "daemon-token" : undefined);
+    },
+  );
+
   it("uses raw explicit URLs for probes but redacts them from status diagnostics", async () => {
     const rawUrl =
       "wss://user:password@override.example:18790/ws?token=secret&key=api-key&X-Amz-Signature=signed";
@@ -1166,50 +1195,49 @@ describe("gatherDaemonStatus", () => {
     expect(await fs.readFile(databasePath)).toEqual(before);
   });
 
-  it.each([false, true])(
-    "reports state inspection recovery instead of a config read failure (capacity: %s)",
-    async (capacity) => {
-      const stateDir = tempDirs.make("openclaw-status-unreadable-state-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const databasePath = resolveOpenClawStateSqlitePath(env);
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
-      await fs.writeFile(databasePath, "not a sqlite database ".repeat(256));
-      const before = await fs.readFile(databasePath);
-      await useRealSchemaPreflight(env);
-      if (capacity) {
-        const snapshot = vi
-          .spyOn(snapshots, "prepareSqliteReadOnlyLocation")
-          .mockRejectedValueOnce(
-            new SqliteSnapshotCapacityError("snapshot storage unavailable (code=ENOSPC)"),
-          );
-        onTestFinished(() => snapshot.mockRestore());
-      }
-      const { program, writeJson, exit } = createStatusCommand();
-      await expect(
-        program
-          .parseAsync(["gateway", "status", "--deep", "--no-probe", "--json"], { from: "user" })
-          .then(() => undefined),
-      ).rejects.toThrow("status-exit");
-      const output = JSON.stringify(writeJson.mock.calls);
-      expect(output).toContain(
-        capacity
-          ? `shared state database inspection is unavailable at ${databasePath}`
-          : `shared state database is unreadable at ${databasePath}`,
-      );
-      expect(output).toContain(
-        capacity
-          ? "Free snapshot disk space or quota, then retry the inspection."
-          : "restore this file from a verified backup",
-      );
-      if (capacity) {
-        expect(output).not.toContain("restore this file");
-      }
-      expect(output).not.toContain("CONFIG_READ_FAILED");
-      expect(exit).toHaveBeenCalledWith(1);
-      expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(await fs.readFile(databasePath)).toEqual(before);
-    },
-  );
+  it.each([
+    undefined,
+    new SqliteSnapshotCapacityError("snapshot storage unavailable (code=ENOSPC)"),
+    new Error("database disk image is malformed"),
+    Object.assign(new Error("disk I/O error"), { errcode: 778 }),
+    new AggregateError([new SqliteSnapshotCapacityError("disk full"), new Error("cleanup failed")]),
+  ])("reports state inspection recovery instead of a config read failure (%s)", async (failure) => {
+    const stateDir = tempDirs.make("openclaw-status-unreadable-state-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.writeFile(databasePath, "not a sqlite database ".repeat(256));
+    const before = await fs.readFile(databasePath);
+    await useRealSchemaPreflight(env);
+    if (failure) {
+      const snapshot = vi
+        .spyOn(snapshots, "prepareSqliteReadOnlyLocation")
+        .mockRejectedValueOnce(failure);
+      onTestFinished(() => snapshot.mockRestore());
+    }
+    const { program, writeJson, exit } = createStatusCommand();
+    await expect(
+      program
+        .parseAsync(["gateway", "status", "--deep", "--no-probe", "--json"], { from: "user" })
+        .then(() => undefined),
+    ).rejects.toThrow("status-exit");
+    const output = JSON.stringify(writeJson.mock.calls);
+    expect(output).toContain(
+      failure
+        ? `shared state database inspection ${"errcode" in failure ? "did not complete" : "was interrupted"} at ${databasePath}`
+        : `shared state database is unreadable at ${databasePath}`,
+    );
+    expect(output).toContain(
+      failure ? "rerun the command" : "restore this file from a verified backup",
+    );
+    if (failure) {
+      expect(output).not.toContain("restore this file");
+    }
+    expect(output).not.toContain("CONFIG_READ_FAILED");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(createConfigIOCalls).not.toHaveBeenCalled();
+    expect(await fs.readFile(databasePath)).toEqual(before);
+  });
 
   it("keeps readable shutdown history when a registered agent database has a newer schema", async () => {
     const stateDir = tempDirs.make("openclaw-status-readable-schema-");
