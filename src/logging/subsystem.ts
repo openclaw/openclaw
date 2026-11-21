@@ -278,7 +278,7 @@ function prepareLogMetaRecord(
 ): Record<string, unknown> {
   let prepared: Record<string, unknown> | undefined;
   for (const [key, value] of Object.entries(meta)) {
-    if (value instanceof Error) {
+    if (value instanceof Error || util.types.isNativeError(value)) {
       prepared ??= { ...meta };
       prepared[key] = {
         name: value.name,
