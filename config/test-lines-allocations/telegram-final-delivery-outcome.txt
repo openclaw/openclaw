@@ -1,0 +1,2 @@
+# Telegram text finals record each settled delivery outcome at debug level, including preview finalization and the early channel_transform skip.
+159
