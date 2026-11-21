@@ -18,6 +18,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 
 type UiProtocolFreshnessIssue = {
   readonly root: string;
@@ -144,11 +145,39 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
   ].join("\n");
 }
 
+async function controlUiRepairDisabled(): Promise<boolean> {
+  // Outside an update this is a source read: no database admission or plugin
+  // validation. Shipped updaters replace io.runtime.js with a bridge that
+  // rejects readSourceConfigBestEffort and would abort Doctor while assets are
+  // still repairable. readConfigFileSnapshot is on that bridge and still
+  // exposes the authored enabled flag.
+  if (resolveDoctorRepairMode({}).updateInProgress) {
+    const { readConfigFileSnapshot } = await import("../config/io.runtime.js");
+    const snapshot = await readConfigFileSnapshot({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    return snapshot.sourceConfig.gateway?.controlUi?.enabled === false;
+  }
+  const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+  const config = await readSourceConfigBestEffort();
+  return config.gateway?.controlUi?.enabled === false;
+}
+
 export async function maybeRepairUiProtocolFreshness(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  for (const issue of await detectUiProtocolFreshnessIssues()) {
+  const issues = await detectUiProtocolFreshnessIssues();
+  const canRepair = issues.some((issue) => issue.canBuild && !issue.installOwner);
+  if (canRepair && (await controlUiRepairDisabled())) {
+    note(
+      "Control UI is disabled (gateway.controlUi.enabled: false), so asset repair was skipped.",
+      "UI",
+    );
+    return;
+  }
+  for (const issue of issues) {
     const stale = issue.kind === "stale-assets";
     note(formatUiProtocolFreshnessIssue(issue), stale ? "UI Freshness" : "UI");
     if (issue.installOwner) {
