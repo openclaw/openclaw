@@ -27,8 +27,7 @@ vi.mock("./src/runtime-provider.js", () => ({
   createMemoryRuntime: createMemoryRuntimeMock,
 }));
 // mock-isolation: Observe manager cleanup; the real close skips managers this test never loaded.
-vi.mock("./src/memory/lifecycle.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./src/memory/lifecycle.js")>()),
+vi.mock("./src/memory/manager-runtime-loader.js", () => ({
   closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 

@@ -8,7 +8,8 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { loadMemoryManagerRuntime } from "./lifecycle.js";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { loadMemoryManagerRuntime } from "./manager-runtime-loader.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 
 type MemorySearchManagerPurpose = "default" | "status" | "cli";
@@ -57,4 +58,17 @@ export async function getMemorySearchManager(
       managerMs: Math.max(0, Date.now() - startedAt),
     },
   };
+}
+
+export async function closeMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  if (!loadMemoryManagerRuntime.peek()) {
+    return;
+  }
+  const { closeMemoryIndexManagersForAgent } = await loadMemoryManagerRuntime();
+  await closeMemoryIndexManagersForAgent({
+    agentId: normalizeAgentId(params.agentId),
+  });
 }

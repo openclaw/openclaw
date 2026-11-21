@@ -1,2 +1,2 @@
-export { closeAllMemorySearchManagers, closeMemorySearchManager } from "./lifecycle.js";
-export { getMemorySearchManager } from "./search-manager.js";
+export { closeAllMemorySearchManagers } from "./manager-runtime-loader.js";
+export { closeMemorySearchManager, getMemorySearchManager } from "./search-manager.js";

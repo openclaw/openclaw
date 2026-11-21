@@ -11,8 +11,7 @@ vi.mock("../../manager-runtime.js", () => ({
   closeMemoryIndexManagersForAgent,
 }));
 
-import { closeMemorySearchManager } from "./lifecycle.js";
-import { getMemorySearchManager } from "./search-manager.js";
+import { closeMemorySearchManager, getMemorySearchManager } from "./search-manager.js";
 
 describe("builtin memory search manager", () => {
   beforeEach(() => {
