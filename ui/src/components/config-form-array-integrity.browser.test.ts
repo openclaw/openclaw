@@ -512,3 +512,91 @@ describe("config form array integrity", () => {
     expect(currentValue).toEqual([{ name: "same" }]);
   });
 });
+
+it("offers schema choices when adding a unique enum item and retains a rejected draft", () => {
+  const container = document.createElement("div");
+  const onPatch = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+  const value = ["WebSearch"];
+  const render = (choices: string[]) =>
+    renderArrayFixture(container, {
+      schema: { type: "array", uniqueItems: true, items: { type: "string", enum: choices } },
+      value,
+      path: ["tools"],
+      onPatch,
+    });
+  render(["Agent", "Workflow", "WebSearch"]);
+  expectElement(findAddButton(container), "open item draft").click();
+  flush();
+  const draft = expectElement(
+    container.querySelector("openclaw-config-form-collection-draft"),
+    "draft",
+  );
+  const select = expectElement(draft.querySelector<HTMLSelectElement>("select"), "schema choices");
+  expect([...select.options].map((option) => option.textContent)).toEqual([
+    "Select…",
+    "Agent",
+    "Workflow",
+    "WebSearch",
+  ]);
+  expect(select.options[3]?.disabled).toBe(true);
+  expect(expectElement(findAddButton(draft), "commit").disabled).toBe(true);
+  select.value = JSON.stringify("Workflow");
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
+  render(["WebSearch", "Workflow", "Agent"]);
+  flush();
+  expect(select.value).toBe(JSON.stringify("Workflow"));
+  expectElement(findAddButton(draft), "commit").click();
+  flush();
+  expect(onPatch).toHaveBeenLastCalledWith(["tools"], ["WebSearch", "Workflow"]);
+  expect(select.value).toBe(JSON.stringify("Workflow"));
+  expectElement(findAddButton(draft), "retry commit").click();
+  flush();
+  expect(draft.querySelector("select")).toBeNull();
+});
+
+it.each([1, "1", true, null])("stores enum choice %j without string coercion", (choice) => {
+  const container = document.createElement("div");
+  const onPatch = vi.fn();
+  renderArrayFixture(container, {
+    schema: { type: "array", uniqueItems: true, items: { enum: [1, "1", true, null] } },
+    value: [],
+    path: ["values"],
+    onPatch,
+  });
+  expectElement(findAddButton(container), "open draft").click();
+  flush();
+  const draft = expectElement(
+    container.querySelector("openclaw-config-form-collection-draft"),
+    "draft",
+  );
+  const select = expectElement(draft.querySelector<HTMLSelectElement>("select"), "enum select");
+  select.value = JSON.stringify(choice);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
+  expectElement(findAddButton(draft), "commit").click();
+  flush();
+  expect(onPatch).toHaveBeenCalledWith(["values"], [choice]);
+});
+
+it("explains when every finite choice is already selected", () => {
+  const container = document.createElement("div");
+  const onPatch = vi.fn();
+  renderArrayFixture(container, {
+    schema: { type: "array", uniqueItems: true, items: { type: "string", enum: ["a", "b"] } },
+    value: ["a", "b"],
+    path: ["values"],
+    onPatch,
+  });
+  expectElement(findAddButton(container), "open draft").click();
+  flush();
+  const draft = expectElement(
+    container.querySelector("openclaw-config-form-collection-draft"),
+    "draft",
+  );
+  const select = expectElement(draft.querySelector<HTMLSelectElement>("select"), "choices");
+  expect(select.options[0]?.textContent).toBe("No available choices");
+  expect([...select.options].every((option) => option.disabled)).toBe(true);
+  expect(expectElement(findAddButton(draft), "commit").disabled).toBe(true);
+  expect(onPatch).not.toHaveBeenCalled();
+});
