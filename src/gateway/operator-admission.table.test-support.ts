@@ -131,7 +131,10 @@ export class AdmissionFixture {
     await this.state.writeConfig(this.config);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    const create = kernelModule.createGatewayKernel;
+    const create = vi.isMockFunction(kernelModule.createGatewayKernel)
+      ? kernelModule.createGatewayKernel.getMockImplementation()
+      : kernelModule.createGatewayKernel;
+    assert(create);
     const capture = vi
       .spyOn(kernelModule, "createGatewayKernel")
       .mockImplementation(async (...args) => {

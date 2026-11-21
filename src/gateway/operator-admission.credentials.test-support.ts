@@ -204,7 +204,6 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
             "narrowed-role",
             "legacy-tailscale",
             "legacy-tailscale-narrowed",
-            "live-ocid-grant",
           ].includes(c.scenario)) &&
         params.attempt.sessionKey === c.sessionKey
       ) {

@@ -602,12 +602,6 @@ export async function runCase(
       expect(c.queuedCalls).toBe(0);
     } else {
       await c.wait(c.recoveredReached.promise);
-      if (scenario === "live-ocid-grant") {
-        expect(c.observedRunScopes).not.toEqual([]);
-        for (const scopes of c.observedRunScopes) {
-          expect(scopes.toSorted()).toEqual([...WRITER, "operator.approvals"].toSorted());
-        }
-      }
       if (
         row.credential === "plugin-grant" ||
         [

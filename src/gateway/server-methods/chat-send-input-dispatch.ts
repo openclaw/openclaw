@@ -517,8 +517,6 @@ export async function handleChatSendWithStorage(
       session,
       client,
       context,
-      hasCurrentClientAuthority,
-      sessionMutationCommitGuard,
       sessionMutationAuthorization,
       externalAuthorityAdmission,
       externalAdmissionParams,
