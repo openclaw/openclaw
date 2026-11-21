@@ -807,6 +807,9 @@ describe("TUI PTY real backends", () => {
         await waitForModelRequests(fixture, 1);
         expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(prompt);
         await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
+        // Streaming text can precede post-turn maintenance; exit only after this turn is idle.
+        const replyOffset = fixture.run.visibleOutput().lastIndexOf(replyText);
+        await waitForOutputAfter(fixture.run, "| idle", replyOffset);
         await fixture.run.write("/exit\r", { delay: false });
         const exitCode = (await fixture.run.waitForExit()).exitCode;
         expect(exitCode).toBe(0);
