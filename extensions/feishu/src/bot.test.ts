@@ -1451,7 +1451,7 @@ describe("handleFeishuMessage command authorization", () => {
       "group scope overrides account scope",
       { groupSessionScope: "group_topic_sender" },
       { groupSessionScope: "group_sender" },
-      { root_id: "om_root_scope" },
+      { root_id: "om_root_scope", thread_id: "omt_scope" },
       "oc-group:sender:ou-scope-user",
       null,
     ],
@@ -1589,14 +1589,14 @@ describe("handleFeishuMessage command authorization", () => {
     expect(dispatcherOptions).toMatchObject({
       replyToMessageId: "om_quote_reply",
       rootId: "om_original_msg",
+      replyInThread: false,
+      threadReply: false,
     });
-    expect(
-      vi.mocked(botRuntime.channel.session.recordInboundSession).mock.calls.at(-1)?.[0]
-        .updateLastRoute,
-    ).toMatchObject({
-      to: "chat:oc-group",
-      threadId: "om_quote_reply",
-    });
+    const lastRoute = vi
+      .mocked(botRuntime.channel.session.recordInboundSession)
+      .mock.calls.at(-1)?.[0].updateLastRoute;
+    expect(lastRoute).toMatchObject({ to: "chat:oc-group" });
+    expect(lastRoute?.threadId).toBeUndefined();
   });
 
   it("uses explicit synthetic typing targets without changing reply routing", async () => {
