@@ -351,8 +351,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, reuseError);
       return;
     }
-    const requestedProject = await resolveRequestedSessionProject(cfg, p, {
-      client,
+    const requestedProject = await resolveRequestedSessionProject(cfg, p, client, {
       cwd: requestedExecNode ? undefined : requestedCwd,
       existingTargetEntry,
     });

@@ -73,15 +73,14 @@ type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
 export async function resolveRequestedSessionProject(
   cfg: OpenClawConfig,
   params: Pick<SessionsCreateParams, "projectId" | "worktree">,
+  client: GatewayClient | null,
   {
-    client,
     cwd,
     existingTargetEntry,
   }: {
-    client: GatewayClient | null;
     cwd?: string;
     existingTargetEntry?: Pick<InternalSessionEntry, "projectId">;
-  },
+  } = {},
 ): Promise<Result<{ projectId?: string; root?: string; worktree: boolean }, ErrorShape>> {
   const projectId = normalizeOptionalString(params.projectId);
   const requester = projectRequesterForClient(client);
