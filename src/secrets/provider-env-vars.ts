@@ -36,6 +36,9 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
   "qwen-dashscope": ["DASHSCOPE_API_KEY"],
+  // Custom provider id used by Unsloth Studio's documented OpenClaw config.
+  // Not a bundled plugin; the token still has to resolve from the environment.
+  unsloth: ["UNSLOTH_API_KEY"],
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {

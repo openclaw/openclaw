@@ -2371,6 +2371,7 @@
                       },
                       "providers/omlx",
                       "providers/sglang",
+                      "providers/unsloth",
                       "providers/vllm"
                     ]
                   }
