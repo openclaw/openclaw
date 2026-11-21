@@ -273,6 +273,8 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
         cfg: getConfig(),
         target,
         workspace: source,
+        // Separate checkouts can share a remote; scope the branch to this publication task.
+        label,
         checkoutCommit,
         runSetupScript: false,
         signal: options.signal,
