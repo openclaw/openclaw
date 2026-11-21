@@ -7,6 +7,8 @@ const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
 const LEGACY_BRACKET_OPEN_HEADERS = ["[TOOL_CALL]", "[TOOL_RESULT]"];
+const DSML_TOOL_TAG_RE =
+  /<(\/?)(\||｜{1,2})DSML\2(tool_use_error|tool_calls|tool_call|function_calls)>/g;
 const traceIconHeads = ["📊", "🛠️", "📖", "📝", "🔍", "🔎", "⚙️"].flatMap((icon) => [
   [icon],
   ["⚠️", icon],
@@ -146,6 +148,58 @@ export function stripMinimaxToolCallXml(
   }
   result += normalized.slice(cursor);
   return result;
+}
+
+/** Hide leaked tool envelopes in assistant-visible text without recovering executable calls. */
+export function stripDeepSeekDsmlToolCallBlocks(text: string): string {
+  if (!text.includes("DSML")) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  const envelopes: {
+    close: string;
+    isInsideQuote?: ReturnType<typeof createQuotedStringScanner>;
+  }[] = [];
+  let result = "";
+  let cursor = 0;
+  for (const match of text.matchAll(DSML_TOOL_TAG_RE)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const isClose = match[1] === "/";
+    const envelope = envelopes.at(-1);
+    if (!envelope) {
+      if (isClose || isInsideCode(start, codeRegions)) {
+        continue;
+      }
+      result += text.slice(cursor, start);
+    } else if (envelope.isInsideQuote?.(start)) {
+      continue;
+    }
+    if (isClose) {
+      // A mismatched envelope cannot safely establish where its private payload ends.
+      if (envelopes.pop()?.close !== match[0]) {
+        return result;
+      }
+      const parent = envelopes.at(-1);
+      if (!parent) {
+        cursor = end;
+      } else if (parent.isInsideQuote) {
+        // The child opened outside a quote; its raw body cannot change the parent's state.
+        parent.isInsideQuote = createQuotedStringScanner(text, end);
+      }
+    } else {
+      envelopes.push({
+        close: `</${match[0].slice(1)}`,
+        // Raw XML parameter values may contain unbalanced prose apostrophes or quotes.
+        isInsideQuote: /^\s*[{[]/.test(text.slice(end))
+          ? createQuotedStringScanner(text, end)
+          : undefined,
+      });
+    }
+  }
+  // An unfinished tool envelope owns the remaining text, not a visible partial answer.
+  return envelopes.length > 0 ? result : result + text.slice(cursor);
 }
 
 export type LegacyBracketBlockScan = {

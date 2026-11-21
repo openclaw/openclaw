@@ -1,5 +1,6 @@
 const names = [
   "reasoning",
+  "dsml",
   "modelTokens",
   "memories",
   "xml",

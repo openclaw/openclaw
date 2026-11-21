@@ -182,6 +182,133 @@ describe("stripToolCallXmlTags", () => {
 
 describe("sanitizeAssistantVisibleText", () => {
   it.each([
+    ['<|DSML|tool_call>{"command":"hidden"}</|DSML|tool_call>'],
+    ["<｜DSML｜function_calls>hidden</｜DSML｜function_calls>"],
+    ["<｜DSML｜tool_use_error>hidden</｜DSML｜tool_use_error>"],
+    [
+      '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="command">hidden</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>',
+    ],
+    [
+      "<｜｜DSML｜｜tool_calls><｜｜DSML｜｜tool_call>hidden</｜｜DSML｜｜tool_call>hidden tail</｜｜DSML｜｜tool_calls>",
+    ],
+    [
+      '<｜｜DSML｜｜tool_calls>{"command":"\\\"</｜｜DSML｜｜tool_calls> hidden tail"}</｜｜DSML｜｜tool_calls>',
+    ],
+    [
+      `<｜DSML｜tool_calls><｜DSML｜parameter name="text" string="true">What's the plan</｜DSML｜parameter></｜DSML｜tool_calls>`,
+    ],
+    [
+      '<｜DSML｜tool_calls><｜DSML｜parameter name="text" string="true">Say "hello</｜DSML｜parameter></｜DSML｜tool_calls>',
+    ],
+    [
+      `<｜DSML｜tool_calls>What's next<｜DSML｜tool_call>{"text":"</｜DSML｜tool_call></｜DSML｜tool_calls> hidden"}</｜DSML｜tool_call>It's hidden too</｜DSML｜tool_calls>`,
+    ],
+    ['<|DSML|tool_calls>[{"text":"</|DSML|tool_calls> hidden"}]</|DSML|tool_calls>'],
+    [`<|DSML|tool_calls>[<|DSML|tool_call>What's hidden</|DSML|tool_call>]</|DSML|tool_calls>`],
+    ["<|DSML|tool_call>hidden unfinished payload", "Before."],
+    ["<｜｜DSML｜｜tool_calls>hidden</｜DSML｜tool_calls>hidden tail", "Before."],
+  ])(
+    "hides leaked DSML payloads at the final delivery boundary: %j",
+    (payload, expected?: string) => {
+      const source = `Before. ${payload} After.`;
+      for (const profile of ["delivery", "final-answer-delivery"] as const) {
+        expect(sanitizeAssistantVisibleTextWithProfile(source, profile)).toBe(
+          expected ?? "Before.  After.",
+        );
+      }
+    },
+  );
+
+  it.each([
+    "Use `<｜｜DSML｜｜tool_calls>example</｜｜DSML｜｜tool_calls>` literally.",
+    "```xml\n<｜｜DSML｜｜tool_calls>example</｜｜DSML｜｜tool_calls>\n```",
+    "    <|DSML|tool_call>example</|DSML|tool_call>",
+  ])("preserves code-owned DSML examples: %j", (source) => {
+    expect(sanitizeAssistantVisibleTextWithProfile(source, "final-answer-delivery")).toBe(source);
+  });
+
+  it("retains the profile's whitespace contract around hidden DSML", () => {
+    const source = "  Before.\n<｜DSML｜tool_calls>hidden</｜DSML｜tool_calls>\nAfter.  ";
+    expect(sanitizeAssistantVisibleTextWithProfile(source, "history")).toBe(
+      "  Before.\n\nAfter.  ",
+    );
+    expect(sanitizeAssistantVisibleTextWithProfile(source, "final-answer-delivery")).toBe(
+      "Before.\n\nAfter.",
+    );
+  });
+
+  it.each([
+    {
+      name: "a split opener and a quoted closing token",
+      updates: [
+        ["Before. <｜｜DS", "Before. <｜｜DS"],
+        ['ML｜｜tool_calls>{"command":"</｜｜DSML｜｜tool_calls> hidden"}', "Before."],
+        ["</｜｜DSML｜｜tool_calls> After.", "Before.  After."],
+      ],
+    },
+    {
+      name: "an unfinished nested envelope",
+      updates: [
+        ["Before. <|DS", "Before. <|DS"],
+        ["ML|tool_calls><|DSML|tool_call>hidden</|DSML|tool_call>", "Before."],
+        ["hidden tail", "Before."],
+      ],
+    },
+    {
+      name: "a raw parameter apostrophe",
+      updates: [
+        ['<｜DSML｜tool_calls><｜DSML｜parameter name="text" string="true">What', ""],
+        ["'s the plan</｜DSML｜parameter>", ""],
+        ["</｜DSML｜tool_calls> Here is the answer.", "Here is the answer."],
+      ],
+    },
+    {
+      name: "an unbalanced raw parameter quote",
+      updates: [
+        ['Before. <｜DSML｜tool_calls><｜DSML｜parameter name="text">Say "hello', "Before."],
+        ["</｜DSML｜parameter></｜DSML｜tool_calls> After.", "Before.  After."],
+      ],
+    },
+    {
+      name: "a JSON envelope nested in a raw XML envelope",
+      updates: [
+        ["Before. <｜DSML｜tool_calls>What's next<｜DSML｜tool_call>", "Before."],
+        ['{"text":"</｜DSML｜tool_call></｜DSML｜tool_calls> hidden"}', "Before."],
+        ["</｜DSML｜tool_call>It's hidden too", "Before."],
+        ["</｜DSML｜tool_calls> After.", "Before.  After."],
+      ],
+    },
+    {
+      name: "an inline code example",
+      updates: [
+        ["Use `<｜｜DS", "Use `<｜｜DS"],
+        [
+          "ML｜｜tool_calls>example</｜｜DSML｜｜tool_calls>` literally.",
+          "Use `<｜｜DSML｜｜tool_calls>example</｜｜DSML｜｜tool_calls>` literally.",
+        ],
+      ],
+    },
+    {
+      name: "a fenced code example",
+      updates: [
+        ["```xml\n<｜DS", "```xml\n<｜DS"],
+        ["ML｜tool_call>example", "```xml\n<｜DSML｜tool_call>example"],
+        [
+          "</｜DSML｜tool_call>\n```",
+          "```xml\n<｜DSML｜tool_call>example</｜DSML｜tool_call>\n```",
+        ],
+      ],
+    },
+  ] as const)("projects DSML across updates: $name", ({ updates }) => {
+    for (const profile of ["delivery", "final-answer-delivery"] as const) {
+      const projection = createTextProjection(assistantVisibleTextFilters(profile, true));
+      for (const [delta, expected] of updates) {
+        expect(projection.append(delta).text).toBe(expected);
+      }
+    }
+  });
+
+  it.each([
     ["Tool Result", "[Tool Result for ID abc]\nstdout: hello"],
     ["Tool Call and Arguments", '[Tool Call: bash (ID: 7)]\nArguments: {"cmd":"ls"}'],
   ])("preserves fenced %s logs", (_name, log) => {
