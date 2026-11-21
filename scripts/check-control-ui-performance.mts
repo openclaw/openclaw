@@ -113,7 +113,9 @@ const controlUiPerformanceBudgets = {
   // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
   // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
   totalCssGzipBytes: 337_312,
-  totalCssRawBytes: 1_740_234,
+  // Peter approved the #198629 widget title overlay (2026-11-20), absorbing inherited raw
+  // debt: measured 1,783,516 B raw (+137 B over main 6b0df8b9) plus 64 B; gzip grew 14 B.
+  totalCssRawBytes: 1_783_580,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
