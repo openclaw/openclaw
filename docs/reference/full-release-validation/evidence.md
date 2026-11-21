@@ -95,11 +95,27 @@ before emitting matrix/evidence handoff:
 
 ## Release-tooling waivers
 
-Trusted **P** owns `scripts/lib/release-validation-waivers.mjs`, not **C** or **Q**
-(default Q=C). Operator-approved entries require exact version, child role, job name,
-and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` restrict
-candidate/execution. Checked-in list is authoritative; retain release-specific
-authorization/diagnostics in PR or handoff.
+The pinned release-tooling **Q** owns grant data in
+`scripts/lib/release-validation-waivers.json`. Trusted **P** owns the evaluator in
+`scripts/lib/release-validation-waivers.mjs`: it authenticates Q’s data and applies
+it to raw evidence, rather than using grants from P or the candidate **C**.
+Operator-approved entries require exact version, child role, job name, and short
+reason; optional `targetSha` and `evidence: { runId, runAttempt }` restrict the
+candidate and execution. Each entry also requires an `aggregates` array: use
+`[]` when no failed aggregate depends on the job, otherwise record each aggregate’s
+exact `jobName`, failed `stepName`, and accepted `causes`. Keep `exactCauses` or
+`logSha256` restrictions when present. The Q-pinned ledger is authoritative.
+
+For an authorized grant, commit only the ledger change directly to the selected
+release-tooling Q branch, then pin its new full SHA in a fresh qualification
+request/admission. Do not open a grant PR against `main`, cherry-pick the grant
+into C, or change candidate bytes/version to carry it. Executable policy and
+workflow changes still use the normal tooling-change process. Keep authorization
+and detailed diagnostics in the release handoff, not the ledger or public docs;
+Q branches in a public repository are public, not private storage. Main contains
+an empty ledger; actual grants belong only on the selected release Q branch.
+Missing or malformed Q ledgers, failed authentication, and transport errors remain
+blocking. There is no fallback to historical grants from main or another revision.
 
 For a newly approved job waiver, default to the exact release version, child
 role, and job across all future FRV runs, attempts, and candidates for that
@@ -115,41 +131,30 @@ A `testFailures` entry additionally requires the sole failed step and the comple
 ordered set of exact test/error signatures from the native test-evidence parser.
 The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
-setup failures remain blocking; aggregate causes are also checked exactly. The historical
-2026.11.10-beta.1 signature grants cover only the MCP listener collision and cron
-pre-output assertion in CI 44290065577/1. Separate FRV16 job-level grants accept
-the ten observed CI failures in 44465881623/1 and the core QA runtime-pair failure
-in 44465878180/1, only for candidate
-`995f9059b6e6fe3ba0865a3354924fd2bcbfceea`. These retain unresolved runtime, worker,
-UI, and cron uncertainty, not a claim of fixes or passing tests. Their aggregates
-require the exact observed causes and failed steps; the silent QA status-check
-aggregate additionally requires the SHA-256 of its complete reviewed original
-log. The November 19, 10:12 UTC authorization extends these grants to the eight
-additional observed CI failures in FRV17: Node large shards 17, 19, 20, 21, and 43,
-Node small shard 12, Bun large shard 39, and UI shard 4/13. The focused
-chat-permissions test passed on the unchanged candidate under Bun, including
-private-message and access-revocation assertions; its original failure remains
-unexplained. The remaining new failures are a browser-download infrastructure
-timeout and suspected timing failures, not proven harmless flakes. These grants
-apply across runs and attempts for the same release, candidate, and named jobs.
-Different candidates and additional failed jobs are not granted. Cancelled,
-timed-out, or incomplete jobs remain coverage gaps, not accepted failures.
+setup failures remain blocking; aggregate causes are also checked exactly.
 
-Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
-inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
-receipts, including failures covered by current exact waivers. Accepted receipts
-return before dispatching another child workflow; a required initial run is still
-necessary. Failed parents without final manifests are recovered through child
-receipts, not relabeled successful. The fresh parent still must complete admission,
-collection, and final verification. Missing, expired, or incompatible evidence
-requires fresh work.
+A Q change limited to the grant ledger does not change workload identity. With
+`reuse_evidence=true`, eligible raw successful or failed child receipts may be
+reused after authentication and reevaluation under the new Q grants. Preserve
+original producer Q, run/attempt, candidate, inputs, artifact digests, and raw
+conclusions; a prior accepted verdict is not a substitute for reevaluation.
+Removing or narrowing a grant can make retained failures blocking again. Broad
+Q changes to executable scripts, workflows, actions, dependencies, or other
+workload inputs still invalidate affected workload evidence; the ledger exception
+is not a general control-only exemption.
 
-Land policy, pin P, run/revalidate FRV with unchanged C/Q. Candidate workflows must
-route state operations to admitted P; changing P cannot retrofit old workflows.
-State/manifest/summary retain raw failures/reasons. Grants neither skip tests nor
-mark passes; failed aggregates must contain only granted causes. Missing, cancelled,
-timed-out, incomplete, mismatched required evidence and ungranted failures block.
-Package, dispatch, and seal integrity remain mandatory.
+Accepted receipts return before another child is dispatched; the required initial
+run cannot be skipped. Failed parents without final manifests can supply eligible
+child receipts, not be relabeled successful. The new parent must complete
+admission, collection, and final verification. Missing, expired, or incompatible
+evidence requires fresh work. A P-only change does not replace Q’s grants.
+
+State, manifests, and summaries retain raw failures and reasons. Grants neither
+skip tests nor mark passes; failed aggregates must contain only granted causes.
+Missing, cancelled, timed-out, incomplete, or mismatched required evidence and
+ungranted failures block. Package, dispatch, seal, and provenance integrity remain
+mandatory. Publication still requires a successful FRV parent under its admitted
+Q/P tuple; a publisher cannot add grants or swap Q after qualification.
 
 Kova grants cover approved thresholds only—not crashes, correctness, isolation, data
 integrity, install/update failures. Separate `qualificationExemption` means
@@ -158,7 +163,7 @@ integrity, install/update failures. Separate `qualificationExemption` means
 - P authenticates historical receipt and seals exemption into coverage.
 - Q supports `FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT` version `1`, consuming
   verified admission before dispatch. Older frozen Q needs explicit repair: frozen C
-  plus reviewed main-ancestor Q in a fresh request, or backport/requalify new C=Q.
+  plus reviewed exact Q in a fresh request, or backport/requalify new C=Q.
   Changing P alone cannot suppress old Q dispatch.
 - Plan omits only exempted lane; manifest records not-run, empty run ID, supporting receipt.
 

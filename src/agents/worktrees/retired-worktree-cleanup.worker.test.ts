@@ -76,18 +76,30 @@ it.each([
     await fs.writeFile(counter, String((values.shift() ?? 0) * 1024 ** 3));
   });
   const argv = process.argv;
+  const exitCode = process.exitCode;
   syncBuiltinESMExports();
   process.argv = [argv[0]!, argv[1]!, retired];
   try {
-    await import("./retired-worktree-cleanup.worker.js");
+    for (let pass = 0; pass < 5; pass++) {
+      vi.resetModules();
+      process.exitCode = undefined;
+      await import("./retired-worktree-cleanup.worker.js");
+      if (process.exitCode !== 75) {
+        break;
+      }
+      process.argv[3] = "resume";
+      // Parent cooldown; the next worker rediscovers the same remaining tree.
+      await timers.setTimeout(30_000);
+    }
   } finally {
     process.argv = argv;
+    process.exitCode = exitCode;
   }
   expect(remaining).toEqual(expected);
   expect(fsSync.existsSync(retired)).toBe(false);
 });
 
-it("bounds unlink bursts and waits for slow commits even with no PSI pressure", async () => {
+it("yields the pass on pressure before issuing another unlink burst", async () => {
   vi.resetModules();
   const root = directories.make("retired-worktree-batches-");
   const retired = path.join(root, "retired");
@@ -95,30 +107,22 @@ it("bounds unlink bursts and waits for slow commits even with no PSI pressure", 
   for (let index = 0; index < 260; index++) {
     await fs.writeFile(path.join(retired, String(index)), "x");
   }
-  const batches: number[] = [];
-  let remaining = 260;
-  const probe = vi.fn().mockResolvedValue(false);
+  const probe = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
   const probeModule = await import("../../infra/host-io-pressure.js");
   vi.spyOn(probeModule, "createHostIoPressureProbe").mockReturnValue(probe);
-  const pauses = vi.spyOn(timers, "setTimeout").mockImplementation(async () => {
-    const next = fsSync.readdirSync(retired).length;
-    batches.push(remaining - next);
-    remaining = next;
-    if (batches.length === 1) {
-      probe.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
-    }
-  });
+  vi.spyOn(timers, "setTimeout").mockResolvedValue(undefined);
   const argv = process.argv;
+  const exitCode = process.exitCode;
   syncBuiltinESMExports();
   process.argv = [argv[0]!, argv[1]!, retired];
   try {
     await import("./retired-worktree-cleanup.worker.js");
+    expect(process.exitCode).toBe(75);
+    expect(fsSync.readdirSync(retired)).toHaveLength(132);
   } finally {
     process.argv = argv;
+    process.exitCode = exitCode;
   }
-  expect(batches).toEqual([128, 0, 0, 128]);
-  expect(pauses.mock.calls.map(([ms]) => ms)).toEqual([100, 5_000, 5_000, 100]);
-  expect(fsSync.existsSync(retired)).toBe(false);
 });
 
 it("paces large files separately and unlinks symlinks without visiting their targets", async () => {
@@ -198,4 +202,42 @@ it("removes only the retired checkout and completes when it is already absent", 
     await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(preserved, "utf8")).toBe("active bytes");
   }
+});
+
+it("yields a large tree in bounded passes and resumes from the remaining files", async () => {
+  const root = directories.make("retired-worktree-passes-");
+  const retired = path.join(root, "retired");
+  await fs.mkdir(retired);
+  for (let index = 0; index < 65; index++) {
+    await fs.writeFile(path.join(retired, String(index)), "x");
+  }
+  let now = 0;
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const unlink = fsSync.unlinkSync;
+  vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
+    unlink(target);
+    now += 1_000;
+  });
+  const argv = process.argv;
+  const exitCode = process.exitCode;
+  const remaining: number[] = [];
+  syncBuiltinESMExports();
+  process.argv = [argv[0]!, argv[1]!, retired];
+  try {
+    for (let pass = 0; pass < 3; pass++) {
+      vi.resetModules();
+      const probeModule = await import("../../infra/host-io-pressure.js");
+      vi.spyOn(probeModule, "createHostIoPressureProbe").mockReturnValue(async () => false);
+      process.exitCode = undefined;
+      await import("./retired-worktree-cleanup.worker.js");
+      remaining.push(fsSync.existsSync(retired) ? fsSync.readdirSync(retired).length : 0);
+      expect(process.exitCode).toBe(pass < 2 ? 75 : undefined);
+      now += 30_000;
+    }
+  } finally {
+    process.argv = argv;
+    process.exitCode = exitCode;
+  }
+  expect(remaining).toEqual([35, 5, 0]);
 });

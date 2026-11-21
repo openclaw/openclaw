@@ -1,12 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
-import * as sessionEvents from "../../../auto-reply/reply/session-event-handoff.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
-import { resumeMarkedSessions } from "../../../gateway/session-restart-resume.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
@@ -40,6 +37,7 @@ import {
   visibleChild,
 } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
+import { registerRequesterRestartDeliveryTests } from "./subagent-registry.restart-delivery.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -67,73 +65,18 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
   setReleaseAgentCallGate: (release: () => void) => void;
   useGlobalSessionScope: () => void;
 }): void {
-  it("wakes a yielded parent when startup fails its child's unreachable yield", async () => {
-    const child = visibleChild("restart-lost-yield");
-    const parentRunId = "parent-before-restart";
-    await spawnVisibleChild({ ...child, requesterTurnRunId: parentRunId });
-    await createRequesterYieldTool(requesterSessionKey, parentRunId).execute("yield", {});
-    await settleTurn(parentRunId, [child]);
-    const entry = getFixture().sessionStore[child.childSessionKey]!;
-    // The child's own awaited completion disappeared with the previous Gateway.
-    getLifecycleHandler()!({
-      stream: "lifecycle",
-      runId: child.runId,
-      seq: 1,
-      ts: Date.now(),
-      sessionKey: child.childSessionKey,
-      data: { phase: "end", yielded: true },
-    });
-    await flushOwnedWork();
-    expect(subagentRuns.get(child.runId)?.pauseReason).toBe("sessions_yield");
-    const restartInput = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
-    onTestFinished(() => restartInput.mockRestore());
-    const parent = getFixture().sessionStore[requesterSessionKey]!;
-    for (const data of [
-      { phase: "start" },
-      { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
-    ]) {
-      await persistGatewaySessionLifecycleEvent({
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        event: { runId: parentRunId, sessionId: parent.sessionId, ts: Date.now(), data },
-      });
-    }
-    for (const data of [
-      { phase: "start" },
-      { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
-    ]) {
-      await persistGatewaySessionLifecycleEvent({
-        sessionKey: child.childSessionKey,
-        agentId: "main",
-        event: { runId: child.runId, sessionId: entry.sessionId, ts: Date.now(), data },
-      });
-    }
-    await resumeMarkedSessions({
-      context: createGatewayContext(),
-      signal: new AbortController().signal,
-      log: { warn: vi.fn() },
-    });
-    await flushOwnedWork();
-    expect(
-      loadExactSessionEntryReadOnly({
-        agentId: "main",
-        sessionKey: child.childSessionKey,
-      })?.entry.status,
-    ).toBe("failed");
-    expect(
-      loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: requesterSessionKey })?.entry
-        .status,
-    ).not.toBe("failed");
-    expect(restartInput).not.toHaveBeenCalled();
-    expect(subagentRuns.get(child.runId)?.execution.outcome).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("no registered continuation can resume it"),
-    });
-    expect(getRequesterWakeCalls()).toHaveLength(1);
-    expect(getRequesterWakeCalls()[0]?.params).toMatchObject({
-      inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-    });
-    await waitForDeliveredCleanup(child.runId);
+  registerRequesterRestartDeliveryTests({
+    requesterSessionKey,
+    getFixture,
+    prepareChildSession,
+    callGatewayMock,
+    spawnVisibleChild,
+    settleTurn,
+    flushOwnedWork,
+    waitForDeliveredCleanup,
+    getRequesterWakeCalls,
+    createGatewayContext,
+    getLifecycleHandler,
   });
 
   it.each(["never bound", "binding retired", "restored"])(

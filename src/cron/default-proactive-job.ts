@@ -28,6 +28,7 @@ export function createDefaultProactiveJob(
   agentId: string,
   nowMs: number,
   cadenceMs = 30 * 60 * 1000,
+  { enabled } = { enabled: true },
 ): CronStoredJob {
   const owner = normalizeAgentId(agentId);
   const sessionKey =
@@ -38,7 +39,7 @@ export function createDefaultProactiveJob(
     id: randomUUID(),
     agentId: owner,
     name: `Proactive check (${owner})`,
-    enabled: true,
+    enabled,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
     schedule: { kind: "every", everyMs: cadenceMs, anchorMs: nowMs },
@@ -110,7 +111,7 @@ export async function provisionDefaultProactiveJob(
   const cadenceMs =
     options.cadenceMs ??
     (previous ? undefined : resolveDefaultProactiveCadenceMs(cfg, owner, options.env));
-  const planned = createDefaultProactiveJob(cfg, owner, nowMs, cadenceMs);
+  const planned = createDefaultProactiveJob(cfg, owner, nowMs, cadenceMs, { enabled: false });
   let job: CronStoredJob | undefined;
   await runCronRuntimeMutation({
     context,
