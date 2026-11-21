@@ -15,11 +15,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { withImageGenerationProviders } from "../../media-generation/registry.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import {
-  encodeImageWithinBytes,
-  getImageMetadata,
-  readImageMetadataFromHeader,
-} from "../../media/media-services.js";
+import { readImageMetadataFromHeader } from "../../media/image-header-metadata.js";
+import { encodeImageWithinBytes, getImageMetadata } from "../../media/media-services.js";
 import { formatMediaSize } from "../../media/store.shared.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
