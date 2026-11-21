@@ -359,6 +359,36 @@ describe("resolvePluginProviders", () => {
     ]);
   });
 
+  it("reuses prepared catalog manifests for policy aliases without rescanning", () => {
+    const plugins = [
+      manifest("catalog-owner", {
+        providers: ["catalog-alias"],
+        origin: "global",
+        enabledByDefault: true,
+      }),
+    ];
+    setManifestPlugins(plugins);
+    indexLoader.mockReturnValue(createProviderRegistrySnapshotFixture());
+    const metadataSnapshot = { manifestRegistry: { plugins, diagnostics: [] } };
+    manifestLoader.mockClear();
+
+    expect(
+      owners.resolveCatalogHookProviderPluginIds({
+        config: { plugins: { allow: ["catalog-alias"] } },
+        env: {},
+        metadataSnapshot,
+      }),
+    ).toEqual(["catalog-owner"]);
+    expect(
+      owners.resolveCatalogHookProviderPluginIds({
+        config: { plugins: { deny: ["catalog-alias"] } },
+        env: {},
+        metadataSnapshot,
+      }),
+    ).toEqual([]);
+    expect(manifestLoader).not.toHaveBeenCalled();
+  });
+
   it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {
     setManifestPlugins([
       manifest("external-auth-owner", {
