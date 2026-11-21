@@ -29,7 +29,19 @@ import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.te
 const reloadFault = vi.hoisted(() => ({
   failuresRemaining: 0,
   onFailure: undefined as (() => void) | undefined,
+  observeFile: undefined as (() => void) | undefined,
 }));
+
+vi.mock("../config/source-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/source-file.js")>();
+  return {
+    ...actual,
+    createConfigFileAdapter: (opts: Parameters<typeof actual.createConfigFileAdapter>[0]) => {
+      reloadFault.observeFile = opts.onChange;
+      return actual.createConfigFileAdapter(opts);
+    },
+  };
+});
 
 vi.mock("../gateway/config-reload.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/config-reload.js")>();
@@ -176,9 +188,9 @@ describe("config mutations against a running Gateway", () => {
     try {
       const command = run(env, ["config", "set", "logging.level", "debug"]);
       await Promise.race([failedApply.promise, command]);
-      // Deliver a file observation after the failed apply without changing the receipt's bytes.
-      const now = new Date();
-      await fs.utimes(env.OPENCLAW_CONFIG_PATH!, now, now);
+      // Supply the observation without making the CLI's bounded confirmation
+      // depend on native watch delivery under CI load. The Gateway still reads real saved bytes.
+      reloadFault.observeFile!();
       const result = await command;
 
       expect(reloadFault.failuresRemaining).toBe(0);
