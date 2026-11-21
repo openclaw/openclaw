@@ -185,6 +185,10 @@ Caches already on disk are not deleted. Large user files still hit the result
 size guard; a recognized cache in a nested project names its cache class and the
 environment setting for moving it outside the workspace before recovery.
 
+Android Gradle Plugin output under `build/intermediates`, `build/outputs/apk`,
+and `build/outputs/bundle` is also omitted at any module depth. Other `build/`
+paths, including source files and reports, remain workspace data.
+
 ### Docker daemon
 
 The Docker CLI inherits the Gateway process environment except `MALLOC_CONF` and
