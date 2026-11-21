@@ -6,19 +6,28 @@ import {
   resolveMemorySessionSyncPlan,
 } from "./manager-session-sync-state.js";
 
-it.each([
-  ["active-memory-mvd4zk3v-d58af102", undefined, undefined, false],
-  ["ordinary", "agent:main:explicit:portal-1:active-memory:0123456789ab", undefined, false],
-  [undefined, undefined, "agent:main:telegram:direct:owner:active-memory:0123456789ab", false],
-  ["ordinary", "agent:main:explicit:active-memory-notes", undefined, true],
-] as const)(
-  "indexability for id=%s key=%s archive=%s",
-  (sessionId, sessionKey, archived, expected) => {
-    expect(
-      isMemorySessionIndexable({ sessionKind: "interactive", sessionId, sessionKey }, archived),
-    ).toBe(expected);
-  },
-);
+describe("memory session indexability", () => {
+  // These cases live inside a describe block: the parameterized suite never
+  // executed at the file top level under the shared extension runner.
+  it.each([
+    ["active-memory-mvd4zk3v-d58af102", undefined, undefined, false],
+    ["ordinary", "agent:main:explicit:portal-1:active-memory:0123456789ab", undefined, false],
+    [undefined, undefined, "agent:main:telegram:direct:owner:active-memory:0123456789ab", false],
+    ["ordinary", "agent:main:explicit:active-memory-notes", undefined, true],
+    // Deleted cron-run archives keep the isolated :run: key; deleted cron-job
+    // archives carry the cache-stable base key (no :run: segment). Both belong
+    // to the cron session family and must stay excluded from memory indexing.
+    ["cron-run-archive", undefined, "agent:main:cron:job-1:run:abc123", false],
+    ["cron-base-archive", undefined, "agent:main:cron:job-1", false],
+  ] as const)(
+    "indexability for id=%s key=%s archive=%s",
+    (sessionId, sessionKey, archived, expected) => {
+      expect(
+        isMemorySessionIndexable({ sessionKind: "interactive", sessionId, sessionKey }, archived),
+      ).toBe(expected);
+    },
+  );
+});
 
 describe("memory session sync state", () => {
   const syncPlan = (targetSessionFiles: Set<string> | null = null) =>

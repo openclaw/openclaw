@@ -5,6 +5,7 @@ export {
 } from "../routing/session-key.js";
 export {
   isCronRunSessionKey,
+  isCronSessionKey,
   isDreamingNarrativeSessionStoreKey,
 } from "../sessions/session-key-utils.js";
 export { parseUsageCountedSessionIdFromFileName } from "../config/sessions/transcript-file-names.js";
