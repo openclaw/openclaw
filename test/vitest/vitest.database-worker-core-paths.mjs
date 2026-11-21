@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/state/state-upgrade.large-agent-db.test.ts",
   "src/sessions/session-controller-model.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",
   "src/agents/embedded-agent-runner/compact.watched-sessions.postgres.test.ts",

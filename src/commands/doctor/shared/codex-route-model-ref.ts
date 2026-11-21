@@ -3,7 +3,7 @@ import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-selection-normalize.js";
 import { resolveConfiguredPrimaryProviderFallback } from "../../../agents/model-selection-shared.js";
 import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-diagnostics.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
