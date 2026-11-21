@@ -1,0 +1,2 @@
+# Reuse one failure across 429/502 attempts to preserve retry-budget freshness.
+5
