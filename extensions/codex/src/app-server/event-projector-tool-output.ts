@@ -3,6 +3,7 @@ import {
   TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS,
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 export function collectDynamicToolContentText(
@@ -54,6 +55,6 @@ export function toolOutputRawEchoSignature(
   }
   return {
     rawLength: trimmed.length,
-    rawPrefix: trimmed.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
+    rawPrefix: truncateUtf16Safe(trimmed, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
   };
 }
