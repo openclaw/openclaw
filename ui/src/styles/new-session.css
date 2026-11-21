@@ -1092,10 +1092,17 @@ span.new-session-page__select {
     margin-top: 14px;
   }
 
-  .new-session-page__composer {
-    /* Matches .agent-chat__composer-shell[data-mobile-composer="true"]. */
+  .new-session-page__composer,
+  .new-session-page .openclaw-id-welcome-step {
+    /* Both occupy the mobile composer slot, inside the shell's safe area. */
     --chat-composer-bottom-gap: 10px;
+  }
 
+  .new-session-page .openclaw-id-welcome-step {
+    padding-block-end: var(--chat-composer-bottom-gap);
+  }
+
+  .new-session-page__composer {
     /* Keep privacy context above the writing surface, never below it. */
     order: 1;
   }
