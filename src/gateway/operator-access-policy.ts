@@ -87,7 +87,7 @@ type GatewayOperatorAccessSource = {
   openclawIdAccountIds?: readonly string[];
   /** Attested connection or retained source; never inferred from profile identities. */
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
-  /** Original uninterrupted grant; null proves independence, omission captures current access. */
+  /** Original grant fact; its owner may resume it or answer current authorization. */
   grant?: GatewayAccessGrantRef | null;
 };
 
@@ -258,9 +258,6 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     options,
   );
   const requiredPlugin = role.policy?.accessPolicyPlugin;
-  if (options.grant !== undefined && requiredPlugin && requiredPlugin !== options.grant?.pluginId) {
-    throw new GatewayOperatorAccessDeniedError("policy-set-changed");
-  }
   if (requiredPlugin && !policies.some((entry) => entry.pluginId === requiredPlugin)) {
     throw new GatewayOperatorAccessDeniedError("policy-unavailable");
   }
@@ -317,14 +314,11 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
         authority = policy.resume
           ? policy.resume({ ...input, grantId: options.grant.grantId })
           : policy.authorize(input);
-        if (!authority || (policy.resume && authority.grantId !== options.grant.grantId)) {
+        if (policy.resume && (!authority || authority.grantId !== options.grant.grantId)) {
           throw new GatewayOperatorAccessDeniedError("grant-revoked");
         }
       } else {
         authority = policy.authorize(input);
-        if (options.grant !== undefined && authority) {
-          throw new GatewayOperatorAccessDeniedError("policy-set-changed");
-        }
       }
       if (authority && pluginId === requiredPlugin) {
         requiredPolicyConfirmed = true;
