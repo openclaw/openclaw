@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -312,12 +313,14 @@ it.each([0, 7])(
   "retains a complete failed export and its cleanup errors with host exit %s",
   async (exit) => {
     const f = fixture("checkpoint");
+    const [command] = f.summary.commands;
+    assert.ok(command);
     const failed = {
       ...f.summary,
       status: "failed",
       runtimeRemoved: false,
       error: "Driver assertion failed",
-      commands: [{ ...f.summary.commands[0], status: "failed", outputComplete: false }],
+      commands: [{ ...command, status: "failed", outputComplete: false }],
       cells: [
         {
           name: "healthy",
@@ -479,7 +482,9 @@ it.each(["split-secret", "split-utf8", "multiline-pem"] as const)(
           : 20;
     const chunks = [output.subarray(0, split), output.subarray(split)];
     fs.writeFileSync(path.join(f.raw, "healthy-update.out"), output);
-    Object.assign(f.summary.commands[0], {
+    const [command] = f.summary.commands;
+    assert.ok(command);
+    Object.assign(command, {
       outputBytes: [output.length, 0],
       capturedOutputBytes: [output.length, 0],
       outputSha256: [hash(output), hash(Buffer.alloc(0))],
@@ -520,10 +525,12 @@ it.each(["split-secret", "split-utf8", "multiline-pem"] as const)(
       .filter((row) => row.event === "stdout");
     expect(stdout).toHaveLength(chunks.length);
     for (const [index, row] of stdout.entries()) {
+      const chunk = chunks[index];
+      assert.ok(chunk);
       expect(row).not.toHaveProperty("bytes");
       expect(row).toMatchObject({
         outputProjection: "metadata-only",
-        capturedBytes: chunks[index].length,
+        capturedBytes: chunk.length,
       });
     }
     const publicOutput = gunzipSync(
@@ -592,7 +599,9 @@ it.each(["changed", "symlink", "hardlink", "directory", "oversized", "outside"] 
       fs.unlinkSync(file);
       if (mode === "changed") {
         const changed = Buffer.from(original);
-        changed[changed.length - 1] ^= 1;
+        const lastByte = changed.at(-1);
+        assert(lastByte !== undefined);
+        changed[changed.length - 1] = lastByte ^ 1;
         fs.writeFileSync(file, changed);
       }
       if (mode === "symlink") fs.symlinkSync(sibling, file);
