@@ -2187,6 +2187,7 @@ src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-authority.ts
 src/state/openclaw-agent-execution-cleanup.ts
+src/state/openclaw-agent-execution-cleanup.worker.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-native.ts
 src/state/openclaw-agent-execution-owner.ts

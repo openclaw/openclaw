@@ -45,6 +45,8 @@ it.skipIf(process.platform === "win32")(
     const log = path.join(tempDirs.make("openclaw-late-imports-"), "late-imports.jsonl");
     instance = await createOpenClawTestInstance({
       name: "late-imports",
+      // A full Gateway close needs more than the fixture's quick-stop default.
+      stopTimeoutMs: 30_000,
       env: {
         NODE_OPTIONS: `--import=${probe}`,
         OPENCLAW_TEST_LATE_IMPORT_LOG: log,
