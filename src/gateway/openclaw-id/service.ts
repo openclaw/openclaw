@@ -24,6 +24,7 @@ import type { ClawNameRequest } from "./claw-name-check.js";
 import type { OpenClawIdAccount, StoredClaw } from "./claw-store.js";
 import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
+import { createEndpointKeyPin } from "./endpoint-key-pin.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
 import { linkSummaryOf } from "./link-summary.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
@@ -125,7 +126,7 @@ export function createOpenClawIdService(params: {
   let lastPublish: PublishOutcome | undefined;
   // K_srv selected by linking or seen in a binding. Keep it when uncertain storage
   // withdraws authority, so a child restart cannot create another endpoint identity.
-  let lastBoundEndpointKey: string | undefined;
+  const endpointKeyPin = createEndpointKeyPin();
   const rebindPublication = createRebindPublication();
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
@@ -308,11 +309,7 @@ export function createOpenClawIdService(params: {
         settings,
         gatewayServer: params.getGatewayServer,
         membership: await (await getAuthority()).admittedPeerKeys(),
-        // Unavailable record (uncertain write): keep the last K_srv. Loaded unlinked: none.
-        boundEndpointKey: () =>
-          (lastBoundEndpointKey = authority?.current()
-            ? authority.current()?.binding?.body.k_srv
-            : lastBoundEndpointKey),
+        boundEndpointKey: () => endpointKeyPin.read(authority?.current()),
         log: params.log,
         onStatus: (tunnel) => {
           status = openClawIdTunnelStatus(tunnel);
@@ -777,8 +774,9 @@ export function createOpenClawIdService(params: {
       const { pub: kGw }: { pub: Ed25519PublicKey } = await gatewayKey.load();
       // A link write can persist and then lose both its acknowledgement and reconciliation.
       // Retain the running identity before awaiting settlement, not only after success.
-      lastBoundEndpointKey = kSrv;
-      const result = await (await getAuthority()).commitLink(input, channel, { kSrv, kGw, guard });
+      const owner = await getAuthority();
+      endpointKeyPin.retain(kSrv, owner.current()?.claw_id);
+      const result = await owner.commitLink(input, channel, { kSrv, kGw, guard });
       if (!result.ok) {
         return result;
       }
