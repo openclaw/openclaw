@@ -26,7 +26,6 @@ import {
 } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
-import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveDeferredLifecycleTerminal } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
@@ -555,13 +554,6 @@ export function createCronPromptExecutor(
                         resolveForwardedProfile(undefined),
                     )
                   : await resolveLiveProfile();
-                if (trigger === "cron" && !binding && authProfileId) {
-                  throw createUnrecordedScheduledAccountRefusal({
-                    runtime: executionProvider,
-                    modelRef: `${providerOverride}/${modelOverride}`,
-                    profileId: authProfileId,
-                  });
-                }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                     ? cliSessionBinding
@@ -590,7 +582,9 @@ export function createCronPromptExecutor(
                         inference.assertCurrent(providerOverride);
                       }
                     : undefined,
-                  nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
+                  // An unpinned run that selects no stored account keeps the CLI's native login.
+                  nativeAuthOnly:
+                    trigger === "cron" && !binding && !authProfileId ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: params.cliSessionBindingFacts,

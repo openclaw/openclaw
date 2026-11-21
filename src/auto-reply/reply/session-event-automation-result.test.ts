@@ -17,7 +17,6 @@ import {
 } from "../../agents/bash-tools.lifecycle.test-support.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { WorkspaceAccessUnavailableError } from "../../agents/workspace-access.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
@@ -31,6 +30,7 @@ import { readTranscriptEventMessage } from "../../config/sessions/session-access
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { resolveAdmittedCronCompletionStatus } from "../../cron/completion-status.js";
+import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "../../cron/inference-binding.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { memberSourceCase } from "../../cron/isolated-agent/run.invalid-source.test-support.js";
 import { resolveCronRunErrorReason } from "../../cron/run-error-reason.js";
@@ -608,7 +608,7 @@ it.for([
   },
 );
 
-it.for(["stored", "direct", "unrelated"] as const)(
+it.for(["retired", "unrelated"] as const)(
   "records %s failure without expanding private causes or chat text",
   async (source, { signal }) => {
     await withOpenClawTestState(
@@ -630,11 +630,12 @@ it.for(["stored", "direct", "unrelated"] as const)(
             ? new Error("Synthetic outer failure", {
                 cause: new Error("Synthetic private nested detail"),
               })
-            : createUnrecordedScheduledAccountRefusal({
-                runtime: "codex",
-                modelRef: "openai/gpt-5.5",
-                profileId: source === "stored" ? "openai:synthetic-account" : undefined,
-              });
+            : Object.assign(
+                new Error(
+                  "Automation account-refusal-job runs on account openai:synthetic-account, which was removed or signed out.",
+                ),
+                { code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE },
+              );
         model.mockReset().mockImplementation(async (params) => {
           await admitModelTurn(params);
           throw refusal;
@@ -664,16 +665,14 @@ it.for(["stored", "direct", "unrelated"] as const)(
           if (source !== "unrelated") {
             expect(outcome).toMatchObject({
               errorClassification: { kind: "permanent" },
-              failureNotificationDetail: { kind: "inference-account-unrecorded" },
+              failureNotificationDetail: { kind: "inference-account-retired" },
             });
-            expect(outcome.diagnostics?.summary).toContain(
-              "Automation has no recorded inference account",
-            );
+            expect(outcome.diagnostics?.summary).toContain("which was removed or signed out");
           }
           const transcript = JSON.stringify(
             (await loadTranscriptEvents({ ...scope, sessionId })).map(readTranscriptEventMessage),
           );
-          expect(transcript).not.toContain("no recorded inference account");
+          expect(transcript).not.toContain("openai:synthetic-account");
           expect(model).toHaveBeenCalledOnce();
         } finally {
           await drainGlobalSingletonLifecycleState("restart");

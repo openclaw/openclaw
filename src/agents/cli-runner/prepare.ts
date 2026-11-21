@@ -84,7 +84,6 @@ import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skill
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
-import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { resolveStableCliSkillAuthoring } from "../stable-skill-authoring.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
@@ -429,15 +428,11 @@ async function prepareCliRunContextWithinReadFence(
     backendAuthPolicy?.nativeAuthProfileIds !== undefined &&
     effectiveAuthProfileId !== undefined &&
     backendAuthPolicy.nativeAuthProfileIds.includes(effectiveAuthProfileId);
-  if (usesNativeAuthProfile) {
+  // A native-only scheduled run forwarded no stored account, so the backend's default or
+  // automatic profile does not replace the CLI's own login.
+  if (usesNativeAuthProfile || params.nativeAuthOnly) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
-  } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
-    throw createUnrecordedScheduledAccountRefusal({
-      runtime: backendResolved.id,
-      modelRef: `${params.modelProvider ?? params.provider}/${params.model ?? "default"}`,
-      profileId: effectiveAuthProfileId,
-    });
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&

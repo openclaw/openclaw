@@ -3,7 +3,6 @@ import {
   isFailoverError,
   readDirectErrorCode,
 } from "../agents/failover/error.js";
-import { isUnrecordedScheduledAccountRefusal } from "../agents/scheduled-unrecorded-account.js";
 import {
   CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
   isCronAccountRefusalBypassed,
@@ -33,12 +32,6 @@ function isRetiredAccountRefusal(error: unknown): boolean {
 export function resolveCronConfigurationRefusal(
   error: unknown,
 ): Required<Pick<CronRunOutcome, "errorClassification" | "failureNotificationDetail">> | undefined {
-  if (isUnrecordedScheduledAccountRefusal(error)) {
-    return {
-      errorClassification: { kind: "permanent" },
-      failureNotificationDetail: { kind: "inference-account-unrecorded" },
-    };
-  }
   return isRetiredAccountRefusal(error)
     ? {
         errorClassification: { kind: "permanent" },

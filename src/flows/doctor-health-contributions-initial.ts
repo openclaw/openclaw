@@ -617,11 +617,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:legacy-cron", "Legacy cron", {
-      healthCheckIds: [
-        "core/doctor/legacy-whatsapp-crontab",
-        "core/doctor/legacy-cron-store",
-        "core/doctor/cron-inference-accounts",
-      ],
+      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
