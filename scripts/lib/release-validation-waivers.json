@@ -1,4 +1,157 @@
 {
   "schema": "openclaw.release-validation-waivers/v1",
-  "waivers": []
+  "waivers": [
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-17 (bun)",
+      "reason": "Concurrent auth-removal refresh-warning assertion did not reproduce in the unchanged real-Gateway Bun replay; credential removal itself was recorded.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server-methods/models-auth-removal.integration.test.ts",
+            "test": "models.authLogout with a concurrent registered config set > publishes removal before returning when… :: AssertionError: {\"result\":{\"provider\":\"fixture\",\"removedProfiles\":[],\"abortedRunIds\":[],\"warning\":\"Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it. Model auth changes were saved, but the Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.\"}}: expected { result: { …(4) }, error: undefined } to not match object { result: { warning: Any<String> } }\n\nCompared values have no visual difference.\n\n❯ src/gateway/server-methods/models-auth-removal.integration.test.ts:183:58\n181|             });\n182|           } else {\n183|             expect(outcome, JSON.stringify(outcome)).not.toMatchObject…\n|                                                          ^\n184|               result: { warning: expect.any(String) },\n185|             });"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run QA Live Matrix catalog / Run Matrix live QA lane",
+      "reason": "Optional Matrix live action proof is blocked by the fixture account lacking room pin authority; no product permission change is warranted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "qa_live_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media audio plugins)",
+      "reason": "Optional live media proof is blocked by provider credit exhaustion and remote reference-image acceptance.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins A)",
+      "reason": "Optional Byteplus live media proof lacks usable test-account credentials.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins B)",
+      "reason": "Optional video-provider qualification is blocked by unavailable Veo model and missing Pixverse test credentials.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins C)",
+      "reason": "Optional Novita video-provider route is unavailable in the test account.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins D)",
+      "reason": "Optional video-provider proof lacks Together credentials and Vydra credits.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live Moonshot plugin)",
+      "reason": "Optional Moonshot web-search proof is blocked by test-account authentication.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live plugins L-N)",
+      "reason": "Optional Mistral live transcription and realtime proof is blocked by test-account authentication.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Accepted Kova performance threshold failures, including memory, for this beta. This grant does not authorize skipping required evidence or accepting correctness, isolation, integrity, or install/update failures.",
+      "aggregates": []
+    }
+  ]
 }
