@@ -77,7 +77,7 @@ class SkillsGatewayScopeTest {
     fun awaitSkills(name: String) {
       composeRule.waitUntil(timeoutMillis = 5_000) {
         val state = runtime.skillsState.value
-        val skill = state.summary?.skills?.singleOrNull()
+        val skill = state.summary?.singleOrNull()
         !state.refreshing && skill?.name == name
       }
       composeRule.waitForIdle()

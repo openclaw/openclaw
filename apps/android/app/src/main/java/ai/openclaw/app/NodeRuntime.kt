@@ -1256,8 +1256,8 @@ class NodeRuntime internal constructor(
   private val usageSummary = GatewaySummaryOwner<GatewayUsageSummary>()
   val usageState: StateFlow<GatewaySummaryState<GatewayUsageSummary>> = usageSummary.state
   private var usageIncompleteRetryJob: Job? = null
-  private val skillsSummary = GatewaySummaryOwner<GatewaySkillsSummary>()
-  val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
+  private val skillsSummary = GatewaySummaryOwner<List<GatewaySkillSummary>>()
+  val skillsState: StateFlow<GatewaySummaryState<List<GatewaySkillSummary>>> = skillsSummary.state
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
 
@@ -7221,15 +7221,13 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private suspend fun refreshSkillsFromGateway(): GatewaySkillsSummary? =
+  private suspend fun refreshSkillsFromGateway(): List<GatewaySkillSummary>? =
     refreshGatewaySummary(
       summary = skillsSummary,
       failureText = nativeText("Could not load skills."),
     ) { gatewayScope ->
       val root = requestGatewayObject(gatewayScope, "skills.status", "{}")
-      GatewaySkillsSummary(
-        skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
-      )
+      parseSkillSummaries(root?.get("skills") as? JsonArray)
     }
 
   private suspend fun setSkillEnabledOnGateway(
@@ -7491,7 +7489,7 @@ class NodeRuntime internal constructor(
     slug: String,
     version: String?,
   ): Boolean {
-    val skills = refreshSkillsFromGateway()?.skills ?: return false
+    val skills = refreshSkillsFromGateway() ?: return false
     if (!isGatewayDataScopeCurrent(gatewayScope)) return false
     // Only an install-only source installs without a version. Its reference is not a `@owner/slug`
     // spelling, so the slug comparison never matches it; the Gateway records the exact reference.
@@ -8528,39 +8526,6 @@ class NodeRuntime internal constructor(
         )
       }
 
-  private fun parseSkillSummaries(skills: JsonArray?): List<GatewaySkillSummary> =
-    skills
-      .mapObjects { obj ->
-        val name = obj.nonBlankString("name") ?: return@mapObjects null
-        val missing = obj["missing"].asObjectOrNull()
-        val clawHub = obj["clawhub"].asObjectOrNull()
-        GatewaySkillSummary(
-          skillKey = obj.nonBlankString("skillKey") ?: name,
-          name = name,
-          description = obj.nonBlankString("description"),
-          source = obj.nonBlankString("source") ?: "unknown",
-          emoji = obj.nonBlankString("emoji"),
-          disabled = obj.boolean("disabled"),
-          eligible = obj.boolean("eligible"),
-          blockedByAllowlist = obj.boolean("blockedByAllowlist"),
-          blockedByAgentFilter = obj.boolean("blockedByAgentFilter"),
-          bundled = obj.boolean("bundled"),
-          missingCount = skillMissingCount(missing),
-          installCount = (obj["install"] as? JsonArray)?.size ?: 0,
-          clawHubSlug =
-            clawHub.nonBlankString("slug"),
-          clawHubValid = clawHub?.boolean("valid") == true,
-          clawHubRequestedReference =
-            clawHub.nonBlankString("requestedReference"),
-          clawHubOwnerHandle =
-            clawHub.nonBlankString("ownerHandle"),
-          clawHubInstalledVersion =
-            clawHub.nonBlankString("installedVersion"),
-        )
-      }
-
-  private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
-
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
       .mapObjects { obj ->
@@ -8859,31 +8824,6 @@ data class GatewayUsageWindowSummary(
   val resetAtMs: Long?,
 )
 
-data class GatewaySkillsSummary(
-  val skills: List<GatewaySkillSummary>,
-)
-
-data class GatewaySkillSummary(
-  val skillKey: String,
-  val name: String,
-  val description: String?,
-  val source: String,
-  val emoji: String?,
-  val disabled: Boolean,
-  val eligible: Boolean,
-  val blockedByAllowlist: Boolean,
-  val blockedByAgentFilter: Boolean,
-  val bundled: Boolean,
-  val missingCount: Int,
-  val installCount: Int,
-  val clawHubSlug: String? = null,
-  val clawHubValid: Boolean = false,
-  /** Exact reference this skill was installed from; an install-only source keeps its identity. */
-  val clawHubRequestedReference: String? = null,
-  val clawHubOwnerHandle: String? = null,
-  val clawHubInstalledVersion: String? = null,
-)
-
 data class GatewayNodesDevicesSummary(
   val nodes: List<GatewayNodeSummary>,
   val pendingDevices: List<GatewayPendingDeviceSummary>,
@@ -9124,8 +9064,6 @@ internal fun sanitizeGatewayLogText(value: String): String =
     .replace(gatewayVisibleSgrPattern, "")
 
 private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
-
-private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
 
 private fun parseGatewayStringArray(items: JsonArray?): List<String> =
   items
