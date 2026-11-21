@@ -37,7 +37,7 @@ describe("trusted approval rewrite isolation", () => {
     resetGlobalHookRunner();
   });
 
-  function installTrustedApprovalPolicy(): void {
+  function installTrustedApprovalPolicy(claimedPluginId?: string): void {
     const registry = createEmptyPluginRegistry();
     registry.trustedToolPolicies = [
       {
@@ -48,7 +48,7 @@ describe("trusted approval rewrite isolation", () => {
           description: "Approval policy",
           evaluate: () => ({
             requireApproval: {
-              pluginId: "trusted-policy",
+              ...(claimedPluginId ? { pluginId: claimedPluginId } : {}),
               title: "Policy approval",
               description: "Policy requested approval",
             },
@@ -59,10 +59,13 @@ describe("trusted approval rewrite isolation", () => {
     setActivePluginRegistry(registry);
   }
 
-  it.each(["allow-once", "deny"] as const)(
-    "keeps an ordinary hook rewrite pending until its separate approval: %s",
-    async (decision) => {
-      installTrustedApprovalPolicy();
+  it.each([
+    { decision: "allow-once", claimedPluginId: undefined },
+    { decision: "deny", claimedPluginId: "another-plugin" },
+  ] as const)(
+    "binds approval to its registration and isolates hook rewrite: $decision",
+    async ({ decision, claimedPluginId }) => {
+      installTrustedApprovalPolicy(claimedPluginId);
       const hookResult = {
         params: { code: "return 'separately-approved';" },
         requireApproval: {
@@ -93,6 +96,7 @@ describe("trusted approval rewrite isolation", () => {
       try {
         const trustedRequest = await trustedRequestEvent.promise;
         expect(trustedRequest.request.title).toBe("Policy approval");
+        expect(trustedRequest.request.pluginId).toBe("trusted-policy");
         expect(runBeforeToolCallMock).not.toHaveBeenCalled();
         onRequest = rewriteRequestEvent.resolve;
         expect(broker.resolve(trustedRequest.id, "allow-once")).toBe(true);

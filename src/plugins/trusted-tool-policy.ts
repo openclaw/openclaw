@@ -331,7 +331,8 @@ export async function runTrustedToolPolicies(
         );
       }
       if ("requireApproval" in decision && decision.requireApproval && !approval) {
-        approval = decision.requireApproval;
+        // Approval ownership comes from the validated registration, not policy output.
+        approval = { ...decision.requireApproval, pluginId };
       }
     } catch {
       ctx.abortSignal?.throwIfAborted();
