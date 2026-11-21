@@ -9,6 +9,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+private val wearTextContentTypes =
+  setOf<JsonElement>(JsonPrimitive("text"), JsonPrimitive("input_text"), JsonPrimitive("output_text"))
+
+internal fun isWearTextContentType(type: JsonElement?): Boolean = type == null || type in wearTextContentTypes
+
 internal fun wearReplyText(source: JsonObject): String =
   when (val content = source["content"]) {
     is JsonPrimitive -> content.contentOrNull.orEmpty()
@@ -23,7 +28,7 @@ private fun JsonElement.replyPartText(includeNonText: Boolean): String? =
     }
 
     is JsonObject -> {
-      if (includeNonText || this["type"] == null || this["type"] == JsonPrimitive("text")) {
+      if (includeNonText || isWearTextContentType(this["type"])) {
         (this["text"] as? JsonPrimitive)?.contentOrNull
       } else {
         null

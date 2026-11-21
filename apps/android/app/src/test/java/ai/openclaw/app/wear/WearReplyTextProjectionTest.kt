@@ -27,6 +27,7 @@ class WearReplyTextProjectionTest {
     id: String = "canonical",
     truncated: Boolean? = false,
     synthetic: Boolean = false,
+    contentType: String = "text",
   ) = buildJsonObject {
     put("ok", true)
     put(
@@ -47,7 +48,7 @@ class WearReplyTextProjectionTest {
           buildJsonArray {
             add(
               buildJsonObject {
-                put("type", "text")
+                put("type", contentType)
                 put("text", text)
               },
             )
@@ -61,6 +62,95 @@ class WearReplyTextProjectionTest {
         )
       },
     )
+  }
+
+  @Test
+  fun historyAndLiveEventsPreserveResponsesTextWithoutToolPayloads() {
+    runTest {
+      for (contentType in listOf("output_text", "input_text", "text")) {
+        val source = reply("Visible response", contentType = contentType)
+        val controller =
+          WearProxyController(
+            requestGateway = { method, _ ->
+              assertEquals("chat.history", method)
+              buildJsonObject {
+                put("messages", buildJsonArray { add(source.getValue("message")) })
+              }
+            },
+            isGatewayConnected = { true },
+            gatewayStatusText = { "Connected" },
+          )
+        val request =
+          WearMessage.Request(
+            requestId = "history",
+            method = WearRpcMethod.ChatHistory,
+            params = buildJsonObject { put("sessionKey", "global") },
+          )
+        val response = controller.handle(request, "watch")
+        assertTrue(response.ok)
+        WearProtocolCodec.encode(response)
+        val result = checkNotNull(response.result).jsonObject
+        val messages = result.getValue("messages").jsonArray
+        val preview = messages.single().jsonObject
+        val content = preview.getValue("content").jsonArray
+        assertEquals(listOf(JsonPrimitive("Visible response")), content.map { it.jsonObject["text"] })
+        assertEquals(JsonPrimitive(false), preview["textTruncated"])
+
+        val projector = WearChatStreamProjector()
+        val event =
+          projector.project(
+            buildJsonObject {
+              put("sessionKey", "global")
+              put("runId", "run")
+              put("state", "delta")
+              put("message", source.getValue("message"))
+            },
+          )
+        assertEquals(JsonPrimitive("Visible response"), checkNotNull(event)["streamText"])
+        val eventMessage = event.getValue("message").jsonObject
+        val eventContent = eventMessage.getValue("content").jsonArray
+        assertEquals(listOf(JsonPrimitive("Visible response")), eventContent.map { it.jsonObject["text"] })
+      }
+    }
+  }
+
+  @Test
+  fun fullReplyRequestsPreserveResponsesTextWithoutToolPayloads() {
+    runTest {
+      for (contentType in listOf("output_text", "input_text", "text")) {
+        val source = reply("Visible response", contentType = contentType)
+        val controller =
+          WearProxyController(
+            requestGateway = { _, _ -> error("Full replies use the captured reply reader") },
+            isGatewayConnected = { true },
+            gatewayStatusText = { "Connected" },
+            readChatReply = { session, agent, entry, offset, revision ->
+              assertEquals("global", session)
+              assertEquals("fixture-agent", agent)
+              projectWearFullReply(source, entry, "$agent:$session", offset, revision)
+            },
+          )
+        val request =
+          WearMessage.Request(
+            requestId = "full-reply",
+            method = WearRpcMethod.ReplyText,
+            params =
+              buildJsonObject {
+                put("source", "chat")
+                put("sessionKey", "global")
+                put("agentId", "fixture-agent")
+                put("entryId", "canonical")
+                put("offset", 0)
+              },
+          )
+        val response = controller.handle(request, "watch")
+        assertTrue(response.ok)
+        WearProtocolCodec.encode(response)
+        val page = WearReplyText.decode(checkNotNull(response.result))
+        assertEquals(WearReplyTextStatus.Ready, page.status)
+        assertEquals("Visible response", page.text)
+      }
+    }
   }
 
   @Test fun historyAndFullTextUseCanonicalIdentityAndWirePages() =
