@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { readTranscriptExportSnapshotReadOnlySync } from "../src/config/sessions/session-accessor.sqlite-export-read.js";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -20,6 +21,7 @@ import {
   restartProviderServer,
   restartToolNames,
   writeRestartJsonText,
+  writeRestartPlugin,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
@@ -33,6 +35,7 @@ it
     "nested",
     "captured",
     "announcing",
+    "preparing-announcing",
     "announcing-crash",
     "private-announcing",
     "private-announcing-crash",
@@ -45,6 +48,7 @@ it
   { timeout: 180_000 },
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
+    const preparingAnnounce = kind === "preparing-announcing";
     const privateContinuation = kind.startsWith("private-announcing");
     const busyRequester = kind === "busy-requester";
     const retryingRequester = kind === "retrying-requester";
@@ -64,6 +68,7 @@ it
     let finishCaptured: (() => void) | undefined;
     let finishChild: (() => void) | undefined;
     let announcing = false;
+    let releasePreparation: (() => void) | undefined;
     let completedReplies = 0;
     let rootReceivedRecovery = false;
     let rootReceivedChildError = false;
@@ -74,7 +79,16 @@ it
       createListener: () =>
         restartProviderServer(
           failed,
-          async (_request, response, body) => {
+          async (request, response, body) => {
+            if (request.url === "/hold-completion-preparation") {
+              if (restarted) {
+                response.end("{}");
+              } else {
+                announcing = true;
+                releasePreparation = () => response.end("{}");
+              }
+              return;
+            }
             const input = Array.isArray(body.input) ? body.input : [];
             const text = JSON.stringify(input);
             const tools = restartToolNames(body);
@@ -105,6 +119,22 @@ it
             if (text.includes("CUSTODY_ROOT_TASK")) {
               rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
               rootReceivedChildError ||= text.includes("Gateway stopped");
+              const latestUserInput = input.findLast(
+                (item) =>
+                  isRecord(item) &&
+                  item.role === "user" &&
+                  !JSON.stringify(item).includes("OpenClaw runtime context:"),
+              );
+              if (
+                preparingAnnounce &&
+                JSON.stringify(latestUserInput).includes(
+                  "The Gateway restarted while you were working.",
+                )
+              ) {
+                // Recovery can show pending-result context before the separate completion arrives.
+                reply("HUB_RESUMED_WAITING_FOR_COMPLETION");
+                return;
+              }
               const receipts = input.flatMap((item) =>
                 isRecord(item) && item.type === "function_call_output"
                   ? findSubagentRecords(
@@ -243,8 +273,40 @@ it
         ...base,
         tools: { ...base.tools, allow: ["sessions_send", "sessions_spawn", "sessions_yield"] },
       },
-      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_GATEWAY_RESTART_TRACE: "1" },
     });
+    if (preparingAnnounce) {
+      const pluginDir = instance.state.path("held-completion-preparation");
+      await writeRestartPlugin(
+        pluginDir,
+        {
+          id: "held-completion-preparation",
+          activation: { onStartup: true },
+          configSchema: { type: "object", properties: {} },
+        },
+        `export default { id: "held-completion-preparation", register(api) {
+        api.on("before_model_resolve", async (event, ctx) => {
+          if (ctx.sessionKey === ${JSON.stringify(rootKey)} && event.prompt.includes("CAPTURED_CUSTODY_RESULT"))
+            await fetch(${JSON.stringify(`http://127.0.0.1:${reservation.claim.port}/hold-completion-preparation`)}, { method: "POST", body: "{}" });
+        });
+      } };`,
+      );
+      await instance.state.writeConfig({
+        ...asRecord(JSON.parse(await readFile(instance.configPath, "utf8"))),
+        plugins: {
+          enabled: true,
+          load: { paths: [pluginDir] },
+          allow: ["held-completion-preparation", "openai"],
+          slots: { memory: "none" },
+          entries: {
+            "held-completion-preparation": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      });
+    }
     vi.stubEnv("OPENCLAW_STATE_DIR", instance.stateDir);
     onTestFinished(() => {
       vi.unstubAllEnvs();
@@ -435,7 +497,7 @@ it
                 delivery: {
                   status: "pending",
                   requesterDelivery: {
-                    state: "consumed",
+                    state: preparingAnnounce ? "waiting" : "consumed",
                     runId: expect.any(String),
                   },
                 },
@@ -456,7 +518,18 @@ it
         if (kind.endsWith("-crash") || retryingRequester) {
           await instance.crashGateway();
         } else {
-          await instance.stopGateway();
+          const stopping = instance.stopGateway();
+          if (preparingAnnounce) {
+            await vi.waitFor(
+              () => expect(instance.logs()).toContain("restart.close.session-abort "),
+              {
+                timeout: 15_000,
+              },
+            );
+            assert(releasePreparation);
+            releasePreparation();
+          }
+          await stopping;
         }
         await client.stopAndWait();
         client = undefined;
@@ -471,7 +544,11 @@ it
                 : "pending",
           },
         });
-        if (interruptAnnounce) {
+        if (preparingAnnounce) {
+          expect(readCapturedInputs()).toHaveLength(0);
+          expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
+        }
+        if (interruptAnnounce && !preparingAnnounce) {
           expect(readRun(capturedRunId)).toMatchObject({
             delivery: { requesterDelivery: { state: "consumed" } },
           });
@@ -536,7 +613,9 @@ it
             expect(readCapturedInputs()).toHaveLength(1);
             if (interruptAnnounce) {
               expect(completedReplies).toBe(1);
-              expect(rootReceivedRecovery).toBe(true);
+              if (!preparingAnnounce) {
+                expect(rootReceivedRecovery).toBe(true);
+              }
             }
           },
           { timeout: 30_000 },
@@ -571,6 +650,7 @@ it
         }
       },
       async () => {
+        releasePreparation?.();
         await client?.stopAndWait();
       },
       instance.cleanup,
