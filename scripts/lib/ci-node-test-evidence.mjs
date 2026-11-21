@@ -93,6 +93,7 @@ function completeInvocations(rows) {
         text === "" ||
         /^\[test\] inner parallelism [1-9]\d*$/u.test(text) ||
         /^\[test\] preflight test\/vitest\/vitest\.[\w.-]+\.ts$/u.test(text) ||
+        /^\[test\] preparing (?:runtime|private-qa) runtime before Vitest workers$/u.test(text) ||
         /^\[test\] running \d+ (?:Vitest shards|exact-target plans) with parallelism \d+(?: and joined exclusive barriers)?$/u.test(
           text,
         ) ||
@@ -227,7 +228,8 @@ export function parseNodeFailureReport(log, requireComplete) {
         continue;
       }
       failureHeaders++;
-      const failure = /^FAIL\s+(?:\S+\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
+      const failure =
+        /^FAIL\s+(?:\S+(?:\s+\([^()\r\n]+\))?\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
       const message = lines[index + 1];
       if (
         !failure ||
