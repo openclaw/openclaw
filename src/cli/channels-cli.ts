@@ -228,6 +228,12 @@ export async function registerChannelsCli(
     .option("--probe", "Check channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms")
     .option("--json", "Output JSON", false)
+    .option(
+      "--fail-on-unhealthy",
+      "Exit non-zero when a selected channel account is unhealthy (terminal disconnects included)",
+      false,
+    )
+    .option("--exit-code", "Alias for --fail-on-unhealthy", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsStatusCommand } = await import("../commands/channels/status.js");

@@ -1,4 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../../cli/daemon-cli/restart-health.constants.js";
@@ -13,7 +14,7 @@ import { withProgress } from "../../cli/progress.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { waitForGatewayDiagnostic } from "../gateway-diagnostic-readiness.js";
 
@@ -22,6 +23,10 @@ export type ChannelsStatusOptions = {
   json?: boolean;
   probe?: boolean;
   timeout?: string;
+  /** Exit non-zero when a selected account is unhealthy (see status-unhealthy.ts). */
+  failOnUnhealthy?: boolean;
+  /** Alias for failOnUnhealthy. */
+  exitCode?: boolean;
 };
 
 function redactGatewayUrlSecretsInText(text: string): string {
@@ -82,15 +87,38 @@ export async function channelsStatusCommand(
       },
     );
     signal?.throwIfAborted();
+    const failOnUnhealthy = opts.failOnUnhealthy === true || opts.exitCode === true;
+    // Load the health evaluator only when the opt-in flag is set, keeping the
+    // plain status path cold (see channels-status-cold-imports).
+    const unhealthyHelpers = failOnUnhealthy ? await import("./status-unhealthy.js") : null;
+    const unhealthyAccounts = unhealthyHelpers?.collectUnhealthyChannelAccounts(payload) ?? [];
     if (opts.json) {
-      writeRuntimeJson(runtime, payload);
-      return;
+      if (failOnUnhealthy) {
+        const output = isRecord(payload) ? { ...payload, unhealthyAccounts } : payload;
+        writeRuntimeJson(runtime, output);
+      } else {
+        writeRuntimeJson(runtime, payload);
+      }
+    } else {
+      const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
+      signal?.throwIfAborted();
+      runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
     }
-    const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
-    signal?.throwIfAborted();
-    runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
+    if (unhealthyAccounts.length > 0) {
+      // The reason goes to stderr in both modes: the JSON payload carries the
+      // same detail, but the exit code alone does not say which account failed.
+      for (const account of unhealthyAccounts) {
+        runtime.error(unhealthyHelpers!.formatUnhealthyChannelAccount(account));
+      }
+      runtime.exit(1);
+    }
   } catch (err) {
     signal?.throwIfAborted();
+    // The unhealthy exit is a result, not a failure of the command: it must
+    // not be rewritten as a diagnostic.
+    if (err instanceof ExitError) {
+      throw err;
+    }
     if (isGatewayProtocolResponseError(err)) {
       throw err;
     }
