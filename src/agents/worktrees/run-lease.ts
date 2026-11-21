@@ -167,7 +167,7 @@ export async function resolveWorktreeForPath(params: {
     return undefined;
   }
   // Paths are canonical at creation/migration; keep registry order for overlapping roots.
-  const bases = new Map(records.map((record, index) => [record.path, index] as const).reverse());
+  const bases = new Map(records.map((record, index) => [record.path, index] as const).toReversed());
   for (const candidate of new Set(params.candidatePaths)) {
     if (!candidate) {
       continue;
