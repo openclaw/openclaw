@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { bindUiPreferences, loadSettings, patchSettings } from "../../app/settings.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
@@ -13,6 +13,7 @@ import * as presentation from "./chat-inline-command-presentation.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { subscribeChatPaneSettings } from "./chat-pane-startup-subscriptions.ts";
 import { createPageState } from "./chat-state-page.ts";
+import * as snapshots from "./session-snapshot-store.ts";
 
 const loadPresentation = presentation.inlineCommandPresentation;
 beforeEach(() => {
@@ -114,7 +115,7 @@ it("publishes load failure through the rendered error owner and preserves newer 
   expect(panes[1]!.lastError).toBe("Newer operation failed");
 });
 
-function savedInlinePane() {
+function savedInlinePane(enabled = true) {
   const row = {
     key: "agent:main:inline-readiness",
     sessionId: "inline-readiness",
@@ -132,13 +133,98 @@ function savedInlinePane() {
   );
   patchSettings({
     gatewayUrl: mounted.context.gateway.connection.gatewayUrl,
-    chatInlineCommands: true,
+    chatInlineCommands: enabled,
   });
   const request = vi.spyOn(mounted.context.gateway.snapshot.client!, "request");
   return { pane: mounted.mount(row.key), request };
 }
 
-it("withholds saved-enabled startup subscriptions until the real renderer is ready", async () => {
+function pendingSnapshot() {
+  const held = createDeferred();
+  vi.spyOn(snapshots, "waitForPrewarmedChatSnapshot").mockReturnValue(held.promise);
+  onTestFinished(() => held.resolve());
+  return held;
+}
+
+it.each(["snapshot", "presentation"])(
+  "prepares saved-enabled startup concurrently and waits for both (%s first)",
+  async (first) => {
+    const snapshot = pendingSnapshot();
+    const held = createDeferred();
+    const prepared = held.promise.then(loadPresentation);
+    const loading = vi.spyOn(presentation, "inlineCommandPresentation").mockReturnValue(prepared);
+    onTestFinished(() => held.resolve());
+    const { pane, request } = savedInlinePane();
+    await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
+    if (first === "snapshot") {
+      snapshot.resolve();
+      await snapshot.promise;
+    } else {
+      held.resolve();
+      await prepared;
+    }
+    await vi.dynamicImportSettled();
+    flush();
+    expect(pane.state).toBeUndefined();
+    expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
+      false,
+    );
+    snapshot.resolve();
+    held.resolve();
+    await waitForSolid(() => {
+      expect(pane.querySelector("textarea")).not.toBeNull();
+      expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
+    });
+  },
+);
+
+it("does not let an early presentation failure bypass snapshot readiness", async () => {
+  const snapshot = pendingSnapshot();
+  const held = createDeferred();
+  const loading = vi
+    .spyOn(presentation, "inlineCommandPresentation")
+    .mockReturnValue(held.promise.then(loadPresentation));
+  onTestFinished(() => held.resolve());
+  const { pane, request } = savedInlinePane();
+  await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
+  held.reject(new Error("Synthetic early presentation failure"));
+  await vi.dynamicImportSettled();
+  flush();
+  expect(pane.state).toBeUndefined();
+  expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
+    false,
+  );
+  snapshot.resolve();
+  await waitForSolid(() => {
+    expect(pane.querySelector(".chat-error")?.textContent).toContain(
+      "Grouped commands remain available",
+    );
+    expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).not.toBe(true);
+  });
+});
+
+it("does not wait for or report a disabled presentation during startup", async () => {
+  const snapshot = pendingSnapshot();
+  const held = createDeferred();
+  const loading = vi
+    .spyOn(presentation, "inlineCommandPresentation")
+    .mockReturnValue(held.promise.then(loadPresentation));
+  onTestFinished(() => held.resolve());
+  const { pane } = savedInlinePane();
+  await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
+  patchSettings({ chatInlineCommands: false });
+  snapshot.resolve();
+  await waitForSolid(() => expect(pane.querySelector("textarea")).not.toBeNull());
+  held.reject(new Error("Disabled presentation failed"));
+  await vi.dynamicImportSettled();
+  flush();
+  expect(pane.querySelector(".chat-error")).toBeNull();
+  expect(pane.state.settings.chatInlineCommands).not.toBe(true);
+  expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).not.toBe(true);
+});
+
+it("prepares a presentation enabled while its startup snapshot is pending", async () => {
+  const snapshot = pendingSnapshot();
   const held = createDeferred();
   const loading = vi
     .spyOn(presentation, "inlineCommandPresentation")
@@ -147,7 +233,11 @@ it("withholds saved-enabled startup subscriptions until the real renderer is rea
       return loadPresentation();
     });
   onTestFinished(() => held.resolve());
-  const { pane, request } = savedInlinePane();
+  const { pane, request } = savedInlinePane(false);
+  await vi.waitFor(() => expect(snapshots.waitForPrewarmedChatSnapshot).toHaveBeenCalled());
+  expect(loading).not.toHaveBeenCalled();
+  patchSettings({ chatInlineCommands: true });
+  snapshot.resolve();
   await vi.waitFor(() => expect(loading).toHaveBeenCalled());
   expect(pane.state).toBeUndefined();
   expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
@@ -158,6 +248,26 @@ it("withholds saved-enabled startup subscriptions until the real renderer is rea
     expect(pane.querySelector("textarea")).not.toBeNull();
     expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
   });
+});
+
+it("does not start a pane retired while startup preparation is pending", async () => {
+  const snapshot = pendingSnapshot();
+  const held = createDeferred();
+  const prepared = held.promise.then(loadPresentation);
+  const loading = vi.spyOn(presentation, "inlineCommandPresentation").mockReturnValue(prepared);
+  onTestFinished(() => held.resolve());
+  const { pane, request } = savedInlinePane();
+  await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
+  pane.disconnectedCallback();
+  snapshot.resolve();
+  held.resolve();
+  await prepared;
+  await vi.dynamicImportSettled();
+  flush();
+  expect(pane.state).toBeUndefined();
+  expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
+    false,
+  );
 });
 
 it.each([false, true])(
