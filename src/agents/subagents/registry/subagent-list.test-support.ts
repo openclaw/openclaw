@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   buildSubagentList,
@@ -36,4 +37,13 @@ export async function buildSubagentListForTests(params: {
     sessionEntries: await readSubagentListSessionEntries(params.cfg, context),
     taskMaxChars: params.taskMaxChars,
   });
+}
+
+/**
+ * The directory exactly as the shared-cwd advisory reports it. The advisory keeps the last 72
+ * characters behind a `...` marker, which a long temp root (nested runner directories) reaches.
+ */
+export function expectedSharedCwdPath(dir: string) {
+  const resolved = path.resolve(dir);
+  return resolved.length <= 72 ? resolved : `...${resolved.slice(-69)}`;
 }

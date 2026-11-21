@@ -1,0 +1,4 @@
+# Coverage for the subagent shared working-directory advisory: grouping, canonicalization,
+# display capping, spawn-policy-inherited roots, and bounded summaries under swarm load.
+# Exact net growth for PR #197123.
+866
