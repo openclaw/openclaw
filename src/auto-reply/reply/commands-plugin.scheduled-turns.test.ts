@@ -460,6 +460,35 @@ describe("native scheduled command execution", () => {
       expect(fixture.scheduledResults).toHaveLength(1);
     });
   });
+  it.each(["disabled", "removed"] as const)(
+    "ends a schedule at its first refusal once an in-process reload leaves the plugin %s",
+    async (change) => {
+      await withCommandPlugin(async (fixture) => {
+        const id = await createContinuation(fixture);
+        const plugins = expectDefined(fixture.cfg.plugins, "plugin config");
+        if (change === "disabled") {
+          plugins.entries = { [pluginId]: { enabled: false } };
+        } else {
+          plugins.load = { paths: [] };
+          plugins.entries = {};
+        }
+        await fixture.reloadPlugin();
+        fixture.handler.mockClear();
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("plugin was disabled or removed"),
+          errorClassification: { kind: "permanent" },
+          executionStarted: false,
+        });
+        expect(fixture.handler).not.toHaveBeenCalled();
+        const [retired] = await fixture.readJobs();
+        expect(retired).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
+        expect(retired?.state.autoDisabled).toBeUndefined();
+        await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
+      });
+    },
+  );
   it("routes scheduled child requests through the real native tool veto", async () => {
     await withCommandPlugin(async (fixture) => {
       const id = await createContinuation(fixture);

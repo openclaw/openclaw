@@ -256,4 +256,31 @@ describe("scheduled plugin command loaded-owner checks", () => {
       "original loaded plugin",
     );
   });
+
+  const unloaded: [string, (fixture: Fixture) => unknown, string][] = [
+    ["absent from", ({ registry }) => (registry.plugins = []), "disabled or removed"],
+    [
+      "disabled without its instance in",
+      async ({ plugin, instance }) => {
+        await instance.dispose();
+        plugin.enabled = false;
+      },
+      "disabled or removed",
+    ],
+    [
+      "absent from a retired version of",
+      ({ registry }) => {
+        registry.plugins = [];
+        markPluginRegistryRetired(registry);
+      },
+      "original loaded plugin",
+    ],
+  ];
+  it.each(unloaded)("refuses a plugin %s the actual registry", async (_change, mutate, error) => {
+    const fixture = registeredSchedule();
+    await mutate(fixture);
+    expect(() => assertPluginCommandScheduleRegistry(fixture.registry, fixture.schedule)).toThrow(
+      error,
+    );
+  });
 });
