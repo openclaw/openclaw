@@ -1,0 +1,4 @@
+# The real bundled-skill regression verifies explicit invocation remains available
+# while the opt-in Labs skill stays out of the normal model prompt.
+# Existing synthetic policy tests do not protect this shipped skill's frontmatter.
+24
