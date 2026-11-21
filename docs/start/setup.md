@@ -64,7 +64,13 @@ pnpm openclaw setup --baseline
 
 ## Run the Gateway from this repo
 
-After `pnpm build`, you can run the packaged CLI directly:
+Run `pnpm install` and `pnpm build` from the checkout root. The full build
+stages bundled plugin manifests and assets. Running `scripts/tsdown-build.mts`
+directly can leave a partial `dist/extensions` tree that causes
+`plugins.entries` validation errors at startup. If you ran that script
+directly, finish with `pnpm build` before starting the Gateway.
+
+Start the Gateway after the build finishes.
 
 ```bash
 node openclaw.mjs gateway --port 18789 --verbose
