@@ -1222,8 +1222,8 @@ pending and no update run is unfinished. A newer run whose backup of a database 
 damaged or missing stands in for nothing, and moved-aside `.migrated-<runId>` files never
 stand in for an older backup (their receipt records no checksum). Backups taken by one
 Doctor run are kept or deleted together. So every database with an intact backup and no
-verified update after it keeps at least one intact backup. No backup is deleted while
-the live database it belongs to is missing.
+verified update after it keeps at least one intact backup. No Doctor backup or
+moved-aside copy is deleted while the live database it belongs to is missing.
 
 Cleanup never deletes:
 

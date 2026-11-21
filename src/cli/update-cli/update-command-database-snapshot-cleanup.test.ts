@@ -293,6 +293,8 @@ it("drops a snapshot's PostgreSQL server captures before removing it and keeps i
     const exported = path.join(snapshot, "payload", "workboard.sqlite.postgres");
     fs.mkdirSync(exported);
     fs.writeFileSync(path.join(exported, "manifest.json"), "{}");
+    // A mirrored source directory of that name holds no manifest and is not an export.
+    fs.mkdirSync(path.join(snapshot, "payload", "state.postgres"));
     const discard = vi.spyOn(snapshotBackup, "discardPostgresSchemaCaptures");
     discard.mockImplementationOnce(async () => {
       expect(fs.existsSync(path.join(exported, "manifest.json"))).toBe(true);
@@ -306,5 +308,13 @@ it("drops a snapshot's PostgreSQL server captures before removing it and keeps i
     expect(fs.existsSync(snapshots.supersededPackage!)).toBe(false);
     discard.mockResolvedValueOnce();
     expect((await runCleanup({ yes: true })).snapshots[snapshot]?.outcome).toBe("removed");
+  });
+});
+
+it("automatic cleanup never releases the triggering update's own snapshot", async () => {
+  await withSnapshotHistory(async (snapshots, runs) => {
+    // A clock set back makes an earlier verified run look like this run's successor.
+    await cleanupCompletedUpdateRecovery(runs.supersededPackage!, process.env, () => {});
+    expect(fs.existsSync(snapshots.supersededPackage!)).toBe(true);
   });
 });

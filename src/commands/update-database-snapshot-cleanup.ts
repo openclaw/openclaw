@@ -166,11 +166,14 @@ export async function discardDatabaseSnapshotServerCaptures(
       if (!entry.isDirectory()) {
         continue;
       }
-      // A PostgreSQL store's export sits beside its anchor image as `<image>.postgres`.
-      if (entry.name.endsWith(".postgres")) {
-        exports.push(path.join(current, entry.name));
+      // A PostgreSQL store's export sits beside its anchor image as `<image>.postgres` and
+      // holds a manifest. Without one it is a mirrored source directory of that name, or an
+      // export whose captures an interrupted removal already dropped.
+      const child = path.join(current, entry.name);
+      if (entry.name.endsWith(".postgres") && fs.existsSync(path.join(child, "manifest.json"))) {
+        exports.push(child);
       } else {
-        visit(path.join(current, entry.name));
+        visit(child);
       }
     }
   };
