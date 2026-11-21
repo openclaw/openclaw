@@ -8,3 +8,20 @@ export function normalizeIMessageMessageId(value: string | null | undefined): st
   const id = value?.trim();
   return id && id !== "ok" && id !== "unknown" ? id : undefined;
 }
+
+export function resolveIMessageSendResultId(
+  result: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!result) {
+    return null;
+  }
+  const raw =
+    (typeof result.messageGuid === "string" && result.messageGuid.trim()) ||
+    (typeof result.messageId === "string" && result.messageId.trim()) ||
+    (typeof result.message_id === "string" && result.message_id.trim()) ||
+    (typeof result.id === "string" && result.id.trim()) ||
+    (typeof result.guid === "string" && result.guid.trim()) ||
+    (typeof result.message_id === "number" ? String(result.message_id) : null) ||
+    (typeof result.id === "number" ? String(result.id) : null);
+  return raw ? raw.trim() : null;
+}

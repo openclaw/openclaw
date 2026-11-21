@@ -100,6 +100,91 @@ function remember(
 }
 
 describe("iMessage provider resource binding", () => {
+  it.each(["final", "tool"] as const)(
+    "drops only proven nonexistent implicit %s reply anchors before native dispatch",
+    async (entrypoint) => {
+      const { sendMessageIMessage } = await import("./send.js");
+      const client = new IMessageRpcClient({ dbPath });
+      const request = vi.spyOn(client, "request").mockResolvedValue({ guid: "sent-guid" });
+      const config = { channels: { imessage: { cliPath, dbPath } } };
+      const { imessagePlugin } = await import("./channel.js");
+      const send = (replyToId: string, replyToIdSource?: "implicit" | "explicit") => {
+        const route =
+          entrypoint === "final"
+            ? imessagePlugin.threading!.resolveReplyTransport!({
+                cfg: config,
+                replyToId,
+                currentMessageId: replyToId,
+                replyToIsExplicit: replyToIdSource !== "implicit",
+              })
+            : { replyToId, replyToIdSource };
+        const sender =
+          entrypoint === "final"
+            ? imessagePlugin.outbound!.sendText!
+            : imessagePlugin.message!.send!.text!;
+        return sender({
+          cfg: config,
+          to: "chat_id:1",
+          text: "synthetic announcement",
+          replyToId: route?.replyToId ?? undefined,
+          replyToIdSource: route?.replyToIdSource,
+          deps: {
+            imessage: (to: string, text: string, opts: Parameters<typeof sendMessageIMessage>[2]) =>
+              sendMessageIMessage(to, text, { ...opts, client }),
+          },
+        });
+      };
+      const eventId = "51c9568a-f631-4b6f-a64d-c9a190b9f8fb";
+      const result = await send(eventId, "implicit");
+      expect(request).toHaveBeenCalledWith(
+        "send",
+        expect.not.objectContaining({ reply_to: expect.anything() }),
+        expect.anything(),
+      );
+      expect(result.receipt?.replyToId).toBeUndefined();
+      request.mockClear();
+      await expect(send(eventId, "explicit")).rejects.toThrow("does not belong");
+      await expect(send(eventId)).rejects.toThrow("does not belong");
+      await expect(send("other-message-guid", "implicit")).rejects.toThrow("does not belong");
+      expect(request).not.toHaveBeenCalled();
+      const nativeId = "A6317CD4-ECDB-4C9D-983B-C3330BF95FD5";
+      const db = new DatabaseSync(dbPath);
+      db.prepare(
+        "INSERT INTO message(ROWID, guid) VALUES (20, ?), (21, 'orphan-guid'), (22, 'dangling-guid')",
+      ).run(nativeId);
+      db.exec("INSERT INTO chat_message_join(chat_id, message_id) VALUES (1, 20), (99, 22)");
+      db.close();
+      await expect(send("orphan-guid", "implicit")).rejects.toThrow("does not belong");
+      expect(await check({ chatId: 99 }, "dangling-guid")).toBe("mismatch");
+      await send(nativeId, "implicit");
+      expect(request).toHaveBeenLastCalledWith(
+        "send",
+        expect.objectContaining({ reply_to: nativeId }),
+        expect.anything(),
+      );
+      await send(nativeId, "explicit");
+      expect(request).toHaveBeenLastCalledWith(
+        "send",
+        expect.objectContaining({ reply_to: nativeId }),
+        expect.anything(),
+      );
+      await send("message-guid", "implicit");
+      expect(request).toHaveBeenLastCalledWith(
+        "send",
+        expect.objectContaining({ reply_to: "message-guid" }),
+        expect.anything(),
+      );
+      await remember("cross-account-guid", { accountId: "other", chatId: 1 });
+      await expect(send("cross-account-guid", "implicit")).rejects.toThrow(
+        "different account or conversation",
+      );
+      fs.renameSync(dbPath, `${dbPath}.unavailable`);
+      await expect(send(eventId, "implicit")).rejects.toThrow(
+        "current same-account conversation binding",
+      );
+    },
+  );
+
   it.each(["action", "reply"] as const)(
     "authorizes %s through SQLite when cached selectors are incomparable, without caller-thread queries",
     async (entrypoint) => {
