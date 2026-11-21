@@ -12,6 +12,7 @@ import {
   findReplaySafeRunAbort,
   isReplaySafeTranscriptConflict,
 } from "../../embedded-agent-runner/transcript-conflict.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
@@ -126,9 +127,12 @@ export function classifyAnnounceDeliveryError(
     replaySafe?: boolean;
     beforeAdmission?: boolean;
     requesterSettle?: boolean;
+    restartInterrupted?: boolean;
   } = {},
 ): SubagentAnnounceDeliveryResult {
   const safeAbort = findReplaySafeRunAbort(error);
+  const restartInterrupted =
+    facts.restartInterrupted || hasAnnounceErrorMatch(error, isAgentRunRestartAbortReason);
   const transcriptConflict = isReplaySafeTranscriptConflict(error);
   const stateConflict = hasAnnounceErrorMatch(
     error,
@@ -136,7 +140,7 @@ export function classifyAnnounceDeliveryError(
   );
   const reason =
     facts.interruption ??
-    (safeAbort
+    (safeAbort || restartInterrupted
       ? "requester_aborted"
       : hasAnnounceErrorMatch(error, isSessionWorkStartInvalidatedError)
         ? "requester_preparation_changed"
@@ -175,6 +179,7 @@ export function classifyAnnounceDeliveryError(
             ) ||
             (facts.requesterSettle === true && isSandboxProvisioningError(error)) ||
             safeAbort ||
+            restartInterrupted ||
             transcriptConflict ||
             (!facts.interruption && stateConflict))
         ? "retryable"

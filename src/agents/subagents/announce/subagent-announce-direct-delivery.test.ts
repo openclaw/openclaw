@@ -28,6 +28,7 @@ import {
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
@@ -347,11 +348,14 @@ it("delivers a text fallback on the current generation after its producer releas
   }
 });
 
-it("preserves the direct completion phase without replacing controller custody", async () => {
+it.each([false, true])("preserves a committed direct completion (restart=%s)", async (restart) => {
   const fixture = setup("agent_harness_completion");
   const expected = { delivered: true, path: "direct" };
   const { queueMessage, input } = steering(fixture, vi.fn());
-  fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
+  fixture.dispatchDone.resolve({
+    ...response([{ text: "Completed directly" }], sentDeliveryStatus),
+    ...(restart ? { status: "timeout", stopReason: "restart" } : {}),
+  });
   const result = await deliverSubagentAnnouncement({
     ...fixture.params,
     controllerInput: input,
@@ -582,6 +586,21 @@ it.each([
   [
     "cancelled requester turn",
     { status: "timeout", stopReason: "rpc", replaySafe: true },
+    { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "restart interruption after an unconfirmed send",
+    Object.assign(createAgentRunRestartAbortError(), { sentBeforeError: true }),
+    { disposition: "ambiguous", reason: "requester_aborted" },
+  ],
+  [
+    "thrown restart interruption",
+    createAgentRunRestartAbortError(),
+    { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "restart-interrupted requester turn",
+    { status: "timeout", stopReason: "restart" },
     { disposition: "retryable", reason: "requester_aborted" },
   ],
   [
