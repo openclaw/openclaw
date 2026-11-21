@@ -5,7 +5,6 @@ import { beforeEach, expect, it } from "vitest";
 import type {
   PluginDiscoveryEntry,
   PluginsCatalogBrowseResult,
-  PluginsListResult,
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -140,7 +139,11 @@ function expectStableHeader(actual: HeaderGeometry, expected: HeaderGeometry) {
   expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1);
 }
 
-async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skill-workshop") {
+async function expectHeaderCopy(
+  page: Page,
+  active: "plugins" | "skills" | "skill-workshop",
+  compactWorkshop = false,
+) {
   const expected = {
     plugins: {
       title: "Plugins",
@@ -159,9 +162,25 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     },
   }[active];
   const header = page.locator(".plugins-hub-header");
-  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
+  const title = header.getByRole("heading", { level: 1, includeHidden: compactWorkshop });
+  expect(await title.textContent()).toBe(expected.title);
   // The phone's floating header carries the title, leaving it for assistive tech.
   const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
+  if (compactWorkshop) {
+    // In the compact Workshop header the learning controls replace the intro row.
+    expect(await header.locator(".hub-page-header__title").isHidden()).toBe(true);
+    if (floatingHeader) {
+      expect(await page.locator(".topbar-page-title").innerText()).toBe(expected.title);
+    }
+    const learningMode = header.getByRole("button", { name: "Skill Workshop learning mode" });
+    await learningMode.click();
+    const help = page.locator(".sw-learning-menu").getByRole("link", { name: "Learn more" });
+    await help.waitFor({ state: "visible" });
+    expect(await help.getAttribute("href")).toBe(expected.docs);
+    await page.keyboard.press("Escape");
+    await help.waitFor({ state: "hidden" });
+    return;
+  }
   await expect
     .poll(() =>
       header.evaluate((element) => {
@@ -176,8 +195,8 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   );
 }
 
-async function installButtonPresentation(page: Page) {
-  const button = page.getByRole("button", { name: /^Install /u }).first();
+async function installButtonPresentation(page: Page, name: RegExp) {
+  const button = page.getByRole("button", { name }).first();
   await button.waitFor({ state: "visible" });
   return button.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -234,31 +253,7 @@ suite.define(() => {
   it("keeps model-provider video capabilities discoverable in Media across pagination", async () => {
     const context = await createContext({ width: 1200, height: 928 });
     const page = await context.newPage();
-    const local: PluginsListResult = {
-      plugins: ["novita", "zai"].map((id) => {
-        return {
-          id,
-          name: id === "zai" ? "Z.AI" : "Novita",
-          packageName: "@openclaw/" + id,
-          clawhubPackage: "@openclaw/" + id,
-          origin: "bundled",
-          installed: true,
-          enabled: true,
-          state: "enabled" as const,
-          description: "Model inference and video generation.",
-          categories: ["models"],
-          capabilityCategories: ["media"],
-        };
-      }),
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-    expect(local.plugins.map((plugin) => plugin.categories)).toEqual([["models"], ["models"]]);
-    expect(local.plugins.map((plugin) => plugin.capabilityCategories)).toEqual([
-      ["media"],
-      ["media"],
-    ]);
-    // Gateway wire fixtures; the catalog owners test category derivation and joining.
+    // Discovery shelves list plugins to add; category derivation is tested at the Gateway owner.
     const novita = {
       id: "ch_QG9wZW5jbGF3L25vdml0YQ",
       catalog: {
@@ -271,18 +266,17 @@ suite.define(() => {
         publishedToClawHub: true,
       },
       local: {
-        present: true,
-        installed: true,
-        enabled: true,
-        state: "enabled",
-        pluginId: "novita",
-        action: "manage",
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
       },
     } satisfies PluginDiscoveryEntry;
     const zai = {
       id: "ch_QG9wZW5jbGF3L3phaQ",
       catalog: { ...novita.catalog, name: "Z.AI", packageName: "@openclaw/zai" },
-      local: { ...novita.local, pluginId: "zai" },
+      local: novita.local,
     } satisfies PluginDiscoveryEntry;
     const fal = {
       id: "ch_QG9wZW5jbGF3L2ZhbA",
@@ -333,7 +327,6 @@ suite.define(() => {
       featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
       methodResponses: {
         ...methodResponses,
-        "plugins.list": local,
         "plugins.catalog.browse": captureUiProof ? catalogPages.beforeAll : catalogPages.all,
       },
     });
@@ -527,7 +520,7 @@ suite.define(() => {
         await expectHeaderCopy(page, "plugins");
         // The Customize sidebar replaces the hub's tabs.
         expect(await page.getByRole("tab").count()).toBe(0);
-        const pluginInstallPresentation = await installButtonPresentation(page);
+        const pluginInstallPresentation = await installButtonPresentation(page, /^Install /u);
         const mobile = viewport.width <= 900;
         const customize = customizeSidebar(page, mobile);
 
@@ -535,7 +528,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
-        expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
+        expect(await installButtonPresentation(page, /^Add /u)).toEqual(pluginInstallPresentation);
         await captureScreenshot(page, `${label}-02-skills.png`);
 
         await customize.open("Skill workshop");
@@ -544,7 +537,7 @@ suite.define(() => {
           routeId: "skill-workshop",
         });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
-        await expectHeaderCopy(page, "skill-workshop");
+        await expectHeaderCopy(page, "skill-workshop", viewport.width <= 768);
         if (!mobile) {
           expect(await customize.row("Skill workshop").getAttribute("aria-current")).toBe("page");
         }
