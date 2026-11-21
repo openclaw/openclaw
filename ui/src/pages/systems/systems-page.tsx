@@ -28,7 +28,6 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { SystemMeasurements } from "./systems-measurements.tsx";
 import { createSystemsRead } from "./systems-read.ts";
@@ -68,9 +67,6 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
         void active.refresh();
       } else if (active.statsVisible() || active.state.showDetails) {
         void active.refreshTelemetry();
-      }
-      if ((!active.selected() || active.state.selectedId === "gateway") && !needsInventory) {
-        void active.refreshBackups();
       }
     };
     let timer: ReturnType<typeof setInterval> | undefined;
@@ -238,9 +234,6 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
           );
         }}
       </Show>
-      {controller().connected() && (!props.row || props.row.environment.id === "gateway") ? (
-        <SystemsBackups controller={controller()} />
-      ) : null}
     </aside>
   );
 }
@@ -464,7 +457,7 @@ function SystemsWorkspace(props: {
       <div
         class={["systems-overview", { "systems-overview--compact": !controller().statsVisible() }]}
         role="region"
-        aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
+        aria-label={t("systems.telemetry")}
         tabindex={0}
       >
         <Show when={props.inventoryRead.receipt()} keyed>
@@ -516,12 +509,6 @@ function SystemsWorkspace(props: {
               )}
             </Show>
           </div>
-        ) : null}
-        {controller().connected() && (!row() || row()!.environment.id === "gateway") ? (
-          <SystemsBackups
-            controller={controller()}
-            onDetails={() => controller().updatePresentation({ showDetails: true })}
-          />
         ) : null}
       </div>
       <div class="systems-body">

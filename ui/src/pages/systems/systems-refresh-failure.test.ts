@@ -67,9 +67,6 @@ it.each(["system.info", "node.list"])(
       if (called === "system.info") {
         return { ...systemInfo, osLabel: "macOS 27.0.0" };
       }
-      if (called === "backup.status") {
-        return { targets: [], schedules: [], locations: [] };
-      }
       throw new Error(`Unexpected request: ${called}`);
     });
     const { gateway } = createApplicationGateway(
@@ -142,9 +139,6 @@ it("keeps unknown inventory neutral without hiding offline recovery", async () =
     }
     if (method === "node.list") {
       return { nodes: [] };
-    }
-    if (method === "backup.status") {
-      return { targets: [], schedules: [], locations: [] };
     }
     throw new Error("Unexpected request: " + method);
   });

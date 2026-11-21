@@ -167,6 +167,10 @@ counts for newly archived transcripts and embedded archives moved back to
 files. Expand **Details by agent** to compare agents, or select **Refresh** to
 read current usage. Administrator access is required.
 
+The **Backups** section below it shows each backup target's latest outcome,
+destination, and next scheduled run, plus a **Check** action for each storage
+location. It needs Gateway read access. See [backups](/install/backups).
+
 **Archive older transcripts** is on by default after 30 inactive days. Turn it
 off to stop future extraction, or set **Archive after (days)** to another positive
 whole number. Changes save through the normal Settings flow and apply

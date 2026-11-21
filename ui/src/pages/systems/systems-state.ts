@@ -1,4 +1,3 @@
-import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
@@ -7,7 +6,6 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { enableHostDesktop as enableHostDesktopConfig } from "../../components/desktop/host-desktop-setup.ts";
-import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -60,8 +58,6 @@ type SystemsState = {
   showStats: boolean | null;
   showDetails: boolean;
   desktopSetupError: string | null;
-  backups: BackupStatusResult | null;
-  backupsError: string | null;
 };
 
 export type Systems = ReturnType<typeof createSystems>;
@@ -78,20 +74,12 @@ export function createSystems(context: ApplicationContext) {
     showStats: null,
     showDetails: false,
     desktopSetupError: null,
-    backups: null,
-    backupsError: null,
   };
   const phoneWidth = globalThis.matchMedia?.(PHONE_WIDTH_QUERY);
   // A phone opens on the remote desktop; an explicit toggle wins at every width.
   const statsVisible = () => state.showStats ?? !phoneWidth?.matches;
-  const storageProbes = new Map<string, StorageLocationsProbeResult>();
   const presentationScope = gatewayPresentationScope(context.gateway);
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
-  type Scope = NonNullable<ReturnType<typeof lifecycle.capture>>;
-  const storageProbeRequests = new Map<
-    string,
-    ReturnType<typeof createPageRequest<Scope, StorageLocationsProbeResult>>
-  >();
   const telemetry = new Map<string, readonly SystemsTelemetrySample[]>();
   const listeners = createChangeListeners();
   const notify = listeners.publish;
@@ -136,63 +124,6 @@ export function createSystems(context: ApplicationContext) {
   }
 
   const desktopSetupBusy = () => desktopSetupRequest !== undefined;
-
-  const storageProbeBusy = (name: string) => storageProbeRequests.get(name)?.pending === true;
-
-  const backupsRequest = createPageRequest<Scope, BackupStatusResult>(notify, {
-    task: (scope, { signal }) => scope.client.request("backup.status", {}, { signal }),
-    onComplete: (result) => {
-      state.backups = result;
-    },
-    // The completion receipt carries failures to the native error boundary.
-    onError: () => {},
-  });
-
-  function cancelBackups(): void {
-    backupsRequest.cancel();
-    for (const request of storageProbeRequests.values()) {
-      request.cancel();
-    }
-    storageProbeRequests.clear();
-  }
-
-  function clearBackups(error: string | null = null): void {
-    cancelBackups();
-    state.backups = null;
-    state.backupsError = error;
-    storageProbes.clear();
-  }
-
-  async function readBackupState(name?: string): Promise<void> {
-    const scope = lifecycle.capture();
-    if (
-      !active ||
-      !current() ||
-      !scope ||
-      (name === undefined ? backupsRequest.pending : storageProbeBusy(name)) ||
-      (name === undefined && document.visibilityState === "hidden") ||
-      !hasOperatorReadAccess(context.gateway.snapshot.hello?.auth ?? null)
-    ) {
-      return;
-    }
-    if (name === undefined) {
-      state.backupsError = null;
-      return backupsRequest.run(scope);
-    }
-    const request = createPageRequest<Scope, StorageLocationsProbeResult>(notify, {
-      task: (target, { signal }) =>
-        target.client.request("storage.locations.probe", { name }, { signal }),
-      onComplete: (result) => {
-        storageProbes.set(name, result);
-      },
-      onError: (error) => {
-        storageProbes.set(name, { state: "error", message: formatUiError(error) });
-      },
-    });
-    storageProbeRequests.set(name, request);
-    storageProbes.delete(name);
-    return request.run(scope);
-  }
 
   function resetDesktopSetup(): void {
     desktopSetupRequest?.resolve();
@@ -309,7 +240,6 @@ export function createSystems(context: ApplicationContext) {
 
   function clear(): void {
     cancelRefresh();
-    clearBackups();
     state.inventory = null;
     state.rows = [];
     state.selectedId = null;
@@ -370,7 +300,6 @@ export function createSystems(context: ApplicationContext) {
       return;
     }
     cancelRefresh();
-    void readBackupState();
     const pending = inventoryRequest.run(refreshIntent);
     const receipt = inventoryRequest.read;
     void refreshTelemetry({ inventory: true, fresh: refreshIntent === "manual" });
@@ -476,7 +405,6 @@ export function createSystems(context: ApplicationContext) {
   return {
     context,
     state,
-    storageProbes,
     sampledAtMs,
     current,
     connected,
@@ -489,10 +417,6 @@ export function createSystems(context: ApplicationContext) {
     get inventoryRead() {
       return inventoryRequest.read;
     },
-    get backupsRead() {
-      return backupsRequest.read;
-    },
-    storageProbeRead: (name: string) => storageProbeRequests.get(name)?.read ?? null,
     desktopAvailable,
     desktopAccessDenied: () =>
       !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
@@ -536,7 +460,6 @@ export function createSystems(context: ApplicationContext) {
       if (!presented) {
         subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
         cancelRefresh();
-        cancelBackups();
         resetDesktopSetup();
         return;
       }
@@ -561,30 +484,22 @@ export function createSystems(context: ApplicationContext) {
             desktopSetupRequest?.resolve();
           }
         }),
-        // Gateway receipts cancel stale inventory, backup, and desktop work before connection or access changes settle.
+        // Gateway receipts cancel stale inventory and desktop work before connection or access changes settle.
         context.gateway.subscribe((snapshot) => {
           const changed = lifecycle.transition(snapshot);
           if (!current()) {
             clear();
           } else if (changed) {
             cancelRefresh();
-            clearBackups();
             resetDesktopSetup();
             telemetry.clear();
             if (snapshot.phase === "connected") {
               void refresh();
             }
           }
-          if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
-            clearBackups(t("systems.backups.readAccessRequired"));
-          }
           notify();
         }),
         context.gateway.subscribeEvents((event) => {
-          if (event.event === "config.changed") {
-            cancelBackups();
-            storageProbes.clear();
-          }
           const placement =
             event.event === "sessions.changed" ? placementFact(event.payload) : undefined;
           const placementChanged =
@@ -627,8 +542,6 @@ export function createSystems(context: ApplicationContext) {
     refresh,
     refreshTelemetry,
     enableHostDesktop,
-    refreshBackups: () => readBackupState(),
-    probeStorage: (name: string) => readBackupState(name),
     subscribe: listeners.subscribe,
   };
 }

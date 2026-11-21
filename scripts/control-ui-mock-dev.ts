@@ -2748,7 +2748,7 @@ async function createChatPickerScenario(
           },
         })),
       },
-      // Systems requests backup status on open; an empty status keeps its panel renderable.
+      // Settings › Agent defaults › Session requests backup status; an empty status keeps it renderable.
       "backup.status": { targets: [], schedules: [], locations: [] },
       "environments.list": {
         environments: [

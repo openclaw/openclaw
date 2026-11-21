@@ -1,7 +1,5 @@
 /* @vitest-environment jsdom */
 import type {
-  BackupRunRecord,
-  BackupStatusResult,
   EnvironmentSummary,
   SessionPlacement,
   SystemInfoResult,
@@ -58,19 +56,15 @@ const systemInfo: SystemInfoResult = {
   ...baseSystemInfo,
   loadAverage: [0.5, 0.4, 0.3],
 };
-const emptyBackups = (): BackupStatusResult => ({ targets: [], schedules: [], locations: [] });
 
 function harness(
   inventory: () => Promise<EnvironmentSummary[]> = async () => [host, worker, offline],
   nodes: () => NodeListNode[] = () => [{ nodeId: "offline", connected: false, paired: true }],
-  backups: () => Promise<BackupStatusResult> = async () => emptyBackups(),
 ) {
   const handlers: Record<string, () => unknown> = {
     "environments.list": async () => ({ environments: await inventory() }),
     "system.info": () => systemInfo,
     "node.list": () => ({ nodes: nodes() }),
-    "backup.status": backups,
-    "storage.locations.probe": () => ({ state: "ok", freeBytes: 1024 ** 3 }),
     "desktop.observe": () => ({
       transport: "rfb",
       wsPath: "/desktop/proof",
@@ -230,52 +224,17 @@ describe("Systems workspace", () => {
   );
 
   it.each([
-    [[], "You need admin access to view a desktop.", "You need read access to view backups."],
-    [["operator.admin"], "Desktop access isn’t available on this device.", "No backups yet."],
-  ])(
-    "distinguishes desktop permissions from unavailable service %#",
-    async (scopes, hint, backup) => {
-      const { controller, gateway } = harness(async () => [{ ...host, desktop: true }]);
-      controller.select(host.id);
-      const { page } = await mount(controller);
-      gateway.publish({
-        hello: gatewayHelloForMethods(["environments.list", "node.list", "system.info"], scopes),
-      });
-      await waitForContent(page, ".systems-state", hint);
-      await waitForContent(page, ".systems-backups", backup);
-    },
-  );
-  it("shows and refreshes backup health on the landing view without machines", async () => {
-    vi.useFakeTimers();
-    const pending = createDeferred<BackupStatusResult>();
-    const backups = vi
-      .fn<() => Promise<BackupStatusResult>>()
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue(emptyBackups());
-    const { controller, request } = harness(
-      async () => [],
-      () => [],
-      backups,
-    );
+    [[], "You need admin access to view a desktop."],
+    [["operator.admin"], "Desktop access isn’t available on this device."],
+  ])("distinguishes desktop permissions from unavailable service %#", async (scopes, hint) => {
+    const { controller, gateway } = harness(async () => [{ ...host, desktop: true }]);
+    controller.select(host.id);
     const { page } = await mount(controller);
-    expect(text(page, ".systems-heading h2")).toBe("Select a device");
-    expect(text(page, ".systems-backups")).toContain("Loading backups…");
-    pending.reject(new Error("Backup history unavailable"));
-    await waitForContent(page, '.systems-backups [role="alert"]', "Backup history unavailable");
-    await controller.refreshBackups();
-    await waitForContent(page, ".systems-backups", "No backups yet.");
-    page.querySelector<HTMLButtonElement>('[aria-label="Device details"]')!.click();
-    await waitForSolid(() =>
-      expect(text(page, ".systems-details .systems-backups code")).toBe(
-        "openclaw backup enable --to <location>",
-      ),
-    );
-    const backupReads = () => calls(request, "backup.status");
-    expect(backupReads()).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(backupReads()).toHaveLength(3);
+    gateway.publish({
+      hello: gatewayHelloForMethods(["environments.list", "node.list", "system.info"], scopes),
+    });
+    await waitForContent(page, ".systems-state", hint);
   });
-
   it("retains inventory while a failed refresh is retried through its visible error", async () => {
     let read: () => Promise<EnvironmentSummary[]> = async () => [host, worker];
     const { controller } = harness(() => read());
@@ -300,175 +259,6 @@ describe("Systems workspace", () => {
     await waitForSolid(() => expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(3));
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(controller.state.selectedId).toBe(host.id);
-  });
-
-  it("renders backup outcomes and namespace-owned schedules, probing storage only on request", async () => {
-    const now = Date.UTC(2026, 8, 30, 12);
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const makeTarget = (fields: Partial<BackupRunRecord> = {}, target = "offsite") => {
-      const latest: BackupRunRecord = {
-        id: "backup",
-        createdAt: now,
-        archivePath: "/backup",
-        kind: "archive",
-        status: "ok",
-        ...fields,
-      };
-      return {
-        kind: latest.kind,
-        target,
-        namespace: latest.namespace,
-        latest,
-        latestOk: latest,
-      };
-    };
-    const success = makeTarget({
-      createdAt: now - 3_600_000,
-      location: {
-        name: "offsite",
-        provider: "filesystem",
-        locationId: "fixture-location",
-        namespace: "gateway",
-        key: "20260930T110000Z-12345678.tar.gz",
-        plaintextBytes: 1024,
-        storedBytes: 2048,
-      },
-    }).latest;
-    const otherNamespace = makeTarget({ namespace: "host-a", bytes: 4096 });
-    const gitTargets = [undefined, "Git remote rejected the push: permission denied."].map(
-      (error) =>
-        makeTarget(
-          {
-            createdAt: now - 3_600_000,
-            kind: "git",
-            pushFailed: true,
-            ...(error ? { error } : {}),
-          },
-          "/backups/git",
-        ),
-    );
-    const { controller, request } = harness(undefined, undefined, async () => ({
-      targets: [
-        {
-          kind: "archive",
-          target: "offsite",
-          namespace: "gateway",
-          latest: {
-            ...success,
-            status: "failed",
-            createdAt: now,
-            error: "Disk disconnected. Run openclaw storage test offsite.",
-          },
-          latestOk: success,
-        },
-        otherNamespace,
-        ...gitTargets,
-      ],
-      schedules: ["gateway", "host-b"].map((namespace) => ({
-        id: namespace,
-        namespace,
-        mode: "offsite" as const,
-        target: "offsite",
-        enabled: true,
-        everyMs: 86_400_000,
-        nextRunAtMs: now + 3_600_000,
-      })),
-      locations: [
-        {
-          name: "offsite",
-          provider: "filesystem",
-          displayTarget: "/Volumes/Archive/openclaw",
-          encrypted: true,
-        },
-      ],
-    }));
-    const { page } = await mount(controller);
-    expect(text(page, ".systems-backups__summary")).toBe("Recorded: 4 · Failed: 3");
-    page.querySelector<HTMLButtonElement>(".systems-backups .systems-summary-link")!.click();
-    await waitForSolid(() => expect(page.querySelector(".systems-details")).not.toBeNull());
-    const section = page.querySelector(".systems-details .systems-backups")!;
-    expect(section.textContent).toMatch(/Last success: .*ago/);
-    expect(section.textContent).toContain("2 KB");
-    expect(section.textContent).toContain("/Volumes/Archive/openclaw");
-    expect(section.textContent).toContain("Next run:");
-    expect(section.textContent).toContain("Disk disconnected. Run openclaw storage test offsite.");
-    const rows = [...section.querySelectorAll(".systems-backup")];
-    expect(rows[1]?.getAttribute("data-status")).toBe("ok");
-    expect(rows[1]?.textContent).toContain("4 KB");
-    expect(rows[1]?.textContent).not.toContain("Next run:");
-    expect(text(section, ".systems-backups__hint")).toContain("Next run:");
-    for (const [index, target] of gitTargets.entries()) {
-      const backup = rows[index + 2]!;
-      expect(backup.getAttribute("data-status")).toBe("failed");
-      expect(text(backup, ".systems-backup__state")?.trim()).toBe("Push failed");
-      expect(backup.textContent).toMatch(/Last local success: .*ago/);
-      expect(text(backup, ".systems-backup__error")).toBe(
-        target.latest.error ??
-          "The local backup succeeded, but couldn’t be pushed to the Git remote. Check the remote and try again.",
-      );
-    }
-    expect(calls(request, "storage.locations.probe")).toHaveLength(0);
-    const probe = createDeferred<{ state: "ok"; freeBytes: number }>();
-    request.mockReturnValueOnce(probe.promise);
-    const check = section.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')!;
-    check.click();
-    flush();
-    expect(check.disabled).toBe(true);
-    probe.resolve({ state: "ok", freeBytes: 1024 ** 3 });
-    await probe.promise;
-    flush();
-    expect(section.textContent).toContain("Available");
-    expect(section.textContent).toContain("1 GB free");
-    expect(request).toHaveBeenCalledWith(
-      "storage.locations.probe",
-      { name: "offsite" },
-      expect.anything(),
-    );
-    controller.select(worker.id);
-    flush();
-    expect(page.querySelector(".systems-backups")).toBeNull();
-  });
-
-  it("discards a backup response from the previous connection", async () => {
-    const pending = createDeferred<BackupStatusResult>();
-    const { controller, gateway } = harness(undefined, undefined, () => pending.promise);
-    const { page } = await mount(controller);
-    gateway.publish({ phase: "offline" });
-    pending.resolve({
-      targets: [],
-      schedules: [],
-      locations: [{ name: "old-host", provider: "filesystem", encrypted: false }],
-    });
-    await pending.promise;
-    flush();
-    expect(controller.state.backups).toBeNull();
-    expect(page.querySelector(".systems-backups")).toBeNull();
-    expect(page.textContent).not.toContain("old-host");
-  });
-
-  it("retires a pending storage probe when the connection leaves", async () => {
-    const { controller, gateway, request } = harness(undefined, undefined, async () => ({
-      targets: [],
-      schedules: [],
-      locations: [{ name: "offsite", provider: "filesystem", encrypted: false }],
-    }));
-    const { page } = await mount(controller);
-    page.querySelector<HTMLButtonElement>(".systems-backups .systems-summary-link")!.click();
-    await waitForSolid(() =>
-      expect(page.querySelector('[aria-label="Check offsite"]')).not.toBeNull(),
-    );
-    const pending = createDeferred<{ state: "ok"; freeBytes: number }>();
-    request.mockReturnValueOnce(pending.promise);
-    page.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')!.click();
-    await waitForSolid(() => expect(page.textContent).toContain("Checking"));
-    gateway.publish({ phase: "offline" });
-    await waitForSolid(() => expect(page.textContent).not.toContain("Checking"));
-    pending.resolve({ state: "ok", freeBytes: 1024 ** 3 });
-    await pending.promise;
-    flush();
-    expect(controller.storageProbes.size).toBe(0);
-    expect(page.querySelector(".systems-backups")).toBeNull();
-    expect(page.textContent).not.toContain("1 GB free");
   });
 
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {

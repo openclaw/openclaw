@@ -37,11 +37,13 @@ async function mount(initialInventory = inventory(7)) {
   const respond = async (method: string): Promise<unknown> =>
     method === "sessions.storage.status"
       ? initialInventory
-      : {
-          ...configSnapshot(config, "raw-one"),
-          configRevisionHash: "revision-one",
-          appliedConfigHash: "revision-one",
-        };
+      : method === "backup.status"
+        ? { targets: [], schedules: [], locations: [] }
+        : {
+            ...configSnapshot(config, "raw-one"),
+            configRevisionHash: "revision-one",
+            appliedConfigHash: "revision-one",
+          };
   const request = vi.fn(respond);
   const reply =
     (method: string, read: () => Promise<unknown>) =>

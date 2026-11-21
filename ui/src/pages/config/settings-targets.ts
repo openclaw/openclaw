@@ -84,9 +84,14 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.sessionStorage.title",
     search: "?section=session",
     hash: `#${SESSION_STORAGE_SETTINGS_TARGET_ID}`,
-    searchKeys: ["configView.sessionStorage.automatic", "configView.sessionStorage.afterDays"],
+    searchKeys: [
+      "configView.sessionStorage.automatic",
+      "configView.sessionStorage.afterDays",
+      "configView.backups.title",
+      "configView.backups.locations",
+    ],
     aliases:
-      "database disk size chats chat history transcripts storage cleanup archive compression retention",
+      "database disk size chats chat history transcripts storage cleanup archive compression retention backup offsite snapshot restore",
   },
   meetingCapture: {
     routeId: "communications",

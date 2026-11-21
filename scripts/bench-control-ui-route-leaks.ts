@@ -817,13 +817,7 @@ function routeTarget(id: ProbeRoute, sessionKey: string): RouteTarget {
       ? { requiredMethods: ["sessions.describe", "environments.status", "desktop.observe"] }
       : id === "systems"
         ? {
-            requiredMethods: [
-              "environments.list",
-              "node.list",
-              "system.info",
-              "backup.status",
-              "desktop.observe",
-            ],
+            requiredMethods: ["environments.list", "node.list", "system.info", "desktop.observe"],
           }
         : id === "portals" || id === "portal-embedded"
           ? { requiredMethods: ["portal.list"] }
@@ -932,7 +926,6 @@ function fixtureFor(
               "environments.status",
               "node.list",
               "system.info",
-              "backup.status",
             ]
           : []),
         ...(id === "search" ? ["webSearch.status"] : []),
@@ -1019,7 +1012,6 @@ function fixtureFor(
               desktop: true,
             },
             "node.list": { nodes: [] },
-            "backup.status": { targets: [], schedules: [], locations: [] },
           }
         : {}),
       ...(id === "desktop-document"

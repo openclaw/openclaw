@@ -44,6 +44,11 @@ it.each(["permission", "subscription", "browser support", "notification access",
     expect(search(query)).toContainEqual(expect.objectContaining({ routeId: "notifications" }));
   },
 );
+it.each(["backup", "storage locations"])("finds Backups in Session settings by %s", (query) => {
+  expect(search(query)).toContainEqual(
+    expect.objectContaining({ routeId: "ai-agents", hash: "#settings-session-storage" }),
+  );
+});
 it("keeps target metadata cold and loads Settings English when search opens", async () => {
   const testApiKey = Symbol.for("openclaw.i18nManagerTestApi");
   const previousTestApi = Object.getOwnPropertyDescriptor(globalThis, testApiKey);

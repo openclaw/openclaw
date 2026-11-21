@@ -34,6 +34,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
+import { BackupsSettings } from "./backups-settings.tsx";
 import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
@@ -517,6 +518,7 @@ export function SessionStorageSettings(props: SettingsProps) {
           <LearnMoreLink
             url={"https://docs.openclaw.ai/gateway/config-agents/sessions#cold-storage"}
           />
+          <BackupsSettings />
         </div>
       </SettingsPage>
       <ShellLayoutBoundary traits={{ settingsPage: true }}>
