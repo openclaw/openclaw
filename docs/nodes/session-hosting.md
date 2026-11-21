@@ -100,6 +100,26 @@ session-owned managed workspace, dispatches it with the exact
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
+To do the same from a terminal, create a session with its own workspace,
+dispatch it to the host's node ID (from `openclaw nodes status --json`), then
+run turns in that session:
+
+```bash
+openclaw gateway call sessions.create --json \
+  --params '{"key":"agent:main:explicit:build-1","agentId":"main","worktree":true,"worktreeSource":"empty"}'
+openclaw gateway call sessions.dispatch --json --timeout 120000 \
+  --params '{"key":"agent:main:explicit:build-1","agentId":"main","deviceId":"<node-id>"}'
+openclaw agent --session-key agent:main:explicit:build-1 --message "Run the tests"
+```
+
+`sessions.dispatch` requires a session-owned workspace: a managed worktree, a
+repository workspace, or a device folder. Pass `"autoDevice": true` instead of
+`deviceId` to let the Gateway choose a host. The first dispatch to a host
+installs the worker runtime and can outlast the default 10-second
+`gateway call` timeout. A call that times out can still complete on the Gateway,
+so check the session's `placement` in `openclaw gateway call sessions.list --json`
+before retrying.
+
 The selected model's **harness** must also support the chosen device. OpenAI
 models using the Codex harness require the official Codex plugin on that node;
 installing it only on the Gateway is not enough. On the node, run:
