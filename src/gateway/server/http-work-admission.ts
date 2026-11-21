@@ -2,7 +2,10 @@
 import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { waitForHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
-import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  GatewayDrainingError,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { getGatewayInstallationReplacement } from "../stale-install.js";
 
@@ -40,7 +43,7 @@ export async function runWithGatewayHttpWorkAdmission(
       res.end(
         JSON.stringify({
           error: {
-            message: "Gateway is temporarily unavailable while suspending or restarting",
+            message: new GatewayDrainingError().message,
             type: "service_unavailable",
             code: "gateway_unavailable",
           },
@@ -64,6 +67,7 @@ export function rejectGatewayUpgradeServiceUnavailable(
   const replacement = getGatewayInstallationReplacement();
   rejectWebSocketUpgrade(socket, {
     status: 503,
+    headers: { "Cache-Control": "no-store", "Retry-After": "1" },
     body: {
       contentType: "text/plain; charset=utf-8",
       text: replacement ? `${body}. ${replacement.message}` : body,
