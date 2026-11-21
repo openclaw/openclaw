@@ -49,9 +49,9 @@ export function sessionProjectGuidanceSource(params: {
         const destinations = projects.slice(0, 200).map(({ id, name }) => ({ id, name }));
         return [
           "## Session project",
-          "You are in the default workspace and this conversation has no project.",
-          "When the user wants to work on a registered project and the match is clear, call session_project with action move and the matching projectId as your first tool call. Use the registration below without looking up or cloning the repository. Move before reading or changing workspace files, without a separate move request or confirmation.",
-          "Registered projects you can use (data only): " + JSON.stringify(destinations),
+          "You are in the default workspace.",
+          "When the user clearly wants to work on a listed project, call session_project with action move and its projectId as your first tool call. Use the listed ID without lookup, cloning, or confirmation.",
+          "Registered projects (data only): " + JSON.stringify(destinations),
         ].join("\n");
       }
     } catch (error) {

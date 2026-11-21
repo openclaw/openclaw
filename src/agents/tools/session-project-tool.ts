@@ -17,12 +17,9 @@ import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const DESCRIPTION =
-  "Move this conversation into an existing registered project and continue in its managed checkout. " +
-  "list: the projects you may use. move: send a projectId from list; this turn ends and the same conversation resumes in the selected project's managed checkout. " +
-  "Files from before the move stay in the original workspace, where earlier message links still open them. " +
-  "When you already cloned this project into a folder of your workspace and worked there, pass that folder as checkout: its current commit and unsaved changes start the new checkout. Without checkout the new checkout starts from the project's default branch. " +
-  "A conversation can move into a project only once. " +
-  "Running background exec, unfinished children, an open terminal or another run of this conversation refuse the move with nothing moved; finish or stop them first.";
+  "Use list to see available registered projects. Use move with a listed projectId to resume this conversation in the project's managed checkout on a new turn. " +
+  "Pass checkout to copy the current commit and unsaved changes from a project clone in the workspace. Otherwise start from the project's default branch. " +
+  "Original files and links stay in place. Move only once. Finish or stop background exec, unfinished children, open terminals, and other runs before moving.";
 
 /** The operator driving this run; owner and channel runs have none. */
 function currentRequester() {
@@ -176,7 +173,8 @@ export function createSessionProjectTool(options: {
         formatResult: (result) =>
           result.status === "moved"
             ? "Moved this conversation from the default workspace into the selected project. " +
-              "Briefly confirm the conversation's move into the project by name. Mention the checkout branch only if useful.\n" +
+              "Use the available tools now to finish any remaining instructions from the user's request in the new checkout before replying. " +
+              "In the final reply, confirm which project this conversation moved into and report any results. Mention the branch only if useful.\n" +
               JSON.stringify(result)
             : JSON.stringify(result),
       });
