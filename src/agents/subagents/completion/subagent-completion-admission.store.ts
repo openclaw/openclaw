@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -12,7 +11,6 @@ import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { readSubagentRunAnnounceResult } from "../announce/subagent-announce-output.js";
 import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
@@ -49,6 +47,7 @@ import type {
   SubagentCompletionMutationResult,
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
+import { buildSubagentCompletionFailureNotice } from "./subagent-completion-notice-text.js";
 
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
 class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
@@ -125,24 +124,27 @@ export async function recordRequiredCompletionNotice(
       : kind === "result"
         ? "subagent-completion"
         : "run-failed-before-reply";
-  const findings = (
-    await Promise.all(
-      batch.map(async (child) => {
-        const outcome = child.execution.outcome;
-        return [
-          `Child ${child.childSessionKey} (run ${child.runId})`,
-          outcome?.status === "error"
-            ? outcome.error === "Gateway stopped"
-              ? "Interrupted by Gateway restart; not resumed."
-              : outcome.error
-            : outcome?.status,
-          kind === "result" ? (await readSubagentRunAnnounceResult(child)).text : undefined,
-        ]
-          .filter(Boolean)
-          .join("\n\n");
-      }),
-    )
-  ).join("\n\n");
+  const findings =
+    kind === "result"
+      ? (
+          await Promise.all(
+            batch.map(async (child) => {
+              const outcome = child.execution.outcome;
+              return [
+                `Child ${child.childSessionKey} (run ${child.runId})`,
+                outcome?.status === "error"
+                  ? outcome.error === "Gateway stopped"
+                    ? "Interrupted by Gateway restart; not resumed."
+                    : outcome.error
+                  : outcome?.status,
+                (await readSubagentRunAnnounceResult(child)).text,
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+            }),
+          )
+        ).join("\n\n")
+      : buildSubagentCompletionFailureNotice(batch, kind);
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
@@ -162,15 +164,7 @@ export async function recordRequiredCompletionNotice(
                 excludeFromContext:
                   kind !== "failed" ||
                   batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
-                content:
-                  kind === "delayed"
-                    ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
-                    : kind === "result"
-                      ? findings
-                      : `${expectDefined(
-                          renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-                          "child completion failure notice",
-                        )}\n\n${findings}`,
+                content: findings,
                 details: { runId, childRunId: entry.runId, error: reason },
               },
       },

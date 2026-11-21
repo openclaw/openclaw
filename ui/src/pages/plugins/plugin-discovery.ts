@@ -276,6 +276,14 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
   });
   return {
     read: (): Readonly<typeof state> => state,
+    findEntry(id: string): PluginDiscoveryEntry | undefined {
+      const matches = (entry: PluginDiscoveryEntry) => entry.id === id;
+      return (
+        state.result?.items.find(matches) ??
+        state.featured.find(matches) ??
+        state.trending.find(matches)
+      );
+    },
     invalidate(): void {
       // Reconnects reload the latest input without replaying its manual observation.
       disconnect();
