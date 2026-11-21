@@ -36,9 +36,9 @@ CodexBar ships CLI builds for macOS and Linux. When `codexbar` is on `PATH`, the
 2. Use the bundled script to summarize by model.
 
 ```bash
-python {baseDir}/scripts/model_usage.py --provider codex --mode current
-python {baseDir}/scripts/model_usage.py --provider codex --mode all
-python {baseDir}/scripts/model_usage.py --provider claude --mode all --format json --pretty
+python3 {baseDir}/scripts/model_usage.py --provider codex --mode current
+python3 {baseDir}/scripts/model_usage.py --provider codex --mode all
+python3 {baseDir}/scripts/model_usage.py --provider claude --mode all --format json --pretty
 ```
 
 ## Current model logic
@@ -57,8 +57,8 @@ python {baseDir}/scripts/model_usage.py --provider claude --mode all --format js
 
 ```bash
 codexbar cost --provider codex --format json > /tmp/cost.json
-python {baseDir}/scripts/model_usage.py --input /tmp/cost.json --mode all
-cat /tmp/cost.json | python {baseDir}/scripts/model_usage.py --input - --mode current
+python3 {baseDir}/scripts/model_usage.py --input /tmp/cost.json --mode all
+cat /tmp/cost.json | python3 {baseDir}/scripts/model_usage.py --input - --mode current
 ```
 
 ## Output
