@@ -502,7 +502,9 @@ const COMPACT_HYBRID_RUNTIME_JOB_SECONDS =
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
 // Hosted run 35477045216 timed out after an hour on a 203-file serial stripe;
 // its 196-file sibling took 2867s. Bound admission independently of stale costs.
-const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
+// Run 44941689899 also exhausted 60 minutes after starting a 278-file
+// system-runtime group behind 24 minutes of completed serial work.
+const COMPACT_HOSTED_INFRA_MAX_FILES = 64;
 // Hourly hosted run 35983526919 spent ~25 minutes in each of these owners.
 // Bound main and full-inventory work independently of stale whole-owner timing estimates.
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
@@ -3878,8 +3880,10 @@ function splitOversizedCompactGroup(
       (fullInventory || group.shard_name === "agentic-gateway-methods"))
       ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name)
       : undefined) ??
-    (runnerBackend === "github" && group.shard_name === "core-runtime-infra-storage-state"
-      ? COMPACT_HOSTED_STORAGE_STATE_MAX_FILES
+    (runnerBackend === "github" &&
+    (group.shard_name === "core-runtime-infra-storage-state" ||
+      group.shard_name === "core-runtime-infra-system-runtime")
+      ? COMPACT_HOSTED_INFRA_MAX_FILES
       : undefined);
   const exceedsHostedFileLimit =
     hostedFileLimit !== undefined && (group.includePatterns?.length ?? 0) > hostedFileLimit;

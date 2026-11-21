@@ -66,6 +66,12 @@ compact PR layout. File membership, worker limits, row caps, and deadlines are
 unchanged. Smaller tails and hourly main validation keep their existing packing;
 these bounds do not replace fresh whole-row timing qualification.
 
+Hosted compact storage-state and system-runtime groups have a 64-file ceiling
+independent of timing estimates. A 278-file system-runtime group exhausted its
+row deadline after 24 minutes of earlier serial work. The ceiling splits that
+work before packing without reducing coverage or increasing worker limits or
+deadlines; hosted whole-row completion still requires fresh qualification.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
