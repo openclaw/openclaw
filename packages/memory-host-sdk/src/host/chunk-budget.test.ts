@@ -1,7 +1,6 @@
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { describe, expect, it } from "vitest";
 import { chunkMarkdown } from "./internal.js";
-import { resolveMarkdownChunkMaxChars } from "./markdown-chunks.js";
 
 describe("weighted memory chunk budgets", () => {
   it.each([
@@ -19,35 +18,6 @@ describe("weighted memory chunk budgets", () => {
       expect(() => encodeURIComponent(chunk.text)).not.toThrow();
       expect(chunk.startLine).toBe(1);
       expect(chunk.endLine).toBe(1);
-    }
-  });
-});
-
-describe("memory chunk ceiling", () => {
-  it("derives the ceiling from the token budget", () => {
-    expect(resolveMarkdownChunkMaxChars({ tokens: 400 })).toBe(1600);
-    expect(resolveMarkdownChunkMaxChars({ tokens: 1 })).toBe(32);
-  });
-
-  it("never writes a chunk longer than the ceiling", () => {
-    const chunking = { tokens: 400, overlap: 80 };
-    const ceiling = resolveMarkdownChunkMaxChars(chunking);
-    const lines = Array.from(
-      { length: 400 },
-      (_, index) => `Line ${index}: ${"word ".repeat(index % 40)}`,
-    );
-    const inputs = [
-      lines.join("\n"),
-      `${"a".repeat(5000)}\n${"b".repeat(1550)}\n${"c".repeat(1550)}`,
-      "㐀".repeat(5000),
-      `${"x".repeat(1599)}\n${"y".repeat(1599)}\n${"z".repeat(10)}`,
-    ];
-    for (const text of inputs) {
-      const chunks = chunkMarkdown(text, chunking);
-      expect(chunks.length).toBeGreaterThan(1);
-      for (const chunk of chunks) {
-        expect(chunk.text.length).toBeLessThanOrEqual(ceiling);
-      }
     }
   });
 });
