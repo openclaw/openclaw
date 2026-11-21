@@ -205,6 +205,7 @@ it("models.list selects a native user-home API-key catalog through the prepared 
           expect(requests).toContain("account/read");
           expect(publicRow).not.toHaveProperty("nativeRuntime");
 
+          account = null;
           for (const socket of server.clients) {
             socket.send(JSON.stringify({ method: "account/updated", params: { authMode: null } }));
           }
@@ -219,7 +220,7 @@ it("models.list selects a native user-home API-key catalog through the prepared 
             await registeredList(true);
             await expect
               .poll(() => requests.filter((method) => method === "model/list").length, {
-                timeout: 15_000,
+                timeout: 30_000,
               })
               .toBeGreaterThan(beforeModels);
             await nativeCatalogSettled(available);

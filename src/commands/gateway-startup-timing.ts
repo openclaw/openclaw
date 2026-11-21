@@ -3,9 +3,7 @@ import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../infra/update-run-timeouts.js"
 type GatewayStartupTiming = { deadlineMs: number; probeTimeoutMs: number };
 type UpdateStartupTiming = {
   timeoutMs?: number;
-  observedStartupMs?: number;
   migrationLeaseMs: number;
-  previousGateway?: boolean;
 };
 
 // Service activation precedes cold-start loading and the authenticated handshake.
@@ -31,24 +29,10 @@ export function resolveGatewayStartupTiming(
   }
   // Keep the state/SQLite lease owner out of setup's eager import graph.
   const floorMs = Math.max(update.migrationLeaseMs, windows ? timing.deadlineMs : 0);
-  const capMs = Math.max(
-    floorMs,
-    windows
-      ? 4 * DEFAULT_UPDATE_STEP_TIMEOUT_MS
-      : update.previousGateway
-        ? 2 * DEFAULT_UPDATE_STEP_TIMEOUT_MS
-        : Infinity,
-  );
-  const observedStartupMs = update.observedStartupMs ?? 0;
-  const observedBudget = `max(${floorMs}ms, canary startup ${observedStartupMs}ms × 10)`;
   return {
     ...timing,
-    deadlineMs: update.timeoutMs ?? Math.min(capMs, Math.max(floorMs, observedStartupMs * 10)),
+    deadlineMs: update.timeoutMs ?? floorMs,
     derivation:
-      update.timeoutMs !== undefined
-        ? "explicit --timeout"
-        : Number.isFinite(capMs)
-          ? `min(${capMs}ms, ${observedBudget})`
-          : observedBudget,
+      update.timeoutMs !== undefined ? "explicit --timeout" : `${floorMs}ms startup floor`,
   };
 }

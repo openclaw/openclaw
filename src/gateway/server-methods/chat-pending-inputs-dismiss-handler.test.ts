@@ -59,7 +59,7 @@ async function fixture() {
     );
     receipts.push(receipt);
     if (disposition) {
-      receipt.finish(disposition);
+      receipt.finish(disposition, "failed");
       await receipt.settled?.();
     }
     return receipt.inputId;
@@ -98,7 +98,7 @@ async function withDismissTest(run: (f: Awaited<ReturnType<typeof fixture>>) => 
     try {
       await run(f);
     } finally {
-      f.receipts.forEach((receipt) => receipt.finish("cancelled"));
+      f.receipts.forEach((receipt) => receipt.finish("cancelled", "failed"));
       await Promise.all(f.receipts.map(async (receipt) => receipt.settled?.()));
       await disposeSessionReadContexts();
     }

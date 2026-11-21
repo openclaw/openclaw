@@ -85,6 +85,8 @@ export type CreateModelAuthAvailabilityResolverParams = {
    */
   canRefreshProviderOAuth?: (provider: string) => boolean;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  /** Config/source route facts only; account and credential decisions remain local. */
+  resolveOpenAIProviderRoutes?: Parameters<typeof createOpenAIModelRoutesResolver>[1];
   preparedRuntimeAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];

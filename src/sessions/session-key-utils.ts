@@ -113,6 +113,11 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   return hasSessionKeyPrefix(sessionKey, "subagent:");
 }
 
+/** A cron run or subagent ends with its final reply; only its live executor resumes it. */
+export function isOneShotRunSessionKey(sessionKey: string | undefined | null): boolean {
+  return isCronRunSessionKey(sessionKey) || isSubagentSessionKey(sessionKey);
+}
+
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
   const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {

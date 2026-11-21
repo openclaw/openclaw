@@ -11,17 +11,11 @@ export function selectableRuntimeId(
   return runtime && runtime.source !== "implicit" ? runtime.id : undefined;
 }
 
-export type ModelRuntimeEntry = Omit<ModelCatalogEntry, "unavailableReason"> & {
-  unavailableReason?:
-    | ModelCatalogEntry["unavailableReason"]
-    | NonNullable<ModelCatalogEntry["runtimeChoices"]>[number]["unavailableReason"];
-};
-
 /** Runtime capabilities are a complete projection; missing fields must not inherit another harness. */
 export function resolveModelRuntimeEntry(
   entry: ModelCatalogEntry | undefined,
   agentRuntime: string | null | undefined,
-): ModelRuntimeEntry | undefined {
+): ModelCatalogEntry | undefined {
   if (!entry || !agentRuntime || entry.agentRuntime?.id === agentRuntime) {
     return entry;
   }

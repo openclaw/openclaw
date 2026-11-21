@@ -6,10 +6,17 @@ import {
   openEngineStore,
   withEngineStoreAdmission,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  resolveDatabaseFamilyEngines,
+  withDatabaseEngineSelection,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bindReportFetch } from "./report-network.test-support.js";
+import { githubItem } from "./reports-data.test-support.js";
+import { buildRoster } from "./roster.js";
 import { createGithubSource } from "./sources/github/index.js";
 import {
   commit,
@@ -20,9 +27,11 @@ import {
   roster,
   window,
 } from "./sources/github/responses.fixtures.js";
+import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { exercise, report } from "./store-conformance.test-support.js";
 import { openTeamReportsConnection } from "./store-database.js";
 import { teamReportsEngineSchema } from "./store-engine-schema.js";
+import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import { openTeamReportsDatabase, type createSqliteWorkerBackend } from "./store.worker.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -103,6 +112,84 @@ describe.skipIf(!connection)("Team Reports PostgreSQL runtime", () => {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("round-trips reports through the public PostgreSQL worker and discards closed scratch", () =>
+    withDatabaseEngineSelection(
+      {
+        effectiveEngines: resolveDatabaseFamilyEngines({
+          database: { families: { "team-reports": { engine: "postgres" } } },
+        }),
+        postgres: input,
+      },
+      async () => {
+        const dbPath = path.join(directory, "public-worker.sqlite");
+        const workerModuleUrl = resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint);
+        let store: TeamReportsStore | undefined;
+        let publicSchema: string | undefined;
+        try {
+          store = await createTeamReportsStore({ dbPath, workerModuleUrl });
+          {
+            using anchor = openNodeSqliteDatabase(dbPath, { readOnly: true });
+            const identity = anchor
+              .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
+              .get();
+            expect(identity?.engine).toBe("postgres");
+            if (typeof identity?.schema !== "string") {
+              throw new Error("Missing public worker PostgreSQL anchor");
+            }
+            publicSchema = identity.schema;
+            expect(
+              anchor
+                .prepare("SELECT name FROM sqlite_schema WHERE name = 'team_reports_periods'")
+                .all(),
+            ).toEqual([]);
+          }
+          const document = report();
+          await store.upsertPeriod({ report: document, markdown: "public worker" });
+          const stored = { report: document, summary: null, markdown: "public worker" };
+          expect(await store.getPeriod("day", document.period.key)).toEqual(stored);
+          expect(await store.listPeriods()).toMatchObject([
+            { key: document.period.key, githubTotal: 41, commits: 11, discordMessages: 13 },
+          ]);
+          expect(await store.listPersonDays("ALICE")).toMatchObject([
+            { dayKey: document.period.key, login: "alice", githubTotal: 1, discordMessages: 2 },
+          ]);
+          expect(
+            await rows(`SELECT count(*)::int AS count FROM "${publicSchema}".team_reports_periods`),
+          ).toEqual([{ count: 1 }]);
+          const options = {
+            period: document.period,
+            nowMs: document.generatedAtMs,
+            orgs: document.orgs,
+            roster: buildRoster([{ github: ["alice"] }]),
+            githubStatus: { ok: true, warnings: [], stats: {} },
+          };
+          await store.appendActivity({
+            source: "github",
+            entries: [
+              {
+                key: "public-activity",
+                value: githubItem({ actor: "alice", atMs: document.period.sinceMs + 1 }),
+              },
+            ],
+          });
+          expect((await store.aggregateActivity(options)).totals.github.total).toBe(1);
+          await store.close();
+          await expect(store.listPeriods()).rejects.toThrow("store is closed");
+          store = await createTeamReportsStore({ dbPath, workerModuleUrl });
+          expect(await store.getPeriod("day", document.period.key)).toEqual(stored);
+          expect((await store.aggregateActivity(options)).totals.github.total).toBe(0);
+        } finally {
+          try {
+            await store?.close();
+          } finally {
+            if (publicSchema) {
+              await observer.query(`DROP SCHEMA "${publicSchema}" CASCADE`);
+            }
+          }
+        }
+      },
+    ));
 
   it("upgrades version 1 index ordering once while retaining run rows", async () => {
     const pathname = path.join(directory, "upgrade.sqlite");

@@ -40,9 +40,9 @@ describe("failed publication account discovery", () => {
     const row = container.querySelector('.chat-pr[data-state="branch"]');
     expect(row?.querySelector(".chat-pr__publication-outcome")).toBeNull();
     expect(row?.querySelector(".chat-pr__create")).toBeNull();
-    expect(row?.textContent).not.toContain("Publication status unavailable");
+    expect(row?.textContent).not.toContain("Couldn’t load publication status");
     expect(row?.querySelector("openclaw-tooltip")?.getAttribute("content")).toBe(
-      "Publication status unavailable: GitHub publication options timed out after 5 seconds; retry the request.",
+      "Couldn’t load publication status: GitHub publication options timed out after 5 seconds; retry the request.",
     );
     row?.querySelector<HTMLButtonElement>(".chat-pr__publication-refresh")?.click();
     expect(onRefresh).toHaveBeenCalledOnce();

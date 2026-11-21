@@ -303,7 +303,6 @@ private struct ChatSidebarRow: View {
                 Button(action: self.pin) {
                     Image(systemName: self.node.session.pinned == true ? "pin.slash" : "pin")
                 }
-                .help(self.node.session.pinned == true ? String(localized: "Unpin") : String(localized: "Pin"))
                 .accessibilityLabel(self.node.session
                     .pinned == true ? String(localized: "Unpin") : String(localized: "Pin"))
                 .focused(self.$focus, equals: .pin)

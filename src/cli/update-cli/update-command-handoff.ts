@@ -289,13 +289,18 @@ export async function handoffUpdateFromGateway(params: {
   return true;
 }
 
+/** A Gateway-started foreground update parks that Gateway after validation, before activation. */
+export function parksForegroundUpdateBeforeActivation(run: UpdateCommandOptions["run"]): boolean {
+  return run?.completionOwner === "gateway-restart" && !run.gatewayRestartRequired;
+}
+
 export async function parkForegroundUpdateForActivation(
   params: { root: string; opts: UpdateCommandOptions },
   assertCurrent: () => void,
 ): Promise<void> {
   assertCurrent();
   const run = params.opts.run;
-  if (run?.completionOwner === "gateway-restart" && !run.gatewayRestartRequired) {
+  if (run && parksForegroundUpdateBeforeActivation(run)) {
     await parkForegroundUpdateHandoff({ root: params.root, run });
     assertCurrent();
   }

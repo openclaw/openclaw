@@ -4,13 +4,15 @@ import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-boots
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
+import { GatewayWordmarkText } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { Kbd, ShortcutText } from "./solid/kbd.tsx";
+import { Kbd, ShortcutHint, ShortcutText } from "./solid/kbd.tsx";
 import { MobileHeaderNotice } from "./solid/mobile-header-notice.tsx";
 import { MobileNavToggle } from "./solid/mobile-nav-toggle.tsx";
 import "./tooltip.ts";
@@ -25,6 +27,7 @@ type Props = {
   onOpenPalette: (() => void) | undefined;
   /** Phone pages: title in the header, joined action pill, and the shared reconnect notice. */
   floating: boolean;
+  navigationLocked?: boolean;
   /** A settings subpage: the menu button goes up a level instead. */
   onBack: (() => void) | undefined;
   pageTitle: string;
@@ -41,14 +44,27 @@ defineSolidBridge<Props>(
         ? props.gatewayStatus
         : undefined;
     return (
-      <header class={["topbar", { "topbar--floating": props.floating }]}>
+      <header
+        class={[
+          "topbar",
+          {
+            "topbar--floating": props.floating,
+            // Nothing in the drawer or action pill works before the first connection.
+            "topbar--navigation-locked": props.floating && props.navigationLocked,
+          },
+        ]}
+      >
         <div class="topnav-shell">
           <Show
             when={props.floating && props.onBack}
             fallback={
-              <openclaw-tooltip
-                prop:content={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
-              >
+              <openclaw-tooltip>
+                <span slot="content">
+                  <ShortcutHint
+                    label={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
+                    combo={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
+                  />
+                </span>
                 <MobileNavToggle
                   class="topbar-nav-toggle"
                   open={props.navDrawerOpen}
@@ -58,25 +74,40 @@ defineSolidBridge<Props>(
               </openclaw-tooltip>
             }
           >
-            <openclaw-tooltip prop:content={t("common.back")}>
-              <button
-                type="button"
-                class="mobile-nav-toggle topbar-nav-toggle topbar-back"
-                aria-label={t("common.back")}
-                onClick={() => props.onBack?.()}
-              >
-                <Icon name="chevronLeft" />
-              </button>
-            </openclaw-tooltip>
+            <button
+              type="button"
+              class="mobile-nav-toggle topbar-nav-toggle topbar-back"
+              aria-label={t("common.back")}
+              onClick={() => props.onBack?.()}
+            >
+              <Icon name="chevronLeft" />
+            </button>
           </Show>
           <div class="topnav-shell__content" onMouseDown={beginNativeWindowDrag}>
             <Show
               when={!props.floating}
               fallback={
                 <>
-                  {/* A new title is a new element, so route changes never register as a layout shift. */}
-                  <Show when={props.pageTitle} keyed>
-                    {(title) => <span class="topbar-page-title">{title}</span>}
+                  <Show
+                    when={props.navigationLocked}
+                    fallback={
+                      <Show when={props.pageTitle} keyed>
+                        {(title) => <span class="topbar-page-title">{title}</span>}
+                      </Show>
+                    }
+                  >
+                    <span class="topbar-connection-brand">
+                      <GatewayWordmarkText
+                        class="topbar-connection-brand__light"
+                        fill="#20242A"
+                        label={t("connection.workspace.header")}
+                      />
+                      <GatewayWordmarkText
+                        class="topbar-connection-brand__dark"
+                        fill="#F6F7F9"
+                        label={t("connection.workspace.header")}
+                      />
+                    </span>
                   </Show>
                 </>
               }
@@ -155,6 +186,7 @@ defineSolidBridge<Props>(
       onToggleDrawer: { default: undefined, attribute: false },
       onOpenPalette: { default: undefined, attribute: false },
       floating: { default: false, attribute: false },
+      navigationLocked: { default: false, attribute: false },
       onBack: { default: undefined, attribute: false },
       pageTitle: { default: "", attribute: false },
       registerPageActions: { default: undefined, attribute: false },

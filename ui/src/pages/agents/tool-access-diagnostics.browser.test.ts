@@ -80,5 +80,7 @@ it("keeps session-denied MCP entries out of the tool preview", () => {
   expect(card?.textContent).toContain("Denied by this session’s tool restrictions.");
   expect(card?.textContent).not.toMatch(/Listed in preview via|Included in preview/);
   expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
-  expect(container.textContent).toContain("No tools are listed in this preview.");
+  expect(container.textContent).toContain(
+    "No tools in this preview. More may become available before a reply.",
+  );
 });

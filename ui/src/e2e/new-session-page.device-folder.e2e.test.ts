@@ -113,17 +113,33 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await input.inputValue()).toBe(deviceFolder.path);
       const folder = page.locator(".new-session-page__device-folder");
-      await expect.poll(() => folder.textContent()).toContain("This model can't work");
+      await expect.poll(() => folder.textContent()).toContain("This model can’t work");
       await message.press("Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await selectModel("worker");
       expect(await input.inputValue()).toBe(deviceFolder.path);
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await page.setViewportSize({ width: 390, height: 844 });
-      await expect
-        .poll(() => folder.evaluate((element) => element.scrollWidth <= element.clientWidth))
-        .toBe(true);
+      for (const viewport of [
+        { width: 1440, height: 900 },
+        { width: 844, height: 390 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await expect
+          .poll(() =>
+            folder.evaluate((element) => {
+              const field = element.getBoundingClientRect();
+              const row = element.parentElement!.getBoundingClientRect();
+              return (
+                field.top >= row.top &&
+                field.bottom <= row.bottom &&
+                element.scrollWidth <= element.clientWidth
+              );
+            }),
+          )
+          .toBe(true);
+      }
       await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ agentId: "main", message: "", deviceFolder });

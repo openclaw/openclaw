@@ -94,19 +94,19 @@ export function registerSessionsSendRejectedSteeringTests({
         expect(queuedText).toContain("[TASK-COMPLETE] occupancy ready");
         expect(queueMessage).toHaveBeenCalledWith(queuedText, {
           abortSignal: expect.any(AbortSignal),
+          queueIdentity: expect.any(String),
           toolAuthorityFingerprint: expect.any(String),
           steeringMode: "all",
           isInboundUserReply: false,
           debounceMs: 0,
-          deliveryTimeoutMs: undefined,
-          waitForTranscriptCommit: true,
+          waitForTranscriptCommit: false,
           onQueueAccepted: expect.any(Function),
           userTurnTranscriptRecorder: expect.any(Object),
         });
       } else if (disposition === "steered") {
         expect(queueMessage).toHaveBeenCalledOnce();
         expect(queueMessage.mock.calls[0]?.[0]).toContain("[TASK-COMPLETE] occupancy ready");
-        expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(true);
+        expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
         // Guidance joins the receiver's reply owner; it cannot impose a new output policy.
         expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       } else {
@@ -177,7 +177,7 @@ export function registerSessionsSendRejectedSteeringTests({
             abortOnUnconfirmedTranscript: false,
             options: expect.objectContaining({
               assertCurrent: expect.any(Function),
-              waitForTranscriptCommit: true,
+              waitForTranscriptCommit: false,
             }),
           });
         }

@@ -533,6 +533,37 @@ describe("irc monitor reconnect", () => {
 });
 
 describe("irc monitor inbound target", () => {
+  it.for(["allowlist", "open"] as const)(
+    "honors an empty channel sender list over wildcard and account senders with %s group policy",
+    async (groupPolicy, { signal }) => {
+      await withIngressQueue(async (ingressQueue, resources) => {
+        const core = installMonitorRuntime();
+        const dispatch = vi.mocked(core.channel.reply.dispatchReplyWithBufferedBlockDispatcher);
+        const server = await resources.server(startMonitorServer());
+        await resources.monitor({
+          config: monitorConfig(server.port, "bot", {
+            groupPolicy,
+            groupAllowFrom: ["*"],
+            groups: {
+              "*": { allowFrom: ["*"], requireMention: false },
+              "#ops": { allowFrom: [], requireMention: false },
+            },
+          }),
+        });
+
+        const denied = observeIngressCompletion(ingressQueue);
+        server.sendInbound("#ops");
+        await withinTest(denied, signal);
+        expect(dispatch).not.toHaveBeenCalled();
+
+        const allowed = observeIngressCompletion(ingressQueue);
+        server.sendInbound("#other");
+        await withinTest(allowed, signal);
+        expect(dispatch).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
   it("maps a channel with a colonless body through the monitor boundary", async () => {
     await withIngressQueue(async (ingressQueue, resources) => {
       const debug = vi.fn();

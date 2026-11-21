@@ -2,7 +2,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHookRunStoppedEvent } from "../plugins/hook-run-stopped.types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { stopSkillExperienceReview } from "../skills/workshop/experience-review-default.js";
 import type { SessionStopSource } from "./session-controller.stop.js";
 
 const log = createSubsystemLogger("sessions/stop");
@@ -49,9 +48,6 @@ export function notifySessionRunStopped(params: {
     sessions: [...sessions.values()],
     runIds: [...new Set([...params.runIds].map((runId) => runId.trim()).filter(Boolean))],
   };
-  // Core Workshop is not a plugin yet, so it has no hook registration; it consumes the same
-  // event directly until it moves to `api.on("run_stopped")`.
-  stopSkillExperienceReview({ sessions: event.sessions, runIds: event.runIds });
   const runner = getGlobalHookRunner();
   if (!runner?.hasHooks("run_stopped")) {
     return;

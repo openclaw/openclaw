@@ -17,7 +17,7 @@ import {
   formatChannelAllowFrom,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { resolveReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
@@ -77,7 +77,7 @@ export async function buildChannelsTable(
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
-  const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(cfg, {
+  const readOnlyPlugins = await resolveReadOnlyChannelPluginsForConfigAsync(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins,
   });

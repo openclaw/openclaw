@@ -3,7 +3,6 @@ import { buildTerminalAgentRunFailureReplyPayload } from "../../auto-reply/reply
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   buildAgentHookContextChannelFields,
@@ -117,6 +116,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     effectiveTurnThinkLevel,
   } = params.modelSelection;
   const thinkingCatalog = params.modelSelection.thinkingCatalog;
+  let effectiveTurnThinkingCatalog = thinkingCatalog;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -354,7 +354,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
           candidateAttempts += 1;
-          clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
           const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
           maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId);
@@ -452,6 +451,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             agentRuntime: candidateRuntime,
           });
           effectiveTurnThinkLevel = candidateThinkLevel;
+          effectiveTurnThinkingCatalog = candidateThinkingCatalog;
           try {
             const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               ...runOptions,
@@ -687,6 +687,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     sessionEntry,
     lifecycleGeneration,
     effectiveTurnThinkLevel,
+    effectiveTurnThinkingCatalog,
     maintenanceAuthProfile,
     compactionAccounting: compactionAccounting.fact,
     compactionRequestBudget: compactionAccounting.requestBudget,

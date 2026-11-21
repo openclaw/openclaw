@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { hasAvailableAuthForProvider, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { createProviderHttpError } from "../agents/provider-http-errors.js";
@@ -6,11 +7,12 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWhisperExecutable } from "./local-audio.test-support.js";
+import { renderMediaAttachmentDisposition } from "./media-attachment-outcomes.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
-import { formatDecisionSummary } from "./runner.entries.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
-import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
@@ -75,7 +77,7 @@ describe("runCapability audio", () => {
     const failure =
       mode === "upload"
         ? await createProviderHttpError(
-            new Response('{"detail":"Synthetic provider response body"}', { status: 403 }),
+            new Response('{"detail":"Body","code":"insufficient_quota"}', { status: 403 }),
             "Audio transcription failed",
             { statusPrefix: "HTTP " },
           )
@@ -129,21 +131,18 @@ describe("runCapability audio", () => {
       );
     } else if (mode === "missing-auth") {
       expect(result.decision.attachments[0]?.attempts).toEqual([]);
+    } else if (explicit) {
+      expect(result.outputs).toMatchObject([{ text: "authored fallback transcript" }]);
     } else {
-      expect(result.decision.attachments[0]?.attempts[0]).toMatchObject({
-        provider: "openai",
-        outcome: "failed",
-        reason: String(failure),
-      });
-      if (explicit) {
-        expect(result.outputs).toMatchObject([{ text: "authored fallback transcript" }]);
-      } else {
-        expect(result.outputs).toEqual([]);
-        expect(hasAuth).not.toHaveBeenCalled();
-        expect(formatDecisionSummary(result.decision)).toBe(
-          "audio: failed (0/1) reason=Audio transcription failed (HTTP 403)",
-        );
-      }
+      expect(result.outputs).toEqual([]);
+      expect(hasAuth).not.toHaveBeenCalled();
+      expect(formatDecisionSummary(result.decision)).toBe(
+        "audio: failed (0/1) reason=Audio transcription failed (HTTP 403) code=insufficient_quota",
+      );
+      const disposition = result.decision.attachmentDispositions?.[0] ?? { kind: "handled" };
+      expect(renderMediaAttachmentDisposition("audio", disposition)).toBe(
+        "[Audio attachment could not be analyzed (HTTP 403 code=insufficient_quota)]",
+      );
     }
   });
 

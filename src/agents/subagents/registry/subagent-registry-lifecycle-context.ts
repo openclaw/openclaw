@@ -20,7 +20,11 @@ export type SubagentLifecycleOptions = {
   subagentAnnounceTimeoutMs: number;
   getRuntimeConfig(): OpenClawConfig;
   clearPendingLifecycleError(runId: string): void;
-  countPendingDescendantRuns(rootSessionKey: string, assertCurrent: () => void): Promise<number>;
+  countPendingDescendantRuns(
+    rootSessionKey: string,
+    assertCurrent: () => void,
+    options?: { excludeSuspendedDelivery?: boolean },
+  ): Promise<number>;
   getLatestRunForChildSession(
     childSessionKey: string,
     matches?: (entry: SubagentRunRecord) => boolean,

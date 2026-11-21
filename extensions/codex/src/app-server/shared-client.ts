@@ -15,7 +15,6 @@ import {
 } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
-  bridgeCodexAppServerStartOptions,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
 } from "./auth-bridge.js";
 import {
@@ -74,7 +73,6 @@ import {
   createCodexAppServerStartupLifetime,
   getCurrentSharedClientEntry,
   getOrCreateSharedClientEntry,
-  closeSharedClientEntryIfUnclaimed,
   getSharedCodexAppServerClientState,
   ownCodexStartup,
   trackIsolatedCodexAppServerClient,
@@ -92,6 +90,7 @@ import {
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
 export {
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   retireSharedCodexAppServerClientIfCurrent,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client-lifecycle.js";
@@ -324,7 +323,7 @@ async function resolveCodexAppServerClientStartContext(
   });
   // Preserve ordinary profile environment policy; only explicitly prepared
   // handoffs clear all inherited auth variables before spawning.
-  const startOptions = await bridgeCodexAppServerStartOptions({
+  const startOptions = await codexStartup.prepareClientStartOptions({
     startOptions: managedStartOptions,
     agentId: options?.agentId,
     agentDir,
@@ -1077,17 +1076,5 @@ export async function clearSharedCodexAppServerClientAndWait(
     [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
   }
 )[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER] = clearSharedCodexAppServerClientAndWait;
-
-export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
-  client: CodexAppServerClient | undefined,
-): { found: boolean; closed: boolean; activeLeases: number; pendingAcquires: number } {
-  const entry = getCurrentSharedClientEntry(client);
-  return {
-    found: entry !== undefined,
-    closed: entry ? closeSharedClientEntryIfUnclaimed(entry) : false,
-    activeLeases: entry?.activeLeases ?? 0,
-    pendingAcquires: entry?.pendingAcquires ?? 0,
-  };
-}
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

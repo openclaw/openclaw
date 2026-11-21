@@ -299,7 +299,7 @@ export async function startSessionPlacementInitialTurn(
         if (expectedSessionId && result.sessionId && expectedSessionId !== result.sessionId) {
           return {
             status: "cleanup-rejected",
-            error: "The conversation changed. Review this message before retrying.",
+            error: "The selected session changed. Review this message before trying again.",
           };
         }
         const placement = result.placement;

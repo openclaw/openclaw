@@ -21,6 +21,7 @@ const PROFILE_KEYS = new Set([
   "desktop",
   "idleTimeout",
   "provider",
+  "runSetupScript",
   "setup",
   "setupEnv",
   "setupSecrets",
@@ -238,13 +239,35 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
 }
 
 /** Existing pre-egress leases retain inspection/release, never new setup or capture. */
-export function parseCrabboxCleanupProfile(profile: WorkerProfile): CrabboxProfile {
+export function parseCrabboxCleanupProfile(
+  profile: Parameters<typeof parseCrabboxProfile>[0],
+): CrabboxProfile {
   const { setupEnv: retiredSetupEnv, ...settings } = profile;
   const parsed = parseCrabboxProfile(settings);
   if (retiredSetupEnv !== undefined) {
     parsed.warmImage = false;
   }
   return parsed;
+}
+
+export function isReservedCrabboxSetupSecretName(name: string): boolean {
+  return (
+    [
+      "CRABBOX_ENV_ALLOW",
+      "HOME",
+      "PATH",
+      "LANG",
+      "NODE_EXTRA_CA_CERTS",
+      "SSL_CERT_FILE",
+      "CURL_CA_BUNDLE",
+      "GIT_SSL_CAINFO",
+      "REQUESTS_CA_BUNDLE",
+      "NODE_USE_ENV_PROXY",
+      "CRABBOX_SETUP_PROXY",
+    ].includes(name) ||
+    /^(?:https?|all|no)_proxy$/iu.test(name) ||
+    name.startsWith("OPENCLAW_")
+  );
 }
 
 export function parseCrabboxSetupSecrets(value: unknown): CrabboxProfile["setupSecrets"] {
@@ -265,23 +288,7 @@ export function parseCrabboxSetupSecrets(value: unknown): CrabboxProfile["setupS
         "Crabbox profile setupSecrets keys must be valid POSIX environment variable names",
       );
     }
-    if (
-      [
-        "CRABBOX_ENV_ALLOW",
-        "HOME",
-        "PATH",
-        "LANG",
-        "NODE_EXTRA_CA_CERTS",
-        "SSL_CERT_FILE",
-        "CURL_CA_BUNDLE",
-        "GIT_SSL_CAINFO",
-        "REQUESTS_CA_BUNDLE",
-        "NODE_USE_ENV_PROXY",
-        "CRABBOX_SETUP_PROXY",
-      ].includes(name) ||
-      /^(?:https?|all|no)_proxy$/iu.test(name) ||
-      name.startsWith("OPENCLAW_")
-    ) {
+    if (isReservedCrabboxSetupSecretName(name)) {
       throw new WorkerProviderError(`Crabbox profile setupSecrets name ${name} is reserved`);
     }
     if (!isSecretRef(ref) || !isValidSecretRef(ref) || ref.source !== "store") {

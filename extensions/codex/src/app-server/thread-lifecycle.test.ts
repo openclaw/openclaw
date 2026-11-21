@@ -6,10 +6,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT,
-  type ModelCompatConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
@@ -26,10 +23,7 @@ import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
-import {
-  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-  type CodexDynamicToolFunctionSpec,
-} from "./protocol.js";
+import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import {
   createCodexAppServerBindingStore,
@@ -86,7 +80,8 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
       selectedAuthMode: "oauth",
       selectedAuthFlow: "chatgpt-token-sharing",
     },
-  } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+    prompt: { resolveSystemPromptContribution: () => undefined },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
   const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
     nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
   });
@@ -532,65 +527,6 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("`sessions_spawn`");
   });
 
-  it("materializes the openclaw_direct prompt inventory once with matching guidance", () => {
-    const params = createAttemptParams({ provider: "openai" });
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    let namespaceReads = 0;
-    const yieldTool: CodexDynamicToolFunctionSpec = {
-      type: "function",
-      name: "sessions_yield",
-      description: "End the current turn",
-      inputSchema: { type: "object" },
-    };
-    const tools = [
-      yieldTool,
-      ...["zeta_tool", "message", "skill_workshop", "alpha_tool", "sessions_spawn"].map(
-        (name): CodexDynamicToolFunctionSpec => ({
-          type: "function",
-          name,
-          description: name,
-          inputSchema: { type: "object" },
-          deferLoading: ["zeta_tool", "skill_workshop", "alpha_tool"].includes(name),
-        }),
-      ),
-    ];
-    const instructions = buildDeveloperInstructions(params, {
-      nativeCodeModeEnabled: true,
-      dynamicTools: [
-        yieldTool,
-        {
-          type: "namespace",
-          name: "openclaw_direct",
-          description: "",
-          get tools() {
-            namespaceReads += 1;
-            return tools;
-          },
-        },
-      ],
-    });
-    expect(namespaceReads).toBe(1);
-    expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(true);
-    expect(instructions.includes("native `wait_agent`")).toBe(true);
-    expect(instructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: openclaw_direct.alpha_tool, openclaw_direct.skill_workshop, openclaw_direct.zeta_tool.",
-    );
-    expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain(
-      "Use Codex native `spawn_agent` for work that only needs Codex-native tools",
-    );
-    expect(instructions).toContain(
-      "Use `tool_search` for deferred tools when it is directly callable",
-    );
-    expect(instructions).toContain(
-      "Do not repeat a completed call to retrieve a result you already have.",
-    );
-    expect(instructions).not.toContain("On code-mode-only models");
-    expect(instructions).toContain(
-      "For new delegated work that needs OpenClaw tools, use `openclaw_direct.sessions_spawn` from the start.",
-    );
-  });
-
   it("keeps hashed dynamic tool fingerprints compatible with legacy JSON bindings", () => {
     const tools = [
       {
@@ -755,6 +691,7 @@ describe("Codex app-server native code mode config", () => {
       );
       expect(request.config).toEqual({
         ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+        include_collaboration_mode_instructions: false,
         project_doc_max_bytes: lightweight ? 0 : 131_072,
         ...(lightweight ? { "features.hooks": true } : { "features.multi_agent": false }),
       });
@@ -862,92 +799,6 @@ describe("Codex app-server turn input image sanitizing", () => {
       },
     ]);
   });
-});
-
-describe("Codex app-server turn params", () => {
-  it.each(["user", "cron"] as const)(
-    "builds resume and %s turn params from the selected OpenClaw model",
-    async (trigger) => {
-      const params = createAttemptParams({ provider: "codex" });
-      params.modelId = "gpt-5.4-codex";
-      params.thinkLevel = "medium";
-      params.trigger = trigger;
-      const appServer = {
-        start: {
-          transport: "stdio" as const,
-          command: "codex",
-          args: ["app-server", "--listen", "stdio://"],
-          headers: {},
-        },
-        codeModeOnly: false,
-        loopDetectionPreToolUseRelay: true,
-        requestTimeoutMs: 60_000,
-        approvalPolicy: "on-request" as const,
-        approvalsReviewer: "guardian_subagent" as const,
-        sandbox: "danger-full-access" as const,
-        connectionClass: "local-loopback" as const,
-        serviceTier: "flex" as const,
-      };
-
-      const resumeParams = await buildThreadResumeParams(params, {
-        threadId: "thread-1",
-        appServer,
-      });
-      expect(resumeParams).toEqual({
-        threadId: "thread-1",
-        excludeTurns: true,
-        initialTurnsPage: {
-          limit: 1,
-          sortDirection: "desc",
-          itemsView: "notLoaded",
-        },
-        model: "gpt-5.4-codex",
-        approvalPolicy: "on-request",
-        approvalsReviewer: "guardian_subagent",
-        config: DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-        sandbox: "danger-full-access",
-        serviceTier: "flex",
-        personality: "none",
-        developerInstructions: resumeParams.developerInstructions,
-      });
-      expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-      const turnParams = await buildTurnStartParams(params, {
-        threadId: "thread-1",
-        cwd: "/tmp/workspace",
-        appServer,
-      });
-      expect(turnParams.turnTrigger).toBe(trigger);
-      expect(turnParams.threadId).toBe("thread-1");
-      expect(turnParams.cwd).toBe("/tmp/workspace");
-      expect(turnParams.model).toBe("gpt-5.4-codex");
-      expect(turnParams.approvalPolicy).toBe("on-request");
-      expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
-      expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
-      expect(turnParams.serviceTier).toBe("flex");
-      const collaboration = turnParams.collaborationMode;
-      if (trigger === "user") {
-        expect(collaboration).toEqual({
-          mode: "default",
-          settings: {
-            model: "gpt-5.4-codex",
-            reasoning_effort: "medium",
-            developer_instructions: null,
-          },
-        });
-      } else {
-        expect(collaboration?.mode).toBe("default");
-        expect(collaboration?.settings.model).toBe("gpt-5.4-codex");
-        expect(collaboration?.settings.reasoning_effort).toBe("medium");
-        for (const instruction of [
-          "This is an OpenClaw cron automation turn",
-          "If it asks you to run an exact command, run that command before doing any investigation",
-          "Use context already provided by the runtime",
-        ]) {
-          expect(collaboration?.settings.developer_instructions).toContain(instruction);
-        }
-      }
-    },
-  );
 });
 
 describe("Codex app-server model provider selection", () => {
@@ -1638,10 +1489,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(startParams).toMatchObject({
       model: "native-effective",
       modelProvider: "native-provider",
-      developerInstructions: agentWorkspaceDeveloperInstructions,
+      developerInstructions: `<thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</thread_policy>`,
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
     });
+    // Reports adopt the base rendered for the probed native model, not the pre-probe estimate.
+    expect(startParams.baseInstructions).toEqual(expect.stringContaining("## Codex Runtime"));
+    expect(materialized.preparedOpenClawBaseInstructions).toBe(startParams.baseInstructions);
     for (const config of [forkParams.config, startParams.config] as Array<
       Record<string, unknown>
     >) {
@@ -1654,6 +1508,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         },
       });
       expect(config[questionKey]).toBe(expectedQuestionSetting);
+      expect(config).not.toHaveProperty("include_collaboration_mode_instructions");
     }
     expect(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]).toEqual({
       threadId: finalThreadId,
@@ -1723,7 +1578,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
     const resumedParams = request.mock.calls[4]?.[1];
     expect(resumedParams).toMatchObject({
-      developerInstructions: agentWorkspaceDeveloperInstructions,
+      developerInstructions: `<thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</thread_policy>`,
       config: expect.any(Object),
     });
     const resumedConfig = (resumedParams as { config: Record<string, unknown> }).config;

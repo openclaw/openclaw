@@ -33,6 +33,10 @@ import {
   normalizeEdgeAuthHeadersConfig,
   resolveEdgeAuthHeaders,
 } from "../../gateway/edge-auth.js";
+import {
+  createGatewayUnreachableTransportError,
+  isGatewayUnreachableSocketError,
+} from "../../gateway/transport-error.js";
 import { openUrl } from "../../infra/browser-open.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -449,7 +453,15 @@ async function withModelsAccountsGateway<T>(
     maxProtocol: PROTOCOL_VERSION,
     notifyOnStartupRetry: true,
     onHelloOk: () => ready.resolve(),
-    onConnectError: fail,
+    onConnectError: (error) =>
+      fail(
+        isGatewayUnreachableSocketError(error)
+          ? createGatewayUnreachableTransportError({
+              cause: error,
+              connectionDetails: bootstrap.connectionDetails,
+            })
+          : error,
+      ),
     onClose: () => {
       // A personal connect belongs to this socket; never move it to a reconnect.
       fail(new Error("Gateway connection closed. Re-run the personal-account command."));

@@ -98,10 +98,30 @@ const WikiApplySchema = Type.Object(
     title: Type.Optional(Type.String({ minLength: 1 })),
     body: Type.Optional(Type.String({ minLength: 1 })),
     lookup: Type.Optional(Type.String({ minLength: 1 })),
-    sourceIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    claims: Type.Optional(Type.Array(WikiClaimSchema)),
-    contradictions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    questions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+    sourceIds: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
+    claims: Type.Optional(
+      Type.Array(WikiClaimSchema, {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
+    contradictions: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
+    questions: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        description:
+          "For update_metadata, supply the complete replacement list, not additions. Omit to preserve existing values; [] clears the list.",
+      }),
+    ),
     confidence: Type.Optional(Type.Union([Type.Number({ minimum: 0, maximum: 1 }), Type.Null()])),
     status: Type.Optional(Type.String({ minLength: 1 })),
   },

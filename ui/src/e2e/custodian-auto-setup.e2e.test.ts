@@ -143,7 +143,7 @@ suite.define(() => {
       const gateway = await install(page, { deferredMethods: ["openclaw.setup.auto"] });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
-      const connecting = card.getByRole("heading", { name: "Connecting your AI..." });
+      const connecting = card.getByRole("heading", { name: "Connecting your AI…" });
       await connecting.waitFor();
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       await capture(page, "pending-automatic-setup", card, [connecting]);
@@ -226,7 +226,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
       const signIn = card.getByRole("button", {
-        name: reuse ? "Use a separate login" : "Sign in with ChatGPT",
+        name: reuse ? "Sign in separately" : "Sign in with ChatGPT",
       });
       await signIn.waitFor();
       const sharedNotice = card.getByText(
@@ -259,7 +259,7 @@ suite.define(() => {
       const selected = card.getByRole("heading", { name: /Using Codex/ });
       await selected.waitFor();
       await sharedNotice.waitFor({ state: "detached" });
-      expect(await card.getByRole("button", { name: "Use a separate login" }).count()).toBe(0);
+      expect(await card.getByRole("button", { name: "Sign in separately" }).count()).toBe(0);
       if (reuse) {
         await capture(page, "separate-codex-login", card, [selected]);
       }
@@ -268,6 +268,48 @@ suite.define(() => {
         .waitFor();
     });
   });
+
+  it.each([
+    {
+      status: "unavailable",
+      error: "The local model needs more memory. Load a smaller model.",
+      title: "Couldn’t connect your AI",
+    },
+    {
+      status: "needs-sign-in",
+      error: "The saved login expired. Sign in again.",
+      title: "Connect ChatGPT to get started",
+    },
+  ] as const)(
+    "shows $status attempts and offers ChatGPT sign-in",
+    async ({ status, error, title }) => {
+      await suite.withPage(options, async ({ page }) => {
+        const gateway = await install(page, {
+          methodResponses: {
+            "openclaw.setup.auto": {
+              ...needsSignIn,
+              status,
+              attempts: [{ kind: local.kind, label: local.label, error }],
+            },
+            "openclaw.setup.auth.start": { sessionId: "recovery", done: true, status: "done" },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+        const card = page.locator(".custodian-setup");
+        await card.getByRole("heading", { name: title }).waitFor();
+        const failure = card.getByText(error, { exact: false });
+        await failure.waitFor();
+        const signIn = card.getByRole("button", { name: "Sign in with ChatGPT" });
+        await signIn.waitFor();
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+        await capture(page, `${status}-failure-with-sign-in`, card, [failure, signIn]);
+        await signIn.click();
+        expect((await gateway.waitForRequest("openclaw.setup.auth.start")).params).toMatchObject({
+          authChoice: needsSignIn.signIn!.authOptionId,
+        });
+      });
+    },
+  );
 
   it.each([false, true])(
     "explains unavailable inference and routes recovery (native=%s)",

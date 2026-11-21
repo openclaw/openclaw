@@ -16,13 +16,15 @@ import {
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
 } from "../media/media-facts.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
-} from "../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  attachSteeringRuntimeContext,
+  getSteeringRuntimeContext,
+} from "./embedded-agent-runner/run/runtime-context-prompt.js";
 import { flushPendingToolResultsAfterIdle } from "./embedded-agent-runner/wait-for-idle-before-flush.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
@@ -270,6 +272,26 @@ describe("guardSessionManager integration", () => {
       expect.objectContaining(prepared),
       runtimeMessage,
     );
+  });
+
+  it("publishes a suppressed user envelope without rewriting the steering carrier", () => {
+    const runtimeMessage = makeUserMessage("steered turn", 2);
+    attachSteeringRuntimeContext(runtimeMessage, { text: "queued steer context" });
+    const carrier = getSteeringRuntimeContext(runtimeMessage);
+    const onUserMessagePersistenceSuppressed = vi.fn();
+    const { sm, appendMessage } = createGuard({
+      // Spread copies carry the enumerable steering symbol into the durable envelope.
+      preparedUserTurnMessage: { ...runtimeMessage },
+      suppressNextUserMessagePersistence: true,
+      onUserMessagePersistenceSuppressed,
+    });
+
+    appendMessage(runtimeMessage);
+
+    expect(sm.getEntries()).toEqual([]);
+    expect(carrier).toBeDefined();
+    expect(getSteeringRuntimeContext(runtimeMessage)).toBe(carrier);
+    expect(onUserMessagePersistenceSuppressed).toHaveBeenCalledOnce();
   });
 
   it("keeps synthetic-result cleanup private after retiring callbacks", async () => {

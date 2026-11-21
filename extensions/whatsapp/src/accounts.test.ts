@@ -15,27 +15,20 @@ function config(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]): 
 describe("resolveWhatsAppAuthDir", () => {
   const base = config({ accounts: {} });
 
-  it("sanitizes path traversal sequences in accountId", () => {
-    const { authDir } = resolveWhatsAppAuthDir({ cfg: base, accountId: "../../../etc/passwd" });
-    expect(authDir).not.toContain("..");
-    expect(path.basename(authDir)).not.toContain("/");
-  });
-
-  it("sanitizes special characters in accountId", () => {
-    const { authDir } = resolveWhatsAppAuthDir({
-      cfg: base,
-      accountId: "foo/bar\\baz",
-    });
-    // Sprawdzaj sanityzacje na segmencie accountId, nie na calej sciezce
-    // (Windows uzywa backslash jako separator katalogow).
-    const segment = path.basename(authDir);
-    expect(segment).not.toContain("/");
-    expect(segment).not.toContain("\\");
-  });
+  it.each(["../../../etc/passwd", "foo/bar\\baz"])(
+    "sanitizes unsafe accountId: %s",
+    (accountId) => {
+      const { authDir } = resolveWhatsAppAuthDir({ cfg: base, accountId });
+      const segment = path.basename(authDir);
+      expect(authDir).not.toContain("..");
+      expect(segment).not.toMatch(/[/\\]/);
+    },
+  );
 
   it("returns default directory for empty accountId", () => {
-    const { authDir } = resolveWhatsAppAuthDir({ cfg: base, accountId: "" });
-    expect(authDir).toMatch(/whatsapp[/\\]default$/);
+    const env = { OPENCLAW_OAUTH_DIR: path.resolve("synthetic-credentials") };
+    const { authDir } = resolveWhatsAppAuthDir({ cfg: base, accountId: "", env });
+    expect(authDir).toBe(path.join(env.OPENCLAW_OAUTH_DIR, "whatsapp", "default"));
   });
 
   it("preserves top-level default account when named accounts are configured", () => {
@@ -63,17 +56,11 @@ describe("resolveWhatsAppAuthDir", () => {
 
   it("merges top-level and account-specific config through shared helpers", () => {
     const resolved = resolveWhatsAppAccount({
-      cfg: {
-        channels: {
-          whatsapp: {
-            sendReadReceipts: false,
-            responsePrefix: "[root]",
-            accounts: {
-              work: {},
-            },
-          },
-        },
-      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      cfg: config({
+        sendReadReceipts: false,
+        responsePrefix: "[root]",
+        accounts: { work: {} },
+      }),
       accountId: "work",
     });
 
@@ -164,18 +151,9 @@ describe("resolveWhatsAppAuthDir", () => {
 
   it("does not inherit default-account selfChatMode for named accounts", () => {
     const resolved = resolveWhatsAppAccount({
-      cfg: {
-        channels: {
-          whatsapp: {
-            accounts: {
-              default: {
-                selfChatMode: true,
-              },
-              work: {},
-            },
-          },
-        },
-      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      cfg: config({
+        accounts: { default: { selfChatMode: true }, work: {} },
+      }),
       accountId: "work",
     });
 

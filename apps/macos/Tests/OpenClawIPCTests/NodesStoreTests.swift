@@ -304,13 +304,13 @@ extension NodesStoreTests {
         try await TestIsolation.withIsolatedState {
             let state = AppStateStore.shared
             let previousMode = state.connectionMode
-            let previousAccent = state.profileAccentHex
+            let previousAccent = state.profileAccent
             let previousMainKey = WorkActivityStore.shared.mainSessionKey
             // The synthetic transport owns no local process; recovery fixtures own that handoff.
             state.connectionMode = .unconfigured
             defer {
                 state.connectionMode = previousMode
-                state.profileAccentHex = previousAccent
+                state.profileAccent = previousAccent
                 WorkActivityStore.shared.reset()
                 WorkActivityStore.shared.setMainSessionKey(previousMainKey)
             }

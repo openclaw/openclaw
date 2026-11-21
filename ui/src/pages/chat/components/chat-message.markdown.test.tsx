@@ -343,7 +343,9 @@ describe("grouped chat rendering", () => {
 
     expect(elementText(".chat-text")).toContain("This message is too large to display here.");
     expect(harness.view.textContent).not.toContain("[chat.history omitted");
-    expect(elementText(".chat-message-load-error")).toContain("Could not load the full message.");
+    expect(elementText(".chat-message-load-error")).toContain(
+      "Couldn’t load the full message. Try again.",
+    );
     expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
     requireElement(".chat-message-load-error__retry", HTMLButtonElement).click();
     expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("oversized-assistant-error");

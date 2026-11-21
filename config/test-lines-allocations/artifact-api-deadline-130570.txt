@@ -1,2 +1,0 @@
-# Covers timeout exit contracts at the verify-upload CLI boundary.
-29

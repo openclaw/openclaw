@@ -13,6 +13,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     agentHarnessId: entry.agentHarnessId,
     agentRuntimeOverride: entry.agentRuntimeOverride,
     initializationPending: entry.initializationPending,
+    templateInitialization: structuredClone(entry.templateInitialization),
     execHost: entry.execHost,
     execNode: entry.execNode,
     deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,

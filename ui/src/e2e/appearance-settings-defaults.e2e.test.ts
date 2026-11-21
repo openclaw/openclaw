@@ -369,21 +369,23 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
-      const usage = sidebar.locator(".sidebar-pages__entry").filter({
-        has: page.locator('[data-sidebar-entry="route:usage"]'),
+      const dashboards = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="route:dashboards"]'),
       });
-      const pinnedUsage = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"]');
+      const pinnedDashboards = sidebar.locator(
+        '.sidebar-rail__pin[data-sidebar-entry="route:dashboards"]',
+      );
       const pinsBefore = await sidebar
         .locator(".sidebar-rail__pin")
         .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
-      expect(await pinnedUsage.count()).toBe(0);
-      await usage.getByRole("button", { name: "Pin", exact: true }).click();
-      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
-      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
+      expect(await pinnedDashboards.count()).toBe(0);
+      await dashboards.getByRole("button", { name: "Pin", exact: true }).click();
+      await pinnedDashboards.getByRole("link", { name: "Dashboards", exact: true }).waitFor();
+      await dashboards.getByRole("button", { name: "Unpin", exact: true }).waitFor();
       // Without a writable profile, personal navigation is browser-local, never global config.
       await expect
         .poll(() => readPersistedSettings(page))
-        .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
+        .toMatchObject({ railShortcuts: [...pinsBefore, "route:dashboards"] });
       await expectRequestCounts(gateway, noPreferenceWrites);
 
       await page.reload();
@@ -394,12 +396,12 @@ suite.define(() => {
 
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
-      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
+      await pinnedDashboards.getByRole("link", { name: "Dashboards", exact: true }).waitFor();
       await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
-      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
+      await dashboards.getByRole("button", { name: "Unpin", exact: true }).waitFor();
       await expect
         .poll(() => readPersistedSettings(page))
-        .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
+        .toMatchObject({ railShortcuts: [...pinsBefore, "route:dashboards"] });
       await expectRequestCounts(gateway, noPreferenceWrites);
     });
   });
@@ -422,7 +424,7 @@ suite.define(() => {
       await importer.locator("button.primary").click();
       await expect
         .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
-        .toBe("tweakcn import failed (503).");
+        .toBe("Couldn’t import the theme. Check the link and try again.tweakcn returned HTTP 503.");
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await gateway.setMethodResponse(
@@ -431,7 +433,7 @@ suite.define(() => {
       );
       await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
       await importer.locator("button.primary").click();
-      await expectText(importer.getByRole("status"), "Imported");
+      await expectText(importer.locator(".settings-theme-import__meta-value"), "Light Green");
       await expectAttribute(page.locator("html"), "data-theme", "custom");
       const importedSettings = await readPersistedSettings(page);
       expect(importedSettings).toMatchObject({
@@ -497,8 +499,8 @@ suite.define(() => {
             };
           })
           .toEqual({ hasCustomTheme: true, theme: "knot" });
-        await expectText(importer.locator(".settings-theme-import__message"), "Imported");
-        await expect.poll(() => importer.getByRole("status").count()).toBe(1);
+        await expectText(importer.locator(".settings-theme-import__meta-value"), "Light Green");
+        await expect.poll(() => importer.locator("input").inputValue()).toBe("");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       } finally {
         releaseImport();

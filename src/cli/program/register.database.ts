@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { type Command, Option } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -44,35 +45,83 @@ async function runDatabasePreflight(
   }
 }
 
+async function inspectDatabaseOwnership(databasePath: string) {
+  const [{ readConfigSnapshotBeforeEngineSelection }, errors, { resolveDatabaseFamilyEngines }] =
+    await Promise.all([
+      import("../../commands/config-preflight-snapshot.js"),
+      import("../../config/io.invalid-config.js"),
+      import("../../infra/database-engine/registry.js"),
+    ]);
+  const snapshot = await readConfigSnapshotBeforeEngineSelection(process.env, {
+    isolateEnv: false,
+  });
+  const readFailed = errors.isConfigReadFailure(snapshot);
+  if (readFailed || snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")) {
+    const { readBackupEngine } = await import("../../infra/database-engine/physical-store.js");
+    // An intact native store can still report its claim during config recovery.
+    if (!existsSync(databasePath) || readBackupEngine(databasePath).engine !== "sqlite") {
+      throw readFailed
+        ? errors.createConfigReadError(snapshot)
+        : errors.createInvalidConfigError(
+            snapshot.path,
+            errors.formatInvalidConfigDetails(snapshot.issues),
+          );
+    }
+  } else if (resolveDatabaseFamilyEngines(snapshot.config).state === "postgres") {
+    const [
+      { resolveDatabaseEngineSelection },
+      { withDatabaseEngineSelection },
+      { executeExistingOpenClawStateRead },
+    ] = await Promise.all([
+      import("../../infra/database-engine/config.js"),
+      import("../../infra/database-engine/context.js"),
+      import("../../state/openclaw-state-db-readonly.js"),
+    ]);
+    const selection = await resolveDatabaseEngineSelection(snapshot.config);
+    const postgresPath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
+    const read = await withDatabaseEngineSelection(selection, () =>
+      executeExistingOpenClawStateRead(
+        { path: postgresPath },
+        { type: "stateBootstrap.ownership", input: { pathname: postgresPath } },
+      ),
+    );
+    return { databasePath: postgresPath, ownership: read?.ownership ?? null };
+  }
+  const { inspectOpenClawStateOwnershipAtPath } =
+    await import("../../state/openclaw-state-ownership.js");
+  return { databasePath, ownership: inspectOpenClawStateOwnershipAtPath(databasePath) };
+}
+
 async function runDatabaseOwnership(
   options: DatabaseOutputOptions & { manager?: string },
 ): Promise<void> {
   try {
-    const databasePath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
+    const initialPath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
     const managerId = options.manager;
-    const ownership =
-      managerId !== undefined
-        ? await (
-            await import("../local-state-owner.js")
-          ).runWithLocalStateOwner({
-            method: "database.ownership.claim",
-            params: { manager: managerId },
-            target: databasePath,
-            onForeignOwner: async () => {
-              throw new Error(
-                "Cannot claim shared-state ownership while a Gateway or embedded agent is running. Stop the Gateway through the external supervisor and stop any embedded agents, then retry the ownership claim.",
-              );
-            },
-            runLocal: async ({ env, assertCurrent }) => {
-              const { claimOpenClawStateOwnership } =
-                await import("../../state/openclaw-state-ownership-operations.js");
-              assertCurrent();
-              return claimOpenClawStateOwnership(managerId, { path: databasePath, env });
-            },
-          })
-        : (
-            await import("../../state/openclaw-state-ownership.js")
-          ).inspectOpenClawStateOwnershipAtPath(databasePath);
+    const { databasePath, ownership } =
+      managerId === undefined
+        ? await inspectDatabaseOwnership(initialPath)
+        : {
+            databasePath: initialPath,
+            ownership: await (
+              await import("../local-state-owner.js")
+            ).runWithLocalStateOwner({
+              method: "database.ownership.claim",
+              params: { manager: managerId },
+              target: initialPath,
+              onForeignOwner: async () => {
+                throw new Error(
+                  "Cannot claim shared-state ownership while a Gateway or embedded agent is running. Stop the Gateway through the external supervisor and stop any embedded agents, then retry the ownership claim.",
+                );
+              },
+              runLocal: async ({ env, assertCurrent }) => {
+                const { claimOpenClawStateOwnership } =
+                  await import("../../state/openclaw-state-ownership-operations.js");
+                assertCurrent();
+                return claimOpenClawStateOwnership(managerId, { path: initialPath, env });
+              },
+            }),
+          };
     const status = ownership
       ? { status: "external" as const, ownership }
       : { status: "unowned" as const };

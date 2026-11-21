@@ -14,6 +14,7 @@ import {
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
 import { NonEmptyString, Sha256String } from "./primitives.js";
+import { RecommendedPromptsSchema } from "./recommended-prompts.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SkillsDetailResultSchema } from "./skill-detail.js";
@@ -43,6 +44,7 @@ export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 
 export {
+  ProviderPresentationSchema,
   ModelChoiceSchema,
   ModelRuntimeChoiceSchema,
   ModelCatalogProviderOutcomeSchema,
@@ -50,6 +52,7 @@ export {
   ModelsListResultSchema,
 } from "./model-catalog.js";
 export type {
+  ProviderPresentation,
   ModelChoice,
   ModelRuntimeChoice,
   ModelCatalogProviderOutcome,
@@ -78,6 +81,8 @@ export const AgentSummarySchema = closedObject({
   creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
+  description: Type.Optional(NonEmptyString),
+  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
   identity: Type.Optional(
     closedObject({
       name: Type.Optional(NonEmptyString),
@@ -99,6 +104,8 @@ export const AgentSummarySchema = closedObject({
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
+  /** Only with an agent-level thinkingDefault: the level clearing it would resolve to. */
+  thinkingInheritedDefault: Type.Optional(NonEmptyString),
   // Configured posture for display only, never an authorization decision.
   defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
   /** Explicit default for new attended sessions; existing-session Default keeps tool policy. */

@@ -67,6 +67,14 @@ final class ConnectionModeCoordinator {
             guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
 
         case .remote:
+            if hostsLocalGateway {
+                // A tunnel opened while hosting was off can hold the hosted Gateway's port or its
+                // widget sandbox port, and startup would attach to that listener instead of launching.
+                // Hosting is part of the tunnel configuration, so such a tunnel is stale; retire it
+                // and wait for its SSH process to exit. ensureRemoteControlTunnel reopens it below.
+                await RemoteTunnelManager.shared.retireStaleControlTunnel()
+                guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
+            }
             await self.applyLocalGateway(
                 mode: mode,
                 paused: paused,
