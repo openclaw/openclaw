@@ -50,7 +50,6 @@ import {
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
-  captureGatewayOperatorContinuation,
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
@@ -386,8 +385,23 @@ describe("scheduled authenticated operator source", () => {
         expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
         expect(first.assertCurrent).not.toThrow();
         expect(second.assertCurrent).not.toThrow();
-        invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-        expect(first.assertCurrent).not.toThrow();
+        const descendant = expectDefined(
+          await first.run(async () => await captureOperatorToolGatewayContinuationContext()),
+          "descendant after requester retirement",
+        );
+        try {
+          first.release();
+          expect(descendant.assertCurrent).not.toThrow();
+          expect(descendant.operatorAuthority?.reauthorize).not.toThrow();
+          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+          expect(descendant.assertCurrent).not.toThrow();
+          await expect(
+            descendant.run(async () => await captureOperatorToolGatewayContinuationContext()),
+          ).rejects.toThrow();
+        } finally {
+          descendant.release();
+        }
+        expect(second.assertCurrent).not.toThrow();
       } finally {
         first.release();
         second.release();
@@ -601,66 +615,6 @@ describe("scheduled authenticated operator source", () => {
       await issueDeviceBootstrapToken({ baseDir: stateDir });
       expectCurrent(restored.authority);
     }));
-  it.each(["allowed", "revoked"] as const)(
-    "admits a retained tokenless continuation after its origin ended unless revoked (%s)",
-    (change) =>
-      withRecovery(
-        async (fixture) => {
-          const connection = new AbortController();
-          Object.assign(fixture.client, { connectionSignal: connection.signal });
-          const caller = acceptedCaller(fixture);
-          const parent = new AbortController();
-          const captured = expectDefined(
-            await caller.capture({ assertCurrent: () => parent.signal.throwIfAborted() }),
-            "accepted source",
-          );
-          expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
-            captured.authority;
-          const continuation = expectDefined(
-            await captureGatewayOperatorContinuation({
-              client: fixture.client,
-              context: fixture.context,
-            }),
-            "detached continuation",
-          );
-          let releaseRetained = expectDefined(continuation.authority.retain, "retain")();
-          try {
-            expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
-            // The original request, its closure and its connection all end before replay.
-            continuation.release();
-            captured.release();
-            caller.release();
-            connection.abort(new Error("Original socket closed"));
-            // The parent invocation is obsolete; a detached child still takes new holds.
-            parent.abort(new Error("Parent chat was edited"));
-            const releaseNext = expectDefined(continuation.authority.retain, "retain")();
-            releaseRetained();
-            releaseRetained = releaseNext;
-            const replay = expectDefined(continuation.authority.reauthorize, "replay admission");
-            if (change === "allowed") {
-              expect(replay).not.toThrow();
-            } else {
-              fixture.context.invalidateClientsForDevice?.("recovery-device", {
-                role: "operator",
-              });
-              // Admitted work finishes; a replay starts through the same admission as new work.
-              expect(continuation.authority.assertCurrent).not.toThrow();
-              expect(replay).toThrow();
-              await expect(
-                captureGatewayOperatorContinuation({
-                  client: fixture.client,
-                  context: fixture.context,
-                }),
-              ).rejects.toThrow();
-            }
-          } finally {
-            releaseRetained();
-          }
-        },
-        { tokenlessDevice: true },
-      ),
-  );
-
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>
     withRecovery(
       async (fixture) => {

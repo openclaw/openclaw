@@ -32,7 +32,6 @@ import {
   bindGatewayDeviceRevocation,
   captureGatewayDeviceRevocation,
   readGatewayDeviceRevocationGuard,
-  retainGatewayDeviceRevocationIndex,
 } from "./device-revocation.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
@@ -607,36 +606,43 @@ export async function captureGatewayOperatorContinuation(
     releaseInherited?.();
     throw error;
   });
+  // Share the already-acquired source hold: retaining its old claim again would
+  // reject descendants after that request ends, even while this continuation lives.
+  let references = 1;
+  const releaseHold = () => {
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        if (--references === 0) {
+          restored.release();
+          releaseInherited?.();
+        }
+      }
+    };
+  };
   const authority = createAdmittedRunOperatorAuthority({
     ...restored.authority,
     // One origin keeps one comparable source identity, as completion batches require.
     source: inherited.source,
-    scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
-    // Every hold keeps the origin's device revocation indexed, not its ended request lifetime.
-    retain: () => {
-      const releaseRestored = restored.authority.retain?.();
-      const releaseOrigin = retainGatewayDeviceRevocationIndex(inherited.assertCurrent);
-      return () => {
-        releaseRestored?.();
-        releaseOrigin?.();
-      };
-    },
-    // A tokenless snapshot carries no device; a start checks the origin's revocation, not its liveness.
+    // Preserve the origin device check even when a tokenless snapshot omits it.
     reauthorize: () => {
       if (readGatewayDeviceRevocationGuard(inherited.assertCurrent)?.() === false) {
         throw new GatewayOperatorRecoveryAuthorizationError(
           "Operator access was revoked; start a new user turn.",
         );
       }
+      inherited.reauthorize?.();
       restored.authority.reauthorize?.();
     },
+    // Each descendant must keep both owners used by reauthorization alive.
+    retain: () => {
+      restored.authority.assertCurrent();
+      references += 1;
+      return releaseHold();
+    },
+    scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
   });
   bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
-  return {
-    authority,
-    release: () => {
-      restored.release();
-      releaseInherited?.();
-    },
-  };
+  return { authority, release: releaseHold() };
 }
