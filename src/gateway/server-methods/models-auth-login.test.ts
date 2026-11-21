@@ -22,7 +22,10 @@ const hooks = vi.hoisted(() => ({
   admission: vi.fn(),
   catalog: vi.fn(),
 }));
-vi.mock("./models-list-result.js", () => ({ buildModelsListResult: hooks.catalog }));
+vi.mock("./models-list-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-list-result.js")>()),
+  buildModelsListResult: hooks.catalog,
+}));
 vi.mock("../../commands/models/auth.js", () => ({ runModelsAuthLoginFlowForGateway: hooks.login }));
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeclaredProviderAuthChoices: () => {
