@@ -16,8 +16,7 @@ import {
 } from "./session-event-handoff.js";
 import { startEmbeddedTurn } from "./session-event.test-support.js";
 
-// mock-isolation: The real event admission, reply preparation and CLI completion run;
-// only runtime selection and external CLI I/O are replaced with deterministic output.
+// mock-isolation: Run real admission/reply/CLI settlement; replace runner selection and CLI I/O.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
 await Promise.all([
