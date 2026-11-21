@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { tmpdir } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
 import { retirementCuts } from "./installed-recovery-observations.mjs";
 import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
@@ -1524,7 +1526,7 @@ function phaseResult(phase, exitStatus, signal) {
     !Number.isInteger(exitStatus) ||
     exitStatus < 0 ||
     exitStatus > 255 ||
-    ![null, "SIGHUP", "SIGINT", "SIGTERM"].includes(signal)
+    (signal !== null && (typeof signal !== "string" || !Object.hasOwn(osConstants.signals, signal)))
   ) {
     throw new Error();
   }
@@ -1561,6 +1563,16 @@ function environmentKeys(keys = []) {
 }
 
 function writeReport(artifactRoot, directory, name, report, limit) {
+  writePublishedFile(
+    artifactRoot,
+    directory,
+    name,
+    Buffer.from(`${JSON.stringify(report, null, 2)}\n`),
+    limit,
+  );
+}
+
+function writePublishedFile(artifactRoot, directory, name, bytes, limit) {
   if (fs.lstatSync(artifactRoot).isSymbolicLink()) {
     throw new Error();
   }
@@ -1568,8 +1580,7 @@ function writeReport(artifactRoot, directory, name, report, limit) {
   if (fs.lstatSync(directory).isSymbolicLink()) {
     throw new Error();
   }
-  const serialized = `${JSON.stringify(report, null, 2)}\n`;
-  if (Buffer.byteLength(serialized) > limit) {
+  if (bytes.length > limit) {
     throw new Error();
   }
   // Root-managed containers must leave the private snapshot readable by the
@@ -1579,7 +1590,7 @@ function writeReport(artifactRoot, directory, name, report, limit) {
   const temporary = path.join(directory, `.${name}.${process.pid}.tmp`);
   const fd = fs.openSync(temporary, "wx", 0o644);
   try {
-    fs.writeFileSync(fd, serialized);
+    fs.writeFileSync(fd, bytes);
     fs.linkSync(temporary, path.join(directory, name));
   } finally {
     fs.closeSync(fd);
@@ -2367,6 +2378,464 @@ function diagnosticSanitizer(redactSensitiveText, outcome) {
     }
     return result;
   };
+}
+
+// Export checkpoints precede the final summary. Only the complete, bound export
+// plus the host's joined successful command may publish an affirmative outcome.
+export async function publishInstalledTerminalDiagnostics(
+  artifactRoot,
+  destination,
+  redactSensitiveText,
+  { exitStatus, timedOut, packageSha256, signal = null },
+) {
+  assert(typeof timedOut === "boolean" && /^[a-f0-9]{64}$/.test(packageSha256));
+  assert(!timedOut || exitStatus !== 0);
+  assert(signal === null || exitStatus !== 0);
+  const coordinates = phaseResult(
+    timedOut ? "installed-terminal-timeout" : "installed-terminal",
+    exitStatus,
+    signal,
+  );
+  for (const label of Object.keys(omissions)) {
+    delete omissions[label];
+  }
+  const report = {
+    ...coordinates,
+    outcome: "failed",
+    host: { processGroupJoined: true, producerSettled: true, timedOut },
+    packageSha256,
+    export: { status: "unavailable", files: [], bytes: 0 },
+    omissions,
+  };
+  const limit = 7 * 1024 * 1024;
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const cells = ["healthy", "late-failure", "historical-control"];
+  const files = new Map();
+  let validated = false;
+  let complete = false;
+  let passed = false;
+  let summary;
+  let finalBytes;
+  let manifestBytes;
+  let manifest;
+  try {
+    finalBytes = readOwned(
+      artifactRoot,
+      "export/installed-terminal.json",
+      "terminal final summary",
+      publicLimit,
+      true,
+    );
+    const parseSummary = (bytes) => {
+      const value = JSON.parse(bytes);
+      assert.equal(value.scope, "installed-terminal-package-settlement");
+      assert.equal(value.sourcePackageSha256, packageSha256);
+      assert(["running", "failed", "passed"].includes(value.status));
+      assert(Array.isArray(value.cells) && value.cells.length <= cells.length);
+      assert(new Set(value.cells.map((cell) => cell.name)).size === value.cells.length);
+      assert(value.cells.every((cell) => cells.includes(cell.name)));
+      assert(Array.isArray(value.commands) && value.commands.length <= 24);
+      assert(value.commands.every(({ name }) => /^[a-z0-9-]{1,80}$/.test(name)));
+      assert(new Set(value.commands.map(({ name }) => name)).size === value.commands.length);
+      return value;
+    };
+    try {
+      summary = parseSummary(finalBytes);
+    } catch {
+      finalBytes = undefined;
+      omissions["terminal final summary"] ??= "Final summary unavailable or invalid";
+      summary = parseSummary(
+        readOwned(artifactRoot, "installed-terminal.json", "terminal checkpoint", publicLimit),
+      );
+    }
+    const required = [
+      "candidate-package-identity.json",
+      "package-hasher-contract.json",
+      "package-heartbeat-contracts.json",
+      "installed-terminal-contracts.json",
+      ...summary.cells.map(({ name }) => `${name}-dependencies.json`),
+    ];
+    const names = new Map([
+      ...required.map((name) => [name, [name]]),
+      ...summary.commands.flatMap(({ name }) =>
+        ["out", "err"].map((suffix) => [`${name}.${suffix}.gz`, [`${name}.${suffix}`]]),
+      ),
+      ...summary.cells.flatMap(({ name }) => [
+        ...[
+          "observer.json",
+          "observer-failed.json",
+          "handoff.json",
+          "launcher-intent.json",
+          "launcher-replaced.json",
+        ].map((suffix) => [`${name}-${suffix}`, [`${name}/${suffix}`]]),
+        [`${name}-isolate-census.json`, []],
+        [`${name}-lifetimes.jsonl.gz`, []],
+        [`${name}-observer.jsonl.gz`, new RegExp(`^${name}/[0-9]+-[0-9]+\\.jsonl$`)],
+      ]),
+    ]);
+    manifestBytes = readOwned(
+      artifactRoot,
+      "export/manifest.json",
+      "terminal manifest",
+      128 * 1024,
+      true,
+    );
+    assert(manifestBytes);
+    manifest = JSON.parse(manifestBytes);
+    assert(Array.isArray(manifest.files) && manifest.files.length <= 94);
+    assert(new Set(manifest.files.map((file) => file.name)).size === manifest.files.length);
+    assert(Number.isSafeInteger(manifest.bytes) && manifest.bytes >= 0 && manifest.bytes <= limit);
+    assert(
+      manifest.files.every(
+        (file) => Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= limit,
+      ),
+    );
+    assert.equal(
+      manifest.bytes,
+      manifest.files.reduce((sum, file) => sum + file.bytes, 0),
+    );
+    let remaining = limit;
+    for (const [index, entry] of manifest.files.entries()) {
+      const label = `terminal member ${index + 1}`;
+      try {
+        assert(names.has(entry.name));
+        assert(Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 && entry.bytes <= limit);
+        assert(/^[a-f0-9]{64}$/.test(entry.sha256));
+        assert(Array.isArray(entry.sources));
+        const allowed = names.get(entry.name);
+        assert.equal(
+          new Set(entry.sources.map((source) => source.name)).size,
+          entry.sources.length,
+        );
+        if (Array.isArray(allowed)) {
+          assert.deepEqual(
+            entry.sources.map((source) => source.name),
+            allowed,
+          );
+        }
+        assert(
+          entry.sources.every(
+            (source) =>
+              (allowed instanceof RegExp
+                ? allowed.test(source.name)
+                : allowed.includes(source.name)) &&
+              Number.isSafeInteger(source.bytes) &&
+              source.bytes >= 0 &&
+              source.bytes <= 8 * 1024 * 1024 &&
+              /^[a-f0-9]{64}$/.test(source.sha256),
+          ),
+        );
+        assert(entry.bytes <= remaining);
+        remaining -= entry.bytes;
+        const bytes = readOwned(artifactRoot, `export/${entry.name}`, label, entry.bytes, true);
+        assert(bytes && bytes.length === entry.bytes && hash(bytes) === entry.sha256);
+        const decodedLimit = entry.name.endsWith("-observer.jsonl.gz")
+          ? 32 * 1024 * 1024
+          : entry.name.endsWith("-lifetimes.jsonl.gz")
+            ? 4 * 1024 * 1024
+            : privateLimit;
+        const decoded = entry.name.endsWith(".gz")
+          ? gunzipSync(bytes, { maxOutputLength: decodedLimit })
+          : bytes;
+        // Keep the producer's 8 MiB command, 32 MiB raw trace and 4 MiB
+        // lifecycle limits. Verify decoded source boundaries before projection.
+        if (entry.sources.length) {
+          let offset = 0;
+          for (const source of entry.sources) {
+            assert(offset + source.bytes <= decoded.length);
+            assert.equal(source.sha256, hash(decoded.subarray(offset, offset + source.bytes)));
+            offset += source.bytes;
+          }
+          assert.equal(offset, decoded.length);
+        }
+        files.set(entry.name, {
+          bytes,
+          decoded,
+          decodedLimit,
+          entry: {
+            name: entry.name,
+            bytes: entry.bytes,
+            sha256: entry.sha256,
+            sources: entry.sources.map(({ name, bytes: sourceBytes, sha256 }) => ({
+              name,
+              bytes: sourceBytes,
+              sha256,
+            })),
+          },
+        });
+      } catch {
+        omissions[label] ??= "Invalid or unavailable exported member";
+      }
+    }
+    // The raw checkpoint may say passed before either export write completed.
+    // Revalidate references with the producer's canonical export contract.
+    assert(finalBytes && files.size === manifest.files.length);
+    assert.deepEqual(
+      Object.keys(manifest)
+        .filter((key) => key !== "error")
+        .toSorted(),
+      ["bytes", "files", "omissions", "status"],
+    );
+    assert.deepEqual(
+      manifest.files,
+      [...files.values()].map(({ entry }) => entry),
+    );
+    assert(["complete", "failed"].includes(manifest.status));
+    assert(Array.isArray(manifest.omissions));
+    assert(manifest.omissions.every((name) => typeof name === "string"));
+    // Capture-only consumers copy a finite dependency-free closure. Load the
+    // terminal export validator only when this host publication mode needs it.
+    const { buildInstalledTerminalSummary } = await import("./installed-terminal-observer.mjs");
+    assert.deepEqual(
+      summary.evidence,
+      buildInstalledTerminalSummary(summary, manifestBytes, (name) => {
+        assert(files.has(name));
+        return files.get(name).bytes;
+      }).evidence,
+    );
+    validated = true;
+    complete = manifest.status === "complete" && manifest.omissions.length === 0;
+  } catch {
+    omissions["terminal export"] = "Complete bound terminal export unavailable";
+  }
+  try {
+    assert(complete);
+    assert.equal(summary.status, "passed");
+    assert.equal(summary.unjoined, false);
+    assert.equal(summary.runtimeRemoved, true);
+    assert.equal(summary.error, undefined);
+    assert.equal(summary.cleanupError, undefined);
+    assert.equal(summary.evidenceError, undefined);
+    assert.deepEqual(
+      summary.cells.map((cell) => cell.name),
+      cells,
+    );
+    for (const cell of summary.cells) {
+      assert.equal(cell.status, "passed");
+      assert.equal(cell.cleanup?.status, "complete");
+      assert.equal(cell.cleanup.joined, true);
+      assert.equal(cell.cleanup.phase, "anchor-retired");
+      assert.equal(cell.cleanup.activeInstallLeases, 0);
+      assert.equal(cell.cleanup.journalRetained, true);
+      const command = summary.commands.find(({ name }) => name === `${cell.name}-update`);
+      assert(command);
+      assert.equal(command.status, "completed");
+      assert.equal(command.treeJoined, true);
+      assert.equal(command.outputComplete, true);
+      assert.deepEqual(command.outputEnded, [true, true]);
+      const expected = cell.name === "healthy" ? 0 : 1;
+      assert.equal(command.exitCode, expected);
+      assert.deepEqual(command.exit, { code: expected, signal: null });
+      for (const [index, suffix] of ["out", "err"].entries()) {
+        const stream = files.get(`${command.name}.${suffix}.gz`).decoded;
+        assert.equal(command.outputBytes[index], stream.length);
+        assert.equal(command.capturedOutputBytes[index], stream.length);
+        assert.equal(command.outputSha256[index], hash(stream));
+      }
+    }
+    const contracts = JSON.parse(files.get("installed-terminal-contracts.json")?.bytes);
+    assert.equal(contracts.packageSha256, packageSha256);
+    for (const memberName of [
+      "candidate-package-identity.json",
+      "package-hasher-contract.json",
+      "package-heartbeat-contracts.json",
+      "installed-terminal-contracts.json",
+      ...cells.map((name) => `${name}-dependencies.json`),
+      ...summary.commands.flatMap(({ name }) => [`${name}.out.gz`, `${name}.err.gz`]),
+      ...cells.flatMap((name) => [`${name}-isolate-census.json`, `${name}-observer.jsonl.gz`]),
+    ]) {
+      assert(files.has(memberName));
+    }
+    const identity = JSON.parse(files.get("candidate-package-identity.json").bytes);
+    assert(/^[a-f0-9]{64}$/.test(summary.candidateSha256));
+    assert.equal(identity.buildInfo.commit, contracts.application?.metadata?.build?.commit);
+    assert.equal(summary.fixture?.method, "candidate-same-schema-first-hop-fixture");
+    assert.equal(summary.fixture.sourceSha256, packageSha256);
+    assert.equal(summary.fixture.sourceVersion, contracts.application.metadata.version);
+    assert.equal(summary.fixture.targetVersion, identity.version);
+    assert.equal(summary.fixture.targetSha256, summary.candidateSha256);
+    for (const cell of summary.cells) {
+      assert.deepEqual(cell.installedIdentity, {
+        version: identity.version,
+        buildInfo: identity.buildInfo,
+        files: Object.keys(identity.files).length,
+      });
+    }
+    passed = true;
+  } catch {
+    omissions["terminal proof"] = "Successful terminal proof unavailable";
+  }
+  // A killed producer may never enter its exporter. Preserve only an allowlisted,
+  // redacted checkpoint and the current command's bounded logs after settlement.
+  if (!validated) {
+    try {
+      const checkpointBytes = readOwned(
+        artifactRoot,
+        "installed-terminal.json",
+        "terminal checkpoint",
+        publicLimit,
+        true,
+      );
+      const checkpoint = JSON.parse(checkpointBytes);
+      assert.equal(checkpoint.scope, "installed-terminal-package-settlement");
+      assert.equal(checkpoint.sourcePackageSha256, packageSha256);
+      assert(["running", "failed", "passed"].includes(checkpoint.status));
+      assert(Array.isArray(checkpoint.commands) && checkpoint.commands.length <= 24);
+      assert(checkpoint.commands.every(({ name }) => /^[a-z0-9-]{1,80}$/.test(name)));
+      const sanitize = diagnosticSanitizer(redactSensitiveText, "failed");
+      const current = checkpoint.commands.at(-1);
+      const partial = {
+        status: "incomplete",
+        qualification: "diagnostic-only",
+        checkpoint: { bytes: checkpointBytes.length, sha256: hash(checkpointBytes) },
+        observedStatus: checkpoint.status,
+        error: sanitize(checkpoint.error, "terminal checkpoint error"),
+        evidenceError: sanitize(checkpoint.evidenceError, "terminal checkpoint export error"),
+        current: current
+          ? {
+              name: current.name,
+              status: ["running", "completed", "failed"].includes(current.status)
+                ? current.status
+                : null,
+              treeJoined: typeof current.treeJoined === "boolean" ? current.treeJoined : null,
+              error: sanitize(current.error, "terminal current command error"),
+              stdout: sanitize(
+                readOwned(artifactRoot, `${current.name}.out`, "terminal current stdout"),
+                "terminal current stdout",
+              ),
+              stderr: sanitize(
+                readOwned(artifactRoot, `${current.name}.err`, "terminal current stderr"),
+                "terminal current stderr",
+              ),
+            }
+          : null,
+      };
+      const bytes = Buffer.from(`${JSON.stringify(partial, null, 2)}\n`);
+      writePublishedFile(artifactRoot, destination, "partial-diagnostics.json", bytes, publicLimit);
+      report.partial = {
+        name: "partial-diagnostics.json",
+        bytes: bytes.length,
+        sha256: hash(bytes),
+      };
+    } catch {
+      omissions["terminal checkpoint"] ??= "Bounded checkpoint diagnostics unavailable";
+    }
+  }
+  // Validate original bytes, but never publish recoverable stdout chunks:
+  // secrets and UTF-8 characters can span writes. Command streams are redacted whole.
+  const redact = (text) => redactSensitiveText(text, { mode: "tools" });
+  const jsonProjection = (value) =>
+    redact(
+      JSON.stringify(value, (_key, field) => {
+        if (field?.event === "stdout" && typeof field.bytes === "string") {
+          return {
+            ...field,
+            bytes: undefined,
+            capturedBytes: Buffer.from(field.bytes, "base64").length,
+            outputProjection: "metadata-only",
+          };
+        }
+        return typeof field === "string" ? redact(field) : field;
+      }),
+    );
+  const project = (bytes, name = "") => {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (/\.(out|err)\.gz$/.test(name)) {
+      return Buffer.from(redact(text));
+    }
+    const values = name.endsWith(".jsonl.gz")
+      ? text
+          .split("\n")
+          .filter((line) => line.trim())
+          .map((line) => JSON.parse(line))
+      : [JSON.parse(text)];
+    return Buffer.from(values.map((value) => `${jsonProjection(value)}\n`).join(""));
+  };
+  const entries = [];
+  const publicMembers = [];
+  let exportedBytes = 0;
+  for (const { entry, decoded, decodedLimit } of files.values()) {
+    let bytes;
+    try {
+      const projected = project(decoded, entry.name);
+      assert(projected.length <= decodedLimit);
+      bytes = entry.name.endsWith(".gz") ? gzipSync(projected) : projected;
+      assert(exportedBytes + bytes.length <= limit);
+    } catch {
+      omissions[entry.name] = "Bounded public projection unavailable";
+      passed = false;
+      continue;
+    }
+    publicMembers.push({ name: entry.name, bytes });
+    entries.push({
+      name: entry.name,
+      bytes: bytes.length,
+      sha256: hash(bytes),
+      privateArtifact: { bytes: entry.bytes, sha256: entry.sha256 },
+      privateSources: entry.sources,
+    });
+    exportedBytes += bytes.length;
+  }
+  let publicManifest;
+  if (manifest) {
+    publicManifest = Buffer.from(
+      `${JSON.stringify({
+        qualification: "redacted-diagnostic-projection",
+        status: complete && entries.length === files.size ? "complete" : "incomplete",
+        privateArtifact: { bytes: manifestBytes.length, sha256: hash(manifestBytes) },
+        files: entries,
+        bytes: exportedBytes,
+      })}\n`,
+    );
+    // Provenance grows the private manifest. Admit the complete compact public
+    // representation before publishing any of its members.
+    assert(publicManifest.length <= 128 * 1024, "Public terminal manifest exceeds its budget");
+  }
+  for (const { name, bytes } of publicMembers) {
+    writePublishedFile(artifactRoot, destination, name, bytes, limit);
+  }
+  if (publicManifest) {
+    writePublishedFile(artifactRoot, destination, "manifest.json", publicManifest, 128 * 1024);
+  }
+  if (validated) {
+    writePublishedFile(
+      artifactRoot,
+      destination,
+      "installed-terminal.json",
+      project(
+        Buffer.from(
+          JSON.stringify({
+            ...summary,
+            privateEvidence: summary.evidence,
+            privateArtifact: { bytes: finalBytes.length, sha256: hash(finalBytes) },
+            evidence: {
+              qualification: "redacted-diagnostic-projection",
+              bytes: publicManifest.length,
+              sha256: hash(publicManifest),
+            },
+          }),
+        ),
+      ),
+      publicLimit,
+    );
+  }
+  report.export = {
+    status:
+      complete && entries.length === files.size
+        ? "complete"
+        : validated || files.size
+          ? "incomplete"
+          : "unavailable",
+    qualification: "redacted-diagnostic-projection",
+    files: entries.map(({ name, bytes, sha256 }) => ({ name, bytes, sha256 })),
+    bytes: exportedBytes,
+  };
+  report.outcome = passed && exitStatus === 0 && !timedOut && signal === null ? "passed" : "failed";
+  writeReport(artifactRoot, destination, "publication.json", report, publicLimit);
+  if (exitStatus === 0 && !passed) {
+    throw new Error("Installed terminal proof did not pass");
+  }
+  return exitStatus === 0 ? undefined : { phase: coordinates.phase, exitStatus, signal };
 }
 
 // The scheduler survives its lane's process-group kill. Read only that attempt's

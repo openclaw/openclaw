@@ -30,3 +30,14 @@ export function publishInstalledRecoveryDiagnostics(
     packageSha256: string;
   },
 ): Omit<FailureCoordinates, "outcome"> | undefined;
+export function publishInstalledTerminalDiagnostics(
+  artifactRoot: string,
+  destination: string,
+  redact: Redactor,
+  observation: {
+    exitStatus: number;
+    timedOut: boolean;
+    packageSha256: string;
+    signal?: string | null;
+  },
+): Promise<Omit<FailureCoordinates, "outcome"> | undefined>;
