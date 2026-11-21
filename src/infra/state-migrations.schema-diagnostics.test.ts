@@ -16,6 +16,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
+import { withEnv } from "../test-utils/env.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { formatSchemaMigrationFailure } from "./schema-migration-diagnostics.js";
 import {
@@ -127,9 +128,11 @@ it("keeps the missing shared-state table and recovery advice in Doctor's refusal
   });
   const result = await withStateMigrationBackupForTest({ env }, () => step.run());
   expect(result.warnings[0]).toContain("missing table apns_registration_tombstones");
-  const refusal = new DoctorStateMigrationRefusalError([
-    createLegacyStateMigrationStepReceipt(step, result),
-  ]);
+  const refusal = withEnv(
+    { HOME: root, OPENCLAW_STATE_DIR: stateDir },
+    () =>
+      new DoctorStateMigrationRefusalError([createLegacyStateMigrationStepReceipt(step, result)]),
+  );
   expect(refusal.failureFacts).toEqual([
     expect.objectContaining({
       check: "state-schema",
@@ -140,6 +143,8 @@ it("keeps the missing shared-state table and recovery advice in Doctor's refusal
     }),
   ]);
   expect(refusal.message).toContain('rerun "openclaw doctor --fix" against the same state/config');
+  // The terminal detail names the operator's database; the persisted fact above redacts it.
+  expect(refusal.message).toContain("~/private state with spaces/state/openclaw.sqlite");
   expect(refusal.message).not.toContain(root);
 
   const logs: string[] = [];
