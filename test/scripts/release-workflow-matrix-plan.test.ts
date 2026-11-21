@@ -4,7 +4,6 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { collectBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
@@ -16,12 +15,13 @@ import {
 } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
+import { readWorkflow, requiredWorkflowStep as requiredStep } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function workflow(): WorkflowDocument {
-  return parse(
-    readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
+  return readWorkflow(
+    ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
   ) as WorkflowDocument;
 }
 
@@ -58,13 +58,6 @@ type WorkflowDocument = {
 
 function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
   return expectDefined(definition.jobs[name], `release workflow job ${name}`);
-}
-
-function requiredStep(job: WorkflowJob, name: string): WorkflowStep {
-  return expectDefined(
-    job.steps.find((step) => step.name === name),
-    name,
-  );
 }
 
 function bashRun(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
@@ -308,7 +301,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     ],
   ])("propagates harness results from %s to the release gate", (stepName, args) => {
     const job = requiredJob(workflow(), "validate_release_live_cache");
-    const step = requiredStep(job, stepName);
+    const step = requiredStep(job.steps, stepName);
     for (const code of [0, 23]) {
       const cwd = tempDirs.make("openclaw-live-cache-shell-replay-");
       const result = bashRun(
@@ -329,13 +322,13 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
 
   it("retains exact-candidate live cache diagnostics on failure", () => {
     const job = requiredJob(workflow(), "validate_release_live_cache");
-    expect(requiredStep(job, "Verify live prompt cache floors").run).toContain(
+    expect(requiredStep(job.steps, "Verify live prompt cache floors").run).toContain(
       "cache-floors.vitest.json",
     );
-    expect(requiredStep(job, "Verify live agent prompt prefix reuse").run).toContain(
+    expect(requiredStep(job.steps, "Verify live agent prompt prefix reuse").run).toContain(
       "agent-prefix-reuse.vitest.json",
     );
-    const upload = requiredStep(job, "Upload live cache diagnostics");
+    const upload = requiredStep(job.steps, "Upload live cache diagnostics");
     expect(upload).toMatchObject({
       if: "always()",
       uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
@@ -353,8 +346,8 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
     ["validate_docker_lanes", "Run targeted Docker E2E lanes"],
   ])("drains diagnostics after credential failure in %s", (jobName, runStepName) => {
     const job = requiredJob(workflow(), jobName);
-    const credentials = requiredStep(job, "Validate Docker E2E credentials");
-    const run = requiredStep(job, runStepName);
+    const credentials = requiredStep(job.steps, "Validate Docker E2E credentials");
+    const run = requiredStep(job.steps, runStepName);
     // Credential validation must be reached only after every setup/binding step
     // succeeds; nothing fallible may intervene before diagnostic continuation.
     expect(job.steps.indexOf(run)).toBe(job.steps.indexOf(credentials) + 1);
@@ -448,17 +441,17 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
     };
     const plannerJob = requiredJob(definition, "plan_release_workflow_matrices");
     const { steps } = plannerJob;
-    const setup = requiredStep(plannerJob, "Setup admission Node.js");
+    const setup = requiredStep(plannerJob.steps, "Setup admission Node.js");
     expect(setup.if).toBeUndefined();
     expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     expect(setup.run).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
     expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
-    const planner = requiredStep(plannerJob, "Plan shared live image plugins");
+    const planner = requiredStep(plannerJob.steps, "Plan shared live image plugins");
     expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(planner));
     runFixture(bash, ["-c", expectDefined(planner.run, "planner command")], env, outputDir);
     const selected = readFileSync(outputPath, "utf8").trim().split("=")[1];
     const step = requiredStep(
-      requiredJob(definition, "prepare_live_test_image"),
+      requiredJob(definition, "prepare_live_test_image").steps,
       "Resolve shared live-test image tag",
     );
     runFixture(bash, ["-c", expectDefined(step.run, "selection command")], {
@@ -537,7 +530,7 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
       "${{ inputs.allow_unreleased_changelog }}",
     );
     const requiredPackageStep = requiredStep(
-      requiredJob(definition, "prepare_docker_e2e_image"),
+      requiredJob(definition, "prepare_docker_e2e_image").steps,
       "Pack OpenClaw package for Docker E2E",
     );
     expect(requiredPackageStep.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(
@@ -641,7 +634,7 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
         expectDefined(expressions[expression], `release-core fixture expression ${expression}`),
       );
     for (const stepName of ["Plan Docker E2E chunk", "Run Docker E2E chunk"]) {
-      const step = requiredStep(job, stepName);
+      const step = requiredStep(job.steps, stepName);
       // Preserve every scheduler selector from the real workflow. PLAN_JSON
       // only substitutes scheduling for execution; it does not change lanes.
       const selectors = Object.fromEntries(
