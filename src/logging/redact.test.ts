@@ -183,6 +183,15 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  // A credential the assignment rules already masked used to pull the pairs after it into one
+  // hinted mask, because the password family re-masked from the placeholder to the end of the
+  // token. The recorded baseline kept the secret's first six characters for that reason.
+  it("keeps the pairs after a masked form credential readable", () => {
+    expect(redactSensitiveText("prefix_password=abcsecretdef&nextkey=1_suffix")).toBe(
+      "prefix_password=***&nextkey=1_suffix",
+    );
+  });
+
   it("preserves shell references, option prose, and ordinary token-like identifiers", () => {
     for (const input of [
       [
