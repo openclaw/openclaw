@@ -1,0 +1,2 @@
+47
+# Streamed IRC inline-code regression rows (reviewer finding on #196166): real-chunker split cases, carry reset guards, and a non-streamed row proving whole replies render unchanged.

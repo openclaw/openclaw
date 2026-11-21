@@ -86,7 +86,8 @@ minutes of silence it closes the connection and reconnects.
 
 ## Outbound text
 
-IRC sends Markdown as plain text, preserving code contents and link destinations.
+IRC sends Markdown as plain text, including replies to inbound messages, preserving
+code contents and link destinations.
 Long replies are rendered before splitting into IRC messages, so code fences and
 inline formatting remain consistent across chunk boundaries. `textChunkLimit`
 and `streaming.chunkMode` control text splitting; the socket also enforces
