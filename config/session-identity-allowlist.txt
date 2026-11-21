@@ -478,7 +478,7 @@ src/agents/subagents/registry/subagent-registry-sweep-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-sweep-kill.ts	6
 src/agents/subagents/registry/subagent-registry-sweep-settle.ts	2
 src/agents/subagents/registry/subagent-registry-sweeper-retire.ts	7
-src/agents/subagents/registry/subagent-registry-sweeper.ts	6
+src/agents/subagents/registry/subagent-registry-sweeper.ts	2
 src/agents/subagents/registry/subagent-registry-typing.ts	1
 src/agents/subagents/registry/subagent-registry.mocks.shared.ts	1
 src/agents/subagents/registry/subagent-registry.ts	1
