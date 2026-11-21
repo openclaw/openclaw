@@ -48,7 +48,6 @@ import { buildMemoryWikiOverview } from "./wiki-overview.js";
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 // Publication fixtures below have no vault source pages.
 const EMPTY_SOURCE_GENERATION = hashMemoryWikiVaultSources([]);
-let blobStateDir = "";
 let blobStoreEnv: NodeJS.ProcessEnv = {};
 let cacheStoreOptions: OpenBlobStoreOptions;
 
@@ -165,7 +164,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginBlobStoreForTests();
     configureMemoryWikiCompiledCacheStore(undefined);
-    blobStateDir = await createTempDir("memory-wiki-compiled-cache-state-");
+    const blobStateDir = await createTempDir("memory-wiki-compiled-cache-state-");
     blobStoreEnv = { ...process.env, OPENCLAW_STATE_DIR: blobStateDir };
     configureMemoryWikiCompiledCacheStore(createCacheStore());
   });
@@ -174,7 +173,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     configureMemoryWikiCompiledCacheStore(undefined);
     await closeOpenClawStateDatabaseAsync();
     resetPluginBlobStoreForTests();
-    blobStateDir = "";
     blobStoreEnv = {};
   });
 
@@ -258,7 +256,13 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         if (change === "source") {
           expect(await loadMemoryWikiCompiledCache(config)).not.toEqual(compiled);
         } else {
-          expect(await loadMemoryWikiCompiledCache(config)).toEqual(compiled);
+          expect(await loadMemoryWikiCompiledCache(config)).toEqual({
+            ...compiled,
+            diagnostics: {
+              ...compiled?.diagnostics,
+              compiledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+            },
+          });
         }
       }
       await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({ state: "ready" });
