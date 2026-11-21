@@ -38,6 +38,14 @@ type JsonContainer = {
 
 type QuoteState = { quoted: boolean; escaped: boolean; damaged: boolean };
 
+type OriginalJsonContainer = {
+  opener: JsonOpeningDelimiter;
+  start: number;
+  end: number;
+  children: OriginalJsonContainer[];
+  valid: boolean;
+};
+
 type RecoveryFrame = {
   opener: JsonOpeningDelimiter;
   selected: boolean;
@@ -75,6 +83,64 @@ function advanceQuotedText(
   return "consumed";
 }
 
+function indexOriginalJsonContainers(source: string): Map<number, number> {
+  const validEnds = new Map<number, number>();
+  const stacks: [OriginalJsonContainer[], OriginalJsonContainer[]] = [[], []];
+  const nodes: OriginalJsonContainer[] = [];
+  let phase: 0 | 1 = 0;
+  let escaped = false;
+  // Either quote parity may own a candidate after arbitrary prose. Each opener
+  // belongs to one lexical forest, independently of discovery/framing masks.
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (char === '"' && !escaped) {
+      phase = phase === 0 ? 1 : 0;
+    } else if (char === "{" || char === "[") {
+      const stack = stacks[phase];
+      const node: OriginalJsonContainer = {
+        opener: char,
+        start: index,
+        end: -1,
+        children: [],
+        valid: false,
+      };
+      stack.at(-1)?.children.push(node);
+      stack.push(node);
+      nodes.push(node);
+    } else if (char === "}" || char === "]") {
+      const stack = stacks[phase];
+      if (stack.at(-1)?.opener === (char === "}" ? "{" : "[")) {
+        stack.pop()!.end = index;
+      } else {
+        // A mismatched closer invalidates every enclosing original container;
+        // later candidates begin a fresh forest without an ancestry search.
+        stack.length = 0;
+      }
+    }
+    escaped = char === "\\" && !escaped;
+  }
+  // Within each forest, own intervals are disjoint. Across both, reconstruction
+  // visits at most twice the source plus two placeholder bytes per child edge.
+  for (const node of nodes.reverse()) {
+    if (node.end < 0 || node.children.some((child) => !child.valid)) continue;
+    const parts: string[] = [];
+    let offset = node.start;
+    for (const child of node.children) {
+      parts.push(source.slice(offset, child.start), child.opener === "{" ? "{}" : "[]");
+      offset = child.end + 1;
+    }
+    parts.push(source.slice(offset, node.end + 1));
+    try {
+      JSON.parse(parts.join(""));
+      node.valid = true;
+      validEnds.set(node.start, node.end);
+    } catch {
+      // Original syntax alone owns admission; discovery only chooses candidates.
+    }
+  }
+  return validEnds;
+}
+
 function extractStrictJsonFragments(
   raw: string,
   opts: BalancedJsonFragmentOptions,
@@ -99,8 +165,8 @@ function extractStrictJsonFragments(
     previousEnd = span.endIndex;
   }
   const openers = opts.openers ?? (["{", "["] as const);
+  const validEnds = indexOriginalJsonContainers(source);
   const roots: JsonContainer[] = [];
-  const nodes: JsonContainer[] = [];
   const stack: JsonContainer[] = [];
   const activeOpeners: Record<JsonOpeningDelimiter, number> = { "{": 0, "[": 0 };
   let selectedDepth = 0;
@@ -168,7 +234,6 @@ function extractStrictJsonFragments(
         valid: false,
       };
       (parent ? parent.children : roots).push(node);
-      nodes.push(node);
       stack.push(node);
       activeOpeners[char] += 1;
       // Discovery controls emission, not ownership by original selected kinds.
@@ -185,46 +250,9 @@ function extractStrictJsonFragments(
       while (stack.at(-1)!.opener !== opener) {
         pop().invalid = true;
       }
-      pop().end = index;
-    }
-  }
-  // Reverse creation order is postorder. Each original own-text interval is
-  // parsed at most once; same-kind constants cannot repair adjacent JSON tokens.
-  for (const node of nodes.reverse()) {
-    if (node.invalid || node.end < 0 || node.children.some((child) => !child.valid)) {
-      continue;
-    }
-    const parts: string[] = [];
-    let offset = node.start;
-    let quoted = false;
-    let escaped = false;
-    for (const child of node.children) {
-      // Framing can hide a quote during discovery, but a string-interior
-      // container is not an original JSON value that we may substitute.
-      for (let index = offset; index < child.start; index++) {
-        const char = source[index];
-        if (escaped) {
-          escaped = false;
-        } else if (quoted && char === "\\") {
-          escaped = true;
-        } else if (char === '"') {
-          quoted = !quoted;
-        }
-      }
-      if (quoted) {
-        node.invalid = true;
-        break;
-      }
-      parts.push(source.slice(offset, child.start), child.opener === "{" ? "{}" : "[]");
-      offset = child.end + 1;
-    }
-    if (node.invalid) continue;
-    parts.push(source.slice(offset, node.end + 1));
-    try {
-      JSON.parse(parts.join(""));
-      node.valid = true;
-    } catch {
-      // A balanced warning is not a record; its eligible children remain usable.
+      const closed = pop();
+      closed.end = index;
+      closed.valid = !closed.invalid && validEnds.get(closed.start) === index;
     }
   }
   const fragments: BalancedJsonFragment[] = [];
