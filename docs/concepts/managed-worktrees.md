@@ -480,6 +480,16 @@ The Gateway keeps one prepared checkout per active repository, destination root,
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
+When a managed or sandbox refresh selects a cold rebuild, `refreshRejectReason`
+distinguishes a missing template directory, failed old-generation validation,
+changed `.gitattributes`, incompatible checkout policy, or a failed Git diff probe.
+`validationFailure` identifies checkout policy, status-probe failure, malformed
+status output, dirty files, or a mismatched HEAD. Failed probes include the bounded
+`refreshErrorClass`: `exit-nonzero`, `timeout`, `no-output-timeout`, `signal`, or
+`output-truncated`. These facts survive through the final preparation outcome;
+they contain no command output or paths. `missReason=commit-changed` still describes
+why selection missed, separately from why incremental refresh was rejected.
+
 Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
 `setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
 `templateApply` measures each private clone separately. A warm caller waiting
