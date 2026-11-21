@@ -44,7 +44,7 @@ function step(job: string, name: string) {
 }
 
 it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
-  const revision = "8ddb0bb7784a3cde6475e7e436b077af15c8df54";
+  const revision = "c07cf34d3920043e79c3d586664589b05c05128a";
   for (const name of ["release_decision", "diagnostic_drain"]) {
     expect((workflowJob(name) as { uses?: string }).uses).toBe(
       "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
