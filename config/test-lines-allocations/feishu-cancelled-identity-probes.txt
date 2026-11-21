@@ -1,0 +1,2 @@
+# Prove canceled background and replacement-startup probes cannot publish identity.
+79
