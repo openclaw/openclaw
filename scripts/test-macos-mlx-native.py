@@ -46,6 +46,7 @@ INPUTS = [
     f"{PACKAGE}/Package.resolved",
     f"{PACKAGE}/Sources/OpenClawMLXTTSHelper/main.swift",
     f"{PACKAGE}/Sources/OpenClawMLXTTSRuntime/MLXTTSHelperService.swift",
+    f"{PROTOCOL}/Package.swift",
     f"{PROTOCOL}/Sources/OpenClawMLXTTSProtocol/MLXTTSProtocol.swift",
 ]
 SELECTED_TESTS = {
@@ -56,6 +57,8 @@ SELECTED_INPUTS = [
     f"{PACKAGE}/Sources/OpenClawMLXTTSRuntime/MLXTTSModelConfigPreflight.swift",
     *SELECTED_TESTS.values(),
 ]
+PROTOCOL_TEST = f"{PROTOCOL}/Tests/OpenClawMLXTTSProtocolTests/MLXTTSProtocolTests.swift"
+CONTROLLER_INPUTS = ["scripts/test-macos-mlx-native.py", "scripts/macos-health-render.sb", BAD_RESOLUTION]
 TEXT = "The quiet fox waits beside the river."
 ACTIVE_TEXT = (
     "Along the quiet river, the patient fox watches the evening light settle over the stones and waits for the wind. "
@@ -411,9 +414,9 @@ def denied_cache_error(event, request_id="bad-offline"):
     return error
 
 
-def verify_fixed_xctests(source, output):
+def verify_fixed_xctests(source, output, selected_tests=SELECTED_TESTS):
     expected = {}
-    for name, relative in SELECTED_TESTS.items():
+    for name, relative in selected_tests.items():
         methods = re.findall(r"^\s+func (test\w+)\(", (source / relative).read_text(), re.M)
         require(methods and len(methods) == len(set(methods)), f"{name}: missing or duplicate source test methods")
         expected[name] = methods
@@ -692,6 +695,8 @@ def foundation_record(raw, pid, mode):
 class Proof:
     def __init__(self, checkout, scratch, proof_dir, budget):
         self.checkout, self.scratch, self.proof_dir, self.budget = checkout, scratch, proof_dir, budget
+        self.controller = Path(__file__).resolve().parents[1]
+        self.selected_tests = SELECTED_TESTS
         self.children = []
         self.cache_consumers = []
         self.platform_temp = None
@@ -906,13 +911,80 @@ class Proof:
     def git(self, *args):
         return self.command(["git", *args], 30)
 
+    def verify_files(self, root, revision, paths):
+        entries = self.command(["git", "ls-tree", "-rz", revision, "--", *paths], 30, root)
+        blobs, modes = {}, {}
+        for entry in entries.split("\0"):
+            if not entry:
+                continue
+            metadata, relative = entry.split("\t", 1)
+            mode, kind, blob = metadata.split()
+            require(kind == "blob" and mode in ("100644", "100755"), "non-regular source input")
+            target = root / relative
+            require(target.resolve(strict=True) == target and target.is_file(), "source input escapes or is symlinked")
+            info = target.stat()
+            require(bool(info.st_mode & 0o111) == (mode == "100755"), "source input mode differs")
+            data = target.read_bytes()
+            require(hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest() == blob,
+                    f"selected helper input differs: {relative}")
+            blobs[relative], modes[relative] = blob, mode
+        return {"sha": revision, "tree": self.command(["git", "rev-parse", revision + "^{tree}"], 30, root),
+                "blobs": blobs, "modes": modes}
+
+    def verify_controller(self, revision):
+        require(re.fullmatch(r"[0-9a-f]{40}", revision or ""), "invalid controller SHA")
+        # Same-revision jobs export the harness from the candidate index; frozen
+        # targets have a separate harness repository. Neither reads candidate policy.
+        root = Path(self.command(["git", "rev-parse", "--show-toplevel"], 30, self.controller)).resolve()
+        require(root in (self.controller, self.checkout), "unknown controller repository")
+        require(self.command(["git", "rev-parse", "HEAD"], 30, root) == revision, "controller HEAD mismatch")
+        identity = self.verify_files(root, revision, CONTROLLER_INPUTS) if root == self.controller else None
+        if identity is None:
+            identity = {"sha": revision, "tree": self.command(["git", "rev-parse", revision + "^{tree}"], 30, root), "blobs": {}}
+            for relative in CONTROLLER_INPUTS:
+                entry = self.command(["git", "ls-tree", revision, "--", relative], 30, root)
+                metadata, actual = entry.split("\t", 1)
+                mode, kind, blob = metadata.split()
+                target = self.controller / relative
+                require(actual == relative and kind == "blob" and mode in ("100644", "100755"), "invalid controller asset")
+                require(target.resolve(strict=True) == target and target.is_file(), "controller asset escapes or is symlinked")
+                require(bool(target.stat().st_mode & 0o111) == (mode == "100755"), "controller asset mode differs")
+                data = target.read_bytes()
+                require(hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest() == blob, "controller asset differs")
+                identity["blobs"][relative] = blob
+        require(set(identity["blobs"]) == set(CONTROLLER_INPUTS), "incomplete controller assets")
+        return identity
+
     def verify_source(self, source, revision):
+        require(re.fullmatch(r"[0-9a-f]{40}", revision), "invalid selected checkout SHA")
+        require(source.is_absolute() and source.resolve(strict=True) == source, "selected checkout root is not physical")
+        require(Path(self.command(["git", "rev-parse", "--show-toplevel"], 30, source)) == source, "selected checkout is not repository root")
         require(self.command(["git", "rev-parse", "HEAD"], 30, source) == revision, "selected checkout HEAD mismatch")
-        blobs = {p: self.command(["git", "rev-parse", f"{revision}:{p}"], 30, source) for p in [*INPUTS, *SELECTED_INPUTS, BAD_RESOLUTION]}
-        for p, expected in blobs.items():
-            actual = self.command(["git", "hash-object", p], 30, source)
-            require(actual == expected, f"selected helper input differs: {p}")
-        return {"sha": revision, "tree": self.command(["git", "rev-parse", f"{revision}^{{tree}}"], 30, source), "blobs": blobs}
+        identity = self.verify_files(source, revision, [PACKAGE, PROTOCOL])
+        paths = set(identity["blobs"])
+        optional = {SELECTED_INPUTS[0], SELECTED_TESTS["MLXTTSModelConfigPreflightTests"]}
+        require(not paths.intersection(optional) or optional <= paths, "partial config-preflight capability")
+        current = optional <= paths
+        expected = set(INPUTS) | {PROTOCOL_TEST, SELECTED_TESTS["MLXTTSHelperServiceTests"]} | (optional if current else set())
+        require(paths == expected, "unsupported or incomplete helper source layout")
+        for relative in (PACKAGE, PROTOCOL):
+            for target in (source / relative).rglob("*"):
+                require(not target.is_symlink(), "symlink in helper package")
+                require(target.is_dir() or (target.is_file() and target.relative_to(source).as_posix() in paths),
+                        "untracked helper package input")
+        self.selected_tests = SELECTED_TESTS if current else {"MLXTTSHelperServiceTests": SELECTED_TESTS["MLXTTSHelperServiceTests"]}
+        for name, relative in self.selected_tests.items():
+            methods = re.findall(r"^\s+func (test\w+)\(", (source / relative).read_text(), re.M)
+            require(len(methods) == (6 if name == "MLXTTSHelperServiceTests" else 7) and len(set(methods)) == len(methods),
+                    "unsupported helper test layout")
+        identity["capability"] = "config-preflight" if current else "baseline"
+        return identity
+
+    def revalidate_source(self):
+        expected = self.result["source"]
+        require(self.verify_source(self.checkout, expected["sha"]) == expected, "selected helper inputs changed")
+        controller = self.result["controller"]
+        require(self.verify_controller(controller["sha"]) == controller, "controller assets changed")
 
     def snapshot(self, name, revision):
         self.begin(f"{name}: immutable source acquisition")
@@ -951,12 +1023,12 @@ class Proof:
         manifest, lock = source / PACKAGE / "Package.swift", source / PACKAGE / "Package.resolved"
         require(digest(manifest) == BAD_MANIFEST_SHA256 and digest(lock) == BAD_LOCK_SHA256,
                 "bad reference historical inputs differ")
-        fixture = self.checkout / BAD_RESOLUTION
+        fixture = self.controller / BAD_RESOLUTION
         require(fixture.is_file() and not fixture.is_symlink() and fixture.stat().st_size == 3119,
                 "bad reference resolution fixture unavailable")
         data = fixture.read_bytes()
         blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
-        selected = self.result["source"]
+        selected = self.result["controller"]
         require(blob == selected["blobs"].get(BAD_RESOLUTION) and hashlib.sha256(data).hexdigest() == BAD_RESOLUTION_SHA256,
                 "bad reference resolution fixture differs from committed native resolution")
         lock.write_bytes(data)
@@ -972,6 +1044,8 @@ class Proof:
         before = {"manifest": digest(manifest), "lock": digest(lock)}
         build = self.scratch / (name + "-build")
         self.command(["swift", "package", "--package-path", package, "--scratch-path", build, "resolve"], 120)
+        if name == "fixed":
+            self.revalidate_source()
         after = {"manifest": digest(manifest), "lock": digest(lock)}
         info = self.result["variants"][name]
         info.update({"before": before, "resolved": after, "pins": json.loads(lock.read_text())["pins"]})
@@ -993,6 +1067,8 @@ class Proof:
         args = ["swift", "build", "--build-system", "swiftbuild", "--package-path", package, "-c", "debug", "--product", "openclaw-mlx-tts", "--build-path", build, "--arch", "arm64", "--disable-index-store", "-Xswiftc", "-gline-tables-only"]
         started = time.monotonic()
         self.command(args, 480)
+        if name == "fixed":
+            self.revalidate_source()
         binary_dir = Path(self.command(args + ["--show-bin-path"], 30).splitlines()[-1])
         require(binary_dir.resolve().is_relative_to(build.resolve()), "Swift bin directory escapes owned build")
         binary = binary_dir / "openclaw-mlx-tts"
@@ -1005,8 +1081,9 @@ class Proof:
         self.command(["swiftc", "-framework", "Metal", "-framework", "CoreGraphics", probe_source, "-o", probe], 60)
         self.command([probe, library, "optional"], 30)
         if name == "fixed":
-            output = self.command(["swift", "test", "--build-system", "swiftbuild", "--package-path", package, "-c", "debug", "--build-path", build, "--arch", "arm64", "--disable-index-store", "-Xswiftc", "-gline-tables-only", "--filter", "OpenClawMLXTTSRuntimeTests\\.(MLXTTSHelperServiceTests|MLXTTSModelConfigPreflightTests)/"], 120)
-            info["tests"] = verify_fixed_xctests(source, output)
+            output = self.command(["swift", "test", "--build-system", "swiftbuild", "--package-path", package, "-c", "debug", "--build-path", build, "--arch", "arm64", "--disable-index-store", "-Xswiftc", "-gline-tables-only", "--filter", "OpenClawMLXTTSRuntimeTests\\.(" + "|".join(self.selected_tests) + ")/"], 120)
+            info["tests"] = verify_fixed_xctests(source, output, self.selected_tests)
+            self.revalidate_source()
         require(before == {"manifest": digest(manifest), "lock": digest(lock)}, f"{name}: inputs changed during build/tests")
         return binary, library, probe
 
@@ -1017,7 +1094,7 @@ class Proof:
         return {**self.env, "HOME": str(home), "CFFIXED_USER_HOME": str(home), "TMPDIR": str(tmp), "HF_HOME": str(home / "hf"), "HF_HUB_CACHE": str(hub)}
 
     def sandbox(self, argv, online=False):
-        profile = self.checkout / "scripts/macos-health-render.sb"
+        profile = self.controller / "scripts/macos-health-render.sb"
         if online:
             require_hosted_ci()
             require(self.platform_temp is not None and validate_platform_temp(self.platform_temp) == self.platform_temp,
@@ -1339,11 +1416,14 @@ class Proof:
         }
         self.retire_cache(online_hub)
 
-    def execute(self, extended, foundation_only=False):
+    def execute(self, extended, foundation_only=False, revision=None):
         require(not foundation_only or extended, "Foundation admission-only requires extended admission")
-        revision = os.environ["CHECKOUT_SHA"]
+        revision = revision or os.environ["CHECKOUT_SHA"]
+        require(revision == os.environ["CHECKOUT_SHA"], "selected checkout operand differs")
+        self.result["controller"] = self.verify_controller(os.environ.get("GITHUB_WORKFLOW_SHA"))
         require(re.fullmatch(r"[0-9a-f]{40}", revision), "invalid selected checkout SHA")
         self.result.update({"source": self.verify_source(self.checkout, revision), "workflowSHA": os.environ.get("GITHUB_WORKFLOW_SHA"), "triggerSHA": os.environ.get("GITHUB_SHA"), "run": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "extended": extended})
+        require(not extended or self.result["source"]["capability"] == "config-preflight", "extended proof requires config-preflight capability")
         self.result["variants"]["fixed"] = dict(self.result["source"])
         (self.proof_dir / "source.txt").write_text(f"source_sha={revision}\nrun_id={os.environ['GITHUB_RUN_ID']}\nrun_attempt={os.environ['GITHUB_RUN_ATTEMPT']}\njob={os.environ['GITHUB_JOB']}\n")
         if foundation_only:
@@ -1381,6 +1461,8 @@ class Proof:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--candidate-root", type=Path, required=True)
+    parser.add_argument("--candidate-sha", required=True)
     parser.add_argument("--proof-dir", type=Path, required=True)
     parser.add_argument("--started", type=float, required=True)
     parser.add_argument("--extended", action="store_true")
@@ -1395,10 +1477,10 @@ def main():
     require(proof_dir.is_relative_to(runner_temp) and proof_dir != runner_temp and not args.proof_dir.is_symlink(), "proof directory is not owned runner scratch")
     budget = Budget(args.started)
     scratch = Path(tempfile.mkdtemp(prefix="openclaw-mlx-native-", dir=runner_temp)).resolve()
-    proof = Proof(Path.cwd().resolve(), scratch, proof_dir, budget)
+    proof = Proof(args.candidate_root, scratch, proof_dir, budget)
     previous = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
-        proof.execute(args.extended, args.foundation_admission_only)
+        proof.execute(args.extended, args.foundation_admission_only, args.candidate_sha)
     except BaseException as error:
         proof.result["failure"] = {"phase": proof.phase, "detail": str(error)}
         raise
