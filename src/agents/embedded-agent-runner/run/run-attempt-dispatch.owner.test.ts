@@ -57,6 +57,7 @@ import type { ManagedWorktreeRecord } from "../../worktrees/types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   assertDurableTranscriptRevocation,
+  assertPromptDispatchCallbacks,
   assertFreshTranscriptAfterRetirement,
   dispatchCases,
   createDispatchSandboxBackend as backend,
@@ -118,6 +119,7 @@ it.each(dispatchCases)(
     retryPreparation,
     cancelTrajectory,
     preparedAuth,
+    finalizer,
     transcriptTargetInvalidation,
     targetField,
   }) => {
@@ -275,6 +277,16 @@ it.each(dispatchCases)(
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
+      const finalize = vi.fn(
+        ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) => {
+          expect(messageToolAvailable).toBe(false);
+          return `${prompt}:finalized`;
+        },
+      );
+      const resolveContext = vi.fn((context: { messageToolAvailable: boolean }) => {
+        expect(context.messageToolAvailable).toBe(false);
+        return [{ kind: "runtime-instruction" as const, text: "Delivery context." }];
+      });
       let onValidateSource: (() => void) | undefined;
       const assertSourceCurrent = vi.fn(() => onValidateSource?.());
       setActivePluginRegistry(createEmptyPluginRegistry());
@@ -492,6 +504,19 @@ it.each(dispatchCases)(
           : {}),
         sessionFile: "global",
         prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
+        ...(finalizer
+          ? {
+              currentInboundContext: {
+                text: "Existing inbound context.",
+                resumableText: "Existing resumed context.",
+              },
+              runtimeContextFragments: [
+                { kind: "runtime-instruction" as const, text: "Existing context." },
+              ],
+              ...(finalizer !== "context" ? { finalizePromptForResolvedTools: finalize } : {}),
+              ...(finalizer !== "string" ? { resolveRuntimeContextForTools: resolveContext } : {}),
+            }
+          : {}),
         ...(skillsSnapshot ? { skillsSnapshot } : {}),
         ...(remoteSkills
           ? {
@@ -1002,6 +1027,7 @@ it.each(dispatchCases)(
         admission.close();
         policyGrant.abort();
         restoreSandbox();
+        assertPromptDispatchCallbacks(finalizer, runAttempt, finalize, resolveContext);
       }
     });
   },
