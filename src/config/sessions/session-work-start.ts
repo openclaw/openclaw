@@ -29,9 +29,20 @@ type SessionWorkStartOptions = {
   expectedSessionId?: string;
   /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
   allowPendingWorkspace?: true;
+  /**
+   * Reset starts a new lifecycle generation. A provider review belongs to the retired
+   * generation and is never continued, so replacing the session needs no acknowledgment.
+   */
+  allowProviderReviewReplacement?: true;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   runId?: string;
 };
+
+/** Gateway reset drains pending preparation and retires any provider-review pause. */
+export const RESET_WORK_START = {
+  allowPendingWorkspace: true,
+  allowProviderReviewReplacement: true,
+} as const satisfies SessionWorkStartOptions;
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
@@ -93,7 +104,11 @@ export function resolveSessionWorkStartBlock(
       true,
     );
   }
-  if (entry?.providerReview && options?.purpose !== "accepted-result-settlement") {
+  if (
+    entry?.providerReview &&
+    options?.purpose !== "accepted-result-settlement" &&
+    options?.allowProviderReviewReplacement !== true
+  ) {
     try {
       if (!options?.providerReviewAcknowledgment) {
         return new SessionWorkStartError(

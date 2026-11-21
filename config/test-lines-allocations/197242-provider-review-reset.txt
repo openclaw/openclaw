@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #197242 (reset of a provider-review-paused session): regression tests for the work-start option and for sessions.reset on paused main and peer sessions.
+79

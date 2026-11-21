@@ -379,9 +379,7 @@ async function initSessionStateAttemptLocked(
   });
   const entry = initializationSnapshot.currentEntry;
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
-  assertReplySessionInitializationAllowed(sessionKey, entry, {
-    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
-  });
+  assertReplySessionInitializationAllowed(sessionKey, entry, params, resetTriggered);
   // Locked model selection is coupled to the current native session id. Reject before
   // lifecycle cleanup so a reset cannot detach the durable harness binding.
   const lockedModelSelection = isModelSelectionLocked(entry);
