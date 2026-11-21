@@ -270,6 +270,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-worker-store.ts",
       "src/state/openclaw-state.worker.ts",
       "src/plugins/plugin-source-capture-directory.ts",
+      "src/process/supervisor/{supervisor,released-processes}.ts",
       "extensions/memory-core/{index,src/memory/lifecycle}.ts",
       "test/helpers/gateway-late-import-probe.mjs",
     ],
