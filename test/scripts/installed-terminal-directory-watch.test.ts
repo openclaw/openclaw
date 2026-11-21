@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
 import { afterEach, expect, test } from "vitest";
 import {
   readInstalledTerminalDependencyTree,
@@ -12,6 +11,7 @@ import {
 import {
   buildInstalledTerminalSummary,
   type InstalledTerminalProcessAbsence,
+  publishInstalledTerminalEvidence,
   readInstalledTerminalEvents,
   readInstalledTerminalHeartbeat,
   summarizeInstalledTerminalLaunches,
@@ -376,37 +376,27 @@ it("admits post-reap absence of the real watch after its creator exits without c
   const compact = summary.cells[0]!.processesWithoutPreload[0]!;
   expect(compact.nativeSettlement).toEqual([]);
   expect(compact.lifetimeBound).toEqual(processAbsence[0]);
-  const artifacts = new Map([
-    [
-      "healthy-observer.jsonl.gz",
-      gzipSync(
-        qualified
-          .map(({ coverage: _coverage, lifetimeBound: _bound, ...row }) => JSON.stringify(row))
-          .join("\n") + "\n",
-      ),
-    ],
-    ["healthy-observer.json", Buffer.from(JSON.stringify({ ...f.spec, processAbsence }))],
-  ]);
-  const exported = () => {
-    const manifest = Buffer.from(
-      JSON.stringify({
-        status: "complete",
-        omissions: [],
-        files: [...artifacts].map(([name, bytes]) => ({
-          name,
-          bytes: bytes.length,
-          sha256: hash(bytes),
-        })),
-      }),
-    );
+  const exported = (receipts = processAbsence) => {
+    const output = dirs.make("installed-watch-export-");
+    for (const name of [
+      "candidate-package-identity",
+      "package-hasher-contract",
+      "package-heartbeat-contracts",
+      "installed-terminal-contracts",
+      "healthy-dependencies",
+    ])
+      writeJson(path.join(output, `${name}.json`), {});
+    fs.cpSync(f.directory, path.join(output, "healthy"), { recursive: true });
+    writeJson(path.join(output, "healthy/observer.json"), { ...f.spec, processAbsence: receipts });
+    publishInstalledTerminalEvidence(output, { ...summary, commands: [] });
+    const manifest = fs.readFileSync(path.join(output, "export/manifest.json"));
     return (value = summary) =>
-      buildInstalledTerminalSummary(value, manifest, (name) => {
-        const bytes = artifacts.get(name);
-        assert(bytes);
-        return bytes;
-      });
+      buildInstalledTerminalSummary(value, manifest, (name) =>
+        fs.readFileSync(path.join(output, "export", name)),
+      );
   };
-  expect(() => exported()()).not.toThrow();
+  const validate = exported();
+  expect(() => validate()).not.toThrow();
   for (const receipt of [
     undefined,
     { ...processAbsence[0], child: pid + 1 },
@@ -414,13 +404,9 @@ it("admits post-reap absence of the real watch after its creator exits without c
   ]) {
     const changed = structuredClone(summary);
     changed.cells[0]!.processesWithoutPreload[0]!.lifetimeBound = receipt;
-    expect(() => exported()(changed)).toThrow();
+    expect(() => validate(changed)).toThrow();
   }
-  artifacts.set(
-    "healthy-observer.json",
-    Buffer.from(JSON.stringify({ ...f.spec, processAbsence: [] })),
-  );
-  expect(() => exported()()).toThrow("Kernel absence is missing");
+  expect(() => exported([])()).toThrow("Kernel absence is missing");
   for (const errorCode of [null, "EPERM"]) {
     expect(() =>
       readInstalledTerminalEvents(f.directory, {

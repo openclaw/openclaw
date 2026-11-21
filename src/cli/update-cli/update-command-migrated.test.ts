@@ -667,31 +667,35 @@ it.for(["package", "release", "success"] as const)(
       return true;
     });
     vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockResolvedValue(candidateContract);
-    // Only the completed child's reply is synthetic. The parent continuation,
-    // terminal publisher and executor release retain their production owners.
+    const result = updateResult({ root: candidateRoot, runId: run.runId, status: "ok" });
+    const published = JSON.stringify({ ...result, fixturePublication: true }, null, 2) + "\n";
+    const worker = path.join(stateDir, "settlement-worker.cjs");
+    await fs.writeFile(
+      worker,
+      `const fs = require('node:fs');
+       let input = ''; process.stdin.setEncoding('utf8');
+       process.stdin.on('data', chunk => { input += chunk; });
+       process.stdin.on('end', () => {
+         const request = JSON.parse(input);
+         fs.writeFileSync(request.resultPath, JSON.stringify({
+           result: ${JSON.stringify(result)}, terminalRunId: ${JSON.stringify(run.runId)},
+           exitCode: 0, executorDelegation: 'pid-start-v1'
+         }));
+         process.stdout.write(${JSON.stringify(published)});
+       });`,
+    );
+    // Keep beforeInput's native PID/argv admission and the runner's owned join.
+    // Only the worker's result is synthetic; parent settlement remains real.
+    const nativeCommand = childCommandBuffers.runUtf8CommandBuffersWithTimeout;
     vi.spyOn(childCommandBuffers, "runUtf8CommandBuffersWithTimeout").mockImplementation(
       async (_argv, options) => {
         if (typeof options === "number" || typeof options.input !== "string") {
           throw new Error("Missing migrated fixture input");
         }
-        const input = JSON.parse(options.input);
-        const result = updateResult({ root: candidateRoot, runId: run.runId, status: "ok" });
+        const child = await nativeCommand([process.execPath, worker], options);
         finishUpdateRun(run.runId, { status: "succeeded" }, { env });
-        await fs.writeFile(
-          input.resultPath,
-          JSON.stringify({
-            result,
-            terminalRunId: run.runId,
-            exitCode: 0,
-            executorDelegation: "pid-start-v1",
-          }),
-        );
-        return {
-          ...candidateContract,
-          stdout: Buffer.from(JSON.stringify(result)),
-          stderr: Buffer.alloc(0),
-          windowsEncoding: null,
-        };
+        expect(child).toMatchObject({ code: 0, termination: "exit", cleanup: "normal" });
+        return child;
       },
     );
     const work = withUpdateCommandTerminalResult(
@@ -751,7 +755,7 @@ it.for(["package", "release", "success"] as const)(
     const settled = await outcome;
     if (stage === "success") {
       expect(settled.error).toBeUndefined();
-      expect(JSON.parse(stdout)).toMatchObject({ status: "ok", runId: run.runId });
+      expect(stdout).toBe(published);
     } else {
       expect(settled.error).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
       expect(stdout).toBe("");

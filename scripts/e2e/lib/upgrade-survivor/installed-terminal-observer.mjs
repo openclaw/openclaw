@@ -1543,9 +1543,19 @@ function install(spec) {
         run,
         reportPath,
         steps: publishedSteps,
+        durationMs: publishedDuration,
         ...published
       } = JSON.parse(Buffer.concat(selected.output).toString("utf8"));
-      const { steps: privateSteps, ...privateResult } = response.result;
+      const {
+        steps: privateSteps,
+        durationMs: privateDuration,
+        ...privateResult
+      } = response.result;
+      for (const duration of [privateDuration, publishedDuration]) {
+        assert(Number.isFinite(duration) && duration >= 0, "Invalid candidate duration");
+      }
+      // Deferred publication measures duration again after terminal preparation.
+      // Both measurements are valid; the captured outcome remains identical.
       assert.deepEqual(published, privateResult, "Published candidate outcome changed");
       assert.deepEqual(publishedSteps.slice(0, privateSteps.length), privateSteps);
       const cleanup = publishedSteps.slice(privateSteps.length);
@@ -1638,7 +1648,10 @@ function install(spec) {
               // update-run-step uses truncateUtf16Safe at the ledger text cap.
               const end =
                 detail.length > 1024 &&
-                /[\uD800-\uDBFF][\uDC00-\uDFFF]/u.test(detail.slice(1023, 1025))
+                detail.charCodeAt(1023) >= 0xd800 &&
+                detail.charCodeAt(1023) <= 0xdbff &&
+                detail.charCodeAt(1024) >= 0xdc00 &&
+                detail.charCodeAt(1024) <= 0xdfff
                   ? 1023
                   : 1024;
               projected.push({
@@ -1704,16 +1717,36 @@ function install(spec) {
         }
         assertRecordingHealthy(spec.directory);
         fs.renameSync(spec.bin, escrow);
-        fs.symlinkSync(link, spec.bin);
-        const replacement = fs.lstatSync(spec.bin, { bigint: true });
-        const replacementIdentity = `${replacement.dev}:${replacement.ino}`;
-        assert.notEqual(identity, replacementIdentity);
-        const replaced = { ...intent, replacementIdentity };
-        writeInstalledRecoveryEvidence(
-          path.join(spec.directory, "launcher-replaced.json"),
-          replaced,
-        );
-        report("launcher-replaced", replaced);
+        let replacementIdentity;
+        try {
+          fs.symlinkSync(link, spec.bin);
+          replacementIdentity = fileIdentity(spec.bin);
+          assert.notEqual(identity, replacementIdentity);
+          const replaced = { ...intent, replacementIdentity };
+          writeInstalledRecoveryEvidence(
+            path.join(spec.directory, "launcher-replaced.json"),
+            replaced,
+          );
+          assert.equal(report("launcher-replaced", replaced), true);
+        } catch (error) {
+          // The live mutator can compensate its own exact replacement even if
+          // publication failed. A later reader still requires a durable receipt.
+          try {
+            assert.equal(fileIdentity(escrow), identity);
+            assert(fs.lstatSync(escrow).isSymbolicLink());
+            assert.equal(fs.readlinkSync(escrow), link);
+            const current = fs.lstatSync(spec.bin, { throwIfNoEntry: false });
+            if (current) {
+              assert(replacementIdentity && current.isSymbolicLink());
+              assert.equal(fileIdentity(spec.bin), replacementIdentity);
+              assert.equal(fs.readlinkSync(spec.bin), link);
+            }
+            fs.renameSync(escrow, spec.bin);
+          } catch {
+            // Unknown replacement or failed compensation retains custody.
+          }
+          throw error;
+        }
       }
     });
     return result;
@@ -2977,7 +3010,7 @@ export function summarizeInstalledTerminalLaunches(rows) {
         };
       }),
     processesWithoutPreload: rows
-      .filter((row) => row.event === "spawn" && row.coverage)
+      .filter((row) => row.event === "spawn" && (row.coverage || row.lifetimeBound))
       .map((row) => ({
         pid: row.child,
         creatorPid: row.pid,
@@ -3191,6 +3224,11 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
     }
     for (const row of cell.workerLifetimeBounds ?? []) {
       const created = launch(row, "thread");
+      assert.equal(
+        nativeExitsFor(raw, created).length,
+        0,
+        "Direct Worker exit cannot be an enclosing lifetime bound",
+      );
       const ended = resolve(row.nativeExit);
       assert(["spawn-exit", "spawn-sync-return", "thread-exit"].includes(ended.event));
       assert.deepEqual(eventIdentity(ended), row.bound.source);
