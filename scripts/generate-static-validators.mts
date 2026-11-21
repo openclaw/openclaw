@@ -7,6 +7,11 @@ import {
   question,
   VendorResult,
 } from "../extensions/typesafe/src/schema-definition.js";
+import {
+  AutomationLastMeaningfulResultSchema,
+  AutomationResultSchema,
+} from "../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import { CyberAccessProgramSchema } from "../packages/gateway-protocol/src/schema/sessions-row.js";
 import { ThemeJsonSchema } from "../src/agents/modes/interactive/theme/theme-schema.js";
 import { ModelRegistryConfigSchema } from "../src/agents/sessions/model-registry-schema-definition.js";
 import { PresenceLocationResultSchema } from "../src/gateway/server-methods/presence-location-schema.js";
@@ -32,6 +37,28 @@ const targets: Array<{
   additionalLintRules?: readonly string[];
   entries: Array<{ name: string; schema: XSchema; type: string }>;
 }> = [
+  // Cron readers need these checks without loading the schema construction graph.
+  {
+    outputBase: "packages/gateway-protocol/src/compiled/cron-runtime.generated",
+    declarationImports: ['import type { Static } from "typebox";'],
+    entries: [
+      {
+        name: "validateAutomationResult",
+        schema: AutomationResultSchema,
+        type: 'import("../schema/cron-automation-result.js").AutomationResult',
+      },
+      {
+        name: "validateAutomationLastMeaningfulResult",
+        schema: AutomationLastMeaningfulResultSchema,
+        type: 'Static<typeof import("../schema/cron-automation-result.js").AutomationLastMeaningfulResultSchema>',
+      },
+      {
+        name: "validateCyberAccessProgram",
+        schema: CyberAccessProgramSchema,
+        type: 'import("../schema/sessions-row.js").CyberAccessProgram',
+      },
+    ],
+  },
   {
     outputBase: "src/agents/sessions/model-registry-validator.generated",
     entries: [

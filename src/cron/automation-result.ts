@@ -1,9 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import {
-  AutomationResultSchema,
-  type AutomationResult,
-} from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import { validateAutomationResult } from "../../packages/gateway-protocol/src/compiled/cron-runtime.generated.js";
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 
 /** A recorded result never settles a yielded turn or outstanding tool work. */
 export function hasPendingAutomationContinuation(
@@ -29,5 +26,5 @@ export function parseAutomationResult(value: unknown): AutomationResult | undefi
   }
   const result =
     typeof value.summary === "string" ? { ...value, summary: value.summary.trim() } : { ...value };
-  return Value.Check(AutomationResultSchema, result) ? result : undefined;
+  return validateAutomationResult(result) ? result : undefined;
 }

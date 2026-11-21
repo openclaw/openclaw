@@ -4,9 +4,10 @@ import {
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
-import { CyberAccessProgramSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
+  validateAutomationLastMeaningfulResult,
+  validateCyberAccessProgram,
+} from "../../packages/gateway-protocol/src/compiled/cron-runtime.generated.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -93,7 +94,7 @@ export function getInvalidPersistedCronJobReason(
   const lastMeaningfulResult = asRecord(candidate.state).lastMeaningfulResult;
   if (
     lastMeaningfulResult !== undefined &&
-    !Value.Check(AutomationLastMeaningfulResultSchema, lastMeaningfulResult)
+    !validateAutomationLastMeaningfulResult(lastMeaningfulResult)
   ) {
     return "invalid-state";
   }
@@ -109,7 +110,7 @@ export function getInvalidPersistedCronJobReason(
   }
   if (
     candidate.cyberAccessProgram !== undefined &&
-    (!Value.Check(CyberAccessProgramSchema, candidate.cyberAccessProgram) ||
+    (!validateCyberAccessProgram(candidate.cyberAccessProgram) ||
       (asRecord(candidate.payload).kind !== "agentTurn" &&
         asRecord(candidate.payload).kind !== "accessAgentTurn"))
   ) {
