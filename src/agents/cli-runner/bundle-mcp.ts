@@ -17,7 +17,10 @@ import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundl
 import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { mapNestedStrings } from "../../shared/map-nested-strings.js";
-import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import {
+  acquireSessionMcpRuntime,
+  retireSessionMcpRuntime,
+} from "../agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
 import {
@@ -512,6 +515,26 @@ export async function prepareCliBundleMcpConfig(params: {
       retainedServerNames = new Set(Object.keys(effectiveConfig.mcpServers));
     } finally {
       await releaseSessionMcpRuntime(acquisition, retainedServerNames);
+      // This acquisition exists only to discover the catalog/apply OAuth policy
+      // before writing a static MCP config file for an external CLI harness to
+      // read independently. Nothing downstream reconnects to this exact runtime:
+      // prepareCliBundleMcpConfig mints a fresh per-turn sessionId on every call,
+      // even across turns resuming the same underlying conversation, so there is
+      // no later reuse to preserve servers for. releaseSessionMcpRuntime's
+      // "retainedServerNames" semantics assume a consumer takes ownership of the
+      // retained servers; here none ever does, which orphans their real child
+      // processes (anchor + uvx/npx descendants) indefinitely once leases hit
+      // zero, since they are never registered for later idle-sweep eviction
+      // either. Fully retire the runtime now instead of leaving it to a reuse
+      // path that never arrives. Refs: https://github.com/openclaw/openclaw/issues/194334
+      await retireSessionMcpRuntime({
+        sessionId: params.nativeMcpPolicy.sessionId,
+        reason: "cli-bundle-mcp-policy-discovery-complete",
+        onError: (error) =>
+          params.warn?.(
+            `bundle-mcp: discovery runtime retirement failed: ${formatErrorMessage(error)}`,
+          ),
+      });
     }
   }
 
