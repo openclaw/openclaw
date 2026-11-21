@@ -82,7 +82,7 @@ export function buildRequesterSettleWakeMessage(params: {
   return [
     ...(pending.length
       ? [
-          `[Subagent Context] These results are ready, but ${pending.length} other subagent(s) from this batch are still working: ${pending.map(describeChild).join("; ")}. Each remaining result arrives later as its own completion. Act on the ready results now without reporting the batch as finished, or call sessions_yield to wait for the rest.`,
+          `[Subagent Context] These results are ready, but ${pending.length} other subagent(s) from this batch are still working: ${pending.map(describeChild).join("; ")}. Each remaining result arrives later as its own completion. If the request needs those results before you answer, call sessions_yield to wait for them; otherwise act on the ready results now without reporting the batch as finished.`,
         ]
       : [
           params.descendantsUnsettled
