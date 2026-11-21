@@ -260,7 +260,6 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         accountId: resolved.accountId,
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
-        client,
         eventScope,
       });
       await setSlackSessionStatus({
