@@ -11206,12 +11206,10 @@ describe("package artifact reuse", () => {
         "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
       profiles: "full",
     });
-    expect(openCodeGo.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 ",
-    );
+    expect(openCodeGo.command).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 ");
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
     expect(openCodeGoSmoke.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
   });
@@ -11236,7 +11234,7 @@ describe("package artifact reuse", () => {
     );
 
     expect(openCodeModels).toMatchObject({
-      models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+      models: "opencode-go/glm-5.3",
       max_models: "2",
     });
     expect(kimi.command).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.7-code");
