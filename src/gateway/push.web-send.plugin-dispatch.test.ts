@@ -6,7 +6,7 @@ import {
   registerVirtualTestPlugin,
 } from "../plugin-sdk/plugin-test-contracts.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { resolveCoreOperatorGatewayMethodScope } from "./methods/core-method-policy.js";
+import { createCoreGatewayMethodDescriptors } from "./methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import { pushHandlers } from "./server-methods/push.js";
@@ -47,20 +47,11 @@ function notifierPlugin(entitled: boolean) {
     },
   });
   setTestPluginRegistry(registry.registry);
-  const scope = resolveCoreOperatorGatewayMethodScope("push.web.send");
-  if (!scope) {
-    throw new Error("push.web.send must be an operator-scoped core method");
-  }
   const methods = createGatewayMethodRegistry(
     [
       ...registry.registry.gatewayMethodDescriptors,
-      {
-        name: "push.web.send",
-        owner: { kind: "core", area: "push" },
-        scope,
-        profileAccess: "independent",
-        handler: pushHandlers["push.web.send"],
-      },
+      // The shipped core row supplies scope, profile access and the since train.
+      ...createCoreGatewayMethodDescriptors({ "push.web.send": pushHandlers["push.web.send"] }),
     ],
     registry.registry,
   );

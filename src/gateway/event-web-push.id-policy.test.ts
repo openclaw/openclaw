@@ -64,6 +64,13 @@ const setSubscriptions = (...subscriptions: BoundWebPushSubscription[]) =>
   mocks.subscriptions.mockReturnValue(subscriptions);
 const setPaired = (...paired: ReturnType<typeof pairedOperator>[]) =>
   mocks.paired.mockReturnValue(paired);
+function expectDelivered(subscriptions: BoundWebPushSubscription[]) {
+  if (subscriptions.length === 0) {
+    expect(mocks.send).not.toHaveBeenCalled();
+  } else {
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ subscriptions }));
+  }
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -88,7 +95,7 @@ describe("Web Push ID canonical profile policy", () => {
     "definitions only",
     "owner",
   ] as const)(
-    "uses canonical profile roles and current ID membership for completion delivery: %s",
+    "uses canonical profile roles and current ID membership for completion and profile sends: %s",
     async (membership) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const creator = ensureProfileForEmail("push-creator@example.test");
@@ -198,115 +205,21 @@ describe("Web Push ID canonical profile policy", () => {
               : membership === "removed" || membership === "off"
                 ? [localBrowser]
                 : [];
-        if (subscriptions.length === 0) {
-          expect(mocks.send).not.toHaveBeenCalled();
-        } else {
-          expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ subscriptions }),
-          );
-        }
-      });
-    },
-  );
-});
-
-describe("profile-targeted send under named roles and OpenClaw ID", () => {
-  it.each([
-    ["member", ["id-browser", "local-browser"]],
-    ["scope removed", []],
-    // An unassigned profile role falls back to the installation default ("restricted").
-    ["unknown role", ["id-browser", "local-browser"]],
-    ["removed", ["local-browser"]],
-    ["owner", ["id-browser", "local-browser"]],
-  ] as const)(
-    "uses the recipient's canonical role and current ID principal: %s",
-    async (membership, expected) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const recipient = ensureProfileForEmail("send-recipient@example.test");
-        linkOpenClawIdUserProfile(
-          { profileId: recipient.id, accountId: "account", email: null },
-          {},
-        );
-        setOpenClawIdMemberAccountLookup(
-          (accountId) =>
-            accountId === "account" && membership !== "removed" && membership !== "owner",
-        );
-        setUserProfileRole(
-          recipient.id,
-          membership === "owner"
-            ? "restricted"
-            : membership === "removed"
-              ? "admin"
-              : membership === "unknown role"
-                ? "missing"
-                : "member",
-        );
-        const cfg: OpenClawConfig = {
-          gateway: {
-            openclawId: { enabled: true },
-            roles: {
-              default: "restricted",
-              definitions: {
-                admin: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
-                restricted: {
-                  scopes: ["operator.read"],
-                  sessions: { others: "none" },
-                  agents: "*",
-                },
-                member: {
-                  scopes: membership === "scope removed" ? [] : ["operator.read"],
-                  sessions: { others: "none" },
-                  agents: "*",
-                },
-              },
-            },
-          },
-        };
-        setRuntimeConfigSnapshot(cfg);
-        const browsers = {
-          "id-browser": makeSubscription("id-browser", recipient.id),
-          "local-browser": makeSubscription("local-browser", recipient.id),
-        };
-        setSubscriptions(...Object.values(browsers));
-        setPaired(
-          pairedOperator("id-browser", ["operator.admin"]),
-          pairedOperator("local-browser", ["operator.admin"]),
-        );
-        const peerKey = `iroh:${"b".repeat(64)}`;
-        setDeviceTokenBindingOwner({
-          lookup: (deviceId) => (deviceId === "id-browser" ? peerKey : undefined),
-          record: async () => {},
-          forget: async () => {},
-          reportMismatch: () => {},
+        // A profile-targeted send has no session to see: only role scopes and ID binding apply.
+        // An ID member without an assigned or default role has no scopes at all.
+        const profileSend =
+          membership === "scope removed" || membership === "definitions only"
+            ? []
+            : membership === "removed" || membership === "off"
+              ? [localBrowser]
+              : [idBrowser, localBrowser];
+        expectDelivered(subscriptions);
+        mocks.send.mockClear();
+        await sendProfileWebPush(() => cfg, {
+          profileId: recipient.id,
+          category: "agent-finished",
         });
-        const principal: OpenClawIdTunnelPrincipal =
-          membership === "owner"
-            ? { kind: "owner", peerKey }
-            : { kind: "member", peerKey, accountId: "account", role: "admin" };
-        setOpenClawIdTunnelPrincipalLookup(() =>
-          membership === "removed" ? undefined : principal,
-        );
-        mocks.send.mockImplementation(
-          async ({ subscriptions }: { subscriptions: BoundWebPushSubscription[] }) =>
-            subscriptions.map((subscription) => ({
-              ok: true,
-              subscriptionId: subscription.subscriptionId,
-              statusCode: 201,
-            })),
-        );
-
-        await expect(
-          sendProfileWebPush(() => cfg, { profileId: recipient.id, category: "agent-finished" }),
-        ).resolves.toEqual({ sent: expected.length, failed: 0, skipped: 0, pruned: 0 });
-        if (expected.length === 0) {
-          expect(mocks.send).not.toHaveBeenCalled();
-        } else {
-          expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              subscriptions: expected.map((deviceId) => browsers[deviceId]),
-            }),
-          );
-        }
+        expectDelivered(profileSend);
       });
     },
   );

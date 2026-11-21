@@ -1,0 +1,7 @@
+# push.web.send, a new operator/plugin Gateway method: delivery owner (canonical recipients,
+# revoked browsers, preference skips counted once across reruns, Private text, 410 pruning, zero
+# counts), handler (param and path rejections, agent ids, cross-profile authorization under a
+# default role and under a role catalog for OpenClaw ID members) and plugin dispatch through the
+# shipped core descriptor. Recipient role/ID policy reuses the existing membership matrix.
+# Exact measured net test-line growth at the head, above the 400-line allowance.
+167
