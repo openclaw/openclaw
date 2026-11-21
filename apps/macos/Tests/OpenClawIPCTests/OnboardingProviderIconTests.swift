@@ -10,6 +10,7 @@ struct OnboardingProviderIconTests {
             ("claude", ["claude-cli", "claude-code", "anthropic"]),
             ("codex", ["codex-cli", "openai"]),
             ("kimi", ["kimi-code"]),
+            ("llama", ["llama-app", "llama-app-existing-server"]),
             ("xai", ["grok-build", "xai"]),
         ]
         for (brand, candidates) in aliases {
@@ -30,7 +31,7 @@ struct OnboardingProviderIconTests {
     }
 
     @Test func `every mapped brand has decodable vector artwork`() throws {
-        for brand in ["claude", "codex", "gemini", "ollama", "lmstudio", "pi", "opencode", "kimi", "xai"] {
+        for brand in ["claude", "codex", "gemini", "ollama", "llama", "lmstudio", "pi", "opencode", "kimi", "xai"] {
             let url = try #require(OnboardingProviderIcon.resourceURL(for: brand))
             #expect(url.pathExtension == "svg")
             #expect(try #require(OnboardingProviderIcon.image(for: brand)).isTemplate)
