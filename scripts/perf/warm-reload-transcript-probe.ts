@@ -3,8 +3,25 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
   const frames: Array<{
     atMs: number;
     scrollTop: number;
+    viewportTop: number;
+    viewportHeight: number;
+    scrollHeight: number;
+    innerTop: number;
+    innerHeight: number;
+    innerStyleHeight: string;
+    columnTop: number | null;
+    columnMarginTop: string | null;
     distanceFromEnd: number;
-    rows: Array<{ key: string; y: number; height: number; characters: number; size: number }>;
+    rows: Array<{
+      key: string;
+      index: string | undefined;
+      y: number;
+      height: number;
+      characters: number;
+      size: number;
+      blockTop: number | null;
+      blockStyleTop: string | null;
+    }>;
   }> = [];
   let anchor: string | undefined;
   let previous = "";
@@ -38,16 +55,22 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
         return;
       }
       const viewport = thread.getBoundingClientRect();
+      const innerRect = inner.getBoundingClientRect();
+      const column = inner.querySelector<HTMLElement>(".chat-virtual-sizer");
       const rows = [
         ...inner.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])"),
       ].map((row) => {
         const rect = row.getBoundingClientRect();
+        const block = row.closest<HTMLElement>(".chat-virtual-block");
         return {
           key: row.dataset.virtualRowKey ?? "",
+          index: row.dataset.index,
           y: rect.y,
           height: rect.height,
           characters: row.textContent?.length ?? 0,
           size: Number.parseFloat(row.dataset.rowSize ?? ""),
+          blockTop: block?.getBoundingClientRect().top ?? null,
+          blockStyleTop: block?.style.top ?? null,
         };
       });
       // Establish the reader after the gesture's admitted rows are measured, before live history.
@@ -64,6 +87,14 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
       )?.key;
       const state = {
         scrollTop: thread.scrollTop,
+        viewportTop: viewport.top,
+        viewportHeight: thread.clientHeight,
+        scrollHeight: thread.scrollHeight,
+        innerTop: innerRect.top,
+        innerHeight: innerRect.height,
+        innerStyleHeight: inner.style.height,
+        columnTop: column?.getBoundingClientRect().top ?? null,
+        columnMarginTop: column?.style.marginTop ?? null,
         distanceFromEnd: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
         rows,
       };
