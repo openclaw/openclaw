@@ -209,9 +209,10 @@ Request fields:
   agent returns `INVALID_REQUEST`. The person's agent filter is matched against
   it.
 - `path` is a Control UI path opened on click, relative to the Control UI base
-  path. It accepts letters, digits, `.`, `_`, `~`, `%`, `/`, and `-`, must start
-  with a letter or digit, and cannot contain a query (`?`), a fragment (`#`), an
-  empty segment, or a `.`/`..` segment (also percent-encoded). Control UI reads
+  path. It accepts letters, digits, `.`, `_`, `~`, `/`, `-`, and complete
+  percent escapes (`%` plus two hex digits), must start with a letter or digit,
+  and cannot contain a query (`?`), a fragment (`#`), an empty segment, or a
+  `.`/`..` segment (also percent-encoded). Control UI reads
   startup settings such as the Gateway URL from the query and fragment, so a
   notification cannot carry them.
 - `title` (80 characters) and `body` (240 characters) are shown on one line.

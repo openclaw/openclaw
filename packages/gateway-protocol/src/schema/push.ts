@@ -126,12 +126,14 @@ export const WebPushSendParamsSchema = closedObject({
   /**
    * Control UI path opened on click, relative to the Control UI base path. No query or
    * fragment (Control UI reads startup settings such as `token` and `gatewayUrl` from
-   * them), no empty segments, and no dot segments, including percent-encoded ones.
+   * them), no empty segments, no dot segments (including percent-encoded ones), and `%`
+   * only as a complete escape.
    */
   path: Type.Optional(
     Type.String({
       maxLength: 512,
-      pattern: "^(?!.*//)(?!.*/(?:\\.|%2[Ee]){1,2}(?:/|$))[A-Za-z0-9][A-Za-z0-9._~%/-]*$",
+      pattern:
+        "^(?!.*//)(?!.*/(?:\\.|%2[Ee]){1,2}(?:/|$))[A-Za-z0-9](?:[A-Za-z0-9._~/-]|%[0-9A-Fa-f]{2})*$",
     }),
   ),
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
