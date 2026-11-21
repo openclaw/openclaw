@@ -58,6 +58,7 @@ import {
   clearSessionWorkspacePreviews,
   sessionWorkspaceForHost,
 } from "./components/chat-session-workspace-state.ts";
+import { createChatInputHistoryReader } from "./input-history-request.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -307,7 +308,8 @@ export function createPageState(
   };
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
-  state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
+  state.handleChatInputHistoryKey = (input) =>
+    handleChatInputHistoryKey(state, input, () => createChatInputHistoryReader(state));
   initializeChatPaneSettings(state, page);
   attachChatRealtimeActions(
     state,

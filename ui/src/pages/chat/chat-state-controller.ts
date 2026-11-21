@@ -310,6 +310,14 @@ export function createChatState<TState extends ChatPageHost>(
           composerPersistence.schedule();
           publishComposerDraft();
         }
+        if (result.completion) {
+          void result.completion.then((completed) => {
+            if (completed.handled) {
+              composerPersistence.schedule();
+              publishComposerDraft();
+            }
+          });
+        }
         return result;
       };
     },
