@@ -64,17 +64,15 @@ describe("applyMergePatch", () => {
 });
 
 describe("createMergePatch", () => {
-  it("preserves null values in complete id-keyed target rows", () => {
+  it("diffs id-keyed rows without dropping unchanged nulls", () => {
     const base = {
-      models: [{ id: "fixture", name: "Old name", thinkingLevelMap: { off: null } }],
+      models: [{ id: "m", name: "Old", contextTokens: 1, thinkingLevelMap: { off: null } }],
     };
-    const target = {
-      models: [{ id: "fixture", name: "New name", thinkingLevelMap: { off: null } }],
-    };
+    const target = { models: [{ id: "m", name: "New", thinkingLevelMap: { off: null } }] };
 
     const patch = createMergePatch(base, target, { mergeObjectArraysById: true });
 
-    expect(patch).toEqual({ models: [{ id: "fixture", name: "New name" }] });
+    expect(patch).toEqual({ models: [{ id: "m", name: "New", contextTokens: null }] });
     expect(applyMergePatch(base, patch, { mergeObjectArraysById: true })).toEqual(target);
   });
 });
