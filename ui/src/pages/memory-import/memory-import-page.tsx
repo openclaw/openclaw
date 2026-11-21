@@ -20,11 +20,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { MemoryImportClient, MemoryImportState } from "./memory-import-state.ts";
-import type {
-  SessionBackfillGatewayResult,
-  SessionBackfillProgress,
-  SessionBackfillRollbackResult,
-} from "./view-types.ts";
+import type * as Backfill from "./view-types.ts";
 import { MemoryImport } from "./view.tsx";
 
 registerRouteSubtitlesEnglish();
@@ -444,7 +440,7 @@ export function MemoryImportPage() {
     }
     publish();
     const requestBackfill = (method: "preview" | "apply") =>
-      client.request<SessionBackfillGatewayResult>(`memory.sessionBackfill.${method}`, {
+      client.request<Backfill.SessionBackfillGatewayResult>(`memory.sessionBackfill.${method}`, {
         agentId,
         ...(state.backfillFrom ? { from: state.backfillFrom } : {}),
         ...(state.backfillTo ? { to: state.backfillTo } : {}),
@@ -452,7 +448,7 @@ export function MemoryImportPage() {
       });
     try {
       if (operation === "rollback") {
-        const result = await client.request<SessionBackfillRollbackResult>(
+        const result = await client.request<Backfill.SessionBackfillRollbackResult>(
           "memory.sessionBackfill.rollback",
           { agentId },
         );
@@ -468,7 +464,7 @@ export function MemoryImportPage() {
           state.backfillPreview = result;
         }
       } else {
-        let progress: SessionBackfillProgress = {
+        let progress: Backfill.SessionBackfillProgress = {
           days: 0,
           candidates: 0,
           staged: 0,
@@ -668,7 +664,9 @@ export function MemoryImportPage() {
           backfillTo={read("backfillTo")}
           backfillBusy={presentation().backfilling() ?? read("backfillBusy")}
           backfillError={
-            admittedPreview() && !read("backfillPreview") ? null : read("backfillError")
+            !read("backfillRollbackTarget") && admittedPreview() && !read("backfillPreview")
+              ? null
+              : read("backfillError")
           }
           backfillProgress={read("backfillProgress")}
           backfillRollbackResult={read("backfillRollbackResult")}
