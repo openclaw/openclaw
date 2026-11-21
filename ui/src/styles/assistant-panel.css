@@ -31,14 +31,11 @@ openclaw-assistant-panel {
   left: var(--shell-nav-width, 0);
 }
 
+/* Desktop webviews draw caption buttons over the window's top-right corner,
+   where these header actions sit. Only the desktop shell publishes the width. */
 .assistant-panel--right {
-  top: var(--shell-topbar-height, 0);
-}
-
-/* Desktop webviews draw their caption buttons over the window's top-right
-   corner, where this panel's header actions sit. */
-html.openclaw-native-desktop .assistant-panel--right {
   --rail-header-padding-end: calc(var(--openclaw-native-window-controls-width, 0px) + 8px);
+  top: var(--shell-topbar-height, 0);
 }
 
 .assistant-panel-resizer {
@@ -74,10 +71,6 @@ html.openclaw-native-desktop .assistant-panel--right {
   width: 16px;
   height: 16px;
   flex: none;
-}
-
-.assistant-panel-icon {
-  flex: 0 0 auto;
 }
 
 @media (max-width: 640px) {
