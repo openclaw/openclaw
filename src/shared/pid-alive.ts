@@ -7,6 +7,7 @@ import { hasErrnoCode, isErrno } from "../infra/errno.ts";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
+import { isWindowsProcessDefinitelyAbsent } from "./windows-process-absent.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
 declare const SEALED_RUNTIME_BUILD: boolean;
@@ -51,6 +52,17 @@ function readNativeLiveness(pid: number): boolean | undefined {
     if (
       error instanceof ProcSafeError &&
       (error.code === "helper-unavailable" || error.code === "unsupported-platform")
+    ) {
+      return undefined;
+    }
+    // Windows reports ACCESS_DENIED for nonexistent PIDs as well (kernel
+    // PID-reuse protection keeps "missing" and "hidden" indistinguishable), so
+    // there the code is ambiguity rather than liveness evidence. POSIX EPERM
+    // still means an existing process the caller may not signal.
+    if (
+      error instanceof ProcSafeError &&
+      error.code === "access-denied" &&
+      process.platform === "win32"
     ) {
       return undefined;
     }
@@ -169,6 +181,7 @@ export function isPidDefinitelyDead(pid: number): boolean {
     return true;
   }
   let missing = false;
+  let deniedToSignal = false;
   try {
     process.kill(pid, 0);
   } catch (error) {
@@ -177,12 +190,23 @@ export function isPidDefinitelyDead(pid: number): boolean {
       return false;
     }
     missing = code === "ESRCH";
+    deniedToSignal = code === "EPERM";
   }
   const native = readNativeLiveness(pid);
-  // Windows EPERM needs native exit evidence; FreeBSD ESRCH may hide a live PID.
-  return native === undefined
-    ? (missing && process.platform !== "freebsd") || isExitedLinuxProcess(pid)
-    : !native;
+  if (native !== undefined) {
+    return !native;
+  }
+  if (missing) {
+    // FreeBSD ESRCH may hide a live PID behind a visibility policy.
+    return process.platform !== "freebsd";
+  }
+  // A Windows signal probe answers EPERM for dead PIDs while native evidence
+  // is unavailable (missing helper, access-denied ambiguity): ask Windows
+  // itself before giving up, so stale lock holders can still be recovered.
+  if (process.platform === "win32" && deniedToSignal) {
+    return isWindowsProcessDefinitelyAbsent(pid);
+  }
+  return isExitedLinuxProcess(pid);
 }
 
 function getDarwinProcessStartTime(

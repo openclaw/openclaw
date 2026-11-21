@@ -35,6 +35,12 @@ vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
 }));
 
+const windowsAbsentMock = vi.hoisted(() => vi.fn<(pid: number) => boolean>(() => false));
+vi.mock("./windows-process-absent.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-process-absent.ts")>()),
+  isWindowsProcessDefinitelyAbsent: windowsAbsentMock,
+}));
+
 // Portable cases disable native inspection; the native suite opts back in.
 beforeEach(() => {
   vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
@@ -48,6 +54,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   readWindowsProcessStartTimeSyncMock.mockReset();
   readFreeBsdProcessStartTimeMock.mockReset();
+  windowsAbsentMock.mockReset().mockReturnValue(false);
 });
 
 function mockProcReads(entries: Record<string, string | (() => string)>) {
@@ -286,7 +293,7 @@ describe("native process identity policy", () => {
     },
   );
 
-  it.each(["darwin", "freebsd", "win32"] as const)(
+  it.each(["darwin", "freebsd"] as const)(
     "never declares a hidden %s process dead",
     async (platform) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
@@ -300,6 +307,73 @@ describe("native process identity policy", () => {
     },
   );
 
+  // Windows reports ACCESS_DENIED for nonexistent PIDs as well (kernel
+  // PID-reuse protection, issue #198757), so there it is ambiguity rather than
+  // liveness evidence: the signal-missing path reclassifies it as dead.
+  it("treats Windows access-denied as ambiguity, letting ESRCH prove death", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    nativeIdentity.mockImplementation(() => {
+      throw new ProcSafeError("access-denied", "hidden", {
+        details: { reason: "visibility-policy" },
+      });
+    });
+    mockKill("ESRCH");
+    expect(liveness(42)).toEqual([false, true]);
+  });
+
+  it.each([
+    {
+      name: "helper unavailable and Windows confirms absence (issue #198757 reporter state)",
+      native: () => {
+        throw new ProcSafeError("helper-unavailable", "missing");
+      },
+      absent: true,
+      dead: true,
+    },
+    {
+      name: "access-denied and Windows confirms absence",
+      native: () => {
+        throw new ProcSafeError("access-denied", "hidden");
+      },
+      absent: true,
+      dead: true,
+    },
+    {
+      name: "helper unavailable but probe cannot confirm (conservative)",
+      native: () => {
+        throw new ProcSafeError("helper-unavailable", "missing");
+      },
+      absent: false,
+      dead: false,
+    },
+    {
+      name: "access-denied for a protected live owner stays alive",
+      native: () => {
+        throw new ProcSafeError("access-denied", "hidden");
+      },
+      absent: false,
+      dead: false,
+    },
+  ])("Windows EPERM recovery: $name", async ({ native, absent, dead }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockKill("EPERM");
+    nativeIdentity.mockImplementation(native);
+    windowsAbsentMock.mockReturnValue(absent);
+    expect(isPidDefinitelyDead(42)).toBe(dead);
+    expect(windowsAbsentMock).toHaveBeenCalledWith(42);
+  });
+
+  it("does not consult the Windows absence oracle when the signal probe succeeds", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    nativeIdentity.mockImplementation(() => {
+      throw new ProcSafeError("helper-unavailable", "missing");
+    });
+    mockKill("success");
+    // A successful signal probe already proves the PID exists on Windows.
+    expect(liveness(42)).toEqual([true, false]);
+    expect(windowsAbsentMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { owner: "absent", value: null, stale: true },
     { owner: "exited", value: { ...identity(), exited: true }, stale: true },
@@ -310,20 +384,32 @@ describe("native process identity policy", () => {
       value: new ProcSafeError("helper-unavailable", "missing"),
       stale: false,
     },
-  ])("recovers only a proven dead Windows EPERM lock owner ($owner)", async ({ value, stale }) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    mockKill("EPERM");
-    nativeIdentity.mockImplementation(() => {
-      if (value instanceof Error) {
-        throw value;
+    {
+      owner: "unavailable but confirmed absent",
+      value: new ProcSafeError("helper-unavailable", "missing"),
+      confirmedAbsent: true,
+      stale: true,
+    },
+  ])(
+    "recovers only a proven dead Windows EPERM lock owner ($owner)",
+    async ({ value, stale, confirmedAbsent }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockKill("EPERM");
+      if (confirmedAbsent) {
+        windowsAbsentMock.mockReturnValue(true);
       }
-      return value;
-    });
-    const { isLockOwnerDefinitelyStale } = await import("../infra/stale-lock-file.js");
-    expect(
-      isLockOwnerDefinitelyStale({ payload: { pid: 42, createdAt: "2000-01-01T00:00:00Z" } }),
-    ).toBe(stale);
-  });
+      nativeIdentity.mockImplementation(() => {
+        if (value instanceof Error) {
+          throw value;
+        }
+        return value;
+      });
+      const { isLockOwnerDefinitelyStale } = await import("../infra/stale-lock-file.js");
+      expect(
+        isLockOwnerDefinitelyStale({ payload: { pid: 42, createdAt: "2000-01-01T00:00:00Z" } }),
+      ).toBe(stale);
+    },
+  );
 
   it("keeps sealed helpers on the bounded shell path", () => {
     vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
