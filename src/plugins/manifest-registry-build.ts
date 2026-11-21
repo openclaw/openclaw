@@ -120,6 +120,34 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   });
 }
 
+// A manifestless load.paths file starts with the Gateway; a manifest beside it replaces that
+// intent, so an enabled hook-only file whose manifest omits onStartup silently stops loading.
+function pushStandaloneFileStartupIntentDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+  explicitConfiguredFileSources: ReadonlySet<string>;
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
+}): void {
+  const { record, normalized } = params;
+  const policyId = normalizePluginPolicyId(record.id);
+  const enabled = normalized?.entries[policyId]?.enabled;
+  if (
+    record.origin !== "config" ||
+    record.activation?.onStartup !== undefined ||
+    !params.explicitConfiguredFileSources.has(path.resolve(record.source)) ||
+    !(enabled === true || (enabled !== false && normalized?.allow.includes(policyId)))
+  ) {
+    return;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: sanitizeForLog(record.id),
+    source: sanitizeForLog(record.manifestPath),
+    message:
+      "standalone plugin file has a manifest without activation.onStartup, so it no longer starts with the Gateway and loads only when a declared activation trigger matches (registering hooks is not one); set activation.onStartup to true to start it with the Gateway, or false to keep it lazy",
+  });
+}
+
 function dedupePluginDiagnostics(
   diagnostics: PluginDiagnostic[],
   discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
@@ -519,6 +547,12 @@ export function buildPluginManifestRegistry(
       });
     }
     pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
+    pushStandaloneFileStartupIntentDiagnostic({
+      record,
+      diagnostics,
+      explicitConfiguredFileSources,
+      normalized,
+    });
   }
   return { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
 }

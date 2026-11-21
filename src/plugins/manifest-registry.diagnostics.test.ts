@@ -81,6 +81,38 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
   });
 });
 
+describe("standalone plugin file startup intent", () => {
+  const warning = "standalone plugin file has a manifest without activation.onStartup";
+
+  it.each([
+    {
+      name: "enabled, manifest omits onStartup",
+      activation: undefined,
+      enabled: true,
+      warns: true,
+    },
+    {
+      name: "enabled, onStartup false",
+      activation: { onStartup: false },
+      enabled: true,
+      warns: false,
+    },
+    { name: "not enabled", activation: undefined, enabled: false, warns: false },
+  ])("$name: warns $warns", ({ activation, enabled, warns }) => {
+    const file = candidate("config", activation ? { activation } : {}, "tool-policy");
+    fs.writeFileSync(file.source, "export default { register() {} };", "utf-8");
+
+    const registry = loadPluginManifestRegistryCore({
+      config: {
+        plugins: { load: { paths: [file.source] }, entries: { "tool-policy": { enabled } } },
+      },
+      candidates: [file],
+    });
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes(warning))).toBe(warns);
+  });
+});
+
 const authChoice = (provider: string, method = "api-key") => ({
   provider,
   method,
