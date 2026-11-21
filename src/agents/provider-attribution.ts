@@ -329,7 +329,9 @@ function resolveProviderAttributionPolicy(
         /^(\d{4}\.\d+\.\d+)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/u.exec(
           version,
         );
-      const gateVersion = release && Number(release[1].slice(0, 4)) >= 2026 ? release[1] : "99.0.0";
+      const numericRelease = release?.[1];
+      const gateVersion =
+        numericRelease && Number(numericRelease.slice(0, 4)) >= 2026 ? numericRelease : "99.0.0";
       return {
         ...policy,
         verification: "vendor-hidden-api-spec",
