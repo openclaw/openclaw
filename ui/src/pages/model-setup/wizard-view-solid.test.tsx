@@ -238,3 +238,37 @@ it("shows device-code expiry only near the end and retires an expired code", asy
   );
   expect(container.querySelector(".wizard-sign-in__ring")).toBeNull();
 });
+
+it.each([
+  ["device_code_expired", "Start sign-in again", "retry"],
+  ["consent_denied", "Retry this step", "retry"],
+  ["callback_port_busy", "Open settings", "settings"],
+  ["rate_limited", undefined, "Wait a few minutes, then start sign-in again."],
+  ["admin_blocked", undefined, "Ask your administrator to allow this sign-in."],
+] as const)("offers the one recovery core owns for %s", async (reason, button, outcome) => {
+  const recovery = { onRetry: vi.fn(), onOpenSettings: vi.fn() };
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={{ phase: "error", message: "The provider said no.", reason }}
+      busy={false}
+      value={undefined}
+      recovery={recovery}
+    />
+  ));
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const actions = [...container.querySelectorAll(".model-setup-wizard__footer button")];
+  if (!button) {
+    expect(actions).toHaveLength(0);
+    expect(container.textContent).toContain(outcome);
+    return;
+  }
+  expect(actions.map((action) => action.textContent?.trim())).toEqual(["Close", button]);
+  (actions[1] as HTMLButtonElement).click();
+  expect(
+    outcome === "settings" ? recovery.onOpenSettings : recovery.onRetry,
+  ).toHaveBeenCalledOnce();
+  // The failure shows only its own sentence: no CLI command and no earlier notes.
+  expect(container.textContent).not.toMatch(/openclaw models auth login/);
+});

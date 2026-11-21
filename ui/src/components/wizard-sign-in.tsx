@@ -7,6 +7,7 @@ import { ModelProviderIcon } from "../lib/reactive/provider-presentation.tsx";
 import { createInterval, createTimeout } from "../lib/reactive/timers.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { resolveProviderIconName } from "./provider-icon-data.ts";
+import { Icon } from "./solid/icon.tsx";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 import "../styles/wizard-sign-in.css";
 import { ProviderFallbackIcon } from "./solid/provider-icon.tsx";
@@ -16,7 +17,7 @@ const SIGN_IN_SLOW_MS = 45_000;
 const EXPIRY_TICK_MS = 15_000;
 const EXPIRY_VISIBLE_MINUTES = 5;
 
-function CopyAction(props: { value: string; label: string; class: string }) {
+function CopyAction(props: { value: string; label: string; class: string; icon?: boolean }) {
   let label!: HTMLSpanElement;
   return (
     <button
@@ -24,6 +25,9 @@ function CopyAction(props: { value: string; label: string; class: string }) {
       class={props.class}
       onClick={(event) => void handleCopyButton(event, props.value, props.label, { label })}
     >
+      <Show when={props.icon}>
+        <Icon name="copy" />
+      </Show>
       <span ref={(element) => (label = element)} data-copy-label>
         {props.label}
       </span>
@@ -57,6 +61,63 @@ function ProviderBadge(props: {
           {(provider) => <ModelProviderIcon provider={provider()} class="wizard-sign-in__icon" />}
         </Show>
       )}
+    </div>
+  );
+}
+
+/**
+ * Browser sign-in that also accepts the address the browser lands on, which often cannot load
+ * on this machine. The runner keeps polling, so a callback that arrives by itself still
+ * finishes the step without the pasted address.
+ */
+export function PasteSignIn(props: {
+  url: string;
+  brandId?: string;
+  providerLabel?: string;
+  icon?: JSX.Element;
+  titled: boolean;
+}) {
+  return (
+    <div class="wizard-sign-in wizard-sign-in--paste">
+      <div class="wizard-sign-in__header">
+        {/* The ring shows that a callback arriving by itself still finishes sign-in. */}
+        <ProviderBadge
+          icon={props.icon}
+          brandId={props.brandId}
+          providerLabel={props.providerLabel}
+          waiting
+        />
+        <Show when={props.titled}>
+          {/* Like other setup dialogs, the sign-in choice's own label names it. */}
+          <h2 class="wizard-sign-in__title">
+            {props.providerLabel || t("modelSetup.wizard.signInTitle")}
+          </h2>
+        </Show>
+      </div>
+      <p class="wizard-sign-in__lead">{t("modelSetup.wizard.pasteDescription")}</p>
+      <span class="sr-only" role="status" aria-live="polite">
+        {props.providerLabel
+          ? t("modelSetup.wizard.waitingForProvider", { provider: props.providerLabel })
+          : t("modelSetup.wizard.waiting")}
+      </span>
+      <div class="wizard-sign-in__paste-actions">
+        <a
+          class="btn btn--sm wizard-step__external-link"
+          data-link-reader-external
+          href={props.url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <Icon name="arrowUpRight" />
+          {t("modelSetup.wizard.openSignInPage")}
+        </a>
+        <CopyAction
+          value={props.url}
+          label={t("modelSetup.wizard.copyLink")}
+          class="btn btn--sm btn--ghost"
+          icon
+        />
+      </div>
     </div>
   );
 }

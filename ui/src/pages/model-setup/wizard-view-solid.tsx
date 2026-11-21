@@ -1,11 +1,15 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
+import {
+  isProviderAuthFailureReason,
+  resolveProviderAuthRecovery,
+} from "../../../../src/plugins/provider-auth-failure.js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import "../../components/modal-dialog.tsx";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
@@ -32,6 +36,8 @@ export type WizardViewProps = {
   onAnswer: (value: unknown, includeValue?: boolean) => void;
   onCancel: () => void;
   onClose: () => void;
+  /** Provider sign-in recovery for a typed failure; without it the error offers only Close. */
+  recovery?: { onRetry: () => void; onOpenSettings: () => void };
 };
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
@@ -76,7 +82,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       type === "multiselect" ||
       type === "note" ||
       type === "action" ||
-      (type === "text" && !current.externalAuthInput) ||
+      type === "text" ||
       (type === "select" && (options?.length ?? 0) <= 2)
     );
   };
@@ -91,6 +97,13 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   };
   const errorState = () =>
     props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined;
+  // Core owns the recovery for each typed sign-in failure; the dialog shows its one action.
+  const recovery = () => {
+    const reason = props.state.phase === "error" ? props.state.reason : undefined;
+    return props.recovery && isProviderAuthFailureReason(reason)
+      ? resolveProviderAuthRecovery(reason)
+      : undefined;
+  };
   return (
     <Show when={displayPhase() !== "idle"}>
       <openclaw-modal-dialog
@@ -194,6 +207,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     >
                       <InlineAlert tone="danger" class="model-setup-wizard__error" role="alert">
                         <p class="model-setup-wizard__error-text">{state().message}</p>
+                        <Show when={recovery() === "wait" || recovery() === "admin"}>
+                          <p class="model-setup-wizard__error-text">
+                            {t(
+                              recovery() === "wait"
+                                ? "modelSetup.wizard.waitThenRetry"
+                                : "modelSetup.wizard.askAdmin",
+                            )}
+                          </p>
+                        </Show>
                         <div class="model-setup-wizard__error-copy">
                           <CopyButton
                             text={state().message}
@@ -208,7 +230,8 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                   <Show when={retainedStep()}>
                     {(state) => (
                       <>
-                        <Show when={state().validationError}>
+                        {/* A pasted-address sign-in shows its error under the field. */}
+                        <Show when={!state().externalAuthInput && state().validationError}>
                           <InlineAlert
                             tone="danger"
                             id="model-setup-wizard-validation-error"
@@ -232,13 +255,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                               ? "model-setup-wizard-validation-error"
                               : undefined
                           }
+                          validationError={state().validationError}
                           confirmAffirmativeLabel={
                             props.mode === "prepare" && state().step.type === "confirm"
                               ? t("modelSetup.wizard.continue")
                               : undefined
                           }
                           leadingAction={
-                            signInStep() || !stepHasPrimary() ? undefined : (
+                            (signInStep() && !state().externalAuthInput) ||
+                            !stepHasPrimary() ? undefined : (
                               <button type="button" class="btn" onClick={() => props.onCancel()}>
                                 {t("common.cancel")}
                               </button>
@@ -267,6 +292,37 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                 </Match>
               </Switch>
             </div>
+            <Show
+              when={
+                recovery() === "retry" ||
+                recovery() === "restart" ||
+                recovery() === "fix-paste" ||
+                recovery() === "open-settings"
+              }
+            >
+              <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
+                <button type="button" class="btn" onClick={() => props.onClose()}>
+                  {t("common.close")}
+                </button>
+                <button
+                  type="button"
+                  class="btn primary"
+                  onClick={() =>
+                    recovery() === "open-settings"
+                      ? props.recovery?.onOpenSettings()
+                      : props.recovery?.onRetry()
+                  }
+                >
+                  {t(
+                    recovery() === "open-settings"
+                      ? "modelSetup.wizard.openSettings"
+                      : recovery() === "retry"
+                        ? "modelSetup.wizard.retryStep"
+                        : "modelSetup.wizard.startAgain",
+                  )}
+                </button>
+              </openclaw-modal-actions>
+            </Show>
             <Show when={displayPhase() === "done"}>
               <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
                 <button
