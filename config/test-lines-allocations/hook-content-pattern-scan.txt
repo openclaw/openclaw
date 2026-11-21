@@ -1,0 +1,2 @@
+# Prove hook-content pattern scans stay linear on long blank and repeated runs and still find interior markers.
+18

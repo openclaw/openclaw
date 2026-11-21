@@ -9,6 +9,9 @@ export {
 /**
  * Patterns that may indicate prompt injection attempts.
  * These are logged for monitoring but content is still processed (wrapped safely).
+ * Hook bodies are untrusted and can be large, so every pattern scans the whole body in
+ * linear time: no adjacent overlapping whitespace quantifiers, and no rescan of the same
+ * line or blank run from each later occurrence.
  */
 const SUSPICIOUS_PATTERNS = [
   /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
@@ -16,15 +19,17 @@ const SUSPICIOUS_PATTERNS = [
   /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
   /you\s+are\s+now\s+(a|an)\s+/i,
   /new\s+instructions?:/i,
-  /system\s*:?\s*(prompt|override|command)/i,
-  /\bexec\b.*command\s*=/i,
+  /system\s*(?::\s*)?(prompt|override|command)/i,
+  // Only the first `exec` of a line can start the match; later ones see a subset of its tail.
+  /^(?:(?!\bexec\b)[^\n\r\u2028\u2029])*\bexec\b.*command\s*=/im,
   /elevated\s*=\s*true/i,
   /rm\s+-rf/i,
   /delete\s+all\s+(emails?|files?|data)/i,
   /<\/?system>/i,
-  /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
+  /\][^\S\n]*\n\s*\[?(system|assistant|user)\]?:/i,
   /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/i,
-  /^\s*System:\s+/im,
+  // Leading whitespace may span blank lines, so the last line start before `System:` decides.
+  /^[^\S\n\r\u2028\u2029]*System:\s+/im,
 ];
 
 export function detectSuspiciousPatterns(content: string): string[] {
