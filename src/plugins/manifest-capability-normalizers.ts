@@ -367,6 +367,29 @@ function normalizeCapabilityProviderModeConfigSignal(
   });
 }
 
+// Kept separate from normalizeManifestRecord, which drops falsy entries such as `false` and `0`.
+function normalizeConfigSignalValueRecord(
+  value: unknown,
+): Record<string, string | number | boolean> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, string | number | boolean> = Object.create(null);
+  for (const [rawPath, expected] of Object.entries(value)) {
+    const path = normalizeOptionalString(rawPath);
+    if (
+      path &&
+      !isBlockedObjectKey(path) &&
+      (typeof expected === "string" ||
+        typeof expected === "boolean" ||
+        (typeof expected === "number" && Number.isFinite(expected)))
+    ) {
+      normalized[path] = expected;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeCapabilityProviderMetadataEntry(
   rawMetadata: Record<string, unknown>,
 ): PluginManifestCapabilityProviderMetadata | undefined {
@@ -395,14 +418,16 @@ function normalizeCapabilityProviderMetadataEntry(
         }
         const required = normalizeOptionalTrimmedStringList(rawSignal.required);
         const requiredAny = normalizeOptionalTrimmedStringList(rawSignal.requiredAny);
+        const equals = normalizeConfigSignalValueRecord(rawSignal.equals);
         const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
-        return required || requiredAny || mode
+        return required || requiredAny || equals || mode
           ? omitUndefinedFields({
               rootPath,
               overlayPath: normalizeOptionalString(rawSignal.overlayPath),
               overlayMapPath: normalizeOptionalString(rawSignal.overlayMapPath),
               required,
               requiredAny,
+              equals,
               mode,
             })
           : undefined;

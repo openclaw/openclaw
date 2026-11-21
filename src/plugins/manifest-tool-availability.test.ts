@@ -6,6 +6,7 @@ import {
   hasManifestToolAvailability,
   manifestConfigSignalPasses,
 } from "./manifest-tool-availability.js";
+import type { PluginManifestCapabilityProviderConfigSignal } from "./manifest-types.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 function makeConfig(value: Record<string, unknown>): OpenClawConfig {
@@ -74,6 +75,52 @@ describe("manifestConfigSignalPasses", () => {
     [{ value: true }, true],
   ] as const)("treats required value %o as configured=%s", (apiKey, expected) => {
     expect(configSignal(xaiConfig({ webSearch: { apiKey } }))).toBe(expected);
+  });
+
+  function demoSignalPasses(
+    demo: Record<string, unknown>,
+    signal: Omit<PluginManifestCapabilityProviderConfigSignal, "rootPath">,
+    env: NodeJS.ProcessEnv = {},
+  ) {
+    return manifestConfigSignalPasses({
+      config: makeConfig({ channels: { demo } }),
+      env,
+      signal: { rootPath: "channels.demo", ...signal },
+    });
+  }
+
+  // Columns: passes equals true, passes equals false. A missing or null path fails both.
+  it.each<[Record<string, unknown>, boolean, boolean]>([
+    [{ knowledgeBase: { enabled: true } }, true, false],
+    [{ knowledgeBase: { enabled: false } }, false, true],
+    [{ knowledgeBase: { enabled: "true" } }, false, false],
+    [{ knowledgeBase: { enabled: null } }, false, false],
+    [{ knowledgeBase: {} }, false, false],
+  ])("compares %j by literal value: %s %s", (demo, equalsTrue, equalsFalse) => {
+    expect(demoSignalPasses(demo, { equals: { "knowledgeBase.enabled": true } })).toBe(equalsTrue);
+    expect(demoSignalPasses(demo, { equals: { "knowledgeBase.enabled": false } })).toBe(
+      equalsFalse,
+    );
+  });
+
+  it("compares equals against the overlaid config, one overlay map entry at a time", () => {
+    expect(
+      demoSignalPasses(
+        { enabled: true, search: { enabled: false } },
+        { overlayPath: "search", equals: { enabled: true } },
+      ),
+    ).toBe(false);
+    const accounts = { a: { token: "t", enabled: false }, b: { enabled: true } };
+    const signal = { overlayMapPath: "accounts", required: ["token"], equals: { enabled: true } };
+    expect(demoSignalPasses({ accounts }, signal)).toBe(false);
+    expect(
+      demoSignalPasses({ accounts: { ...accounts, c: { token: "t", enabled: true } } }, signal),
+    ).toBe(true);
+  });
+
+  it("never resolves a SecretRef for equals", () => {
+    const flag = { source: "env", provider: "default", id: "KB_FLAG" };
+    expect(demoSignalPasses({ flag }, { equals: { flag: "on" } }, { KB_FLAG: "on" })).toBe(false);
   });
 
   it("resolves env secret refs only when their value is non-empty", () => {

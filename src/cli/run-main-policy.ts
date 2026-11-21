@@ -293,7 +293,7 @@ export function resolveMissingPluginCommandMessage(
       (allow.length === 0 || allow.includes(toolOwner.pluginId));
     if (ownerEnabled) {
       // Per-account / per-tool runtime gates (e.g. Feishu's
-      // channels.feishu.enabled / tools.<x> toggles) are not declarable as
+      // channels.feishu.enabled / tools.<x> toggles) are not declared in its
       // manifest configSignals, so a positive manifest-availability signal
       // proves "could be loaded if config permits", not "currently registered".
       // Soften the wording when the runtime resolver could only prove
