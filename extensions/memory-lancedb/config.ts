@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DEFAULT_CAPTURE_MAX_CHARS, DEFAULT_RECALL_MAX_CHARS } from "./memory-policy-data.js";
 
 type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
 type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
@@ -15,12 +16,7 @@ export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemo
       Partial<Pick<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields>>;
   };
 
-export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
-export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
-
 const DEFAULT_MODEL = "text-embedding-3-small";
-export const DEFAULT_CAPTURE_MAX_CHARS = 500;
-export const DEFAULT_RECALL_MAX_CHARS = 1000;
 
 export function resolveDefaultDbPath(stateDir: string = resolveStateDir()): string {
   return join(stateDir, "memory", "lancedb");
