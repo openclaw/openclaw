@@ -211,6 +211,9 @@ export function createMockTypingController(
     markRunComplete: vi.fn(),
     markDispatchIdle: vi.fn(),
     cleanup: vi.fn(),
+    holdForQueuedFollowup: vi.fn(),
+    isHeldForQueuedFollowup: vi.fn(() => false),
+    releaseQueuedFollowupHold: vi.fn(),
     ...overrides,
   };
 }
