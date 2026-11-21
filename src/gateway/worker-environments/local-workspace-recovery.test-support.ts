@@ -289,10 +289,11 @@ export async function proveAggregateWorkspaceRecovery({
   const projection = first!.workspaceDir;
   // Real aggregate budget, individually valid files: no limit override can hide a staging bypass.
   const artifactBytes = Math.ceil((768 * 1024 * 1024) / 13);
+  // Debug/Release outputs are excluded; custom configurations still count toward the budget.
   const artifacts = Array.from(
     { length: 13 },
     (_, index) =>
-      "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
+      "src/App/" + (index % 2 ? "obj" : "bin") + "/Staging/net10.0/output-" + index + ".dll",
   );
   const sourceText = "authored edit survives aggregate recovery\n";
   for (const relative of artifacts) {
