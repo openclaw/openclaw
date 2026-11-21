@@ -295,11 +295,14 @@ export function SkillDiscovery(props: SkillsProps) {
     setScope("all");
     props.onCategoryChange(next);
   };
-  const sections = createMemo(() =>
-    !category() && !query().trim() && scope() === "all"
-      ? groupOverview(remoteRows(), props.readCategories()?.categories ?? [])
-      : { shelves: [], ungrouped: remoteRows() },
-  );
+  const sections = createMemo(() => {
+    if (category() || query().trim() || scope() !== "all") {
+      return { shelves: [], ungrouped: remoteRows() };
+    }
+    // An unavailable directory is empty; a pending directory has not placed any rows yet.
+    const directory = props.readCategories();
+    return directory && groupOverview(remoteRows(), directory.categories);
+  });
   const remoteTitle = () => category()?.label ?? t("skillsPage.clawHub");
   const inventoryReady = () =>
     props.libraryEntries !== undefined &&
@@ -429,16 +432,22 @@ export function SkillDiscovery(props: SkillsProps) {
           </CatalogDiscoverySection>
         </Show>
         <Show
-          when={remoteRows().length > 0}
+          when={remoteRows().length > 0 && sections()}
           fallback={
-            <Show when={scope() === "all" && pending() && props.state.connected}>
+            <Show
+              when={
+                scope() === "all" &&
+                (pending() || (remoteRows().length > 0 && !sections())) &&
+                props.state.connected
+              }
+            >
               <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
                 {renderCatalogGridSkeleton({ label: t("skillsPage.searching"), cards: 6 })}
               </CatalogDiscoverySection>
             </Show>
           }
         >
-          <For each={sections().shelves} keyed={(section) => section.category.slug}>
+          <For each={sections()?.shelves} keyed={(section) => section.category.slug}>
             {(section) => (
               <CatalogDiscoverySection
                 id={"category-" + section().category.slug}
@@ -459,10 +468,10 @@ export function SkillDiscovery(props: SkillsProps) {
               </CatalogDiscoverySection>
             )}
           </For>
-          <Show when={sections().ungrouped.length}>
+          <Show when={sections()?.ungrouped.length}>
             <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
               <PluginCatalogGrid
-                items={sections().ungrouped}
+                items={sections()?.ungrouped ?? []}
                 results
                 busy={props.loading || pending()}
               >
@@ -473,7 +482,7 @@ export function SkillDiscovery(props: SkillsProps) {
             </CatalogDiscoverySection>
           </Show>
         </Show>
-        <Show when={scope() === "all" && props.hasNextPage}>
+        <Show when={scope() === "all" && props.hasNextPage && sections()}>
           <div class="plugin-catalog-load-more">
             <button
               type="button"

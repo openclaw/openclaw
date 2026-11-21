@@ -238,11 +238,12 @@ describe("unified skill discovery", () => {
       { ...remoteSkill("alice", "unknown"), categories: ["unadvertised"] },
     ];
     const onCategoryChange = vi.fn();
-    const container = renderDiscovery({
-      readCategories: () => ({ categories: [beta, alpha, { slug: "empty", label: "Empty" }] }),
-      clawhubResults: [...tagged, ...uncategorized],
-      onCategoryChange,
-    });
+    const props = { clawhubResults: [...tagged, ...uncategorized], onCategoryChange };
+    const container = renderDiscovery({ ...props, readCategories: () => null });
+    expect(shelfText(container)).not.toBe("");
+    expect(container.querySelector("[data-skill-id]")).toBeNull();
+    const categories = [beta, alpha, { slug: "empty", label: "Empty" }];
+    renderDiscovery({ ...props, readCategories: () => ({ categories }) }, container);
     const sections = [...container.querySelectorAll("[data-catalog-section]")];
     expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
       "On call",
