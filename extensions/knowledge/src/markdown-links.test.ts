@@ -241,13 +241,25 @@ it("real scans expose scoped link resolutions and diagnostics without invalidati
   await cp(sampleVaultRoot(), root, { recursive: true });
   const file = root + "/people/alex-rivera.md";
   const before = await readFile(file, "utf8");
-  await writeFile(file, before + "\n[[Missing page]] [self](alex-rivera.md)\n");
+  await writeFile(
+    root + "/people/alex-rivera#v2.md",
+    before.replaceAll("sample_person_alex", "sample_person_hash").replaceAll("Alex", "Hashed"),
+  );
+  const appended =
+    "\n[[Missing page]] [self](alex-rivera.md) [hash](alex-rivera%23v2.md) [hash-fragment](alex-rivera%23v2.md#Details)\n";
+  await writeFile(file, before + appended);
   const vault = new SampleVault(root),
     detail = await inspectRecord(vault, { id: "sample_person_alex" });
   expect(detail.record!.valid).toBeTruthy();
   expect(detail.links!.some((l) => l.status === "missing")).toBeTruthy();
   expect(detail.issues.some((i) => i.code === "missing-link")).toBeTruthy();
   expect(detail.links!.some((l) => l.id === "sample_person_alex")).toBeTruthy();
+  expect(detail.links!.filter((l) => l.href.startsWith("alex-rivera%23")).map((l) => l.id)).toEqual(
+    ["sample_person_hash", "sample_person_hash"],
+  );
+  expect(
+    connections(await vault.scan(), { id: "sample_person_hash", direction: "backlinks" }).total,
+  ).toBe(1);
   await rename(file, root + "/people/alex-renamed.md");
   const changed = await inspectRecord(vault, { id: "sample_person_alex" });
   expect(changed.record!.path).toBe("people/alex-renamed.md");
