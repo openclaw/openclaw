@@ -71,18 +71,19 @@ export function buildReferenceContext(params: {
 
 export function selectDeltaNotes(
   snapshot: SessionObserverCompanionSnapshot,
-  afterSequence: number,
+  cursor: SessionCompanionThread["lastNote"],
 ): {
   notes: SessionObserverCompanionSnapshot["notes"];
-  lastSequence: number;
+  cursor: NonNullable<SessionCompanionThread["lastNote"]>;
 } {
+  const afterSequence = cursor && cursor.runId === snapshot.runId ? cursor.sequence : 0;
   const candidates = snapshot.notes
     .filter((note) => note.sequence > afterSequence)
     // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array, preserving snapshot note order.
     .sort((left, right) => left.sequence - right.sequence);
   return {
     notes: selectSessionCompanionReferenceItems(candidates.toReversed(), DELTA_MAX_BYTES),
-    lastSequence: candidates.at(-1)?.sequence ?? afterSequence,
+    cursor: { runId: snapshot.runId, sequence: candidates.at(-1)?.sequence ?? afterSequence },
   };
 }
 

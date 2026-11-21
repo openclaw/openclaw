@@ -380,9 +380,10 @@ it.each([
 });
 
 it("builds context once and advances observer note deltas across asks", async () => {
+  let runId = "first-run";
   let notes = [{ sequence: 1, text: "first note" }];
   const harness = createHarness({
-    snapshot: () => ({ agentId: "main", notes }),
+    snapshot: () => ({ agentId: "main", runId, notes }),
   });
   await harness.ask("First?");
   expectHistory(harness.seededHistory[0], "Operator: seed question");
@@ -399,6 +400,10 @@ it("builds context once and advances observer note deltas across asks", async ()
   expect(secondHistory.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
   expect(harness.run.mock.calls[1]?.[1].runParams.prompt).toBe("Second?");
   expectHistory(secondHistory[0], "second note", "third note");
+  runId = "next-run";
+  notes = [{ sequence: 1, text: "new run started publishing" }];
+  await harness.ask("And now?");
+  expectHistory(harness.seededHistory[2]?.[0], "new run started publishing");
 });
 
 it("caps replay by exchange count and UTF-8 bytes", () => {

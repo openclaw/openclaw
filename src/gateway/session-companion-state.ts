@@ -31,7 +31,7 @@ export type SessionCompanionThread = {
   context: SessionCompanionPreparedContext;
   digestText: string;
   exchanges: SessionCompanionExchange[];
-  lastNoteSequence: number;
+  lastNote?: { runId?: string; sequence: number };
   busy: boolean;
   lastUsedAt: number;
 };

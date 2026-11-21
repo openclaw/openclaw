@@ -387,7 +387,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       context: result.context,
       digestText: formatObserverDigest(observerSnapshot),
       exchanges: [],
-      lastNoteSequence: 0,
       busy: false,
       lastUsedAt: params.now(),
     };
@@ -529,7 +528,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       thread.digestText = formatObserverDigest(currentSnapshot);
-      const delta = selectDeltaNotes(currentSnapshot, thread.lastNoteSequence);
+      const delta = selectDeltaNotes(currentSnapshot, thread.lastNote);
       const referenceContext = buildReferenceContext({
         thread,
         deltaNotes: delta.notes,
@@ -651,7 +650,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       const exchange: SessionCompanionExchange = { question, answer, ts };
       thread.exchanges.push(exchange);
       trimSessionCompanionExchanges(thread.exchanges);
-      thread.lastNoteSequence = delta.lastSequence;
+      thread.lastNote = delta.cursor;
       thread.lastUsedAt = ts;
       return { answer, ts };
     };
