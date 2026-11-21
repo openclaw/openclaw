@@ -187,7 +187,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     );
   }
   // A live requester turn owns its bound children until its own transfer releases them.
-  if (settledBatch.length === 0 || settledBatch.some(isClaimedByLiveRequesterTurn)) {
+  if (
+    settledBatch.length === 0 ||
+    settledBatch.some((entry) => isClaimedByLiveRequesterTurn(entry))
+  ) {
     return false;
   }
   if (subagentRuns.isCompletionAuthorityRetired(currentSettledEntry)) {
