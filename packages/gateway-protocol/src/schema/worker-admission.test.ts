@@ -399,6 +399,71 @@ describe("worker protocol schemas", () => {
     );
   });
 
+  it("carries provider-issued tool-call IDs longer than the identifier budget", () => {
+    // A Copilot diagnostic run produced a 458-character tool-call ID; provider
+    // IDs are opaque upstream strings, unlike the internal worker identifiers.
+    const longId = "call_1|" + "x".repeat(451);
+    const validateEvent = (value: unknown) =>
+      validateInferenceEvent(inferenceFrame("event", { event: value }));
+    check(
+      validateEvent,
+      { type: "toolcall_start", contentIndex: 0, id: longId, toolName: "probe" },
+      true,
+    );
+    check(
+      validateEvent,
+      { type: "toolcall_start", contentIndex: 0, id: " call-1 ", toolName: "probe" },
+      false,
+    );
+    check(
+      validateCommit,
+      transcriptMessage({
+        role: "assistant" as const,
+        content: [{ type: "toolCall" as const, id: longId, name: "probe", arguments: {} }],
+        api: "responses",
+        provider: "fixture",
+        model: "fixture-model",
+        usage,
+        stopReason: "toolUse" as const,
+        timestamp: 2,
+      }),
+      true,
+    );
+    check(
+      validateCommit,
+      transcriptMessage({
+        role: "toolResult" as const,
+        toolCallId: longId,
+        toolName: "probe",
+        content: [{ type: "text" as const, text: "ok" }],
+        isError: false,
+        timestamp: 3,
+      }),
+      true,
+    );
+    check(
+      validateCommit,
+      transcriptMessage({
+        role: "assistant" as const,
+        content: [
+          {
+            type: "toolCall" as const,
+            id: "call_1|" + "x".repeat(MAX_PAYLOAD_BYTES),
+            name: "probe",
+            arguments: {},
+          },
+        ],
+        api: "responses",
+        provider: "fixture",
+        model: "fixture-model",
+        usage,
+        stopReason: "toolUse" as const,
+        timestamp: 2,
+      }),
+      false,
+    );
+  });
+
   it.each([
     transcriptCommit({ sessionId: "other" }),
     transcriptCommit({ messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }] }),
