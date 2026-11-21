@@ -158,6 +158,34 @@ describe("secrets runtime fast path", () => {
     }
   });
 
+  it("returns control to the event loop before finishing a large multi-agent auth-store load", async () => {
+    const totalAgents = 30;
+    const agentDirs = Array.from({ length: totalAgents }, (_, i) => `/tmp/openclaw-agent-${i}`);
+    let loadedCount = 0;
+    let atNextTurn: Promise<number> | undefined;
+    const loadAuthStore = () => {
+      loadedCount += 1;
+      atNextTurn ??= new Promise<number>((resolve) => {
+        setImmediate(() => resolve(loadedCount));
+      });
+      return emptyAuthStore();
+    };
+
+    const resultPromise = prepareSecretsRuntimeSnapshot({
+      config: asConfig(explicitMainRoster()),
+      env: {},
+      agentDirs,
+      loadAuthStore,
+    });
+    const snapshot = await resultPromise;
+    const loadedAtNextTurn = await atNextTurn;
+
+    expect(loadedAtNextTurn).toBeGreaterThan(0);
+    expect(loadedAtNextTurn).toBeLessThan(totalAgents);
+    expect(loadedCount).toBe(totalAgents);
+    expect(snapshot.authStores).toHaveLength(totalAgents);
+  });
+
   it("uses the fast path when web fetch only configures runtime limits", async () => {
     const snapshot = await prepareSnapshot({
       ...explicitMainRoster(),

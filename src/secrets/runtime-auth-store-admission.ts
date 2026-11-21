@@ -15,6 +15,17 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { shortenHomePath } from "../utils.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 
+// Admission checks, auth-store reads and clones are synchronous CPU work; yielding every
+// batch lets pending Gateway requests interleave instead of blocking behind a full
+// multi-agent scan.
+const AUTH_STORE_LOAD_YIELD_BATCH_SIZE = 25;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 export async function loadAdmittedAuthStores(params: {
   agentDirs: readonly string[];
   env: NodeJS.ProcessEnv;
@@ -26,8 +37,13 @@ export async function loadAdmittedAuthStores(params: {
 }> {
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const degradedOwners: DegradedSecretOwner[] = [];
+  let processed = 0;
   const statePath = resolveOpenClawStateSqlitePath(params.env);
   for (const agentDir of params.agentDirs) {
+    processed += 1;
+    if (processed > 1 && processed % AUTH_STORE_LOAD_YIELD_BATCH_SIZE === 1) {
+      await yieldToEventLoop();
+    }
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
     const agentId = resolveAuthProfileDatabaseOwnerId(agentDir);
     const isDeleted = () => {
