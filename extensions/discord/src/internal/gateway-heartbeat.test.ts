@@ -96,4 +96,59 @@ describe("GatewayPlugin heartbeat lifecycle", () => {
     expect(heartbeatCount()).toBe(0);
     expect(errors).not.toHaveBeenCalled();
   });
+
+  it("keeps the interval after an acknowledged heartbeat", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { socket, errors, heartbeatCount } = openGateway(45_000);
+
+    await vi.advanceTimersByTimeAsync(0);
+    socket.emit("message", JSON.stringify({ op: GatewayOpcodes.HeartbeatAck, d: null }));
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(heartbeatCount()).toBe(2);
+    expect(errors).not.toHaveBeenCalled();
+  });
+
+  it("resumes a missed heartbeat ACK without close code 1000 or 1001", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { gateway, socket, errors, heartbeatCount } = openGateway(45_000);
+    const debug = vi.fn();
+    gateway.emitter.on("debug", debug);
+    (gateway as unknown as { sessionId: string | null; sequence: number | null }).sessionId =
+      "sess";
+    (gateway as unknown as { sequence: number | null }).sequence = 7;
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heartbeatCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(errors).toHaveBeenCalledExactlyOnceWith(new Error("Gateway heartbeat ACK timeout"));
+    const close = (socket as unknown as { close: ReturnType<typeof vi.fn> }).close;
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(close.mock.calls[0]?.[0]).not.toBe(1000);
+    expect(close.mock.calls[0]?.[0]).not.toBe(1001);
+    expect(debug).toHaveBeenCalledWith(
+      "Gateway reconnect scheduled in 2000ms (zombie, resume=true)",
+    );
+  });
+
+  it("does not zombie when Discord requests a heartbeat just before the interval", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { socket, errors, heartbeatCount } = openGateway(45_000);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heartbeatCount()).toBe(1);
+    socket.emit("message", JSON.stringify({ op: GatewayOpcodes.HeartbeatAck, d: null }));
+    await vi.advanceTimersByTimeAsync(44_000);
+    socket.emit("message", JSON.stringify({ op: GatewayOpcodes.Heartbeat, d: null }));
+    expect(heartbeatCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(errors).not.toHaveBeenCalled();
+    expect(heartbeatCount()).toBe(2);
+    socket.emit("message", JSON.stringify({ op: GatewayOpcodes.HeartbeatAck, d: null }));
+    await vi.advanceTimersByTimeAsync(44_000);
+    expect(heartbeatCount()).toBe(3);
+    expect(errors).not.toHaveBeenCalled();
+  });
 });

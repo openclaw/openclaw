@@ -77,6 +77,7 @@ export class GatewayPlugin implements GatewayPluginContract {
   private shouldReconnect = false;
   protected isConnecting = false;
   private heartbeatInterval?: NodeJS.Timeout;
+  private heartbeatIntervalMs = 45_000;
   private firstHeartbeatTimeout?: NodeJS.Timeout;
   private reconnectTimeout?: NodeJS.Timeout;
   private readonly voiceStateCache = new DiscordGatewayVoiceStateCache();
@@ -167,25 +168,13 @@ export class GatewayPlugin implements GatewayPluginContract {
               min: 1,
               max: MAX_TIMER_TIMEOUT_MS,
             }) ?? 45_000;
+          this.heartbeatIntervalMs = intervalMs;
           this.stopHeartbeat();
-          const scheduleHeartbeatCycle = () => {
-            this.heartbeatInterval = setTimeout(() => {
-              this.heartbeatInterval = undefined;
-              if (!this.lastHeartbeatAck) {
-                this.emitter.emit("error", new Error("Gateway heartbeat ACK timeout"));
-                this.scheduleReconnect({ reason: "zombie", preferResume: true });
-                return;
-              }
-              this.sendHeartbeat();
-              scheduleHeartbeatCycle();
-            }, intervalMs);
-            this.heartbeatInterval.unref();
-          };
           this.firstHeartbeatTimeout = setTimeout(
             () => {
               this.firstHeartbeatTimeout = undefined;
               this.sendHeartbeat();
-              scheduleHeartbeatCycle();
+              this.armHeartbeatTimer();
             },
             Math.max(0, intervalMs * Math.random()),
           );
@@ -213,6 +202,13 @@ export class GatewayPlugin implements GatewayPluginContract {
           break;
         case GatewayOpcodes.Heartbeat:
           this.sendHeartbeat();
+          // A gateway heartbeat request is an immediate beat. Restart the interval
+          // so the ACK deadline is a full heartbeat_interval after this send. The
+          // timer armed by the previous beat would otherwise see the in-flight ACK
+          // as missed and reconnect a live socket.
+          if (this.heartbeatInterval) {
+            this.armHeartbeatTimer();
+          }
           break;
         case GatewayOpcodes.Dispatch:
           void this.handleDispatch(payload).catch(this.emitAsyncError);
@@ -300,6 +296,21 @@ export class GatewayPlugin implements GatewayPluginContract {
       clearTimeout(this[key]);
       this[key] = undefined;
     }
+  }
+
+  private armHeartbeatTimer(): void {
+    clearTimeout(this.heartbeatInterval);
+    this.heartbeatInterval = setTimeout(() => {
+      this.heartbeatInterval = undefined;
+      if (!this.lastHeartbeatAck) {
+        this.emitter.emit("error", new Error("Gateway heartbeat ACK timeout"));
+        this.scheduleReconnect({ reason: "zombie", preferResume: true });
+        return;
+      }
+      this.sendHeartbeat();
+      this.armHeartbeatTimer();
+    }, this.heartbeatIntervalMs);
+    this.heartbeatInterval.unref();
   }
 
   private stopReconnectTimer(): void {
