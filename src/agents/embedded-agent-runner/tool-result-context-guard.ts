@@ -13,7 +13,10 @@ import {
   createFreshLlmBoundaryTokenEstimator,
 } from "../sessions/context-token-pressure.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
-import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+import {
+  formatContextLimitTruncationNotice,
+  forMessage as toolResultTruncationNotice,
+} from "./context-truncation-notice.js";
 import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -62,6 +65,11 @@ function truncateToolResultToChars(
     const isText = (block: unknown): block is { type: "text"; text: string } =>
       isToolResultTextBlock(block) && block.type === "text";
     const imageCount = content.filter(isImage).length;
+    const sourceTextLength = content.reduce<number>(
+      (sum, block) => sum + (isText(block) ? block.text.length : 0),
+      0,
+    );
+    const fullOmissionNoticeLength = toolResultTruncationNotice(msg)(sourceTextLength).length;
     const omissionNotice = (retainedImages: number) => {
       const omittedImages = imageCount - retainedImages;
       return (
@@ -80,11 +88,13 @@ function truncateToolResultToChars(
         Math.max(0, maxChars - reservedChars),
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );
-      return replaceToolResultContent(msg, [
-        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
-        ...(bounded as { content: unknown[] }).content,
-        ...notice,
-      ]);
+      // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+      const boundedContent = (bounded as { content: unknown[] }).content;
+      return {
+        message: replaceToolResultContent(msg, [...boundedContent, ...notice]),
+        compactedText: boundedContent.length < retainedContent.length,
+        boundedContent,
+      };
     };
 
     // Image cost alone rules out larger prefixes. The allocator still reserves
@@ -95,21 +105,29 @@ function truncateToolResultToChars(
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,
       );
-      const projected = projectContent(
+      const { message, compactedText, boundedContent } = projectContent(
         retainedContent,
         retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
       );
-      const projectedContent = (projected as { content: unknown[] }).content;
+      // A compacted result has one notice. It must contain source text beyond
+      // that notice, not just a nonempty (possibly clipped) omission marker.
       if (
-        retainedContent.some((block, index) => {
-          const projectedBlock = projectedContent[index];
-          return isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text);
-        })
+        compactedText
+          ? boundedContent.reduce<number>(
+              (sum, block) => sum + (isText(block) ? block.text.length : 0),
+              0,
+            ) <= fullOmissionNoticeLength
+          : retainedContent.some((block, index) => {
+              const projectedBlock = boundedContent[index];
+              return (
+                isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text)
+              );
+            })
       ) {
         continue;
       }
-      if (estimateMessageCharsCached(projected, cache) <= maxChars) {
-        return projected;
+      if (estimateMessageCharsCached(message, cache) <= maxChars) {
+        return message;
       }
     }
     // Dropping unfit non-text content must not flatten away surviving semantic
@@ -125,7 +143,7 @@ function truncateToolResultToChars(
         : formatContextLimitTruncationNotice(
             Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
           ),
-    );
+    ).message;
   }
 
   const truncatedText = truncateToolResultText(getToolResultText(msg), maxChars, {
