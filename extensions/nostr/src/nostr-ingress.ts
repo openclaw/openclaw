@@ -257,11 +257,20 @@ export function createNostrIngress(options: {
         return Promise.reject(error as Error);
       }
       queuedAdmissions += 1;
+      const reservedWindowStartedAt = admissionWindowStartedAt;
       return monitor
         .admit(prepared, { receivedAt: prepared.receivedAt })
-        .then((result): "accepted" | "duplicate" =>
-          result.queueResult?.kind === "accepted" ? "accepted" : "duplicate",
-        )
+        .then((result): "accepted" | "duplicate" => {
+          if (result.queueResult?.kind === "accepted") {
+            return "accepted";
+          }
+          // A replayed event the queue already holds appends nothing; it must not use up the
+          // window that a new event needs after a relay resubscribes.
+          if (reservedWindowStartedAt === admissionWindowStartedAt && admissionWindowCount > 0) {
+            admissionWindowCount -= 1;
+          }
+          return "duplicate";
+        })
         .finally(() => {
           queuedAdmissions -= 1;
         });
