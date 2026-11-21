@@ -28,7 +28,6 @@ export function readCronEventClaimInDatabase(
     queueName: event.claim.queueName,
     candidateIds: [event.claim.id],
     blockedLaneKeys: [],
-    deriveLaneKey: false,
     scanLimit: 1,
   }).claimed.find((candidate) => candidate.event_id === event.claim.id);
   if (!row || row.claim_token !== event.claim.token || row.channel_id !== job.schedule.source) {
