@@ -25,6 +25,7 @@ import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads
 export function createPluginCaptureResourceClient(
   port: MessagePort,
   retainBrokerUntilProcessExit?: () => void,
+  reference?: { ref(): void; unref(): void },
 ) {
   const pending = new Map<
     number,
@@ -55,10 +56,19 @@ export function createPluginCaptureResourceClient(
   port.on("message", receive);
   port.on("close", fail);
   port.on("messageerror", fail);
+  const release = (id: number) => {
+    pending.delete(id);
+    // A lost reply does not settle native work; retain custody on transport failure.
+    if (!pending.size && !unavailable) {
+      reference?.unref();
+    }
+  };
+  reference?.unref();
   const start = (command: PluginCaptureResourceCommand) => {
     if (unavailable) {
       throw unavailable;
     }
+    reference?.ref();
     const id = ++nextId;
     const call: {
       completion: ReturnType<typeof createDeferredCore<PluginCaptureResourceReply>>;
@@ -66,7 +76,13 @@ export function createPluginCaptureResourceClient(
     } = { completion: createDeferredCore() };
     void call.completion.promise.catch(() => {});
     pending.set(id, call);
-    port.postMessage({ id, command });
+    try {
+      port.postMessage({ id, command });
+    } catch (error) {
+      // Synchronous refusal admits no native operation.
+      release(id);
+      throw error;
+    }
     return { id, call };
   };
   const unwrap = (reply: PluginCaptureResourceReply) => {
@@ -82,7 +98,7 @@ export function createPluginCaptureResourceClient(
       try {
         return unwrap(await call.completion.promise);
       } finally {
-        pending.delete(id);
+        release(id);
       }
     },
     requestSync(command: PluginCaptureResourceCommand) {
@@ -102,7 +118,7 @@ export function createPluginCaptureResourceClient(
         }
         return unwrap(call.reply).root;
       } finally {
-        pending.delete(id);
+        release(id);
       }
     },
   };
@@ -121,6 +137,7 @@ export async function createPluginCaptureOwner(
   const client = createPluginCaptureResourceClient(
     independent.port,
     independent.retainBrokerUntilProcessExit,
+    independent,
   );
   const roots = new Set<number>();
   let closing = false;
@@ -195,6 +212,8 @@ export async function createPluginCaptureOwner(
       port1.postMessage(reply);
     };
     port1.on("message", receive);
+    // Execution and independent requests retain their existing reference owners.
+    port1.unref();
     return {
       port: port2,
       service() {
