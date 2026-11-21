@@ -104,16 +104,21 @@ function withAdmission(run: (assertCurrent: ReturnType<typeof activeAssertion>) 
     return completedReview;
   });
 }
-it.each(["success", "failure"])(
-  "cleans up system review diagnostics after %s without affecting the source",
-  async (outcome) => {
+it.each([
+  ["success", undefined],
+  ["failure", undefined],
+  ["success", 300],
+  ["failure", 300],
+] as const)(
+  "cleans up system review diagnostics after %s (timeoutSeconds=%s) without affecting the source",
+  async (outcome, timeoutSeconds) => {
     const foreground = { sessionId: candidate.source.sessionId };
     observe(foreground.sessionId);
     let reviewSessionId = "";
     mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
       reviewSessionId = params.sessionId;
       expect(params.trigger).toBeUndefined();
-      expect(params.timeoutMs).toBe(300_000);
+      expect(params.timeoutMs).toBe(timeoutSeconds === undefined ? 172_800_000 : 300_000);
       observe(reviewSessionId);
       if (outcome === "failure") {
         throw new Error("review provider failed");
@@ -121,10 +126,12 @@ it.each(["success", "failure"])(
       return completedReview;
     });
 
-    candidate.config.agents = {
-      ...candidate.config.agents,
-      defaults: { ...candidate.config.agents?.defaults, timeoutSeconds: 300 },
-    };
+    if (timeoutSeconds !== undefined) {
+      candidate.config.agents = {
+        ...candidate.config.agents,
+        defaults: { ...candidate.config.agents?.defaults, timeoutSeconds },
+      };
+    }
     const review = runSkillExperienceReview(candidate);
     await (outcome === "failure"
       ? expect(review).rejects.toThrow("review provider failed")

@@ -811,16 +811,18 @@ describe("worker inference provider runtime", () => {
   ])(
     "accounts for $name before rejecting a dangling streamed tool call",
     async ({ tokens, cost, billed, expected }) => {
-      const runtime = setup(sessionEntry, {
-        config: {
-          ...config,
-          models: {
-            providers: {
-              [PROVIDER]: { baseUrl: BASE_URL, models: [logicalModel] },
+      const runtime = tokens
+        ? setup(sessionEntry, {
+            config: {
+              ...config,
+              models: {
+                providers: {
+                  [PROVIDER]: { baseUrl: BASE_URL, models: [logicalModel] },
+                },
+              },
             },
-          },
-        },
-      });
+          })
+        : setup();
       const terminal = finalMessage();
       terminal.usage = {
         ...(tokens ? usage : makeZeroUsageSnapshot()),
@@ -852,7 +854,11 @@ describe("worker inference provider runtime", () => {
       const expectedEvents =
         expected === undefined
           ? []
-          : [expect.objectContaining({ costUsd: expect.closeTo(expected, 12) })];
+          : [
+              expect.objectContaining({
+                costUsd: tokens ? expect.closeTo(expected, 12) : expected,
+              }),
+            ];
       expect(usageEvents).toEqual(expectedEvents);
       if (cost !== undefined && !tokens) {
         expect(usageEvents[0]).not.toHaveProperty("context.used");

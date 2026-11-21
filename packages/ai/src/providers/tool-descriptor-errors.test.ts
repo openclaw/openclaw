@@ -65,13 +65,23 @@ it.each(
 const transportHost = getAiTransportHost();
 afterEach(() => configureAiTransportHost(transportHost));
 
-it.each(adapters)(
-  "$name sends a healthy forced tool beside an unreadable descriptor",
-  async ({ stream }) => {
+it.each(
+  adapters.flatMap((adapter) =>
+    ["name", "parameters", "description"].flatMap((field) =>
+      [false, true].map((forced) => ({
+        name: adapter.name,
+        stream: adapter.stream,
+        field,
+        forced,
+      })),
+    ),
+  ),
+)(
+  "$name sends a healthy tool beside unreadable $field (forced=$forced)",
+  async ({ stream, field, forced }) => {
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const payload: unknown = await new Request(input, init).json();
       expect(payload).toMatchObject({
-        tool_choice: { type: "tool", name: "healthy_probe" },
         tools: [
           {
             name: "healthy_probe",
@@ -83,6 +93,11 @@ it.each(adapters)(
           },
         ],
       });
+      if (forced) {
+        expect(payload).toHaveProperty("tool_choice", { type: "tool", name: "healthy_probe" });
+      } else {
+        expect(payload).not.toHaveProperty("tool_choice");
+      }
       expect(payload).toHaveProperty("tools.length", 1);
       const events = [
         {
@@ -113,17 +128,17 @@ it.each(adapters)(
       );
     });
     configureAiTransportHost({ ...transportHost, buildModelFetch: () => fetch });
+    const unreadable = { name: "unreadable_probe", description: "Unreadable", parameters: {} };
+    Object.defineProperty(unreadable, field, {
+      get() {
+        throw new Error(`unreadable ${field}`);
+      },
+    });
     const events = await stream(
       {
         messages: [{ role: "user", content: "Call healthy_probe with value OK.", timestamp: 0 }],
         tools: [
-          {
-            name: "unreadable_probe",
-            description: "Unreadable",
-            get parameters() {
-              throw new Error("unreadable parameters");
-            },
-          },
+          unreadable,
           {
             name: "healthy_probe",
             description: "Return value",
@@ -135,7 +150,7 @@ it.each(adapters)(
           },
         ],
       },
-      { toolChoice: { type: "tool", name: "healthy_probe" } },
+      forced ? { toolChoice: { type: "tool", name: "healthy_probe" } } : {},
     );
     const result = await events.result();
     expect(result.stopReason, result.errorMessage).toBe("toolUse");
