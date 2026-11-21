@@ -64,6 +64,18 @@ it.each([
     "E".repeat(64 * 1024),
     "API error (500): (error body exceeded diagnostic limit; truncated)",
   ],
+  [
+    "TTS",
+    502,
+    "proxy failure Authorization: Basic c3ludGhldGljLWNyZWRlbnRpYWw=; request rejected",
+    "API error (502): proxy failure Authorization: Basic ***; request rejected",
+  ],
+  [
+    "voices",
+    502,
+    `${"p".repeat(350)} Authorization: Basic c3ludGhldGljLWNyZWRlbnRpYWw=; rejected`,
+    `API error (502): ${"p".repeat(350)} Authorization: Basic ***; rejected`,
+  ],
   ["voices", 503, "service unavailable", "API error (503): service unavailable"],
   ["voices", 200, "{not-json", "API returned malformed JSON"],
 ] as const)("%s rejects status %i with %j", async (kind, status, body, message) => {

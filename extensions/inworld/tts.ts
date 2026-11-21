@@ -34,10 +34,12 @@ async function readInworldErrorBodySnippet(response: Response): Promise<string> 
   }
 
   const collapsed = buffer.toString("utf8").replace(/\s+/g, " ").trim();
-  if (collapsed.length > INWORLD_ERROR_BODY_MAX_CHARS) {
-    return `${truncateUtf16Safe(collapsed, INWORLD_ERROR_BODY_MAX_CHARS)}…`;
+  const { redactSensitiveText } = await import("openclaw/plugin-sdk/security-runtime");
+  const redacted = redactSensitiveText(collapsed, { mode: "tools" });
+  if (redacted.length > INWORLD_ERROR_BODY_MAX_CHARS) {
+    return `${truncateUtf16Safe(redacted, INWORLD_ERROR_BODY_MAX_CHARS)}…`;
   }
-  return collapsed;
+  return redacted;
 }
 
 export const INWORLD_TTS_MODELS = [
