@@ -25,8 +25,9 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./channel-react-action.runtime.js", async () => {
+vi.mock("./channel-react-action.runtime.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./channel-react-action.runtime.js")>()),
     handleWhatsAppAction: hoisted.handleWhatsAppAction,
     resolveAuthorizedWhatsAppOutboundTarget: hoisted.resolveAuthorizedWhatsAppOutboundTarget,
     resolveWhatsAppAccount: hoisted.resolveWhatsAppAccount,
@@ -49,18 +50,7 @@ vi.mock("./channel-react-action.runtime.js", async () => {
       }
       return undefined;
     },
-    isWhatsAppGroupJid: (value?: string | null) => (value ?? "").trim().endsWith("@g.us"),
-    normalizeWhatsAppTarget: (value?: string | null) => {
-      const raw = (value ?? "").trim();
-      if (!raw) {
-        return null;
-      }
-      const stripped = raw.replace(/^whatsapp:/, "");
-      if (stripped.endsWith("@g.us")) {
-        return stripped;
-      }
-      return stripped.startsWith("+") ? stripped : `+${stripped.replace(/^\+/, "")}`;
-    },
+    resolveWhatsAppTargetFacts: (await import("./target-facts.js")).resolveWhatsAppTargetFacts,
     readStringParam: (
       params: Record<string, unknown>,
       key: string,

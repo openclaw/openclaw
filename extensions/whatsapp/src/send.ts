@@ -36,6 +36,7 @@ import {
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
 import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
+import { requireWhatsAppTargetFacts } from "./target-facts.js";
 import { markdownToWhatsAppChunks, resolveJidToE164, toWhatsappJid } from "./targets-runtime.js";
 
 type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
@@ -344,7 +345,7 @@ export async function sendPollWhatsApp(
     cfg,
     accountId: options.accountId,
   });
-  const jid = toWhatsappJid(to);
+  const jid = requireWhatsAppTargetFacts({ target: to }).wireDelivery.jid;
   const normalized = normalizePollInput(poll, { maxOptions: 12 });
   if (!isWhatsAppNewsletterJid(jid)) {
     await active.assertSendReady?.(to);
