@@ -859,6 +859,11 @@ export function isWebPushTestParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").WebPushTestParamsSchema
 >;
+export function isWebPushSendParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").WebPushSendParamsSchema
+>;
 export function isWebPushPreferencesGetParams(
   value: unknown,
 ): value is import("typebox").Static<

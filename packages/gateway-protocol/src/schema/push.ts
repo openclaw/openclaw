@@ -107,6 +107,50 @@ export const WebPushTestParamsSchema = closedObject({
   body: Type.Optional(Type.String()),
 });
 
+/**
+ * Request payload for a preference-aware Web Push to one user profile's current browsers.
+ *
+ * Recipients come from the Gateway's subscription authority, never from the caller.
+ * Approval requests keep their own delivery owner and are not accepted here.
+ */
+export const WebPushSendParamsSchema = closedObject({
+  profileId: Type.String({ minLength: 1, maxLength: 256 }),
+  category: Type.Union([
+    Type.Literal("agent-finished"),
+    Type.Literal("agent-question"),
+    Type.Literal("human-mentioned"),
+    Type.Literal("scheduled-task-failed"),
+  ]),
+  /** Collapses repeated notifications on the device; namespaced by the Gateway. */
+  tag: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9._:-]{1,64}$" })),
+  /** Control UI path opened on click, relative to the Control UI base path. */
+  path: Type.Optional(
+    Type.String({
+      maxLength: 512,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._~%/-]*(?:\\?[^\\s#]*)?$",
+    }),
+  ),
+  title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+  body: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  urgency: Type.Optional(
+    Type.Union([
+      Type.Literal("very-low"),
+      Type.Literal("low"),
+      Type.Literal("normal"),
+      Type.Literal("high"),
+    ]),
+  ),
+  ttlSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
+});
+
+export const WebPushSendResultSchema = closedObject({
+  sent: Type.Integer({ minimum: 0 }),
+  failed: Type.Integer({ minimum: 0 }),
+  skipped: Type.Integer({ minimum: 0 }),
+  pruned: Type.Integer({ minimum: 0 }),
+});
+
 export const WebPushPreferencesGetParamsSchema = closedObject({
   endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
 });
@@ -135,6 +179,8 @@ export type WebPushVapidPublicKeyParams = Record<string, never>;
 export type WebPushSubscribeParams = Static<typeof WebPushSubscribeParamsSchema>;
 export type WebPushUnsubscribeParams = Static<typeof WebPushUnsubscribeParamsSchema>;
 export type WebPushTestParams = SchemaContract<Static<typeof WebPushTestParamsSchema>>;
+export type WebPushSendParams = Static<typeof WebPushSendParamsSchema>;
+export type WebPushSendResult = Static<typeof WebPushSendResultSchema>;
 export type WebPushNotificationCategory = Static<typeof WebPushNotificationCategorySchema>;
 export type WebPushDetailLevel = Static<typeof WebPushDetailLevelSchema>;
 export type WebPushNotificationPreferences = Static<typeof WebPushNotificationPreferencesSchema>;

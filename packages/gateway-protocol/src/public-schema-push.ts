@@ -5,6 +5,8 @@ export {
   PushTestResultSchema,
   WebPushPreferencesGetParamsSchema,
   WebPushPreferencesSetParamsSchema,
+  WebPushSendParamsSchema,
+  WebPushSendResultSchema,
   WebPushSubscribeParamsSchema,
   WebPushTestParamsSchema,
   WebPushUnsubscribeParamsSchema,
