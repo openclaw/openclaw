@@ -14,12 +14,13 @@ const RECOVERY =
 export function buildSubagentCompletionFailureNotice(
   batch: readonly SubagentRunRecord[],
   kind: "failed" | "delayed",
+  reason: string,
 ): string {
   const sorted = batch.toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   const only = sorted.length === 1 ? sorted[0] : undefined;
   const endedAt = only?.execution.endedAt;
   const heading =
-    kind === "delayed"
+    (kind === "delayed"
       ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
       : only
         ? `${truncateUtf16WithEllipsis(only.label?.trim() || "A child agent", 200)} finished${
@@ -27,7 +28,8 @@ export function buildSubagentCompletionFailureNotice(
               ? ` on ${new Date(endedAt).toISOString().slice(0, 16).replace("T", " ")} UTC`
               : ""
           }, but its result couldn't be added to this conversation automatically. Details are below.`
-        : `${sorted.length} child agents finished, but their results couldn't be added to this conversation automatically. Details are below.`;
+        : `${sorted.length} child agents finished, but their results couldn't be added to this conversation automatically. Details are below.`) +
+    `\nReason: ${truncateUtf16WithEllipsis(reason === "expired" ? "The completion delivery deadline expired." : reason, 1_024)}`;
   const overflow = (count: number) =>
     `[${count} additional child results omitted; list the requester's children with the available session tools and read their history.]`;
   // Reserve framing, recovery guidance and the overflow count before allocating result heads.
@@ -43,7 +45,9 @@ export function buildSubagentCompletionFailureNotice(
         ? outcome.error === "Gateway stopped"
           ? "Interrupted by Gateway restart; not resumed."
           : outcome.error
-        : outcome?.status;
+        : outcome?.status === "ok"
+          ? "Completed successfully."
+          : outcome?.status;
     const identity = `Child session ${child.childSessionKey} (run ${child.runId})\n${child.label?.trim() || "A child agent"}: ${status ?? "unknown"}`;
     const header = truncateUtf16WithEllipsis(identity, 512);
     const captured = hasPrivateRequesterInput(child)

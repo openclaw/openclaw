@@ -153,7 +153,7 @@ export async function recordRequiredCompletionNotice(
             }),
           )
         ).join("\n\n")
-      : buildSubagentCompletionFailureNotice(shown, kind);
+      : buildSubagentCompletionFailureNotice(shown, kind, reason);
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {

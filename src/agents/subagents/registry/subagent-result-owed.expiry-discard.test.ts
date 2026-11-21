@@ -97,7 +97,8 @@ it.each(["suspended", "pending", "live requester", "unknown blocker", "not_requi
         status: "terminal",
         startedAt: endedAt - 60_000,
         endedAt,
-        outcome: { status: "error", error: "Gateway stopped" },
+        outcome:
+          scenario === "pending" ? { status: "ok" } : { status: "error", error: "Gateway stopped" },
       },
       completion: {
         required,
@@ -159,13 +160,19 @@ it.each(["suspended", "pending", "live requester", "unknown blocker", "not_requi
     expect(persisted?.delivery).toMatchObject({ status: "discarded", discardReason: "expired" });
     expect(persisted?.completion?.resultText).toBe(resultText);
     expect(notices[0]).toMatchObject({
+      customType: "subagent-delivery-failed",
       content: expect.stringContaining(
         "Captured before drain: the missing invoice is in archive A.",
       ),
       details: expect.objectContaining({ childRunId: entry.runId, error: "expired" }),
     });
     const rendered = JSON.stringify(notices[0]);
-    expect(rendered).toContain("Interrupted by Gateway restart; not resumed.");
+    expect(rendered).toContain(
+      scenario === "pending"
+        ? "Completed successfully."
+        : "Interrupted by Gateway restart; not resumed.",
+    );
+    expect(rendered).toContain("The completion delivery deadline expired.");
     expect(rendered).toContain("[result truncated; see full-result recovery below]");
     expect(rendered).toContain("Full-result recovery:");
     expect(rendered).not.toContain(resultText);

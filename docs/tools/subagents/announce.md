@@ -86,6 +86,10 @@ Oversized batches share the space between result heads; any omitted children are
 counted explicitly. Truncation is marked, and the stored result is unchanged.
 The normal visible-result fallback keeps its existing behavior.
 
+A delivery failure notice identifies the delivery problem and its reason separately
+from the child's execution outcome. A child that completed successfully is still
+reported as successful even when its result cannot be delivered automatically.
+
 For a truncated result, use the existing Gateway `chat.history` read with the child
 session key and `maxChars: 500000`; page with `offset` to locate the run's final
 message. Use `chat.message.get` with that message's `messageId`, `sessionId`, and
