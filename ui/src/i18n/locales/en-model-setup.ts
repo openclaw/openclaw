@@ -178,7 +178,7 @@ const enModelSetup = {
       browserOpenedContinue:
         "{provider} is open in a new tab. Approve access there, then choose Continue.",
       deviceCodeOpened:
-        "{provider} is open in a new tab. Make sure it shows the same code before you approve.",
+        "{provider} is open in a new tab. Enter the code shown here if prompted, or check that the codes match. After approving, return to this OpenClaw window to see the result.",
       deviceCodeEnter: "Enter this code on the provider’s sign-in page.",
       waitingForProvider: "Waiting for {provider}…",
       reopenSignIn: "Reopen browser tab",

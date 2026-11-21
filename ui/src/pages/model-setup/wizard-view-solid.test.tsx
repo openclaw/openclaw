@@ -221,7 +221,7 @@ it("shows device-code expiry only near the end and retires an expired code", asy
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
 
   expect(container.querySelector(".wizard-sign-in__lead")?.textContent).toBe(
-    "GitHub is open in a new tab. Make sure it shows the same code before you approve.",
+    "GitHub is open in a new tab. Enter the code shown here if prompted, or check that the codes match. After approving, return to this OpenClaw window to see the result.",
   );
   expect(container.querySelector("code")?.textContent).toBe("WDJB-MJHT");
   expect(container.textContent).not.toContain("Expires in");
