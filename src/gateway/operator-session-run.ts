@@ -58,12 +58,16 @@ export function prepareGatewayOperatorSessionRun(params: {
     operatorRunAuthority: params.authority,
     scopes: [...params.authority.scopes],
   });
-  const creation = resolveSandboxedSessionCreation(
-    { ...client, authenticatedUserProfile: { profileId: params.authority.profileId } },
-    params.cfg,
-  );
+  const creation = resolveOperatorSessionCreation({
+    ...client,
+    authenticatedUserProfile: { profileId: params.authority.profileId },
+  });
   return {
-    creation: creation ? { ...creation, via: "run" as const } : undefined,
+    creation: {
+      ...creation,
+      via: "run" as const,
+      sandbox: resolveCreatorSandbox(params.cfg, creation),
+    },
     assertCurrent,
     assertAuthorized: (entry: SessionEntry | undefined) => {
       assertCurrent();
