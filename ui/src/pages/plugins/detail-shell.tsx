@@ -40,6 +40,10 @@ export function renderPluginDetailBreadcrumb(props: {
 export function PluginReadmeWell(props: {
   children: JSX.Element;
   expanded?: boolean;
+  /** The toggle stays available when opening loads a separate full document. */
+  alwaysExpandable?: boolean;
+  /** Called after the reader opens or closes the whole text. */
+  onToggle?: (expanded: boolean) => void;
 }): JSX.Element {
   let body!: HTMLDivElement;
   let well!: HTMLDivElement;
@@ -71,10 +75,14 @@ export function PluginReadmeWell(props: {
       <button
         type="button"
         class="plugin-catalog-detail__readme-toggle"
-        hidden={!overflows()}
+        hidden={!expanded() && !overflows() && !props.alwaysExpandable}
         aria-expanded={expanded() ? "true" : "false"}
         aria-controls={bodyId}
-        onClick={() => setExpanded(!expanded())}
+        onClick={() => {
+          const next = !expanded();
+          setExpanded(next);
+          props.onToggle?.(next);
+        }}
       >
         {t(expanded() ? "chat.messages.showLess" : "chat.messages.showMore")}
         <Icon name={expanded() ? "chevronUp" : "chevronDown"} />

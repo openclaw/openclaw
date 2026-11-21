@@ -77,6 +77,23 @@ function pendingRepository(preference: NewSessionPreference) {
   return { ...fixture, discovery };
 }
 
+it("shows and submits New worktree for a restored managed clone folder", async () => {
+  const { state, request, readPreference } = createRepositoryFixture();
+  const folder = "/workspace/managed-clone";
+  readPreference.mockReturnValue({ workspace: "/workspace", folder, worktree: false });
+  request.mockImplementation(async (method) =>
+    method === "fs.listDir" ? { path: folder, entries: [] } : { ...GIT, requiresWorktree: true },
+  );
+
+  state.adoptAgentDefaults();
+  await repositoryReady(state);
+
+  expect(state.currentCheckoutUnavailableReason).toBe(
+    "Use an isolated worktree for this project and agent",
+  );
+  expect(createParams(state, "Inspect the clone")).toMatchObject({ cwd: folder, worktree: true });
+});
+
 const cloudProfile: DraftCloudProfile = {
   id: "aws",
   providerId: "crabbox",

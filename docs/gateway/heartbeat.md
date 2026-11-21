@@ -130,8 +130,15 @@ Doctor leaves an incomplete `HEARTBEAT.md` in place before importing it.
 
 ## First setup
 
-Explicit setup provisions one enabled **Proactive check** job for the ambient
-owner agent. It runs every 30 minutes unless the provider supplies a different
+Fresh setup creates one **Proactive check** job for the ambient owner agent and
+leaves it disabled. To turn it on, find its ID and enable it:
+
+```bash
+openclaw automations list --all
+openclaw automations enable <job-id>
+```
+
+Once enabled, it runs every 30 minutes unless the provider supplies a different
 initial cadence, uses the agent's main conversation, waits for idle execution,
 and delivers to a resolved owner DM. The job skips an explicitly empty scratch
 checklist; missing scratch still runs. Edit its schedule, prompt, model, or

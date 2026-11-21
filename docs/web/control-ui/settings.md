@@ -325,6 +325,8 @@ Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
 shows the searchable local inventory. Select a plugin to open its overview.
 Catalog browsing and search load independently of that inventory. Installation
 stays disabled until the Gateway confirms the current inventory and permissions.
+If the Gateway disconnects while the catalog is open, search and filter choices
+are kept and results reload when it reconnects.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full
@@ -350,7 +352,9 @@ editor with plugin configuration and editable **Permissions** controls; Back ret
 to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
-The catalog shows featured plugins and category shelves. Within each category,
+The **Featured** shelf and its **View all** list keep ClawHub’s curated order.
+Plugins already on this Gateway show **Installed** instead of **Install**, even
+when disabled. Within each category,
 ClawHub's selected priorities appear first, followed by remaining plugins in
 download order. **View all** preserves that order. Computer use groups interactive
 desktop and browser control. Other and uncategorized plugins remain available
@@ -359,14 +363,14 @@ Search queries
 [ClawHub](https://clawhub.ai/plugins) without leaving the page. Catalog detail
 links use `/plugins/<catalog-id>`; installed-only links use
 `/settings/plugins/<plugin-id>`. Both show the same overview and actions.
+When you open an entry from browse or search, the overview shows the artwork,
+name, description, and publisher already available in the catalog while the
+remaining details load.
 
-Open a skill on a plugin detail page to browse its complete declared folder. The
-viewer starts with `SKILL.md`, includes unlinked files and nested folders, and
-renders full Markdown documents. Files that cannot render, exceed the read
-limits, or are unavailable remain visible with an explanation. Installed and
-catalog plugins use the same viewer; catalog reads stay pinned to the selected
-release and do not install or execute the plugin. This viewer has no search or
-Copy controls. Reading a bundle requires `operator.read`.
+Open a skill on a plugin detail page to read its `SKILL.md` in a dialog without
+leaving the page. Installed and catalog plugins use the same read-only viewer.
+Catalog previews stay pinned to the selected release and do not install or
+execute the plugin. Reading a preview requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
@@ -671,9 +675,11 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
-## Templates (Labs)
+<a id="templates-labs" />
 
-Enable **Settings → Labs → Templates** to browse official Template packages from
+## Templates
+
+Open **Customize → Templates** to browse official Template packages from
 ClawHub on the **Templates** page. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
 Opening a catalog entry keeps the selected published version in its detail link,
@@ -684,8 +690,10 @@ installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
 [Templates](/cli/templates) for the package contract and local-source CLI commands.
 
-Turning the Labs switch off hides Template discovery and Add. Existing agents keep
-running.
+Templates are available by default without a settings switch. An existing
+`gateway.controlUi.experimental.templates: false` remains an advanced opt-out
+that hides discovery and blocks new Add operations. Set it to `true` or remove it
+to restore availability. Existing agents keep running.
 
 ## Speech bubbles
 

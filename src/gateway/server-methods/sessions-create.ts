@@ -20,6 +20,7 @@ import {
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { projectRequesterForClient } from "../project-access.js";
 import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
@@ -307,7 +308,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     deviceFolderAuthority.assertCurrent = preparedFolder?.value.assertCurrent;
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
-    const requestedProjectId = normalizeOptionalString(p.projectId);
+    let requestedProjectId = normalizeOptionalString(p.projectId);
     const requestedProjectGitUrl = p.projectGitUrl;
     const projectPreparationError = validateSessionProjectPreparation({
       cwd: requestedCwd,
@@ -351,11 +352,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, reuseError);
       return;
     }
-    const requestedProject = await resolveRequestedSessionProject(cfg, p, client);
+    const requestedProject = await resolveRequestedSessionProject(cfg, p, client, {
+      cwd: requestedExecNode ? undefined : requestedCwd,
+      existingTargetEntry,
+    });
     if (!requestedProject.ok) {
       respond(false, undefined, requestedProject.error);
       return;
     }
+    requestedProjectId = requestedProject.value.projectId;
     const projectRoot = requestedProject.value.root;
     if (requestedProject.value.worktree || requestedProjectGitUrl) {
       p.worktree = true;
@@ -565,6 +570,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       bindSharingCreation: (operation) =>
         sessionMutationAuthorization?.bindCreation?.(p, operation),
       followSharingRegistration: sessionMutationAuthorization?.followRegistration,
+      readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
+      getCurrentSessionAccessCap: () => operatorSessionCap(client, getCurrentConfig()),
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
           entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,

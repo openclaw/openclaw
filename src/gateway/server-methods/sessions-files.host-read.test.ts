@@ -232,6 +232,115 @@ it.each<[string, Partial<InternalSessionEntry>?, OpenClawConfig?]>([
   },
 );
 
+it("stats only the references a preview would open", async () => {
+  const outsidePath = outsideFile("outside\n");
+  fs.mkdirSync(path.join(workspaceRoot, "src"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "src/readme.md"), "# Read me\n");
+  fs.mkdirSync(path.join(workspaceRoot, "a"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "b"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "a/twin.ts"), "");
+  fs.writeFileSync(path.join(workspaceRoot, "b/twin.ts"), "");
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const paths = [
+    "readme.md",
+    "twin.ts",
+    "src/readme.md",
+    "./src/readme.md",
+    outsidePath,
+    `${outsidePath}.missing`,
+    "src/absent.md",
+    "src",
+    "src/readme.md",
+  ];
+
+  const full = await fixture.files.ok("stat", {
+    files: paths.map((filePath) => ({ path: filePath, messageEntryId: "entry-1" })),
+  });
+  expect(full).toEqual({
+    sessionKey,
+    files: [
+      ["readme.md", "file"],
+      ["twin.ts", "missing"],
+      ["src/readme.md", "file"],
+      ["./src/readme.md", "file"],
+      [outsidePath, "file"],
+      [`${outsidePath}.missing`, "missing"],
+      ["src/absent.md", "missing"],
+      ["src", "missing"],
+      ["src/readme.md", "file"],
+    ].map(([filePath, status]) => ({ path: filePath, status })),
+  });
+  for (const file of (full.files as { path: string; status: string }[]).filter((entry) =>
+    entry.path.includes("/"),
+  )) {
+    const preview = await fixture.files.request("get", file.path);
+    expect(preview[0]?.ok).toBe(file.status === "file");
+  }
+
+  fixture.entry.permissionMode = "read-only";
+  const contained = await fixture.files.ok("stat", {
+    files: [{ path: outsidePath }, { path: "src/readme.md" }],
+  });
+  expect(contained.files).toEqual([
+    { path: outsidePath, status: "missing" },
+    { path: "src/readme.md", status: "file" },
+  ]);
+});
+
+it("stats a reference as openable only when the reader would open it", async () => {
+  fs.mkdirSync(path.join(workspaceRoot, "docs"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "sub"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "docs/report.md"), "# Report\n");
+  fs.writeFileSync(path.join(workspaceRoot, "docs/other.md"), "# Other\n");
+  fs.writeFileSync(path.join(workspaceRoot, "docs/source.md"), "# Source\n");
+  fs.linkSync(
+    path.join(workspaceRoot, "docs/source.md"),
+    path.join(workspaceRoot, "docs/linked.md"),
+  );
+  // A touched path resolves only from the session cwd; an untouched one also tries the root.
+  const fixture = prepareHostFileRead({
+    permissionMode: "full",
+    spawnedWorkspaceDir: workspaceRoot,
+    spawnedCwd: path.join(workspaceRoot, "sub"),
+  });
+  mockVisibleMessages([assistantToolCall("read", { path: "docs/report.md" })]);
+  const references = ["docs/report.md", "docs/other.md", "docs/linked.md", "linked.md"];
+
+  const stat = await fixture.files.ok("stat", {
+    files: references.map((reference) => ({ path: reference })),
+  });
+  expect(stat.files).toEqual([
+    { path: "docs/report.md", status: "missing" },
+    { path: "docs/other.md", status: "file" },
+    { path: "docs/linked.md", status: "missing" },
+    // The unique bare-name match is the hard link, which the reader then refuses to open.
+    { path: "linked.md", status: "missing" },
+  ]);
+  expect(
+    (await fixture.files.request("get", path.join(workspaceRoot, "docs/linked.md")))[0]?.ok,
+  ).toBe(false);
+  for (const file of stat.files) {
+    const preview = await fixture.files.request("get", file.path);
+    expect(preview[0]?.ok).toBe(file.status === "file");
+  }
+});
+
+it("stats touched references that name literal @ files like the reader", async () => {
+  fs.writeFileSync(path.join(workspaceRoot, "@report.md"), "# At\n");
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  mockVisibleMessages([assistantToolCall("read", { path: "./@report.md" })]);
+  const stat = await fixture.files.ok("stat", { files: [{ path: "./@report.md" }] });
+  const preview = await fixture.files.request("get", "./@report.md");
+  expect(preview[0]?.ok).toBe(true);
+  expect(stat.files).toEqual([{ path: "./@report.md", status: "file" }]);
+
+  // A bare name whose only match needs @-sensitive resolution is left to the reader.
+  fs.mkdirSync(path.join(workspaceRoot, "@docs"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "@docs/notes.md"), "# Notes\n");
+  const bare = await fixture.files.ok("stat", { files: [{ path: "notes.md" }] });
+  expect(bare.files).toEqual([{ path: "notes.md", status: "unknown" }]);
+});
+
 it("canonicalizes host previews and lists outside touched-file metadata without edit tokens", async () => {
   const outsidePath = outsideFile("outside\n");
   const aliasPath = path.join(path.dirname(outsidePath), "alias.txt");

@@ -157,7 +157,10 @@ function contextWithClient(
   });
   const context = {
     router: createRouter<RouteId, ApplicationContext>({
-      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+      routes: [
+        { id: "chat", path: "/chat", component: () => ({}) },
+        { id: "skill-settings", path: "/settings/skills", component: () => ({}) },
+      ],
     }),
     gateway: source.gateway,
     agents: {
@@ -459,6 +462,21 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
     agentsList: mainAgents,
     selectedAgentId: "main",
   });
+  vi.mocked(harness.navigate).mockImplementation((routeId, options) => {
+    if (routeId !== "skill-settings") {
+      throw new Error(`Unexpected route: ${routeId}`);
+    }
+    void harness.router.navigate(
+      routeId,
+      harness,
+      {},
+      {
+        pathname: options?.pathname ?? "/settings/skills",
+        search: options?.search ?? "",
+        hash: "",
+      },
+    );
+  });
   const mounted = mountSkillsPage(harness, {
     ...harness.gateway.snapshot,
   });
@@ -466,13 +484,11 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
     expect(mounted.find(".plugins-item")?.textContent).toContain("Refreshing"),
   );
   mounted.find('[aria-label="Open Repo Skill details"]')!.click();
-  const findCardButton = () =>
-    Array.from(mounted.find("openclaw-modal-dialog")?.querySelectorAll("button") ?? []).find(
-      (button) => button.textContent?.trim() === "Skill card",
-    );
-  await waitForSolid(() => expect(findCardButton()).toBeDefined());
-  findCardButton()!.click();
-  await waitForSolid(() => expect(mounted.text()).toContain("Previous provider card"));
+  await waitForSolid(() =>
+    expect(mounted.find(".skill-page .sidebar-markdown")?.textContent).toContain(
+      "Previous provider card",
+    ),
+  );
   const row = mounted.find(".plugins-item");
   harness.emitConnected(false);
   pending.resolve(verdicts);
@@ -492,7 +508,7 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
   expect(mounted.text()).not.toContain("Repo Skill");
   expect(mounted.text()).not.toContain("Clean");
   expect(mounted.text()).not.toContain("Previous provider card");
-  expect(mounted.find("openclaw-modal-dialog")).toBeNull();
+  expect(mounted.find(".skill-page")).toBeNull();
 });
 
 it.each([

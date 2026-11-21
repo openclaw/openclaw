@@ -33,15 +33,19 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import * as gitExec from "../../infra/git-exec.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
+import { createLocalWorkspaceBaselineTree } from "./local-workspace-manifest-tree.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
@@ -128,6 +132,7 @@ beforeAll(async () => {
   await write(source, "pnpm-lock.yaml", firstLock);
   await write(source, "package.json", '{"name":"fixture","private":true}\n');
   await write(source, "packages/tool/package.json", '{"name":"fixture-tool"}\n');
+  await write(source, ".agents/.DS_Store", "synthetic metadata\n");
   await write(source, ".gitignore", "node_modules/\n.env*\n.npmrc\nbuild/\n");
   await git(source, "add", ".");
   await git(source, "commit", "--quiet", "-m", "fixture");
@@ -338,6 +343,9 @@ it("refreshes source and lockfile changes without rewriting unchanged files", as
     "template.identity": `${selected.backend}:${selected.cacheKey}:${selected.contentKey}`,
     "template.reason": "ready",
     "template.missReason": "commit-changed",
+    "template.refreshRejectReason": undefined,
+    "template.validationFailure": undefined,
+    "template.refreshErrorClass": undefined,
     "template.priorSourceCommit": sourceCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
@@ -396,12 +404,75 @@ it("refreshes source and lockfile changes without rewriting unchanged files", as
   expect(mocks.install).toHaveBeenCalledTimes(3);
   expect(await read(template.path, "pnpm-lock.yaml")).toBe(firstLock);
   expect(await read(template.path, "source.ts")).toBe(sourceText);
-  const attributes = await clone("attributes", attributeCommit);
+  const attributes = await withWorktreePreparationTiming("sandbox", () => {
+    markManagedWorktreePreparation();
+    return clone("attributes", attributeCommit);
+  });
   expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
+    template: "cold",
+    "template.reason": "ready",
+    "template.missReason": "commit-changed",
+    "template.refreshRejectReason": "attributes-changed",
+  });
 });
 
+it.for(["exit-nonzero", "timeout", "no-output-timeout", "signal", "output-truncated"] as const)(
+  "reports a sandbox cold rebuild after a failed diff probe (%s)",
+  async (errorClass, { signal }) => {
+    const clone = await fixture(signal);
+    await clone("seed");
+    const execute = gitExec.executeGitCommand;
+    let failedProbes = 0;
+    using _ = vi.spyOn(gitExec, "executeGitCommand").mockImplementation((cwd, args, options) => {
+      if (args.includes("diff-tree")) {
+        failedProbes++;
+        return Promise.resolve({
+          ...createCommandResult({
+            code: errorClass === "output-truncated" ? 0 : 128,
+            termination:
+              errorClass === "exit-nonzero" || errorClass === "output-truncated"
+                ? "exit"
+                : errorClass,
+            stdoutTruncatedBytes: errorClass === "output-truncated" ? 1 : undefined,
+            stderr: "synthetic private diff detail",
+          }),
+          timeoutMs: 0,
+        });
+      }
+      return execute(cwd, args, options);
+    });
+    const result = await withWorktreePreparationTiming("sandbox", () => {
+      markManagedWorktreePreparation();
+      return clone("advanced", sourceCommit);
+    });
+    expect(await git(result, "rev-parse", "HEAD")).toBe(sourceCommit);
+    expect(await read(result, "node_modules/source-derived.txt")).toBe(
+      "export const version = 'updated';\n",
+    );
+    expect(failedProbes).toBe(1);
+    const details = mocks.preparation.mock.lastCall?.[0].details;
+    expect(details).toMatchObject({
+      kind: "sandbox",
+      template: "cold",
+      "template.reason": "ready",
+      "template.missReason": "commit-changed",
+      "template.refreshRejectReason": "diff-probe-failed",
+      "template.refreshErrorClass": errorClass,
+    });
+    expect(JSON.stringify(details)).not.toContain("synthetic private diff detail");
+  },
+);
+
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
+  const rm = fs.rm;
+  using _ = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+    if (path.basename(String(target)) === "build" && options?.recursive) {
+      throw new Error("Bulk template cleanup entered the Gateway libuv pool");
+    }
+    return rm(target, options);
+  });
   mocks.install.mockImplementation(async ({ directory }) => {
     await expectMissing(directory, ...hostSecrets);
     return installFiles(directory, {
@@ -442,7 +513,7 @@ it.for(["none", "same", "previous"])(
     );
     try {
       const projectionPath = path.join(path.dirname(seed), "templates", "fetch-proof", "workspace");
-      await withWorktreeAllocationLease({ env, signal }, (allocation) =>
+      const initial = await withWorktreeAllocationLease({ env, signal }, (allocation) =>
         initializeLocalWorkspaceProjection({
           owner: {
             agentId: "main",
@@ -462,6 +533,22 @@ it.for(["none", "same", "previous"])(
         }),
       );
       expect(mocks.install).toHaveBeenCalledOnce();
+      expect(await read(projectionPath, ".agents/.DS_Store")).toBe("synthetic metadata\n");
+      expect(initial.preparedDirectories).toContain(".agents/skills");
+      expect(initial.preparedDirectories).not.toContain(".agents");
+      const cached = parseWorkerWorkspaceManifest(initial.rawManifest, initial.manifestRef);
+      expect(cached.directories).not.toContain(".agents");
+      const fresh = await captureWorkspaceManifestDocument({
+        root: projectionPath,
+        baseCommit,
+        buildCacheInputs: new Set(),
+        signal,
+      });
+      expect(createLocalWorkspaceBaselineTree(cached, initial.preparedDirectories)).toEqual(
+        createLocalWorkspaceBaselineTree(
+          parseWorkerWorkspaceManifest(fresh.rawManifest, fresh.manifestRef),
+        ),
+      );
       vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
       expect(await git(projectionPath, "config", "--get-all", "openclaw.projection")).toBe("true");
