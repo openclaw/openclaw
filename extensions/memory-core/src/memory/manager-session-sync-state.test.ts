@@ -11,6 +11,11 @@ it.each([
   ["ordinary", "agent:main:explicit:portal-1:active-memory:0123456789ab", undefined, false],
   [undefined, undefined, "agent:main:telegram:direct:owner:active-memory:0123456789ab", false],
   ["ordinary", "agent:main:explicit:active-memory-notes", undefined, true],
+  ["ordinary", undefined, "agent:main:cron:daily", false],
+  ["ordinary", undefined, "agent:main:cron:daily:run:run-1", false],
+  ["ordinary", undefined, "agent:main:main", true],
+  ["ordinary", undefined, "agent:main:telegram:group:room:topic:1", true],
+  ["ordinary", undefined, "agent:main:main:heartbeat", false],
 ] as const)(
   "indexability for id=%s key=%s archive=%s",
   (sessionId, sessionKey, archived, expected) => {
