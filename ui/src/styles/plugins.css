@@ -2070,16 +2070,11 @@
     gap: 2px;
   }
 
+  /* Row previews show six cards on tablets; the base grid already hides later cards. */
   .plugin-catalog-results--rows
     .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 5) {
+    .plugin-catalog-card:nth-child(-n + 6) {
     display: grid;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 7) {
-    display: none;
   }
 }
 
@@ -2087,12 +2082,6 @@
 @media (max-width: 640px) {
   .plugin-catalog-results--rows .plugin-catalog-results__body {
     gap: 26px;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 3) {
-    display: grid;
   }
 
   .plugin-catalog-results--rows
