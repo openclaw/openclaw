@@ -114,10 +114,15 @@ export function bindingStoreKey(identity: CodexAppServerBindingIdentity): string
 export function ownsStoredSessionGeneration(
   identity: CodexAppServerBindingIdentity,
   current: StoredCodexAppServerBinding | undefined,
+  options?: { retired?: boolean },
 ): boolean {
-  return (
-    identity.kind !== "session" || !current?.sessionId || current.sessionId === identity.sessionId
-  );
+  const sameGeneration =
+    identity.kind !== "session" || !current?.sessionId || current.sessionId === identity.sessionId;
+  // A retired tombstone keeps the previous id. Deletion of the later session may pass it.
+  if (sameGeneration || !options?.retired || identity.kind !== "session" || !current) {
+    return sameGeneration;
+  }
+  return current.state === "cleared" && current.retired === true;
 }
 
 /** Legacy effect guards; prepared readers also observe raw SDK binding writes. */

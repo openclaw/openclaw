@@ -700,7 +700,7 @@ export function createCodexAppServerBindingStore(
           ...prepareLease(identity, { allowRetired: true, assertCurrent }),
           assertCurrent,
           assertRecordCurrent(stored) {
-            if (!stored || !ownsStoredSessionGeneration(identity, stored)) {
+            if (!stored || !ownsStoredSessionGeneration(identity, stored, { retired: true })) {
               throw new Error("Codex binding generation changed before session deletion");
             }
           },
