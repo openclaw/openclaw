@@ -18,7 +18,7 @@ import {
   describeBundledMetadataOnlyChannelCatalogContract,
   describeChannelCatalogEntryContract,
   describeOfficialFallbackChannelCatalogContract,
-} from "./test-helpers/channel-catalog-contract.js";
+} from "./test-helpers/channel-plugin-catalog-contract-suites.js";
 
 async function registerChannels(ids: string) {
   const channels = await Promise.all(

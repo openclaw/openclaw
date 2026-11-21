@@ -14,6 +14,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import type { SessionsSearchResult } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 
@@ -132,13 +133,20 @@ try {
   await projection.ensureMaterialized();
   assert(projection.selectEntries({ sortBy: null }).length >= sessions);
   // Self visibility forces the worker to authorize every matching key before concluding.
-  const read = () =>
-    searchRecallSessionTranscripts({
+  const read = async () => {
+    let published: SessionsSearchResult | undefined;
+    const historicalResult: unknown = await searchRecallSessionTranscripts({
       projection: projection!,
       query: "recallbenchmark",
       limit: 25,
       recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:unmatched-requester" },
+      onResult: (result) => {
+        published = result;
+      },
     });
+    // --owner-ref can load a historical owner that returned its page instead of publishing it.
+    return published ?? historicalResult;
+  };
   const coldStart = performance.now();
   const expected = await read();
   const coldMs = performance.now() - coldStart;

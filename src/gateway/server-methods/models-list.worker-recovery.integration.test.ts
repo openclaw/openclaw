@@ -1,11 +1,9 @@
-import { channel } from "node:diagnostics_channel";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { text as readText } from "node:stream/consumers";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import type { Worker } from "node:worker_threads";
+import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
@@ -15,6 +13,7 @@ import {
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
@@ -46,13 +45,14 @@ it("model reads recover a failed shared-worker publication and retain the failed
   Object.defineProperty(globalThis, failureKey, { configurable: true, value: preparationFailure });
   const events = new EventEmitter();
   const workers = new Map<number, Worker>();
-  const workerChannel = channel("worker_threads");
-  const recordWorker = (message: unknown) => {
-    if (isRecord(message) && message.worker instanceof Worker) {
-      workers.set(message.worker.threadId, message.worker);
-    }
-  };
-  workerChannel.subscribe(recordWorker);
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  const observeWorkers = vi
+    .spyOn(workerCpu, "createCpuTrackedWorker")
+    .mockImplementation((...args) => {
+      const worker = createWorker(...args);
+      workers.set(worker.threadId, worker);
+      return worker;
+    });
   let requests = 0;
   let siblingRequests = 0;
   let heldThread = 0;
@@ -278,7 +278,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
     }
   } finally {
     Reflect.deleteProperty(globalThis, failureKey);
-    workerChannel.unsubscribe(recordWorker);
+    observeWorkers.mockRestore();
     await Promise.all(providerWork);
   }
 }, 120_000);

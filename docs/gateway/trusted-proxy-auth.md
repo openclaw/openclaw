@@ -713,6 +713,9 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
     - Whether headers are being stripped somewhere in the chain.
 
   </Accordion>
+  <Accordion title="trusted_proxy_access_invalid / trusted_proxy_access_user_mismatch / trusted_proxy_access_keys_unavailable">
+    Only with [Cloudflare Access JWT verification](/gateway/cloudflare-access#verify-the-access-jwt) on. `invalid`: the `cf-access-jwt-assertion` is not signed by the configured team, is for another application (`audience`), or has expired; check `issuer` and `audience`. `user_mismatch`: the user header differs from the assertion's signed email, so something other than Access set it. `keys_unavailable`: the Gateway could not load usable keys from `<issuer>/cdn-cgi/access/certs` and has no cached set younger than 24 hours. Check outbound HTTPS and the issuer's certs response.
+  </Accordion>
   <Accordion title="trusted_proxy_user_not_allowed">
     The user is authenticated but not in `allowUsers`. Sign in with a permitted account or ask the Gateway administrator to review the intended access policy. Do not remove the allowlist as a connectivity workaround.
   </Accordion>

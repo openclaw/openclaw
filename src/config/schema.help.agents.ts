@@ -33,6 +33,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy. With the default hybrid reload mode, changes hot-reload the plugin runtime for new agent turns without restarting the Gateway unless the plugin requires a restart for this path. Use this to stage plugin rollout gradually across environments.",
   "plugins.entries.*.allowMetrics":
     "Allow this plugin to publish its own metric families through an enabled diagnostics exporter. Off by default. Does not enable the plugin or the exporter.",
+  "plugins.entries.*.memoryBackend":
+    'Load this memory plugin as a passive backend that the selected memory slot owner can list and query through its provider runtime. Defaults to the slot owner manifest: true when the owner declares memoryBackends, otherwise false. Set false to keep this plugin out of an owner that requests backends. The backend registers only its memory provider runtime: no tools, hooks, services, prompt or recall contributions. Has no effect on the slot owner, when plugins.slots.memory is "none", or on plugins that are not memory plugins. Does not enable the plugin.',
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptModification":

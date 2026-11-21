@@ -14,3 +14,209 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A skill's mark always sits on the same quiet tonal tile, its own emoji or image included, at
+   about 60% of the tile; the default icon is only dimmer so a list of them stays quiet. */
+.skill-tile {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  color: var(--muted-strong);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.skill-tile > img {
+  width: 60%;
+  height: 60%;
+  object-fit: contain;
+}
+
+/* A publisher's profile picture is a photo, so it fills its round tile. */
+.skill-tile--profile > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.skill-tile svg {
+  width: 18px;
+  height: 18px;
+}
+
+.skill-tile--default {
+  color: color-mix(in srgb, var(--text) 42%, transparent);
+}
+
+/* The list stays mounted behind a skill page. Its wrapper only hides it; the page keeps
+   laying out the list's sections, so their spacing is the page's own. */
+.skills-list-surface {
+  display: contents;
+}
+
+.skills-list-surface[hidden] {
+  display: none;
+}
+
+/* One shrinkable track: long names truncate inside their rows instead of widening the page. */
+.skill-discovery .plugin-catalog-results__body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Installed skills in one raised line above the registry: marks, name, the first names. */
+.skill-installed-shelf {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 60px;
+  padding: 0 18px 0 14px;
+  border: 0;
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  background: var(--card);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent),
+    0 1px 2px color-mix(in srgb, var(--text) 4%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+.skill-installed-shelf:hover {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text) 9%, transparent),
+    0 2px 8px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.skill-installed-shelf:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.skill-installed-shelf__stack {
+  display: flex;
+  flex: none;
+}
+
+.skill-installed-shelf__stack > .skill-tile {
+  width: 32px;
+  height: 32px;
+  margin-inline-start: -8px;
+  /* Opaque, so overlapping tiles never show through each other; the ring separates them. */
+  background: color-mix(in srgb, var(--text) 5%, var(--card));
+  box-shadow: 0 0 0 2.5px var(--card);
+  font-size: 19px;
+}
+
+.skill-installed-shelf__stack > .skill-tile:first-child {
+  margin-inline-start: 0;
+}
+
+.skill-installed-shelf__stack svg {
+  width: 16px;
+  height: 16px;
+}
+
+.skill-installed-shelf__text {
+  display: flex;
+  flex: 1 1 0;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.skill-installed-shelf__text strong {
+  flex: none;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.skill-installed-shelf__names {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-installed-shelf__chevron {
+  display: grid;
+  flex: none;
+  color: var(--muted);
+}
+
+.skill-installed-shelf__chevron svg {
+  width: 16px;
+  height: 16px;
+}
+
+.skill-installed-shelf:hover .skill-installed-shelf__chevron {
+  color: var(--text-strong);
+}
+
+/* Installed inventory rows carry the same mark and handle as the catalog rows. */
+.settings-row.skill-inventory-row {
+  gap: 14px;
+}
+
+.skill-inventory-row > .skill-tile {
+  width: 36px;
+  height: 36px;
+  font-size: 22px;
+}
+
+.skill-inventory-row .settings-row__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.skill-inventory-row__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-inventory-row__owner {
+  flex: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+@media (max-width: 640px) {
+  .plugin-catalog-results--rows .plugin-catalog-row__main > .skill-tile {
+    margin-top: 1px;
+  }
+
+  .skill-installed-shelf {
+    padding: 0 14px 0 12px;
+    gap: 12px;
+  }
+
+  .skill-installed-shelf__names {
+    display: none;
+  }
+
+  .skill-installed-shelf__chevron {
+    margin-inline-start: auto;
+  }
+
+  .skill-inventory-row .settings-row__title {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  /* The state is the row's last line, on the text column's edge, not under the tile. */
+  .skill-inventory-row > .settings-row__control {
+    margin-inline-start: 50px;
+  }
+}

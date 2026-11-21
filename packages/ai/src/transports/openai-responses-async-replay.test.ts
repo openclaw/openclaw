@@ -153,6 +153,62 @@ it.each([
   },
 );
 
+const toolRound = (id: string) => [
+  createAssistant(
+    model,
+    [{ type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {} }],
+    { stopReason: "toolUse" },
+  ),
+  makeTextToolResult(`call_${id}|fc_${id}`, "lookup", "found", false, 0),
+];
+const carrierMessage = (text: string) => ({
+  role: "user" as const,
+  content: `OpenClaw runtime context:\n${text}`,
+  timestamp: 0,
+  runtimeContext: {},
+});
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)("%s keeps a steering carrier after the tool round it followed", (_name, convert) => {
+  const sent = [user("look up"), carrierMessage("turn facts"), ...toolRound("a")];
+  const first = convert(model, { messages: sent }, new Set(["openai"]));
+  const next = convert(
+    model,
+    {
+      messages: [...sent, carrierMessage("steering facts"), user("steering"), ...toolRound("b")],
+    },
+    new Set(["openai"]),
+  );
+  expect(next.slice(0, first.length)).toEqual(first);
+  expectTypes(next, [
+    "message",
+    "message",
+    "function_call",
+    "function_call_output",
+    "message",
+    "message",
+    "function_call",
+    "function_call_output",
+  ]);
+});
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)(
+  "%s keeps a tail turn carrier with its user when steering follows",
+  (_name, convert) => {
+    // Routes without retained carriers move the current turn's carrier to the tail.
+    const turn = [user("look up"), ...toolRound("a"), carrierMessage("turn facts")];
+    const first = convert(model, { messages: turn }, new Set(["openai"]));
+    const next = convert(model, { messages: [...turn, user("steering")] }, new Set(["openai"]));
+    expect(next.slice(0, first.length)).toEqual(first);
+    expectTypes(first, ["message", "message", "function_call", "function_call_output"]);
+  },
+);
+
 it.each([
   ["provider", convertProviderResponsesMessages],
   ["transport", convertResponsesMessages],

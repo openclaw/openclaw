@@ -138,10 +138,14 @@ afterEach(() => {
 });
 describe("grouped plugin settings", () => {
   it("keeps typing and focus in Advanced settings when configuration updates", async () => {
-    const [value, setValue] = createSignal({ plugins: { label: "" } });
-    const schema = objectSchema({ label: { type: "string", title: "Label" } });
+    const [value, setValue] = createSignal({ plugins: { slots: { memory: "" } } });
+    const schema = objectSchema({
+      plugins: objectSchema({
+        slots: objectSchema({ memory: { type: "string", title: "Label" } }),
+      }),
+    });
     const onPatch = vi.fn((_path: Array<string | number>, next: unknown) => {
-      setValue({ plugins: { label: String(next) } });
+      setValue({ plugins: { slots: { memory: String(next) } } });
     });
     const { gateway } = createApplicationGateway();
     const plugins = new ControlUiPluginRuntime(() => context);
@@ -161,7 +165,8 @@ describe("grouped plugin settings", () => {
           iconUrls={{}}
           canMutate
           mutationBlockedReason={null}
-          advancedSchema={schema}
+          rawConfigSchema={schema}
+          settingsContext={context}
           onConfigReload={vi.fn()}
           onRefresh={vi.fn()}
           onTabChange={vi.fn()}
@@ -176,6 +181,7 @@ describe("grouped plugin settings", () => {
       { wrapper: provider.wrapper },
     );
     await settle();
+    await page.getByText("Slots", { exact: true }).click();
     await expect.element(page.getByRole("textbox", { name: "Label", exact: true })).toBeVisible();
     const input = mounted.container.querySelector<HTMLInputElement>('input[aria-label="Label"]')!;
     input.focus();
@@ -185,7 +191,7 @@ describe("grouped plugin settings", () => {
       await settle();
       expect(document.activeElement).toBe(input);
       expect(input.value).toBe(text);
-      expect(onPatch).toHaveBeenLastCalledWith(["plugins", "label"], text);
+      expect(onPatch).toHaveBeenLastCalledWith(["plugins", "slots", "memory"], text);
     }
   });
   it("retains an optional config draft across refreshes and a rejected atomic save", async () => {
