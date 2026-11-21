@@ -3,6 +3,8 @@
  * Compile bulk-unlink-delay.c, then run with --delay-library <absolute library>.
  * --baseline-module is the pinned parent's local-workspace-checkout.ts, saved
  * beside the candidate module so its relative imports retain their meaning.
+ * --fixture-state and --fixture-tree reuse completed synthetic inputs only.
+ * Each sample receives a fresh copy (reflink where supported) of the 62k-file tree.
  * A/A controls and five serial A/B pairs use fresh 62k-file/1.14GB trees.
  * Acceptance: candidate has zero Gateway unlink workers during the injected
  * one-second stall; concurrent patch/file-write tails stay below 250ms.
@@ -34,6 +36,8 @@ import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    "fixture-state": { type: "string" },
+    "fixture-tree": { type: "string" },
     "baseline-module": { type: "string" },
     "delay-library": { type: "string" },
     child: { type: "boolean" },
@@ -46,11 +50,14 @@ const { values } = parseArgs({
 });
 assert(values.output && values["baseline-module"] && values["delay-library"]);
 const output = path.resolve(values.output);
+const stateDir = path.resolve(values["fixture-state"] ?? path.join(output, "state"));
 const files = Number(values.files);
 const pairs = Number(values.pairs);
 const source = path.join(output, "source");
 const projection = path.join(output, "projection");
-const key = "agent:main:bulk-unlink-proof";
+const tree = path.resolve(values["fixture-tree"] ?? path.join(output, "tree"));
+const labelPrefix = path.basename(output);
+const key = `agent:main:bulk-unlink-proof-${labelPrefix}`;
 const baseline = pathToFileURL(path.resolve(values["baseline-module"])).href;
 const candidate = new URL(
   "../../src/gateway/worker-environments/local-workspace-checkout.ts",
@@ -60,15 +67,17 @@ type Sample = { name: string; mode: string; injected: boolean };
 
 if (values.child) {
   assert(typeof process.send === "function");
-  const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
-  await seedTeamShapeSessions({
-    stateDir: process.env.OPENCLAW_STATE_DIR!,
-    sessions: Number(values.sessions),
-    retainedRuns: 0,
-    seed: 2725,
-    now: Date.now(),
-    transcriptBytes: Number(values["transcript-bytes"]),
-  });
+  if (!values["fixture-state"]) {
+    const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
+    await seedTeamShapeSessions({
+      stateDir,
+      sessions: Number(values.sessions),
+      retainedRuns: 0,
+      seed: 2725,
+      now: Date.now(),
+      transcriptBytes: Number(values["transcript-bytes"]),
+    });
+  }
   const { startGatewayServer } = await import("../../src/gateway/server.ts");
   const server = await startGatewayServer(Number(values.port), {
     bind: "loopback",
@@ -186,6 +195,17 @@ if (values.child) {
       cron: { enabled: false },
     }),
   );
+  if (!values["fixture-tree"]) {
+    const bytes = Buffer.alloc(18432, 97);
+    for (let i = 0; i < files; i++) {
+      const directory = path.join(tree, "node_modules", `package-${Math.floor(i / 100)}`, "lib");
+      if (i % 100 === 0) {
+        fs.mkdirSync(directory, { recursive: true });
+        await pause(0);
+      }
+      fs.writeFileSync(path.join(directory, String(i)), bytes);
+    }
+  }
   const port = await getFreePort();
   const library = path.resolve(values["delay-library"]);
   // Removable fixture volumes may have shared writable ancestors. Keep the
@@ -197,7 +217,7 @@ if (values.child) {
     {
       env: createGatewayBenchEnv(path.join(output, "home"), configPath, {
         caseEnv: {
-          OPENCLAW_STATE_DIR: path.join(output, "state"),
+          OPENCLAW_STATE_DIR: stateDir,
           XDG_CACHE_HOME: cacheRoot,
           UV_THREADPOOL_SIZE: "4",
           BULK_UNLINK_LOG: path.join(output, "unlink.log"),
@@ -270,21 +290,11 @@ if (values.child) {
       samples.push({ name: `slow-${mode}`, mode, injected: true });
     }
     for (const sample of samples) {
-      fs.rmSync(projection, { recursive: true, force: true });
-      fs.mkdirSync(projection);
-      const bytes = Buffer.alloc(18432, 97);
-      for (let i = 0; i < files; i++) {
-        const directory = path.join(
-          projection,
-          "node_modules",
-          `package-${Math.floor(i / 100)}`,
-          "lib",
-        );
-        if (i % 100 === 0) {
-          fs.mkdirSync(directory, { recursive: true });
-        }
-        fs.writeFileSync(path.join(directory, String(i)), bytes);
-      }
+      await fs.promises.rm(projection, { recursive: true, force: true });
+      await fs.promises.cp(tree, projection, {
+        recursive: true,
+        mode: fs.constants.COPYFILE_FICLONE,
+      });
       if (sample.injected) {
         for (let i = 0; i < 4; i++) {
           fs.writeFileSync(path.join(projection, `slow-unlink-${sample.name}-${i}`), "x");
@@ -293,7 +303,7 @@ if (values.child) {
       const control: number[] = [];
       for (let i = 0; i < 10; i++) {
         const at = performance.now();
-        await rpc("sessions.patch", { key, label: `proof-${revision++}` });
+        await rpc("sessions.patch", { key, label: `${labelPrefix}-${revision++}` });
         control.push(performance.now() - at);
       }
       const running = new AbortController();
@@ -305,7 +315,7 @@ if (values.child) {
       const patcher = (async () => {
         while (!running.signal.aborted) {
           const at = performance.now();
-          await rpc("sessions.patch", { key, label: `proof-${revision++}` });
+          await rpc("sessions.patch", { key, label: `${labelPrefix}-${revision++}` });
           patches.push(performance.now() - at);
           await pause(10);
         }
@@ -343,6 +353,9 @@ if (values.child) {
             files,
             bytes: files * 18432,
             sessions: values.sessions,
+            databaseBytes: fs.statSync(
+              path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"),
+            ).size,
             sourceHashes: Object.fromEntries(
               [
                 baseline,
