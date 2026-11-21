@@ -1,3 +1,4 @@
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   addGatewayClientOptions,
   callGatewayFromCli,
@@ -10,9 +11,12 @@ import { periodSchema } from "./periods.js";
 type CliContext = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0];
 
 function request(method: string, options: GatewayRpcOpts, params: unknown): Promise<unknown> {
+  // Generation must retain its receipt even when the command is interrupted.
+  const signal = method === "generate" ? undefined : getAsyncWorkSignal();
   return callGatewayFromCli(`team-reports.${method}`, options, params, {
     mode: "cli",
     scopes: method === "generate" ? ["operator.admin"] : ["operator.read"],
+    ...(signal ? { signal } : {}),
   });
 }
 

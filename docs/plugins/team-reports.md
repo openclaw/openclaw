@@ -408,6 +408,10 @@ The CLI talks to the running Gateway and supports `--json` plus the standard
 [Gateway client options](/cli/gateway). Reading needs `operator.read`;
 generation needs `operator.admin`.
 
+Ctrl-C cancels a pending `status`, `list`, or `show` request. An interrupted
+`generate` still waits for its submitted request to settle and prints the run ID
+when generation is accepted.
+
 ```bash
 openclaw team-reports status --json
 openclaw team-reports list --json
