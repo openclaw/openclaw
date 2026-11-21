@@ -15,7 +15,7 @@ import {
   chatAttachmentBatchBytes,
   type ChatAttachmentLimits,
 } from "./chat-attachment-admission.ts";
-import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
+import { canResizeChatAttachment, resizeChatAttachmentImage } from "./chat-attachment-image.ts";
 
 registerChatComposerEnglish();
 
@@ -406,11 +406,13 @@ export function readChatAttachmentFile(
         });
     };
     reads.updateProgress(entry, 0);
-  } else if (imageLimit !== undefined && file.type.startsWith("image/") && file.size > imageLimit) {
-    void resizeChatAttachmentImage(file, imageLimit, preparation.signal, setProcessing).then(
-      readPreparedFile,
-      () => finish("error"),
-    );
+  } else if (imageLimit !== undefined && canResizeChatAttachment(file)) {
+    void resizeChatAttachmentImage(
+      file,
+      Math.min(imageLimit, entry.reservedBytes ?? imageLimit),
+      preparation.signal,
+      setProcessing,
+    ).then(readPreparedFile, () => finish("error"));
   } else {
     readPreparedFile(file);
   }

@@ -24,12 +24,74 @@ export function dataImageClipboardFile(
   }
 }
 
-// Only PNG uploads opt into preparation. Other formats keep ordinary admission.
+// Only formats whose dimensions we can inspect before decoding opt into preparation.
 export function canResizeChatAttachment(file: File): boolean {
-  return file.type === "image/png";
+  return file.type === "image/png" || file.type === "image/jpeg";
 }
 
-async function checkResizeSource(file: File, signal: AbortSignal): Promise<void> {
+// Admit the 37.45 MP photo case without allowing unbounded browser source allocation.
+const MAX_JPEG_SOURCE_PIXELS = 40_000_000;
+
+async function readResizeDimensions(
+  file: File,
+  signal: AbortSignal,
+): Promise<{ width: number; height: number }> {
+  if (file.type === "image/jpeg") {
+    const signature = new DataView(await file.slice(0, 2).arrayBuffer());
+    signal.throwIfAborted();
+    if (signature.byteLength !== 2 || signature.getUint16(0) !== 0xffd8) {
+      throw new Error("Invalid JPEG header");
+    }
+    // Walk marker headers, not compressed pixels or potentially large EXIF data.
+    for (
+      let offset = 2, markers = 0;
+      offset + 4 <= file.size && offset < 1024 * 1024 && markers < 256;
+      markers += 1
+    ) {
+      const header = new DataView(await file.slice(offset, offset + 9).arrayBuffer());
+      signal.throwIfAborted();
+      if (header.getUint8(0) !== 0xff) {
+        break;
+      }
+      const marker = header.getUint8(1);
+      if (marker === 0xff) {
+        offset += 1;
+        continue;
+      }
+      if (marker === 0xda || marker === 0xd9 || marker === 0xd8) {
+        break;
+      }
+      // TEM and restart markers have no segment length.
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+        offset += 2;
+        continue;
+      }
+      const length = header.getUint16(2);
+      if (length < 2 || length > file.size - offset - 2) {
+        break;
+      }
+      // Baseline, extended sequential, and progressive Huffman JPEG.
+      if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+        if (length < 8 || header.byteLength < 9) {
+          break;
+        }
+        const height = header.getUint16(5);
+        const width = header.getUint16(7);
+        // A bounded downscale may admit phone photos above the default 25 MP
+        // media limit. Do not remove source admission just because output is small.
+        if (width === 0 || height === 0 || width * height > MAX_JPEG_SOURCE_PIXELS) {
+          throw new Error("JPEG dimensions exceed the resize budget");
+        }
+        return { width, height };
+      }
+      // Lossless and arithmetic-coded SOFs are not supported by this preparation path.
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        break;
+      }
+      offset += length + 2;
+    }
+    throw new Error("JPEG dimensions are missing or unsupported");
+  }
   const header = new DataView(await file.slice(0, 33).arrayBuffer());
   signal.throwIfAborted();
   if (
@@ -43,11 +105,14 @@ async function checkResizeSource(file: File, signal: AbortSignal): Promise<void>
   }
   const width = header.getUint32(16);
   const height = header.getUint32(20);
-  // Match the media processor's 25 MP decode budget, before asking the browser
-  // to allocate source pixels. The output canvas bound alone cannot do this.
+  // Bound source allocation before decode, independently of the output canvas.
   if (width === 0 || height === 0 || width * height > 25_000_000) {
     throw new Error("PNG dimensions exceed the resize budget");
   }
+  return { width, height };
+}
+
+async function checkPngAnimation(file: File, signal: AbortSignal): Promise<void> {
   // PNG's animation control must precede IDAT. Skip metadata by declared length
   // without buffering it; do not silently flatten an oversized APNG to frame 1.
   for (let offset = 33; offset + 12 <= file.size;) {
@@ -83,7 +148,13 @@ export async function resizeChatAttachmentImage(
   onProcessingChange: (processing: boolean) => void,
 ): Promise<File> {
   signal.throwIfAborted();
-  await checkResizeSource(file, signal);
+  const { width, height } = await readResizeDimensions(file, signal);
+  if (file.size <= maxBytes && Math.max(width, height) <= 4096) {
+    return file;
+  }
+  if (file.type === "image/png") {
+    await checkPngAnimation(file, signal);
+  }
   // Queue wait is not a stalled read. Each worker gets the full read watchdog.
   onProcessingChange(false);
   const prepared = preparationQueue.then(() => {
