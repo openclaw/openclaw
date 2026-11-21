@@ -235,6 +235,9 @@ export function loadPluginManifest(
   if (!configSchema) {
     return fail("plugin manifest requires configSchema");
   }
+  if (raw.memoryBackends !== undefined && typeof raw.memoryBackends !== "boolean") {
+    return fail("plugin manifest memoryBackends must be a boolean");
+  }
   if (raw.generationOverlap !== undefined && typeof raw.generationOverlap !== "boolean") {
     return fail("plugin manifest generationOverlap must be a boolean");
   }
@@ -448,6 +451,7 @@ export function loadPluginManifest(
     ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),
     kind,
+    ...(raw.memoryBackends === true ? { memoryBackends: true } : {}),
     ...(contextEngineIds ? { contextEngineIds } : {}),
     ...(isRecord(raw.reload) && raw.reload.turnHandover === true
       ? { reload: { turnHandover: true } }

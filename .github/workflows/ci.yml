@@ -2468,7 +2468,7 @@ jobs:
   checks-ui:
     permissions:
       contents: read
-    name: ${{ needs.preflight.outputs.compatibility_target == 'true' && 'checks-ui' || format('checks-ui ({0}/{1})', matrix.shard, needs.preflight.outputs.ui_test_shard_count) }}
+    name: ${{ needs.preflight.outputs.compatibility_target == 'true' && needs.preflight.outputs.ui_test_shard_count == '1' && 'checks-ui' || format('checks-ui ({0}/{1})', matrix.shard, needs.preflight.outputs.ui_test_shard_count) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_tests == 'true'
     # Keep unit shards on the existing hybrid pool; hosted retries and overrides remain available.
@@ -2520,6 +2520,8 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_test_groups_gzip_base64 }}
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+          UI_TEST_SHARD: ${{ matrix.shard }}
+          UI_TEST_SHARD_COUNT: ${{ needs.preflight.outputs.ui_test_shard_count }}
           OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ format('["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"{0}]', needs.preflight.outputs.compatibility_target != 'true' && format(', "--shard={0}/{1}"', matrix.shard, needs.preflight.outputs.ui_test_shard_count) || '') }}
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" && "$OPENCLAW_CI_TEST_RUNTIME_POLICY" != "bun-all" && "$OPENCLAW_CI_TEST_RUNTIME_POLICY" != "dual-all" ]]; then
@@ -2527,7 +2529,11 @@ jobs:
             # Give legacy browser fixtures enough headroom on shared hosted runners.
             # Isolate files because older suites can still leak module mocks between tests.
             # Do not retry whole files: several rely on one-shot mocked browser globals.
-            pnpm --dir ui test --testTimeout=30000 --isolate
+            shard_args=()
+            if [[ "$UI_TEST_SHARD_COUNT" -gt 1 ]]; then
+              shard_args+=("--shard=$UI_TEST_SHARD/$UI_TEST_SHARD_COUNT")
+            fi
+            pnpm --dir ui test --testTimeout=30000 --isolate "${shard_args[@]}"
           else
             # Three workers deliberately exercise stable non-default file packing so
             # isolate:false mock-registry leaks fail close to the introducing change.
@@ -5913,6 +5919,12 @@ jobs:
               export IOS_DEST="generic/platform=iOS Simulator"
             fi
           fi
+          export OPENCLAW_CI_SIMSLIM_BINARY=""
+          if [[ -n "${IOS_SIMULATOR_ID:-}" && -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            export OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim"
+          fi
           python3 - <<'PY'
           import os
           import signal
@@ -5931,11 +5943,8 @@ jobs:
                   if os.environ.get("IOS_SIMULATOR_ID"):
                       preparation = subprocess.Popen(["/bin/bash", "-euo", "pipefail", "-c", '''
           xcrun simctl bootstatus "$IOS_SIMULATOR_ID" -b
-          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
-            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
-            ./scripts/install-simslim.sh "$simslim_dir"
-            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
-              ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
+          if [[ -n "$OPENCLAW_CI_SIMSLIM_BINARY" ]]; then
+            ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
           fi
           '''], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                   if os.environ["HISTORICAL_TARGET"] != "true" and (

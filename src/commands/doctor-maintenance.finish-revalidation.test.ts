@@ -540,7 +540,7 @@ async function runDoctorFinishForStoppedUnit(
         expect(restart).not.toHaveBeenCalled();
       }
       if (legacyCatalog) {
-        expect(() => maintenance?.run(() => listUpdateRuns())).toThrow();
+        expect(maintenance?.run(() => listUpdateRuns())).toEqual([]);
       }
       if (continuation === "terminal-dead-before-restart") {
         if (runId) {

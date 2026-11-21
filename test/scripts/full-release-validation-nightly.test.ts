@@ -274,7 +274,7 @@ it("routes long watchers to their own Boat runner and always cleans up after the
       expect(runnerJob["timeout-minutes"]).toBe(720);
       if (selected === frv) {
         expect(waiter.uses).toBe(
-          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85",
+          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36",
         );
       }
       expect(

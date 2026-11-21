@@ -11,7 +11,9 @@ import {
   listAgentRunsForSession,
 } from "../../infra/agent-run-registry.js";
 import { isSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { prepareSessionPermissionModeAuthorization } from "../session-permission-authorization.js";
 import {
   readSessionWorkerPlacementAsync,
   type SessionWorkerPlacementContext,
@@ -20,13 +22,18 @@ import {
   prepareSessionPatchPermissionChange,
   type ActiveSessionPermissionChange,
 } from "./sessions-patch-permissions.runtime.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  SessionMutationAuthorization,
+} from "./types.js";
 
 export type PreparedSessionPatchExecutionPermission =
   | { ok: false; error: ErrorShape }
   | {
       ok: true;
       validate?: () => ErrorShape | undefined;
+      release?: () => void;
       change?: ActiveSessionPermissionChange;
     };
 
@@ -35,27 +42,69 @@ export async function prepareSessionPatchExecutionPermissionChange(
     context: GatewayRequestContext;
     agentId: string;
     assertCurrent: () => ErrorShape | undefined;
+    readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
   },
 ): Promise<PreparedSessionPatchExecutionPermission> {
-  const permissionChanged = params.entry.permissionMode !== params.existingEntry?.permissionMode;
-  const sandboxChanged =
-    params.entry.sandboxMode !== params.existingEntry?.sandboxMode ||
-    params.entry.nativeRuntimeConsent !== params.existingEntry?.nativeRuntimeConsent;
-  const validate =
-    (permissionChanged && !("permissionMode" in params.patch)) ||
-    sandboxChanged ||
-    "sandboxMode" in params.patch ||
-    "nativeRuntimeConsent" in params.patch
-      ? await prepareSessionPatchSandboxChange(params)
-      : undefined;
-  const permission =
-    (permissionChanged || "permissionMode" in params.patch) && params.existingEntry?.sessionId
-      ? prepareSessionPatchPermissionChange({
-          ...params,
-          sessionId: params.existingEntry.sessionId,
-        })
-      : { ok: true as const };
-  return permission.ok ? { ...permission, validate } : permission;
+  const authority = await prepareSessionPermissionModeAuthorization({
+    ...params,
+    permissionMode: params.entry.permissionMode,
+    getCurrentConfig: params.context.getRuntimeConfig,
+    readSharing: params.readSessionSharing,
+    readAuthority: () => {
+      const actor = resolveGatewayOperatorRoleActor(params.client);
+      const scopes = params.client === null ? undefined : (params.client.connect.scopes ?? []);
+      return {
+        scopes,
+        profileId:
+          actor?.kind === "operator"
+            ? actor.profileId
+            : params.client?.authenticatedUserProfile?.profileId,
+        sessionCap:
+          scopes === undefined || scopes.includes(ADMIN_SCOPE)
+            ? undefined
+            : operatorSessionCap(params.client, params.context.getRuntimeConfig()),
+      };
+    },
+  });
+  const validatePermissionAuthority = () =>
+    authority.validate(params.existingEntry, params.entry.permissionMode);
+  try {
+    const authorityError = params.assertCurrent() ?? validatePermissionAuthority();
+    if (authorityError) {
+      authority.release();
+      return { ok: false, error: authorityError };
+    }
+    const permissionChanged = params.entry.permissionMode !== params.existingEntry?.permissionMode;
+    const sandboxChanged =
+      params.entry.sandboxMode !== params.existingEntry?.sandboxMode ||
+      params.entry.nativeRuntimeConsent !== params.existingEntry?.nativeRuntimeConsent;
+    const validate =
+      (permissionChanged && !("permissionMode" in params.patch)) ||
+      sandboxChanged ||
+      "sandboxMode" in params.patch ||
+      "nativeRuntimeConsent" in params.patch
+        ? await prepareSessionPatchSandboxChange(params)
+        : undefined;
+    const permission =
+      (permissionChanged || "permissionMode" in params.patch) && params.existingEntry?.sessionId
+        ? prepareSessionPatchPermissionChange({
+            ...params,
+            sessionId: params.existingEntry.sessionId,
+          })
+        : { ok: true as const };
+    if (!permission.ok) {
+      authority.release();
+      return permission;
+    }
+    return {
+      ...permission,
+      validate: () => validatePermissionAuthority() ?? validate?.(),
+      release: authority.release,
+    };
+  } catch (error) {
+    authority.release();
+    throw error;
+  }
 }
 
 export async function prepareSessionPatchSandboxChange(

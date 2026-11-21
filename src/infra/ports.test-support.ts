@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import net from "node:net";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import type { TestContext } from "vitest";
@@ -10,7 +11,13 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 
-type NativeConnection = { port: number; clientPort: number; pid: number; stdout: string };
+type NativeConnection = {
+  port: number;
+  clientPort: number;
+  pid: number;
+  command: string;
+  stdout: string;
+};
 
 export async function listenServer(
   skip: TestContext["skip"],
@@ -86,6 +93,7 @@ export async function withNativeSsConnection(
       "Native TCP fixture needs a port and PID",
     );
 
+    const command = (await readFile(`/proc/${pid}/comm`, "utf8")).trimEnd();
     const captured = spawnSync(
       "ss",
       ["-H", "-tnp", "state", "established", `( sport = :${port} or dport = :${port} )`],
@@ -108,7 +116,7 @@ export async function withNativeSsConnection(
       skip("Native ss cannot expose process metadata for the owned client");
     }
 
-    await withinTest(inspect({ port, clientPort, pid, stdout: captured.stdout }), signal);
+    await withinTest(inspect({ port, clientPort, pid, command, stdout: captured.stdout }), signal);
   } catch (error) {
     const code = extractErrorCode(error);
     if (code && ["ENOENT", "EACCES", "EPERM", "EADDRNOTAVAIL"].includes(code)) {

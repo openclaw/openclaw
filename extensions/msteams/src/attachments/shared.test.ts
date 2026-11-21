@@ -6,11 +6,13 @@ import {
 const installAttachmentTestTransport = useAttachmentTestTransport();
 import { lookup } from "node:dns/promises";
 import {
-  encodeGraphShareId,
   htmlTagAttributeValues,
   isDownloadableAttachment,
   isLikelyImageAttachment,
   normalizeContentType,
+} from "./html.js";
+import {
+  encodeGraphShareId,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";

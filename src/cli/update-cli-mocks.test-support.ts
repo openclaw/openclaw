@@ -246,9 +246,9 @@ vi.mock("../infra/update-triage.js", async (importOriginal) => {
   };
 });
 
-// Keep CLI orchestration on the canonical Git updater boundary.
-vi.mock("../infra/update-runner-git.js", () => ({
-  updateGitCheckout: vi.fn(),
+// mock-isolation: the real runner builds Git worktrees; CLI orchestration tests own only its result.
+vi.mock("../infra/update-runner-git-release.js", () => ({
+  updateGitRelease: vi.fn(),
 }));
 
 vi.mock("../state/openclaw-database-preflight.js", () => ({

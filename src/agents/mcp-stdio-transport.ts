@@ -97,7 +97,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
     }
 
     // Directory preparation may finish after shutdown has retired this launch.
-    if (this.startupAbort.signal.aborted) {
+    if (this.closing || this.startupAbort.signal.aborted) {
       const failure = new Error("MCP stdio transport is closed");
       materializeErrorStack(failure);
       throw failure;
@@ -116,7 +116,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         const { prepareMcpDockerLaunch } = await import("./mcp-docker-custody.js");
         this.docker = await prepareMcpDockerLaunch(parsed, env, this.serverParams.cwd);
       }
-      if (this.startupAbort.signal.aborted) {
+      if (this.closing || this.startupAbort.signal.aborted) {
         throw new Error("MCP stdio transport is closed");
       }
       const child = await runWithSpawnBrokerAdmission("mcp", () =>
@@ -241,11 +241,8 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
   }
 
   close(): Promise<void> {
-    if (this.starting && !this.process) {
-      this.startupAbort.abort();
-    }
     this.closing ??= (async () => {
-      // A connect timeout can request disposal while the spawn owner is admitting.
+      // Graceful close joins spawn ownership; aborting admission loses cleanup custody.
       await this.starting?.catch(() => undefined);
       try {
         const failures: unknown[] = [];
@@ -304,6 +301,9 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
 
   forceClose(): Promise<void> {
     this.forceRequested = true;
+    if (this.starting && !this.process) {
+      this.startupAbort.abort();
+    }
     if (this.docker) {
       this.docker.force();
     } else {

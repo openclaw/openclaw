@@ -159,6 +159,14 @@ If a hook redacts accepted input and no keyed request fingerprint is available,
 the original delivery cannot be established. Keep the original message ID; a
 new ID could deliver the correction twice.
 
+`sessions.steerTarget` accepts `{ sessionKey, agentId? }` under the same genuine
+person and current session-write policy as steering. It returns
+`{ target: { sessionId, runId } }` for the exact steerable physical backend, or
+`{ target: null }` when none is available. Catalog status and projected activity
+are not target identities. Discovery does not reserve a run: submit both returned
+IDs to `sessions.steerActive`, which rejects a replaced target rather than
+retargeting a successor.
+
 `sessions.steerActive` accepts
 `{ sessionKey, agentId?, sessionId, runId, message, idempotencyKey }`.
 It requires a source-authenticated personal operator with current session write
@@ -192,6 +200,28 @@ proof that the approved text was unchanged and an exact text match; otherwise th
 retry fails closed. Do not generate a new key to recover an uncertain result.
 This host method does not add remote writer authentication or grant write access
 to a Session Share reader.
+
+### Restricted Session Share writer transport
+
+A separately approved paired device with the exact singleton scope
+`operator.session-share.steer` can connect as a restricted writer transport.
+It is not a human identity, an upgrade of `operator.session-share.read`, or an
+`operator.write` grant. Mixed scopes, role changes, shared-token impersonation,
+and omission of the stored restricted scope are rejected.
+
+Like a publication reader, this connection receives only a minimal hello and
+transport ticks. The only eligible methods are `session-share.steer.target` and
+`session-share.steer.send`, registered by the Session Share plugin with the exact
+writer scope and independent-profile policy. Without those source handlers,
+neither method is advertised or admitted. In particular, the device cannot call
+`sessions.steerTarget`, `sessions.steerActive`, ordinary chat, or administration.
+Token replacement, revocation, and issuer rotation retire the transport through
+the existing device lifecycle.
+
+This transport does not implement source grants or remote steering. Future source
+handlers must supply a source-approved genuine person grant through ingress v2
+and enforce current publication selection before calling the host operations.
+A device ID, catalog row, or display identity does not supply that authority.
 
 ### Chat input reconciliation
 
@@ -256,3 +286,13 @@ can only be reused with its original device and canonical folder. A required
 cloud-worker profile cannot be combined with a device folder. If the device is
 offline or its folder consent changes, reconnect or restore consent; no local
 fallback is permitted.
+
+### Restricted writer opt-in
+
+`gateway.sessionControl.publicationWriteEnabled` defaults to off. Enable it to
+admit a paired singleton `operator.session-share.steer` transport. This switch
+does not enable host steering or publication reads; each has its own opt-in.
+Source plugins must separately enable their writer handlers and grant access.
+The switch is checked at each request admission. Disabling denies new requests
+but does not revoke admitted work, which may still deliver. Retries pass admission
+and keep their original message ID.
