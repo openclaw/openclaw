@@ -84,6 +84,20 @@ export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletio
 
 export type AssistantUsageSnapshot = Usage;
 
+/** Transcript `api` of realtime voice rows; only billing rows among them carry usage. */
+export const REALTIME_VOICE_TRANSCRIPT_API = "realtime";
+
+/**
+ * Realtime voice billing rows record a provider's billed tokens for usage and cost reports.
+ * They do not measure the agent's context, so context and model-identity readers skip them.
+ */
+export function isBillingOnlyUsageRecord(message: unknown): boolean {
+  const record = asOptionalRecord(message);
+  return (
+    record?.api === REALTIME_VOICE_TRANSCRIPT_API && asOptionalRecord(record.usage) !== undefined
+  );
+}
+
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   return createZeroUsage();
 }

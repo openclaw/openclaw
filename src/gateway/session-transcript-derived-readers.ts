@@ -8,6 +8,7 @@ import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harn
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
+  isBillingOnlyUsageRecord,
   normalizeUsage,
   type ContextUsage,
   type UsageLike,
@@ -48,13 +49,16 @@ function extractTranscriptUsageSnapshot(
   const api =
     source === "artifact" && typeof record.api === "string" ? record.api.trim() : record.api;
   const legacyCliUsage = api === "cli" && usageRaw && usageRaw.contextUsage === undefined;
+  // A realtime billing row adds its counters to the totals, but it is not the agent's
+  // context size or model, so it never replaces either.
+  const billingOnly = isBillingOnlyUsageRecord({ api, usage: usageRaw });
   // Canonical context measurements include zero independently of response billing.
   // Legacy artifacts still need their existing completeness evidence.
-  const totalTokens = legacyCliUsage
-    ? undefined
-    : deriveSessionTotalTokens({ lastCallUsage: usage });
-  const modelProvider = typeof record.provider === "string" ? record.provider.trim() : undefined;
-  const model = typeof record.model === "string" ? record.model.trim() : undefined;
+  const totalTokens =
+    legacyCliUsage || billingOnly ? undefined : deriveSessionTotalTokens({ lastCallUsage: usage });
+  const modelProvider =
+    !billingOnly && typeof record.provider === "string" ? record.provider.trim() : undefined;
+  const model = !billingOnly && typeof record.model === "string" ? record.model.trim() : undefined;
   const costUsd =
     usage?.usageReport?.state === "unavailable"
       ? undefined
@@ -90,7 +94,7 @@ function extractTranscriptUsageSnapshot(
       : {}),
     ...(legacyCliUsage
       ? { contextUsage: { state: "unavailable" } as const }
-      : normalizedUsage.contextUsage
+      : normalizedUsage.contextUsage && !billingOnly
         ? { contextUsage: normalizedUsage.contextUsage }
         : {}),
     ...(typeof totalTokens === "number" ? { totalTokens, totalTokensFresh: true } : {}),

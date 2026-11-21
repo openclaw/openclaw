@@ -266,6 +266,13 @@ Register each capability inside `register(api)` alongside your existing
     frames after submitting them to the local socket; the callback neither
     acknowledges remote receipt nor vetoes the frame. Control requested
     inside an observer runs after that frame.
+    Call `req.onUsage?.(report)` once per provider response that reports
+    token usage, including cancelled responses and responses on a connection
+    that was replaced, because the provider bills them. The report names the
+    billing `provider` and `model`, the `responseId`, the outcome `status`, and
+    `input`, `cachedInput`, and `output` token counts split by modality; cached
+    counts are subsets of input counts. Hosts that pass `usageSessionKey`
+    record each report in that session's usage, keyed by response ID.
     `submitToolResult` may return `void` for synchronous submission, or a
     `Promise<void>` for an asynchronous completion boundary the provider
     bridge can expose. Gateway relay sessions wait for that promise before

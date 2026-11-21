@@ -65,6 +65,10 @@ See [Models](/providers/models) for pricing config and [Token use and costs](/re
 
 Inbound media can be summarized or transcribed via a provider API before the reply pipeline runs. Provider support is registered per plugin and changes as plugins are added; see [Media understanding](/nodes/media-understanding) for the current list and config.
 
+### Realtime voice
+
+Realtime voice sessions (Discord voice, Talk, Voice Call) bill the realtime provider for every spoken response, separately from the agent model that answers consults. When the provider reports token usage for a response, OpenClaw records it once per response ID in the voice session, under the provider and realtime model, so Control UI usage and `/usage cost` show it next to the consult model. Cancelled responses are recorded too, because they are billed. The model catalog has no audio rates, so realtime rows show tokens but are unpriced unless the model has a configured price; a configured text price does not cover audio tokens. OpenAI realtime reports usage; Azure OpenAI realtime, GPT-Live, and meeting-bot sessions are not recorded yet.
+
 ### Image and video generation
 
 `image_generate` and `video_generate` route to whichever authenticated provider is available. Both can infer an auth-backed provider default when their `agents.defaults.mediaModels` entry is unset.

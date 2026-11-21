@@ -32,3 +32,51 @@ it("does not repeat accounting over the full history when its bounded tail has n
     accounting.mockRestore();
   }
 });
+
+it("keeps the agent context size when a realtime voice billing row follows it", async () => {
+  const target = fixture.scopeFor("voice");
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 10 });
+  await fixture.writeTranscript(target.sessionId, [
+    {
+      type: "message",
+      id: "question",
+      parentId: null,
+      message: { role: "user", content: "Summarize the project.", timestamp: 1 },
+    },
+    {
+      type: "message",
+      id: "agent",
+      parentId: "question",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the summary." }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        usage: { input: 100_000, output: 500, cacheRead: 0, cacheWrite: 0, totalTokens: 100_500 },
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    },
+    {
+      type: "message",
+      id: "realtime-usage",
+      parentId: "agent",
+      message: {
+        role: "assistant",
+        content: [],
+        api: "realtime",
+        provider: "openai",
+        model: "gpt-realtime-2.1",
+        usage: { input: 900, output: 400, cacheRead: 600, cacheWrite: 0, totalTokens: 1_900 },
+        stopReason: "stop",
+        timestamp: 3,
+      },
+    },
+  ]);
+  const estimate = await estimateContextTokensFromSessionTranscript({
+    ...target,
+    contextWindowTokens: 200_000,
+  });
+  expect(estimate?.contextTokens).toBeGreaterThanOrEqual(100_000);
+});
