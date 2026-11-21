@@ -181,7 +181,8 @@ const enUsage = {
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Error rate",
-      errorHint: "Errors ÷ total messages.",
+      errorHint:
+        "Recorded tool-result errors and assistant messages stopped for error, abort, or timeout ÷ total messages. Failed attempts with no recorded message are not included.",
       avgSession: "avg session",
       cacheHitRate: "Cache hit rate",
       cacheHint: "Cache reads ÷ (input + cache reads + cache writes).",
