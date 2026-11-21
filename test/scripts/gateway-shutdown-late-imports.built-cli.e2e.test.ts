@@ -19,8 +19,8 @@ afterEach(async () => {
   instance = undefined;
 });
 
-/** Imports first resolved after SIGTERM by a module loaded before it (a new chain's root). */
-function lateImportRoots(lines: string[]) {
+/** Hashed dist chunks first imported after SIGTERM by a module loaded before it. */
+function lateChunkImports(lines: string[]) {
   return lines.flatMap((line) => {
     const [, parent, specifier, fromLoadedModule] = JSON.parse(line) as [
       number,
@@ -28,9 +28,11 @@ function lateImportRoots(lines: string[]) {
       string,
       boolean,
     ];
-    // Dependencies resolve by package name in the replacement tree, and workers
-    // started after SIGTERM load their stable-named entry from it.
-    return fromLoadedModule && /^\.\.?\//u.test(specifier)
+    // Only hashed chunks vanish in a swap. Stable entries, workers started after
+    // SIGTERM, and dependencies resolve in the replacement tree.
+    return fromLoadedModule &&
+      !parent?.includes("/node_modules/") &&
+      /^\.\.?\/(?:.*\/)?[^/]+-[\w-]{8}\.mjs$/u.test(specifier)
       ? [`${path.basename(parent ?? "")} -> ${specifier}`]
       : [];
   });
@@ -63,5 +65,5 @@ it("stops a built Gateway without first-importing a module after SIGTERM", async
   // The preload observed the stop signal, so an empty log is a real result.
   expect(existsSync(`${log}.sigterm`)).toBe(true);
   const lines = (await readFile(log, "utf8").catch(() => "")).split("\n").filter(Boolean);
-  expect(lateImportRoots(lines)).toEqual([]);
+  expect(lateChunkImports(lines)).toEqual([]);
 }, 240_000);
