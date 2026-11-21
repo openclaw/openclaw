@@ -60,6 +60,14 @@ class LocationHandler internal constructor(
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
     try {
       val (location, isPrecise) = disclosure.getLocation(maxAgeMs, timeoutMs, allowPrecise = desiredAccuracy != "coarse")
+      // A fresh fix can arrive after the app leaves the foreground. Admission alone is not
+      // permission to disclose it; retain the existing opt-in background-location exception.
+      if (!isForeground() && !allowsBackgroundLocation()) {
+        return nodeInvokeError(
+          "LOCATION_BACKGROUND_UNAVAILABLE",
+          "choose Always and grant background location access",
+        )
+      }
       val payload =
         buildJsonObject {
           put("lat", location.latitude)
