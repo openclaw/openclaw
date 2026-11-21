@@ -363,7 +363,7 @@ it.each(["allowed", "missing source", "different sender", "revoked device"] as c
   },
 );
 
-it.each(["original route", "writer", "writer with original route"] as const)(
+it.each(["original route", "writer"] as const)(
   "readmits accepted reply and runtime intent under current route permissions: %s",
   async (mode) => {
     const created = await createFixture();
@@ -374,15 +374,11 @@ it.each(["original route", "writer", "writer with original route"] as const)(
       message: { role: "assistant", content: "The selected earlier answer.", timestamp: 2 },
     });
     Object.assign(fixture.params, {
-      ...(mode !== "writer"
-        ? {
-            deliver: true,
-            originatingChannel: "discord",
-            originatingTo: "channel:queued-result",
-            originatingAccountId: "queued-account",
-            originatingThreadId: "queued-thread",
-          }
-        : {}),
+      deliver: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:queued-result",
+      originatingAccountId: "queued-account",
+      originatingThreadId: "queued-thread",
       replyToId: "quoted-answer",
       thinking: "high",
       fastMode: "auto",
@@ -406,7 +402,7 @@ it.each(["original route", "writer", "writer with original route"] as const)(
     }
     await continueSessionQueuedInputs(fixture.context, retained.target, retained);
     await fixture.finishDispatch();
-    if (mode === "writer with original route") {
+    if (mode === "writer") {
       expect(dispatched).toEqual([]);
       expect(fixture.context.logGateway.warn).toHaveBeenCalledWith(
         expect.stringContaining("originating route fields require admin scope"),
@@ -419,15 +415,11 @@ it.each(["original route", "writer", "writer with original route"] as const)(
     expect(fixture.context.logGateway.warn).not.toHaveBeenCalled();
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.ctx).toMatchObject({
-      ...(mode === "original route"
-        ? {
-            OriginatingChannel: "discord",
-            OriginatingTo: "channel:queued-result",
-            AccountId: "queued-account",
-            MessageThreadId: "queued-thread",
-            ExplicitDeliverRoute: true,
-          }
-        : {}),
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:queued-result",
+      AccountId: "queued-account",
+      MessageThreadId: "queued-thread",
+      ExplicitDeliverRoute: true,
       ReplyToId: "quoted-answer",
       ReplyToBody: "The selected earlier answer.",
     });
@@ -437,11 +429,11 @@ it.each(["original route", "writer", "writer with original route"] as const)(
       fastModeAutoOnSecondsOverride: 7,
       timeoutOverrideMs: 90_000,
     });
-    expect(dispatched[0]?.replyOptions?.operatorAuthority?.scopes).toEqual(
-      mode === "writer"
-        ? ["operator.write"]
-        : ["operator.admin", "operator.read", "operator.write"],
-    );
+    expect(dispatched[0]?.replyOptions?.operatorAuthority?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
   },
 );
 

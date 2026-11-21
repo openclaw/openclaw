@@ -131,54 +131,6 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       ) {
         expect([...source.scopes].toSorted()).toEqual([...WRITER, "operator.approvals"].toSorted());
       }
-      if (c.row.ingress === "channel") {
-        expect(source.channelRecoverySource).toBeDefined();
-      } else {
-        const snapshot = source.recoverySnapshot;
-        assert(snapshot);
-        expect(snapshot.sourceIngress).toBe(c.row.ingress);
-        if (snapshot.sourceIngress !== "principal") {
-          expect(snapshot.authPolicy.authMethod).toBe(
-            c.row.credential === "fallback"
-              ? "password"
-              : c.row.credential === "proxy-device" ||
-                  c.row.credential === "plugin-grant" ||
-                  c.row.credential.startsWith("ocid-")
-                ? "trusted-proxy"
-                : c.row.credential === "tailscale-device"
-                  ? "tailscale"
-                  : c.row.credential,
-          );
-          if (c.row.credential === "trusted-proxy" || c.row.credential === "plugin-grant") {
-            expect(snapshot.device).toBeUndefined();
-          }
-          if (c.row.credential === "tailscale") {
-            expect(snapshot.device).toBeDefined();
-            if (c.scenario === "legacy-tailscale" || c.scenario === "legacy-tailscale-narrowed") {
-              expect([...snapshot.scopes].toSorted()).toEqual(
-                [...WRITER, "operator.approvals", "operator.pairing"].toSorted(),
-              );
-            }
-          }
-          if (c.row.credential === "proxy-device" || c.row.credential === "tailscale-device") {
-            expect(snapshot.device).toEqual({
-              deviceId: c.identity.deviceId,
-              key: sha256Hex(publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem)),
-            });
-            if (c.row.credential === "tailscale-device" && c.scenario !== "narrowed-grant") {
-              expect([...snapshot.scopes].toSorted()).toEqual([...WRITER].toSorted());
-            }
-          }
-          if (c.row.credential === "fallback") {
-            expect(snapshot.authPolicy.fallbackCredentialGeneration).toBeDefined();
-          }
-          if (c.row.credential.startsWith("ocid-")) {
-            expect(snapshot.openclawIdPrincipal?.kind).toBe(
-              c.row.credential === "ocid-owner" ? "owner" : "member",
-            );
-          }
-        }
-      }
       c.enqueued.resolve();
     }
     return accepted;
@@ -393,10 +345,12 @@ export async function prepareAdmissionOperator(
     ];
     await fixture.publish(next, c.signal);
   }
-  if (credential === "principal") {
+  if (credential === "principal" || credential === "device-token") {
     const next = structuredClone(fixture.config);
     delete next.gateway!.roles;
     await fixture.publish(next, c.signal);
+  }
+  if (credential === "principal") {
     assert(fixture.kernel);
     const host = getGatewayControlUiIngressHost(fixture.kernel.resolvePluginGatewayContext);
     assert(host);

@@ -310,6 +310,8 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
   }
   assert(fixture.kernel);
   const context = fixture.kernel.gatewayRequestContext;
+  // A real restart loses the process-local ACK cache as well as the retired source.
+  context.dedupe.delete(`chat:${c.queuedRunId}`);
   const generationState = context.sharedGatewaySessionGenerationState;
   if (c.scenario === "generation-unavailable") {
     const source = decodeQueuedOperatorRecoverySource(JSON.parse(stored.origin_source_json));
