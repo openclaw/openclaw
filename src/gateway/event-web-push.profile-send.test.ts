@@ -240,31 +240,15 @@ describe("profile-targeted send", () => {
     await sendToBob(question);
     const calls = mocks.send.mock.calls.map(([call]) => call);
     const url = "chat/research/thread%2E1#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator";
-    const delivery = { TTL: 60, urgency: "high", topic: expect.any(String) };
+    const message = (subscription: BoundWebPushSubscription, title: string, body: string) => ({
+      subscriptions: [subscription],
+      payload: { title, body, tag: "openclaw-send-ticket-42", renotify: false, url },
+      deliveryOptions: { TTL: 60, urgency: "high", topic: expect.any(String) },
+    });
     expect(calls).toEqual(
       expect.arrayContaining([
-        {
-          subscriptions: [identified],
-          payload: {
-            title: "Desk · Ticket assigned",
-            body: "Review ticket 42\\u{202E}",
-            tag: "openclaw-send-ticket-42",
-            renotify: false,
-            url,
-          },
-          deliveryOptions: delivery,
-        },
-        {
-          subscriptions: [privateTarget],
-          payload: {
-            title: "OpenClaw needs an answer",
-            body: "An agent has a question for you.",
-            tag: "openclaw-send-ticket-42",
-            renotify: false,
-            url,
-          },
-          deliveryOptions: delivery,
-        },
+        message(identified, "Desk · Ticket assigned", "Review ticket 42\\u{202E}"),
+        message(privateTarget, "OpenClaw needs an answer", "An agent has a question for you."),
       ]),
     );
   });
