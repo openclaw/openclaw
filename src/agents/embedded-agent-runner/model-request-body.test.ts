@@ -94,24 +94,26 @@ it.each([
       return replacement;
     });
     await withServer(
-      async (request, response) => {
+      (request, response) => {
         const chunks: Buffer[] = [];
-        for await (const chunk of request) {
+        request.on("data", (chunk: Buffer) => {
           chunks.push(Buffer.from(chunk));
-        }
-        wires.push(Buffer.concat(chunks).toString("utf8"));
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(
-          `data: ${JSON.stringify({
-            candidates: [
-              {
-                finishReason: "CONTINUATION",
-                continuationToken: token,
-                content: { parts: [{ text: "partial response" }] },
-              },
-            ],
-          })}\n\n`,
-        );
+        });
+        request.on("end", () => {
+          wires.push(Buffer.concat(chunks).toString("utf8"));
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end(
+            `data: ${JSON.stringify({
+              candidates: [
+                {
+                  finishReason: "CONTINUATION",
+                  continuationToken: token,
+                  content: { parts: [{ text: "partial response" }] },
+                },
+              ],
+            })}\n\n`,
+          );
+        });
       },
       async (origin) => {
         const model = makeProviderModelFixture<"google-generative-ai">({
@@ -241,6 +243,7 @@ it.each([undefined, Object.freeze({ failure: "synthetic-finalizer" })])(
     };
     await expect(
       prepareModelRequestBody(options, () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Verify raw non-Error failure identity.
         throw reason;
       })({}),
     ).rejects.toBe(reason);
@@ -256,6 +259,7 @@ it.each([undefined, null, false, 0])(
     modelRequestBodyState(options).onBytes = onBytes;
     await expect(
       prepareModelRequestBody(options, () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Verify raw falsey failure identity.
         throw reason;
       })({}),
     ).rejects.toBe(reason);

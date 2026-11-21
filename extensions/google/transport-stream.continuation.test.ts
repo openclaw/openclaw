@@ -157,7 +157,9 @@ describe("actual routed Google continuation transport", () => {
       waiting.promise.then(() => "awaiting HTTP EOF"),
       result.then(() => "ended early"),
     ]);
-    if (phase === "awaiting HTTP EOF") body?.close();
+    if (phase === "awaiting HTTP EOF") {
+      body?.close();
+    }
     expect(phase).toBe("awaiting HTTP EOF");
     expect((await result).providerReplay?.id).toBe(token);
     expect(guardedFetch).toHaveBeenCalledTimes(1);
@@ -201,7 +203,9 @@ describe("actual routed Google continuation transport", () => {
     );
     const stream = await start({ signal: controller.signal });
     for await (const event of stream) {
-      if (event.type === "text_delta") controller.abort();
+      if (event.type === "text_delta") {
+        controller.abort();
+      }
     }
     expect((await stream.result()).providerReplay).toBeUndefined();
     expect(cancel).toHaveBeenCalledOnce();
@@ -234,7 +238,7 @@ describe("actual routed Google continuation transport", () => {
   );
 
   it("preserves direct Google terminal-marker behavior without a routed replay receipt", async () => {
-    guardedFetch.mockResolvedValueOnce(response(frame(continued) + "data: [DONE]\n\n" + "data: {"));
+    guardedFetch.mockResolvedValueOnce(response(frame(continued) + "data: [DONE]\n\ndata: {"));
     const result = await (
       await start(
         {},
