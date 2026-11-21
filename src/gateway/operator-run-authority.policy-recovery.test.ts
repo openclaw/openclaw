@@ -26,7 +26,7 @@ import { errorShapeFromError } from "./error-shape.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-principal-run-authority.js";
 
 it("admits closed-scope lineage while policy failures remain unavailable and revocation is final", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

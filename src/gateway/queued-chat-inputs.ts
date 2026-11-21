@@ -108,8 +108,10 @@ export async function continueSessionQueuedInputs(
       if (
         participationCeiling &&
         (participationCeiling.kind !== "send" ||
-          participationCeiling.profileId !== authority.profileId ||
-          participationCeiling.sessionKey !== target.sessionKey)
+          (participationCeiling.source
+            ? participationCeiling.source.agentId !== target.agentId
+            : participationCeiling.profileId !== authority.profileId ||
+              participationCeiling.sessionKey !== target.sessionKey))
       ) {
         throw new Error("Queued participation input does not match its sender and session.");
       }

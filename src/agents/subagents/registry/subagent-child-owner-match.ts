@@ -1,5 +1,11 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { isValidAgentId, normalizeAgentIdStrict } from "../../../routing/session-key.js";
+import {
+  intersectParticipationCeilings,
+  sessionParticipationCeiling,
+  type ParticipationCeiling,
+} from "../../participation-ceiling.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function resolveSubagentChildAgentId(entry: {
@@ -117,4 +123,23 @@ export function matchesSubagentChildSessionOwner(
   return (
     owner !== undefined && owner === resolveSubagentChildAgentId({ childSessionKey, childAgentId })
   );
+}
+
+/** The registry's captured source outlives child deletion and is a restriction, not a grant. */
+export function resolveSubagentCompletionParticipation(
+  records: Iterable<SubagentRunRecord>,
+  entry: SessionEntry | undefined,
+  captured?: ParticipationCeiling,
+): ParticipationCeiling | undefined {
+  let recorded = captured;
+  for (const record of records) {
+    if (record.participationCeiling) {
+      recorded = intersectParticipationCeilings(recorded, record.participationCeiling);
+      sessionParticipationCeiling(entry, recorded);
+      if (!matchesSubagentChildSessionIdentity(record, entry ?? null)) {
+        throw new Error("Participant completion child incarnation changed.");
+      }
+    }
+  }
+  return sessionParticipationCeiling(entry, recorded);
 }

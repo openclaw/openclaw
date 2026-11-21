@@ -259,7 +259,7 @@ export async function prepareSpawnThreadBinding(params: {
 
 export function resolveSpawnAdmission(params: {
   cfg: OpenClawConfig;
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "participant";
   enabled?: boolean;
   collector?: {
     liveChildren: number;

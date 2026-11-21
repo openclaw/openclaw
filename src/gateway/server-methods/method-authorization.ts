@@ -11,7 +11,7 @@ import {
 } from "../../shared/session-method-scopes-base.js";
 import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
 import { authorizeParticipationExecApprovalMethod } from "../exec-approval-participation.js";
-import { isInProcessSessionRun } from "../in-process-session-run.js";
+import { isInProcessSessionRun, readInProcessParticipationRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -59,9 +59,13 @@ export function authorizeGatewayMethodScopes(
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed && isInProcessSessionRun(method, params)) {
     scopeAuth = authorizeOperatorScopesForRequiredScope(
-      scopeAuth.missingScope,
+      readInProcessParticipationRun(method, params)?.source
+        ? "operator.read"
+        : scopeAuth.missingScope,
       scopes,
-      "operator.sessions.write",
+      readInProcessParticipationRun(method, params)?.source
+        ? "operator.sessions.read"
+        : "operator.sessions.write",
       method,
     );
   }

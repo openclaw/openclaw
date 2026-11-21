@@ -48,11 +48,7 @@ import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
-import {
-  callNativeSubagentGateway,
-  captureSubagentSpawnGatewayContext,
-  readGatewayRunId,
-} from "./subagent-spawn-gateway.js";
+import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import {
   createSubagentSpawnLifecycleEmitter,
@@ -84,12 +80,12 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
-    captureSubagentSpawnGatewayContext();
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
   }
+  const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
+    requestResolution.resolved.gateway;
   const {
     taskName,
     spawnMode,
@@ -153,19 +149,21 @@ export async function spawnSubagentDirect(
       operatorAuthority.assertCurrent();
       preparationHold.retainAuthority(operatorAuthority.retain?.());
     }
-    const childPlan = await resolveSubagentChildPlan({
-      request: { ...params, context: contextMode },
-      ctx: { ...ctx, assertActive },
-      cfg,
-      requesterInternalKey,
-      requesterAgentId,
-      targetAgentId,
-      requesterEntry: requestResolution.resolved.requesterEntry,
-      sandboxMode,
-      swarmEnabled: swarmConfig.enabled,
-      requesterSandboxed: ctx.sandboxed,
-      spawnedBy: { profileId: creatorProfileId, operatorScopes: operatorAuthority?.scopes },
-    });
+    const childPlan =
+      requestResolution.resolved.participationChildPlan ??
+      (await resolveSubagentChildPlan({
+        request: { ...params, context: contextMode },
+        ctx: { ...ctx, assertActive },
+        cfg,
+        requesterInternalKey,
+        requesterAgentId,
+        targetAgentId,
+        requesterEntry: requestResolution.resolved.requesterEntry,
+        sandboxMode,
+        swarmEnabled: swarmConfig.enabled,
+        requesterSandboxed: ctx.sandboxed,
+        spawnedBy: { profileId: creatorProfileId, operatorScopes: operatorAuthority?.scopes },
+      }));
     if (!childPlan.ok) {
       return childPlan.result;
     }
@@ -243,6 +241,7 @@ export async function spawnSubagentDirect(
         spawnedWorkspaceDir,
         spawnedCwd,
         sessionPermissionPolicy: ctx.sessionPermissionPolicy,
+        participationCeiling: requestResolution.resolved.participationCeiling,
         worktree: params.worktree ? params : undefined,
         admissionPatch: admission.childSessionPatch,
         inheritedToolAllowlist: ctx.inheritedToolAllowlist,
@@ -557,6 +556,7 @@ export async function spawnSubagentDirect(
           ...childTarget,
           controllerSessionKey: ownership.controllerSessionKey,
           sessionEntry: childEntry,
+          participationCeiling: childEntry?.participationCeiling,
           requesterSessionKey: ownership.completionRequesterSessionKey,
           requesterOrigin,
           progressOrigin,

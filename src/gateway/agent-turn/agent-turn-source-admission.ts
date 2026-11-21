@@ -1,9 +1,13 @@
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { sessionParticipationCeiling } from "../../agents/participation-ceiling.js";
+import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
 import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -13,10 +17,12 @@ import {
 import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { readInProcessParticipationRun } from "../in-process-session-run.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "../server-methods/gateway-personal-caller.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { prepareSessionParticipationRun } from "../session-principal-run-authority.js";
 import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { authorizeResolvedSessionMutationAsync } from "../session-sharing.js";
@@ -42,12 +48,51 @@ export async function authorizeAgentTurnSession({
   principal,
   agentId,
   sessionKey,
+  entry,
+  participationCeiling,
 }: {
   cfg: OpenClawConfig;
   principal: AgentTurnPrincipal | null;
   agentId: string;
   sessionKey: string;
+  entry?: SessionEntry;
+  participationCeiling?: ParticipationCeiling;
 }) {
+  if (sessionParticipationCeiling(entry) || participationCeiling?.source) {
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const context = scope?.resolveGatewayContext?.() ?? scope?.context;
+    if (!context) {
+      throw new Error("Participant source Gateway is unavailable.");
+    }
+    if (!participationCeiling || participationCeiling.sessionKey !== sessionKey) {
+      const access = await resolveSessionMutationAuthorizationAsync({
+        context,
+        client: principal,
+        method: "agent",
+        requestParams: { sessionKey, agentId },
+      });
+      try {
+        if (access.error) {
+          return access.error;
+        }
+        access.authorization?.assertCurrent();
+      } finally {
+        access.authorization?.release?.();
+      }
+    }
+    const source = await prepareSessionParticipationRun({
+      context,
+      agentId,
+      entry,
+      turnCeiling: participationCeiling,
+    });
+    try {
+      source?.authority.assertCurrent();
+      return undefined;
+    } finally {
+      source?.release();
+    }
+  }
   return (
     authorizeGatewaySessionCreation({ cfg, client: principal, agentId }) ??
     (await authorizeResolvedSessionMutationAsync({ cfg, client: principal, sessionKey, agentId }))
@@ -269,6 +314,8 @@ export async function registerAgentTurnSourceAdmission({
     principal,
     sessionKey: loaded.canonicalKey,
     agentId: sourceAgentId,
+    entry: loaded.entry,
+    participationCeiling: readInProcessParticipationRun("agent", source.preflight.request),
   });
   if (authorizationError) {
     source.io.emitAcceptance([false, undefined, authorizationError]);

@@ -66,6 +66,8 @@ export type SessionMutationAuthorizationParams = {
   sessionScope?: SessionOperatorScope;
   /** Resolve this pending requirement against the exact existing session. */
   participationRequired?: true;
+  /** Prepared against the child's original invitation, never request data. */
+  participantRunAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Database access classified by the host-owned method registry. */
   databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
@@ -165,6 +167,7 @@ export function prepareSessionMutationAuthorizationRequest(
       requiresCommunicationAuthority ||
       bindsProgressLifecycle ||
       bindsTalkTarget ||
+      params.method === "chat.send" ||
       params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:

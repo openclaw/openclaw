@@ -553,7 +553,9 @@ export async function executePreparedReplyRun(
         normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
-      sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      sessionRoot:
+        opts?.participationCeiling?.source?.root ??
+        normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
       toolOverrides: admittedSessionSettings?.toolOverrides,

@@ -46,7 +46,7 @@ type PersistedSubagentToolPolicyEnvelope = {
   completionOwnerSessionKey?: string;
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "participant";
   delegatedToolPolicy?: DelegatedToolPolicy;
 };
 
@@ -342,8 +342,9 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
     delegatedToolPolicy,
-    ...(entry.inheritedToolPolicySource === "sender"
-      ? { inheritedToolPolicySource: "sender" as const }
+    ...(entry.inheritedToolPolicySource === "sender" ||
+    entry.inheritedToolPolicySource === "participant"
+      ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
   };
 }

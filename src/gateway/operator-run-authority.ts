@@ -9,8 +9,8 @@ import {
 import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import {
   prepareOperatorModelPolicy,
+  intersectOperatorModelPolicy,
   readOperatorModelPolicyMembership,
-  type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -145,21 +145,6 @@ function prepareRunRolePolicy(
     : undefined;
 }
 
-export function intersectOperatorRunModelPolicy(
-  original: PreparedOperatorModelPolicy | undefined,
-  current: PreparedOperatorModelPolicy | undefined,
-): PreparedOperatorModelPolicy | undefined {
-  return original &&
-    current &&
-    readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
-    ? Object.freeze({
-        models: Object.freeze(current.models.filter(original.allows)),
-        allows: (ref: Parameters<typeof original.allows>[0]) =>
-          original.allows(ref) && current.allows(ref),
-      })
-    : (current ?? original);
-}
-
 /** Keep the admission ceiling while refreshing only committed config/metadata views. */
 function prepareRunModelPolicy(params: {
   cfg: OpenClawConfig;
@@ -188,7 +173,7 @@ function prepareRunModelPolicy(params: {
           policy: params.resolvePolicy(nextConfig),
           manifestPlugins: nextMetadata ?? [],
         });
-        policy = intersectOperatorRunModelPolicy(original, current);
+        policy = intersectOperatorModelPolicy(original, current);
         cfg = nextConfig;
         metadata = nextMetadata;
         publication = nextPublication;
@@ -297,6 +282,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
   invocationAuthority?: Readonly<{
+    participationAuthority?: AdmittedRunOperatorAuthority;
     assertCurrent: () => void;
     signal?: AbortSignal;
     release?: () => void;
@@ -631,6 +617,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
         policy: capturedRole,
       }),
       source: source.token,
+      participationCeiling:
+        params.invocationAuthority?.participationAuthority?.participationCeiling,
       invocation: params.invocationAuthority,
       signal: revocation.signal,
       retain: () => {
@@ -682,7 +670,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
           throw new Error("Your operator role changed; reconnect before continuing.");
         }
       },
-      modelPolicy,
+      get modelPolicy() {
+        const participant = params.invocationAuthority?.participationAuthority;
+        return participant
+          ? intersectOperatorModelPolicy(modelPolicy, participant.modelPolicy)
+          : modelPolicy;
+      },
     });
     bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (

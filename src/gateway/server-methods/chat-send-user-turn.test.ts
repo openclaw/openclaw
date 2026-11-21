@@ -37,7 +37,7 @@ import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
-import { prepareSessionPrincipalRunAuthority } from "../session-sharing-authorization-async.js";
+import { prepareSessionPrincipalRunAuthority } from "../session-principal-run-authority.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import { createClientInfo, createAttachments } from "./chat-send-user-turn.test-support.js";

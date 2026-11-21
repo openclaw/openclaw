@@ -26,26 +26,26 @@ export function revokeSessionParticipationQueueInTransaction(
     db
       .selectFrom("session_pending_inputs")
       .selectAll()
-      .where("session_key", "=", target.sessionKey)
-      .where("session_id", "=", target.sessionId)
       .where("state", "=", "queued")
       .where("consumed_event_id", "is", null),
   ).rows;
-  const actor = readSessionActorTransactionState(database, target);
   for (const row of rows) {
     const { __openclaw: provenance } = parseSessionPendingInputMessage(row.message_json);
     const ceiling = provenance?.participationCeiling;
     if (
       ceiling?.kind !== "send" ||
       ceiling.profileId !== target.profileId ||
-      ceiling.sessionKey !== target.sessionKey
+      ceiling.sessionKey !== target.sessionKey ||
+      (ceiling.source
+        ? ceiling.source.sessionId !== target.sessionId
+        : row.session_key !== target.sessionKey || row.session_id !== target.sessionId)
     ) {
       continue;
     }
     const changes = { state: "cancelled", end_cause: "revoked", origin_source_json: null };
     withSqliteDatabaseWriteScope(
       database.db,
-      [target.sessionKey, sqliteSessionIdWriteScope(target.sessionId)],
+      [row.session_key, sqliteSessionIdWriteScope(row.session_id)],
       () =>
         executeSqliteQuerySync(
           database.db,
@@ -57,6 +57,10 @@ export function revokeSessionParticipationQueueInTransaction(
             .where("consumed_event_id", "is", null),
         ),
     );
+    const actor = readSessionActorTransactionState(database, {
+      sessionKey: row.session_key,
+      sessionId: row.session_id,
+    });
     if (actor) {
       actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
       actor.pendingInputs.set(row.idempotency_key, { ...row, ...changes });

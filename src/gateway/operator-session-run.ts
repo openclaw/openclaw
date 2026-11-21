@@ -2,6 +2,10 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import {
+  intersectParticipationCeilings,
+  sessionParticipationCeiling,
+} from "../agents/participation-ceiling.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import {
@@ -67,11 +71,23 @@ export function prepareGatewayOperatorSessionRun(params: {
     assertCurrent,
     assertAuthorized: (entry: SessionEntry | undefined) => {
       assertCurrent();
+      const child = sessionParticipationCeiling(entry);
+      if (child) {
+        const admitted = params.authority.participationCeiling;
+        if (!admitted?.source || admitted.source.agentId !== params.agentId) {
+          throw new ToolAuthorizationError("Participant child has no original-source authority.");
+        }
+        intersectParticipationCeilings(child, admitted);
+        return;
+      }
       const error = entry
         ? authorizeSessionAgentRun({
             cfg: params.cfg,
             client,
             target: { agentId: params.agentId, canonicalKey: params.sessionKey, entry },
+            invitedSession:
+              params.authority.participationCeiling?.sessionKey === params.sessionKey &&
+              params.authority.participationCeiling.source?.sessionId === entry.sessionId,
           })
         : authorizeGatewaySessionCreation({ cfg: params.cfg, client, agentId: params.agentId });
       if (error) {

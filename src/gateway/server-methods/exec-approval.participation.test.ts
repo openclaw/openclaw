@@ -17,6 +17,7 @@ import {
   sessionId,
   sessionKey,
 } from "../../agents/harness/tool-authority.runtime.test-support.js";
+import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
@@ -29,6 +30,7 @@ import {
 } from "../../state/user-profile-writes.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
@@ -225,179 +227,253 @@ it.for(methods)(
   },
 );
 
-it("binds request approvals from registered host authority and canonical creation, never wire source or assigned owner", async (test) => {
-  const fixture = await createPreparedTestApprovalManager(test);
-  await fixture.run(() =>
-    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const participant = await ensureCanonicalUserProfileForEmail("participant@participate.test");
-      const expectedBinding = {
-        ...binding,
-        participantProfileId: participant.id,
-        participantLabel: participant.displayName || participant.id,
-      };
-      setRuntimeConfigSnapshot({});
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "creator" },
-          owner: { actor: { type: "human", id: "assignee" } },
-        },
-      );
-      await admitted(async ({ admittedRunContext }) => {
-        const delegated = expectDefined(
-          getAdmittedRunDelegatedAuthority(admittedRunContext),
-          "delegated run",
+it.for(["direct", "child"] as const)(
+  "binds %s request approvals to the original creator through registered host authority",
+  async (kind, test) => {
+    const fixture = await createPreparedTestApprovalManager(test);
+    await fixture.run(() =>
+      withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+        const participant = await ensureCanonicalUserProfileForEmail(
+          "participant@participate.test",
         );
-        const identity: AgentRuntimeIdentity = {
-          kind: "agentRuntime",
-          agentId: "main",
+        const runSessionKey = kind === "child" ? "agent:main:subagent:approval-child" : sessionKey;
+        const runSessionId = kind === "child" ? "approval-child-id" : sessionId;
+        const ceiling: ParticipationCeiling = {
+          kind: "send",
+          profileId: participant.id,
           sessionKey,
-          operationalRunInstance: admittedRunContext.operationalRunInstance,
-          delegatedAuthority: { ...delegated, kind: "local" },
-        };
-        const runtimeClient = {
-          ...client(participant.id, ["operator.sessions.read"]),
-          internal: { agentRuntimeIdentity: identity },
-        };
-        const authorize = (method: string, id?: string, who = runtimeClient) =>
-          authorizeParticipationExecApprovalMethod({
-            method,
-            params: { id, sessionKey, runId: attempt.runId },
-            client: who,
-            manager: fixture.manager,
-          });
-        expect(captureActiveEmbeddedRunParticipation(identity)).toBeUndefined();
-        expect(authorize("exec.approval.request")).toBeUndefined();
-        await withPreparedEmbeddedRunToolAuthority(
-          { admittedRunContext },
-          {
-            ...attempt,
-            participationCeiling: { kind: "send", profileId: participant.id, sessionKey },
-          },
-          undefined,
-          async (prepared) => {
-            const handle = createEmbeddedRunHandle({
-              runId: attempt.runId,
-              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-            });
-            attachActiveEmbeddedRun(
-              sessionId,
-              handle,
-              sessionKey,
-              attempt.sessionFile,
-              "main",
-              prepared.replyOperation,
-            );
-            try {
-              const capture = expectDefined(
-                captureActiveEmbeddedRunParticipation(identity),
-                "host capture",
-              );
-              expect(capture.ceiling).toEqual({
-                kind: "send",
-                profileId: participant.id,
-                sessionKey,
-              });
-              expect(() =>
-                captureActiveEmbeddedRunParticipation({
-                  ...identity,
-                  delegatedAuthority: { ...identity.delegatedAuthority, claimId: "forged" },
-                }),
-              ).toThrow();
-              expect(await prepareExecApprovalParticipation(identity, {})).toEqual(expectedBinding);
-              expect(authorize("exec.approval.request")).toBe(true);
-              expect(authorize("exec.approval.waitDecision", "missing")).toBeUndefined();
-              const handlers = createExecApprovalHandlers(fixture.manager);
-              const context = {
-                ...createContext(),
-                chatRunState: createChatRunState(),
-                validateAgentRuntimeApprovalAuthority: () => true,
-              };
-              const request = async (runtime: boolean) => {
-                const params = {
-                  command: "echo proof",
-                  host: "gateway",
-                  timeoutMs: 60_000,
-                  twoPhase: true,
+          ...(kind === "child"
+            ? {
+                source: {
                   agentId: "main",
-                  sessionKey,
-                  runId: attempt.runId,
-                  security: "allowlist",
-                  ask: "always",
-                };
-                const opts: GatewayRequestHandlerOptions = {
-                  req: { type: "req", id: "request", method: "exec.approval.request", params },
-                  params,
-                  context,
-                  respond: vi.fn(),
-                  isWebchatConnect: () => false,
-                  client: runtime
-                    ? {
-                        ...client("runtime", ["operator.approvals"]),
-                        internal: { agentRuntimeIdentity: identity },
-                      }
-                    : client("ordinary", ["operator.approvals"]),
-                };
-                const { pending } = await waitForApprovalRequested(
-                  context,
-                  "exec.approval.requested",
-                  () => fixture.track(Promise.resolve(handlers["exec.approval.request"]!(opts))),
-                );
-                const record = expectDefined(
-                  (await fixture.manager.listPendingRecords())[0],
-                  "requested record",
-                );
-                expect(record.participation).toEqual(runtime ? expectedBinding : undefined);
-                expect(authorize("exec.approval.waitDecision", record.id)).toBe(
-                  runtime ? true : undefined,
-                );
-                expect(
-                  authorize("exec.approval.waitDecision", record.id.slice(0, 8)),
-                ).toBeUndefined();
-                for (const method of [
-                  "exec.approval.get",
-                  "exec.approval.list",
-                  "plugin.approval.request",
-                ]) {
-                  expect(authorize(method, record.id)).toBeUndefined();
-                }
-                if (runtime) {
-                  expect(authorize("exec.approval.resolve", record.id)).toBe(false);
-                  expect(authorize("approval.resolve", record.id)).toBe(false);
-                  const foreign = {
-                    ...runtimeClient,
-                    internal: {
-                      agentRuntimeIdentity: {
-                        ...identity,
-                        delegatedAuthority: { ...identity.delegatedAuthority, claimId: "forged" },
-                      },
-                    },
-                  };
-                  expect(() => authorize("exec.approval.request", undefined, foreign)).toThrow();
-                  expect(() =>
-                    authorize("exec.approval.waitDecision", record.id, foreign),
-                  ).toThrow();
-                }
-                await fixture.manager.resolve(record.id, "deny", "cleanup");
-                await pending;
-              };
-              await request(true);
-              await request(false);
-              detachActiveEmbeddedRun(sessionId, handle, sessionKey);
-              expect(() => capture.assertCurrent()).toThrow();
-              expect(captureActiveEmbeddedRunParticipation(identity)).toBeUndefined();
-              expect(authorize("exec.approval.request")).toBeUndefined();
-            } finally {
-              detachActiveEmbeddedRun(sessionId, handle, sessionKey);
-            }
+                  sessionId,
+                  lifecycleRevision: null,
+                  creatorProfileId: "creator",
+                  root: state.workspaceDir,
+                },
+              }
+            : {}),
+        };
+        const expectedBinding = {
+          ...binding,
+          ...(kind === "child" ? { creatorOnly: true as const } : {}),
+          participantProfileId: participant.id,
+          participantLabel: participant.displayName || participant.id,
+        };
+        setRuntimeConfigSnapshot({});
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId,
+            updatedAt: 1,
+            sessionRoot: state.workspaceDir,
+            createdActor: { type: "human", source: "profile", id: "creator" },
+            owner: { actor: { type: "human", id: "assignee" } },
           },
         );
-      });
-    }),
-  );
-});
+        if (kind === "child") {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: runSessionKey },
+            {
+              sessionId: runSessionId,
+              updatedAt: 1,
+              parentSessionKey: sessionKey,
+              createdActor: { type: "human", source: "profile", id: participant.id },
+              inheritedToolPolicySource: "participant",
+              participationCeiling: ceiling,
+            },
+          );
+        }
+        await admitted(async ({ admittedRunContext }) => {
+          const delegated = expectDefined(
+            getAdmittedRunDelegatedAuthority(admittedRunContext),
+            "delegated run",
+          );
+          const identity: AgentRuntimeIdentity = {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: runSessionKey,
+            operationalRunInstance: admittedRunContext.operationalRunInstance,
+            delegatedAuthority: { ...delegated, kind: "local" },
+          };
+          const runtimeClient = {
+            ...client(participant.id, ["operator.sessions.read"]),
+            internal: { agentRuntimeIdentity: identity },
+          };
+          const authorize = (method: string, id?: string, who = runtimeClient) =>
+            authorizeParticipationExecApprovalMethod({
+              method,
+              params: { id, sessionKey: runSessionKey, runId: attempt.runId },
+              client: who,
+              manager: fixture.manager,
+            });
+          expect(captureActiveEmbeddedRunParticipation(identity)).toBeUndefined();
+          expect(authorize("exec.approval.request")).toBeUndefined();
+          await withPreparedEmbeddedRunToolAuthority(
+            { admittedRunContext },
+            {
+              ...attempt,
+              sessionId: runSessionId,
+              sessionKey: runSessionKey,
+              participationCeiling: ceiling,
+            },
+            undefined,
+            async (prepared) => {
+              const handle = createEmbeddedRunHandle({
+                runId: attempt.runId,
+                toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+              });
+              attachActiveEmbeddedRun(
+                runSessionId,
+                handle,
+                runSessionKey,
+                attempt.sessionFile,
+                "main",
+                prepared.replyOperation,
+              );
+              try {
+                const capture = expectDefined(
+                  captureActiveEmbeddedRunParticipation(identity),
+                  "host capture",
+                );
+                expect(capture.ceiling).toEqual(ceiling);
+                expect(() =>
+                  captureActiveEmbeddedRunParticipation({
+                    ...identity,
+                    delegatedAuthority: { ...identity.delegatedAuthority, claimId: "forged" },
+                  }),
+                ).toThrow();
+                expect(await prepareExecApprovalParticipation(identity, {})).toEqual(
+                  expectedBinding,
+                );
+                expect(authorize("exec.approval.request")).toBe(true);
+                expect(authorize("exec.approval.waitDecision", "missing")).toBeUndefined();
+                const handlers = createExecApprovalHandlers(fixture.manager);
+                const context = {
+                  ...createContext(),
+                  chatRunState: createChatRunState(),
+                  validateAgentRuntimeApprovalAuthority:
+                    createAgentRuntimeApprovalAuthorityValidator(),
+                };
+                const request = async (runtime: boolean) => {
+                  const params = {
+                    command: "echo proof",
+                    host: "gateway",
+                    timeoutMs: 60_000,
+                    twoPhase: true,
+                    agentId: "main",
+                    sessionKey: runSessionKey,
+                    runId: attempt.runId,
+                    security: "allowlist",
+                    ask: "always",
+                  };
+                  const opts: GatewayRequestHandlerOptions = {
+                    req: { type: "req", id: "request", method: "exec.approval.request", params },
+                    params,
+                    context,
+                    respond: vi.fn(),
+                    isWebchatConnect: () => false,
+                    client: runtime
+                      ? {
+                          ...client("runtime", ["operator.approvals"]),
+                          internal: { agentRuntimeIdentity: identity },
+                        }
+                      : client("ordinary", ["operator.approvals"]),
+                  };
+                  const { pending } = await waitForApprovalRequested(
+                    context,
+                    "exec.approval.requested",
+                    () => fixture.track(Promise.resolve(handlers["exec.approval.request"]!(opts))),
+                  );
+                  const record = expectDefined(
+                    (await fixture.manager.listPendingRecords())[0],
+                    "requested record",
+                  );
+                  expect(record.participation).toEqual(runtime ? expectedBinding : undefined);
+                  expect(authorize("exec.approval.waitDecision", record.id)).toBe(
+                    runtime ? true : undefined,
+                  );
+                  expect(
+                    authorize("exec.approval.waitDecision", record.id.slice(0, 8)),
+                  ).toBeUndefined();
+                  for (const method of [
+                    "exec.approval.get",
+                    "exec.approval.list",
+                    "plugin.approval.request",
+                  ]) {
+                    expect(authorize(method, record.id)).toBeUndefined();
+                  }
+                  if (runtime) {
+                    expect(authorize("exec.approval.resolve", record.id)).toBe(false);
+                    expect(authorize("approval.resolve", record.id)).toBe(false);
+                    const foreign = {
+                      ...runtimeClient,
+                      internal: {
+                        agentRuntimeIdentity: {
+                          ...identity,
+                          delegatedAuthority: { ...identity.delegatedAuthority, claimId: "forged" },
+                        },
+                      },
+                    };
+                    expect(() => authorize("exec.approval.request", undefined, foreign)).toThrow();
+                    expect(() =>
+                      authorize("exec.approval.waitDecision", record.id, foreign),
+                    ).toThrow();
+                    if (kind === "child") {
+                      for (const method of methods) {
+                        const invoke = (who: ReturnType<typeof client>) =>
+                          createApprovalInvocation({
+                            handlers: handlersFor(method, fixture),
+                            method,
+                            body: {
+                              id: record.id,
+                              ...(method === "approval.resolve" ? { kind: "exec" } : {}),
+                              decision: "allow-once",
+                            },
+                            client: who,
+                          }).invoke();
+                        const creator = client("creator", ["operator.read", "operator.write"]);
+                        expect(canResolveParticipationExecApproval(record, creator)).toBe(true);
+                        for (const who of [
+                          client(participant.id, ["operator.approvals"]),
+                          client("assignee", ["operator.approvals"]),
+                          client("admin", ["operator.admin"]),
+                        ]) {
+                          expect((await invoke(who)).ok).toBe(false);
+                          expect(record.resolvedAtMs).toBeUndefined();
+                        }
+                      }
+                      expect(
+                        (
+                          await createApprovalInvocation({
+                            handlers,
+                            method: "exec.approval.resolve",
+                            body: { id: record.id, decision: "allow-once" },
+                            client: client("creator", ["operator.read", "operator.write"]),
+                          }).invoke()
+                        ).ok,
+                      ).toBe(true);
+                    }
+                  }
+                  await fixture.manager.resolve(record.id, "deny", "cleanup");
+                  await pending;
+                };
+                await request(true);
+                await request(false);
+                detachActiveEmbeddedRun(runSessionId, handle, runSessionKey);
+                expect(() => capture.assertCurrent()).toThrow();
+                expect(captureActiveEmbeddedRunParticipation(identity)).toBeUndefined();
+                expect(authorize("exec.approval.request")).toBeUndefined();
+              } finally {
+                detachActiveEmbeddedRun(runSessionId, handle, runSessionKey);
+              }
+            },
+          );
+        });
+      }),
+    );
+  },
+);
 
 it("recognizes a merged creator without letting a merged participant self-approve", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {

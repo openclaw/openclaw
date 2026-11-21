@@ -1,5 +1,5 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
@@ -40,10 +40,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
-import {
-  prepareSessionPrincipalRunAuthority,
-  resolveSessionMutationAuthorizationAsync,
-} from "./session-sharing-authorization-async.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-principal-run-authority.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import * as sharingPreparation from "./session-sharing-preparation.js";
 // mock-isolation: Only model execution and the final child launch are synthetic.
 vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));

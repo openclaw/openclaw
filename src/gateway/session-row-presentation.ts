@@ -1,7 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
-import { intersectSessionPermissionModes } from "../agents/session-permission-exec-mode.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";

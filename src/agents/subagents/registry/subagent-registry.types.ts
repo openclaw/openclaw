@@ -154,6 +154,8 @@ type SubagentKillIntent = {
 };
 
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** Host-captured constraint retained independently of child-row deletion; never a grant. */
+  participationCeiling?: import("../../participation-ceiling.js").ParticipationCeiling;
   /** Host-captured SDK spawn provenance; absence never establishes plugin ownership. */
   nativePluginOwner?: {
     version: 1;

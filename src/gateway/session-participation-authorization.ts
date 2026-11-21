@@ -7,7 +7,7 @@ import {
   PARTICIPATION_TOOL_ALLOWLIST,
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
-import { intersectSessionPermissionModes } from "../agents/session-permission-exec-mode.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
 import { readQueuedParticipationProfile } from "./queued-chat-input-admission.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";

@@ -10,6 +10,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import type { DelegatedToolPolicyContext } from "./delegated-tool-policy.js";
 import type { ModelRef } from "./model-ref-shared.js";
+import type { ParticipationCeiling } from "./participation-ceiling.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
 export type SpawnedRunMetadata = {
@@ -35,6 +36,8 @@ export type SpawnedToolContext = DelegatedToolPolicyContext & {
   /** Prepared by tool-policy resolution so building the spawn schema reads no session store; unset uses session-key shape. */
   requesterIsSubagent?: boolean;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  /** Current host-admitted cap; model arguments cannot supply or replace it. */
+  participationCeiling?: ParticipationCeiling;
 };
 
 type NormalizedSpawnedRunMetadata = {

@@ -34,10 +34,13 @@ import {
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
 } from "../../internal-runtime-context.js";
+import { intersectParticipationCeilings } from "../../participation-ceiling.js";
 import {
   resolveCommandReplyExpectation,
   resolveCompletionInputReplyExpectation,
 } from "../../reply-completion.js";
+import { resolveSubagentCompletionParticipation } from "../registry/subagent-child-owner-match.js";
+import { getSubagentRunsForChildSession } from "../registry/subagent-registry-memory.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -130,6 +133,21 @@ async function sendSubagentAnnounceDirectlyBound(
     );
     const requesterEntry = requester.entry;
     const requesterAgentId = requester.agentId;
+    const completionKeys =
+      params.settleWakeSourceSessionKeys ??
+      (params.sourceSessionKey ? [params.sourceSessionKey] : []);
+    const ceilings = await Promise.all(
+      completionKeys.map(async (key) =>
+        resolveSubagentCompletionParticipation(
+          getSubagentRunsForChildSession(key, requesterAgentId),
+          (await loadRequesterSessionEntry(key, requesterAgentId)).entry,
+        ),
+      ),
+    );
+    if (ceilings.some(Boolean) && ceilings.some((ceiling) => !ceiling)) {
+      throw new Error("Participant completions require a separate requester turn.");
+    }
+    const participationCeiling = ceilings.reduce(intersectParticipationCeilings, undefined);
     const requesterSessionId = requesterEntry?.sessionId;
     const requesterLifecycleRevision = requesterEntry?.lifecycleRevision;
     const deliveryTarget =
@@ -259,7 +277,8 @@ async function sendSubagentAnnounceDirectlyBound(
       : requiresMessageToolDelivery
         ? "message_tool_only"
         : undefined;
-    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    const shouldDeliverAgentFinal =
+      !participationCeiling && deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
@@ -271,6 +290,7 @@ async function sendSubagentAnnounceDirectlyBound(
     // A public completion steers once into the requester's running turn. Ordinary
     // rejection leaves its input queued for the dispatch below.
     if (
+      !participationCeiling &&
       !parentOnly &&
       !params.requireDirectDelivery &&
       params.expectsCompletionMessage &&
@@ -435,6 +455,7 @@ async function sendSubagentAnnounceDirectlyBound(
         sessionId: boundRequesterSessionId,
         lifecycleRevision: requesterLifecycleRevision ?? null,
         runId: params.directIdempotencyKey,
+        participationCeiling,
       });
     }
     const classifyResponse = createDirectAnnounceResponseClassifier({
@@ -492,6 +513,7 @@ async function sendSubagentAnnounceDirectlyBound(
           params.isSourceSessionEffectsAllowed?.() !== false
             ? {
                 sourceSessionKey: params.sourceSessionKey,
+                participationCeiling,
                 ...(trustedCompletionEvent?.childSessionId
                   ? { sourceSessionId: trustedCompletionEvent.childSessionId }
                   : {}),

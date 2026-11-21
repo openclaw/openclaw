@@ -630,6 +630,7 @@ export function* assembleOpenClawCodingTools(
       (tool) =>
         (tool.name !== "message" || options?.disableMessageTool !== true) &&
         (!options?.participationCeiling ||
+          (options.swarmCollector && tool === swarmStructuredOutputTool) ||
           (participationToolAllowlist(options.participationCeiling).includes(tool.name) &&
             !getPluginToolMeta(tool))),
     ),

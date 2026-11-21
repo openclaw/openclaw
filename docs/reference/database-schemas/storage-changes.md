@@ -3285,6 +3285,49 @@ This version phase does not rewrite transcripts; the scoped restore leaves
 those canonical rows and other undeclared tables intact. It is not a general
 rollback for other migrations or external effects.
 
+## Participate child constraints within agent schema 44
+
+The maintainer-accepted Stage B design extends the existing private session-entry
+and subagent-run JSON payloads within the unreleased agent schema 44. It adds no
+table, database, index, dependency, backfill, or schema-version bump. Existing rows
+are not rewritten. Upgrade cost is normal lazy decoding plus the bounded source
+lookup for each new participant child turn or completion admission.
+
+The session entry owns a sticky child-only `participationCeiling`: the original
+invitation key and participant, source agent/incarnation/creator/root, and captured
+tool and permission limits. Reset and entry replacement preserve it. The original
+invited parent remains turn-local. Native spawn also captures that constraint in
+the existing host-owned subagent run record. This retained record and the private
+completion capability survive loss of the child row; they require a matching child
+envelope rather than interpreting absence as unrestricted owner work. Registry
+retirement follows existing completion/cleanup retention. Public session and
+subagent projections do not expose these private fields.
+
+Every new child turn, restart input, or completion re-admits the original principal
+against the current invitation and role, then intersects the stored limits. Removed
+or read-only membership refuses new work and cancels matching queued descendant
+inputs through the membership writer. No invitation epoch is stored: reinvitation
+may admit retained children under their original limits and the current grant.
+Collectors retain recorded outcomes after restart but do not regain execution or
+owner completion authority from those outcomes. Child exec approvals require the
+original creator; an unrelated administrator cannot approve them.
+
+**Same-version draft readers:** schema 44 is already used by development builds,
+including the maintainer's fsn1 rollout. Its version check cannot distinguish a
+draft reader that predates these fields. The accepted boundary is a coordinated
+upgrade of all same-version readers before enabling participant children, not an
+older-reader safety guarantee. Do not roll back to a same-version draft reader
+while these obligations remain; finish or discard them under the matching build
+and restore a pre-feature backup if a rollback is necessary. No live upgrade or
+rollback is performed by this source change. Older released schema readers keep
+their existing newer-schema refusal.
+
+Proof covers entry/reset persistence, registry serialization and restart custody,
+missing-child/envelope refusals, creator-only child approval, child-local process
+access, and authenticated Gateway native child/grandchild/private-completion flow.
+The Gateway test substitutes only provider HTTP replies; it is not live-model or
+older-draft downgrade proof.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,

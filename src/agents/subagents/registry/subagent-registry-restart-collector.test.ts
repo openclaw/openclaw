@@ -50,6 +50,19 @@ it.each(["crash", "shutdown"] as const)(
             : {}),
         }),
       );
+      entries[0]!.participationCeiling = {
+        kind: "send",
+        profileId: "participant",
+        sessionKey: "agent:main:main",
+        tools: ["read"],
+        source: {
+          agentId: "main",
+          sessionId: "source",
+          lifecycleRevision: null,
+          creatorProfileId: "creator",
+          root: "/synthetic/root",
+        },
+      };
       const restore = () =>
         createSubagentRegistryRestorer({
           runs: subagentRuns,
@@ -92,6 +105,17 @@ it.each(["crash", "shutdown"] as const)(
           pending: [],
         };
         expect((await waiting).details).toMatchObject(expected);
+        const restoredParticipant = subagentRuns.get("captured")!;
+        expect(restoredParticipant.participationCeiling).toEqual(entries[0]!.participationCeiling);
+        const ownerEffect = () => {
+          throw new Error("Owner fallback executed");
+        };
+        expect(() =>
+          subagentRuns.runWithCompletionAuthority(restoredParticipant, ownerEffect),
+        ).toThrow("Participant completion requires");
+        expect(() =>
+          subagentRuns.runWithCompletionBatchAuthority([restoredParticipant], ownerEffect),
+        ).toThrow("Participant completion requires");
         // A late waiter must read the durable result without a new completion event.
         expect((await tool.execute("late-wait", args, signal)).details).toMatchObject(expected);
         for (const entry of entries) {

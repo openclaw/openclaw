@@ -29,6 +29,7 @@ export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
   nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
+  participationCeiling?: SubagentRunRecord["participationCeiling"];
   subagentProfile?: SubagentRunRecord["subagentProfile"];
   childSessionKey: string;
   childAgentId: string;
@@ -86,6 +87,7 @@ export function createSubagentRegistrationRecord(
   return normalizeSubagentRunState({
     runId,
     taskRunId: runId,
+    participationCeiling: registerParams.participationCeiling,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
     ...(registerParams.nativePluginOwner
       ? { nativePluginOwner: { ...registerParams.nativePluginOwner } }

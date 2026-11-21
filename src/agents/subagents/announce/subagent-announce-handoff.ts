@@ -1,6 +1,7 @@
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { ParticipationCeiling } from "../../participation-ceiling.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 
 type SubagentSettleToolPolicyBatch = {
@@ -13,6 +14,7 @@ type SubagentSettleToolPolicyBatch = {
 export type TrustedSubagentCompletionHandoff = {
   kind: "subagent-completion";
   sourceSessionKey: string;
+  participationCeiling?: ParticipationCeiling;
   sourceSessionId?: string;
   targetSessionKey: string;
   targetSessionId: string;
@@ -23,6 +25,7 @@ export type TrustedSubagentCompletionHandoff = {
 
 export type SubagentCompletionToolHandoffRegistration = {
   sourceSessionKey: string;
+  participationCeiling?: ParticipationCeiling;
   sourceSessionId?: string;
   targetSessionKey: string;
   targetSessionId: string;

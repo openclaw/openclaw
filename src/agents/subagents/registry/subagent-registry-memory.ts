@@ -20,6 +20,7 @@ import {
   isSubagentCancellationNotice,
   runWithSubagentCompletionBatchAuthority,
   selectCompletionAuthorityBatch,
+  assertParticipationCompletionCustody,
 } from "./subagent-completion-batch-authority.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
@@ -291,6 +292,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
     source.assertCurrent();
+    assertParticipationCompletionCustody(entry, source);
     if (
       this.retiredCompletionEntries.has(key) &&
       !isSameSubagentRunOwner(this.get(entry.runId), entry)
@@ -371,6 +373,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const entry = this.currentValue(observed);
     this.assertCompletionEntryCurrent(entry);
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    assertParticipationCompletionCustody(entry, custody?.authority);
     // Keep the requester's retained authority after child cancellation. Only a notice
     // without that custody uses its independently admitted cancellation caller.
     if (!custody && isSubagentCancellationNotice(entry)) {

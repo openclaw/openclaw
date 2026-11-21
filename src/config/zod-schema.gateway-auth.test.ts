@@ -353,7 +353,7 @@ test("validates invited tools as exact core names only with an invitation ceilin
   for (const invitedTools of [
     [],
     ["read"],
-    ["read", "web_fetch", "exec"],
+    ["read", "web_fetch", "exec", "sessions_spawn"],
     ["tool_search", "tool_describe", "dispatch_action"],
     [" read ", "read"],
   ]) {
@@ -381,7 +381,6 @@ test("validates invited tools as exact core names only with an invitation ceilin
       "conversations_send",
       "conversations_turn",
       "sessions_send",
-      "sessions_spawn",
       "sessions_list",
       "sessions",
       "secrets",

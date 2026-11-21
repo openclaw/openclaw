@@ -4,7 +4,10 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { restoreOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
+import {
+  intersectOperatorModelPolicy,
+  restoreOperatorModelPolicySnapshot,
+} from "../agents/operator-model-policy.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
@@ -55,7 +58,6 @@ import {
 import {
   captureChannelOperatorRunAuthority,
   captureGatewayOperatorRunAuthority,
-  intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
 import { retainGatewayOperatorInvocation } from "./operator-run-invocation.js";
 import {
@@ -406,7 +408,7 @@ async function restoreGatewayOperatorSnapshot(params: {
         references += 1;
         return releaseHold();
       },
-      modelPolicy: intersectOperatorRunModelPolicy(originalModels, live.modelPolicy),
+      modelPolicy: intersectOperatorModelPolicy(originalModels, live.modelPolicy),
       onModelPolicyChanged: undefined,
     });
     authority.assertCurrent();
@@ -574,7 +576,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
         }
       },
       get modelPolicy() {
-        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
+        return intersectOperatorModelPolicy(originalModels, live.modelPolicy);
       },
     });
     authority.assertCurrent();
@@ -586,7 +588,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
 }
 
 /** Accepted work runs on its origin's saved facts and current policy, not its accepting request. */
-export async function captureGatewayOperatorContinuation(
+async function captureGatewayOperatorContinuationSource(
   input: Parameters<typeof captureGatewayOperatorRunAuthority>[0],
 ): ReturnType<typeof captureGatewayOperatorRunAuthority> {
   const inherited = input.client?.internal?.operatorRunAuthority;
@@ -643,4 +645,43 @@ export async function captureGatewayOperatorContinuation(
     },
     input.invocationAuthority,
   );
+}
+
+/** Re-admit a descendant's invitation independently of the ended spawning request. */
+export async function captureGatewayOperatorContinuation(
+  input: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
+    participationCeiling?: import("../agents/participation-ceiling.js").ParticipationCeiling;
+  },
+): ReturnType<typeof captureGatewayOperatorRunAuthority> {
+  const captured = await captureGatewayOperatorContinuationSource(input);
+  const ceiling =
+    input.participationCeiling ??
+    input.client?.internal?.operatorRunAuthority?.participationCeiling;
+  if (!captured || !ceiling?.source) {
+    return captured;
+  }
+  try {
+    const { prepareSessionParticipationRun } = await import("./session-principal-run-authority.js");
+    const context = input.context.resolveGatewayContext?.();
+    if (!context) {
+      throw new Error("Participant continuation requires its original Gateway.");
+    }
+    const participant = await prepareSessionParticipationRun({
+      context,
+      agentId: ceiling.source.agentId,
+      turnCeiling: ceiling,
+    });
+    if (!participant) {
+      throw new Error("Participant continuation requires current source authority.");
+    }
+    return retainGatewayOperatorInvocation(captured, {
+      participationAuthority: participant.authority,
+      assertCurrent: participant.authority.assertCurrent,
+      signal: participant.authority.signal,
+      release: participant.release,
+    });
+  } catch (error) {
+    captured.release();
+    throw error;
+  }
 }

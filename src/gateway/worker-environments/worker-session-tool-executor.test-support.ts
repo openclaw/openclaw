@@ -214,7 +214,7 @@ type WorkerSessionToolTestOptions = {
   collectExecutionIdentity?: boolean;
   operatorProfileId?: string;
   operatorScopes?: readonly string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "participant";
   delegatedToolPolicyActive?: boolean;
 };
 

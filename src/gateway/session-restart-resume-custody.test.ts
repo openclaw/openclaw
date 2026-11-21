@@ -16,113 +16,146 @@ import { createContext } from "./server-plugin-in-process-dispatch.test-support.
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import { prepareRestartStores } from "./session-restart-resume-discovery.js";
 
-it.each(["completed", "interrupted"] as const)(
-  "delivers a restored %s child's owed notice after its requester settled",
-  (state) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      const person = ensureGatewayOwnerProfile("Restart custody owner");
-      const target = {
-        agentId: "main",
-        physicalAgentId: "main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      const sessionKey = "agent:main:dashboard:settled-requester";
-      const entry = {
-        sessionId: "settled-requester",
-        lifecycleRevision: "original-revision",
-        updatedAt: 1,
-        createdActor: { type: "human" as const, source: "profile" as const, id: person.id },
-      };
-      replaceSessionEntrySync({ ...target, sessionKey }, entry);
-      const child = createSubagentRunRecord({
-        runId: "owed-completion",
-        childSessionKey: "agent:main:subagent:finished-child",
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        requesterStorePath: target.storePath,
-        completionRequesterSessionId: entry.sessionId,
-        completionRequesterLifecycleRevision: entry.lifecycleRevision,
-        expectsCompletionMessage: true,
-        spawnMode: "session",
-        completionTarget: "parent",
-        ...(state === "completed"
-          ? { endedAt: 1, delivery: { status: "pending" as const } }
-          : {
-              createdAt: Math.floor(performance.timeOrigin) - 10_000,
-              startedAt: Math.floor(performance.timeOrigin) - 9_000,
-            }),
+it.each([
+  "completed",
+  "interrupted",
+  "participant-missing",
+  "participant-envelope-missing",
+] as const)("delivers a restored %s child's owed notice after its requester settled", (state) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const person = ensureGatewayOwnerProfile("Restart custody owner");
+    const target = {
+      agentId: "main",
+      physicalAgentId: "main",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const sessionKey = "agent:main:dashboard:settled-requester";
+    const entry = {
+      sessionId: "settled-requester",
+      lifecycleRevision: "original-revision",
+      updatedAt: 1,
+      createdActor: { type: "human" as const, source: "profile" as const, id: person.id },
+    };
+    replaceSessionEntrySync({ ...target, sessionKey }, entry);
+    const child = createSubagentRunRecord({
+      runId: "owed-completion",
+      childSessionKey: "agent:main:subagent:finished-child",
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterStorePath: target.storePath,
+      completionRequesterSessionId: entry.sessionId,
+      completionRequesterLifecycleRevision: entry.lifecycleRevision,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+      completionTarget: "parent",
+      ...(state !== "interrupted"
+        ? { endedAt: 1, delivery: { status: "pending" as const } }
+        : {
+            createdAt: Math.floor(performance.timeOrigin) - 10_000,
+            startedAt: Math.floor(performance.timeOrigin) - 9_000,
+          }),
+    });
+    const participant = state.startsWith("participant-");
+    if (participant) {
+      Object.assign(child, {
+        participationCeiling: {
+          kind: "send",
+          profileId: "participant",
+          sessionKey,
+          tools: ["read"],
+          source: {
+            agentId: "main",
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            creatorProfileId: person.id,
+            root: "/synthetic/root",
+          },
+        },
       });
-      subagentRuns.set(child.runId, child);
-      subagentRuns.retireCompletionAuthority(child);
-      try {
-        const params = {
-          context: createContext(),
-          signal: new AbortController().signal,
-          log: { warn: vi.fn() },
-        };
-        params.context.resolveGatewayContext = () => params.context;
-        const recover = async () => {
-          const stores = await prepareRestartStores(params, [target]);
-          expect(stores?.[0]?.entries.map((row) => row.sessionKey)).toContain(sessionKey);
-          await prepareRestartCompletionCustody(params, stores![0]!);
-          expect(params.log.warn).not.toHaveBeenCalled();
-        };
-        const received: string[] = [];
-        if (state === "interrupted") {
-          const controller = createLifecycleControllerFixture(
-            {
-              entry: child,
-              runs: subagentRuns,
-              realWorker: true,
-              runSubagentAnnounceFlow: async (notice) => {
-                expect(
-                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
-                    ?.profileId,
-                ).toBe(person.id);
-                if (notice.outcome?.status !== "error") {
-                  throw new Error("Missing interrupted outcome");
-                }
-                received.push(notice.outcome.error!);
-                return "delivered";
-              },
-            },
-            {
-              callGateway: vi.fn(),
-              cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-              ownersByEntry: new Map(),
-            },
-          );
-          saveSubagentRegistryChangesToSqlite(subagentRuns, [child.runId]);
-          const settle = async () => {
-            const drain = observeRootWork();
-            try {
-              return await settleRestartInterruptedSubagentRun({
-                runId: child.runId,
-                entry: subagentRuns.get(child.runId)!,
-                complete: controller.completeSubagentRun,
-                now: Date.now(),
-              });
-            } finally {
-              await drain();
-            }
-          };
-          const premature = await settle();
-          await recover();
-          await settle();
-          expect(received).toEqual([
-            "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.",
-          ]);
-          expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
-          expect(premature).toBe(false);
-        } else {
-          await recover();
-          expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(false);
-        }
-      } finally {
-        subagentRuns.delete(child.runId);
+      if (state === "participant-envelope-missing") {
+        replaceSessionEntrySync(
+          { ...target, sessionKey: child.childSessionKey },
+          { sessionId: "child", updatedAt: 1 },
+        );
       }
-    }),
+    }
+    subagentRuns.set(child.runId, child);
+    subagentRuns.retireCompletionAuthority(child);
+    try {
+      const params = {
+        context: createContext(),
+        signal: new AbortController().signal,
+        log: { warn: vi.fn() },
+      };
+      params.context.resolveGatewayContext = () => params.context;
+      const recover = async () => {
+        const stores = await prepareRestartStores(params, [target]);
+        expect(stores?.[0]?.entries.map((row) => row.sessionKey)).toContain(sessionKey);
+        await prepareRestartCompletionCustody(params, stores![0]!);
+        if (participant) {
+          expect(params.log.warn).toHaveBeenCalledWith(
+            expect.stringContaining("Participant child authority is missing"),
+          );
+        } else {
+          expect(params.log.warn).not.toHaveBeenCalled();
+        }
+      };
+      const received: string[] = [];
+      if (state === "interrupted") {
+        const controller = createLifecycleControllerFixture(
+          {
+            entry: child,
+            runs: subagentRuns,
+            realWorker: true,
+            runSubagentAnnounceFlow: async (notice) => {
+              expect(
+                getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
+                  ?.profileId,
+              ).toBe(person.id);
+              if (notice.outcome?.status !== "error") {
+                throw new Error("Missing interrupted outcome");
+              }
+              received.push(notice.outcome.error!);
+              return "delivered";
+            },
+          },
+          {
+            callGateway: vi.fn(),
+            cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+            ownersByEntry: new Map(),
+          },
+        );
+        saveSubagentRegistryChangesToSqlite(subagentRuns, [child.runId]);
+        const settle = async () => {
+          const drain = observeRootWork();
+          try {
+            return await settleRestartInterruptedSubagentRun({
+              runId: child.runId,
+              entry: subagentRuns.get(child.runId)!,
+              complete: controller.completeSubagentRun,
+              now: Date.now(),
+            });
+          } finally {
+            await drain();
+          }
+        };
+        const premature = await settle();
+        await recover();
+        await settle();
+        expect(received).toEqual([
+          "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.",
+        ]);
+        expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
+        expect(premature).toBe(false);
+      } else {
+        await recover();
+        expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(participant);
+      }
+    } finally {
+      subagentRuns.delete(child.runId);
+    }
+  }),
 );
 
 it.for(["archived", "replaced", "reset"] as const)(
