@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { resolveReloginProfileIdentity } from "./auth-relogin-identity.js";
+import { isAuthProfileReconnect, resolveReloginProfileIdentity } from "./auth-relogin-identity.js";
 
 const credential = (accountId: string): AuthProfileCredential => ({
   type: "oauth",
@@ -17,6 +17,19 @@ const matchesPersonalAccount = (incoming: AuthProfileCredential, existing: AuthP
   incoming.accountId === existing.accountId;
 
 describe("re-login identity boundaries", () => {
+  it("requires literal credential continuity to keep a static account name", () => {
+    const base = { provider: "fixture" };
+    const key = { ...base, type: "api_key" as const, key: "fixture-a" };
+    const token = { ...base, type: "token" as const, token: "fixture-a" };
+    const keyRef = { source: "env" as const, provider: "default", id: "FIXTURE_KEY" };
+    const referenced = { ...base, type: "api_key" as const, keyRef };
+    expect(isAuthProfileReconnect(key, key, {})).toBe(true);
+    expect(isAuthProfileReconnect({ ...key, key: "fixture-b" }, key, {})).toBe(false);
+    expect(isAuthProfileReconnect(token, token, {})).toBe(true);
+    expect(isAuthProfileReconnect({ ...token, token: "fixture-b" }, token, {})).toBe(false);
+    expect(isAuthProfileReconnect(referenced, referenced, {})).toBe(false);
+  });
+
   it.each<
     Partial<Parameters<typeof resolveReloginProfileIdentity>[0]> & {
       name: string;

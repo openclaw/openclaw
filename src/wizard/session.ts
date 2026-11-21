@@ -65,8 +65,8 @@ function normalizeTextAnswer(value: unknown): string | undefined {
 
 /** Own enumerable, closure-bound methods survive the runtime installer's note adapter. */
 function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
-  async function prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
-    return await session.awaitAnswer(createStep(step));
+  async function prompt(step: Omit<WizardStep, "id">, optional?: boolean): Promise<unknown> {
+    return await session.awaitAnswer(createStep(step), undefined, undefined, optional);
   }
 
   function createStep(step: Omit<WizardStep, "id">): WizardStep {
@@ -88,6 +88,23 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       message,
       executor: "client",
     });
+  }
+
+  async function text(params: Parameters<WizardPrompter["text"]>[0], optional = false) {
+    const answer = await session.awaitAnswer(
+      createStep({
+        type: "text",
+        message: params.message,
+        initialValue: params.initialValue,
+        placeholder: params.placeholder,
+        sensitive: params.sensitive,
+        executor: "client",
+      }),
+      params.validate,
+      params.signal,
+      optional,
+    );
+    return normalizeTextAnswer(answer) ?? "";
   }
 
   return {
@@ -121,13 +138,11 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       });
     },
 
-    async plain(message: string): Promise<void> {
-      await prompt({
-        type: "note",
-        message,
-        format: "plain",
-        executor: "client",
-      });
+    async plain(message, options): Promise<void> {
+      await prompt(
+        { type: "note", message, format: "plain", executor: "client" },
+        options?.optional,
+      );
     },
 
     async select<T>(params: WizardSelectParams<T>): Promise<T> {
@@ -160,21 +175,8 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       return (Array.isArray(res) ? res : []) as T[];
     },
 
-    async text(params: Parameters<WizardPrompter["text"]>[0]): Promise<string> {
-      const res = await session.awaitAnswer(
-        createStep({
-          type: "text",
-          message: params.message,
-          initialValue: params.initialValue,
-          placeholder: params.placeholder,
-          sensitive: params.sensitive,
-          executor: "client",
-        }),
-        params.validate,
-        params.signal,
-      );
-      return normalizeTextAnswer(res) ?? "";
-    },
+    text,
+    optionalText: (params) => text(params, true),
 
     async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
       const res = await prompt({
@@ -235,6 +237,7 @@ export class WizardSession {
     {
       deferred: Deferred<unknown>;
       text: boolean;
+      optional: boolean;
       validate?: (value: string) => string | undefined;
     }
   >();
@@ -362,6 +365,11 @@ export class WizardSession {
   }
 
   cancel(): boolean {
+    if (this.currentStep && this.answerDeferred.get(this.currentStep.id)?.optional) {
+      // A cosmetic follow-up can be dismissed without cancelling the saved operation.
+      this.rejectPendingAnswers();
+      return false;
+    }
     if (
       this.status !== "running" ||
       this.cancellationLocked ||
@@ -566,6 +574,7 @@ export class WizardSession {
     step: WizardStep,
     validate?: (value: string) => string | undefined,
     signal?: AbortSignal,
+    optional = false,
   ): Promise<unknown> {
     if (this.status !== "running") {
       throw new Error("wizard: session not running");
@@ -583,7 +592,7 @@ export class WizardSession {
       this.finishPreparation();
     }
     const deferred = createDeferredCore<unknown>();
-    this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
+    this.answerDeferred.set(step.id, { deferred, text: step.type === "text", optional, validate });
     const abort = () => {
       this.answerDeferred.delete(step.id);
       if (this.currentStep?.id === step.id) {

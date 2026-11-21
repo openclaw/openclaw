@@ -72,10 +72,13 @@ export type WizardPrompter = {
   note: (message: string, title?: string) => Promise<void>;
   /** Present a browser device code as structured UI when the client supports it. */
   deviceCode?: (params: WizardDeviceCodeParams) => Promise<void>;
-  plain?: (message: string) => Promise<void>;
+  /** Present plain text; optional notices can be dismissed without cancelling the operation. */
+  plain?: (message: string, options?: { optional?: boolean }) => Promise<void>;
   select: <T>(params: WizardSelectParams<T>) => Promise<T>;
   multiselect: <T>(params: WizardMultiSelectParams<T>) => Promise<T[]>;
   text: (params: WizardTextParams) => Promise<string>;
+  /** Present nonessential text input without requiring it to complete the operation. */
+  optionalText?: (params: WizardTextParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
   /** Queue an explicit browser destination for the next client step or browser-wait progress. */
