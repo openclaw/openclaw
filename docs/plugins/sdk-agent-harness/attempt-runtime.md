@@ -271,6 +271,13 @@ records an already-confirmed messaging delivery, and
 Callers retain their native receipt, routing, cancellation, and result-encoding
 contracts; these helpers do not establish delivery or grant execution authority.
 
+Caller-owned functions (`clientTools` from `/v1/responses` and
+`/v1/chat/completions`) come from `createAgentHarnessClientTools`. It applies the
+attempt's `toolsAllow`, rejects names that collide with the harness's other tools
+with the same conflict error as the built-in runtime, and returns tools to expose
+with the harness's own tools. A call is recorded, not executed, and its result
+ends the turn; return the recorded `calls` as the attempt's `clientToolCalls`.
+
 ## Workspace-staged attachments
 
 Admitted attachment facts can refer to files staged under the prepared workspace
