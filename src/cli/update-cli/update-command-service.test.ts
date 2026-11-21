@@ -7,7 +7,7 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
-import { gitReleaseSlot } from "../../infra/git-release-paths.js";
+import { gitReleaseForwardingEntry, gitReleaseSlot } from "../../infra/git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
@@ -910,7 +910,7 @@ describe("maybeRestartService", () => {
     expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
   });
 
-  it.for(["checkout", "launcher", "stage-failed"] as const)(
+  it.for(["checkout", "npm-fallback", "launcher", "stage-failed"] as const)(
     "stages the release launcher without restarting when --no-restart leaves the service on the %s",
     async (serviceStarts, { onTestFinished }) => {
       const home = await fs.realpath(tempDirs.make("update-git-no-restart-"));
@@ -926,6 +926,15 @@ describe("maybeRestartService", () => {
         await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
       }
       await publishGitRelease({ prefix, releaseRoot, trial: true, pending: true });
+      if (serviceStarts === "npm-fallback") {
+        // A deferred npm-to-Git switch: the link still names the npm package the service starts.
+        await fs.rm(gitReleaseSlot(prefix));
+        await fs.symlink(checkout, gitReleaseSlot(prefix));
+        await fs.writeFile(
+          path.join(checkout, "openclaw.mjs"),
+          gitReleaseForwardingEntry(path.join(prefix, "openclaw-launcher.mjs")),
+        );
+      }
       const entry =
         serviceStarts === "launcher"
           ? path.join(prefix, "openclaw-launcher.mjs")

@@ -91,9 +91,16 @@ export function servingGitReleaseSlot(prefix: string): string {
 /** The release link's prefix when `entrypoint` starts through it, for the launcher. */
 export function resolveGitReleaseLauncherForEntrypoint(entrypoint: string): string | null {
   const packagePath = path.dirname(path.dirname(path.resolve(entrypoint)));
-  const slot =
-    path.basename(packagePath) === "openclaw" ? readPackageReleaseSlotSync(packagePath) : null;
-  return slot ? path.join(slot.prefix, GIT_RELEASE_LAUNCHER) : null;
+  if (path.basename(packagePath) !== "openclaw") {
+    return null;
+  }
+  const prefix =
+    readPackageReleaseSlotSync(packagePath)?.prefix ??
+    // The link can name the npm package a switch keeps as its fallback.
+    (isGitReleaseForwardingPackage(packagePath, path.dirname(packagePath))
+      ? path.dirname(packagePath)
+      : null);
+  return prefix ? path.join(prefix, GIT_RELEASE_LAUNCHER) : null;
 }
 
 /** The launcher's release entry, so service ownership reads the release it starts. */

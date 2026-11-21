@@ -450,10 +450,9 @@ export async function maybeRestartService(
         );
       }
     }
-    // Rebind the next start without activating it or replacing the serving checkout's files.
-    const pendingRelease =
-      activation.result.mode === "git" && readPackageReleaseSlotSync(activation.result.root ?? "");
-    if (pendingRelease && (await serviceUsesUpdatedRoot()) === false) {
+    // Rebind the next start to the launcher without activating it. Staging skips a service
+    // that already names the launcher; the link can name the npm package a switch keeps.
+    if (activation.result.mode === "git" && (await serviceUsesUpdatedRoot()) !== null) {
       await stageUpdatedInstallGatewayService(activation, preserveDefinition);
     }
     return "ok";

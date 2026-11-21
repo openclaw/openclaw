@@ -1,3 +1,4 @@
+import path from "node:path";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -17,6 +18,7 @@ import {
 import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-authority.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -76,11 +78,15 @@ export async function stageUpdatedInstallGatewayService(
 ): Promise<void> {
   const { assertCurrent, onWarnings } = params;
   try {
+    const service = resolveGatewayService();
+    const command = await service.readCommand(params.serviceEnv, { requireEffective: true });
+    // A definition that names the launcher already starts the release the link selects.
+    if (command?.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER)) {
+      return;
+    }
     if (preserveDefinition || params.serviceInstallEnv === null) {
       throw new Error("The managed service definition cannot be rewritten.");
     }
-    const service = resolveGatewayService();
-    const command = await service.readCommand(params.serviceEnv, { requireEffective: true });
     const managed = resolveManagedGatewayServiceCommand(command);
     if (!managed) {
       throw new Error("The managed service command is unavailable.");
