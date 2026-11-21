@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.i18n.nativeText
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -41,7 +42,7 @@ class CronRuntimeGuardTest {
     assertEquals(
       GatewayCronActionState.Notice(
         id = "job-1",
-        message = "Cron changes require operator.admin access.",
+        message = nativeText("Cron changes require operator.admin access."),
         kind = GatewayCronNoticeKind.Error,
       ),
       runtime.cronActionState.value,
@@ -68,7 +69,7 @@ class CronRuntimeGuardTest {
         assertEquals(
           GatewayCronActionState.Notice(
             id = "job-1",
-            message = "Another cron action is still finishing.",
+            message = nativeText("Another cron action is still finishing."),
             kind = GatewayCronNoticeKind.Warning,
           ),
           runtime.cronActionState.value,
@@ -106,7 +107,7 @@ class CronRuntimeGuardTest {
     val notice =
       GatewayCronActionState.Notice(
         id = "job-a",
-        message = "Automation updated.",
+        message = nativeText("Automation updated."),
         kind = GatewayCronNoticeKind.Success,
       )
     actionState.value = notice
