@@ -3068,7 +3068,6 @@
 ["src/cli/update-cli/update-command-service-maintenance-native.test-support.ts","./update-command-node-runtime.js","bfd1f835407c6cb4525b16c6373a1f2d56ef4f6ec05ef4ef855cc744297ab317",1]
 ["src/cli/update-cli/update-command-service-maintenance-native.test-support.ts","./update-command-original-service.js","556173eea5d1e62bea20884150aeb9e70719853a0c2e338fb96f5fcd8598fe5e",1]
 ["src/cli/update-cli/update-command-service-maintenance-native.test-support.ts","./update-command-package.js","e92a3bef666f6d2df8296a6bf687d62c77db97a7587a2deead38b29bd81c9f13",1]
-["src/cli/update-cli/update-command-service-maintenance-native.test-support.ts","./update-command-schema.js","8a6ee418a402aee1d1dc6e395321c00e2f8f748d379bba74408c37503464f79c",1]
 ["src/cli/update-cli/update-command-service-maintenance-native.test-support.ts","./update-command-target.js","207422d87ecaa6f89fd1fdae944937417172789f00a3cd0a88c4928fcb23f190",1]
 ["src/cli/update-cli/update-command-service-maintenance-native.test-support.ts","./update-command-triage.js","73dde07fe923864d192221a74adcce98d421d95575339da01704a4d9cd9e58b2",1]
 ["src/cli/update-cli/update-command-service-maintenance-native.test-support.ts","./update-command-unwind.js","f8fc6b651be308cae3fb0cc1b3d9ff154f9e57c5df43e786369e99d222746592",1]
