@@ -130,7 +130,7 @@ it("keeps a removed job in the group without actions and reconciles later visibi
   await waitForSolid(() => {
     expect(card.getAllByRole("switch")).toHaveLength(1);
     expect(card.queryByRole("link", { name: /Alpha/ })).toBeNull();
-    expect(card.getByRole("status").textContent).toContain("Removed from your automations");
+    expect(card.getByText("Removed", { exact: true })).toBeDefined();
     expect(card.queryByRole("button")).toBeNull();
   });
   jobs.set(alpha.id, alpha);
