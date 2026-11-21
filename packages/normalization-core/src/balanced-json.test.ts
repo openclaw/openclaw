@@ -560,6 +560,92 @@ describe("balanced JSON extraction", () => {
   });
 
   it.each(["\n", "\r\n", "\r"])(
+    "retires candidate selection with its owner and keeps suffix admission stable (%j)",
+    (newline) => {
+      const kept = '{"kept":1}';
+      const cases = [
+        { prefix: "warning: [expected {]", openers: ["{", "["] as const, emitted: [] },
+        { prefix: "warning: {expected [}", openers: ["{", "["] as const, emitted: [] },
+        {
+          prefix: `warning: [${newline}${kept}${newline}{]`,
+          openers: ["{", "["] as const,
+          emitted: [kept],
+        },
+        { prefix: '{"items":[}', openers: ["{"] as const, emitted: ['{"items":[}'] },
+        { prefix: '[{"items":]', openers: ["["] as const, emitted: ['[{"items":]'] },
+      ];
+      for (const { prefix, openers, emitted } of cases) {
+        const records = openers.some((opener) => opener === "{")
+          ? ['{"first":1}', '{"second":2}']
+          : ["[1]", "[2]"];
+        for (const stray of ["", "}", "]", "}]", "]}", "}]".repeat(128)]) {
+          for (const separator of [newline, " result: "]) {
+            const raw = `${prefix}${stray}${separator}${records.join(" ")}`;
+            expect(
+              extractBalancedJsonFragments(raw, { recoverAtLineStart: true, openers }),
+              raw,
+            ).toEqual(fragmentsAt(raw, [...emitted, ...records]));
+          }
+        }
+      }
+    },
+  );
+
+  it("preserves completed children until an eligible, undamaged parent replaces them", () => {
+    const child = '{"kept":1}';
+    const next = '{"next":2}';
+    const cases = [
+      { prefix: "[warning\n", suffix: "\n]", emitted: [`[warning\n${child}\n]`] },
+      { prefix: "[warning\n", suffix: "\n{]", emitted: [child] },
+      { prefix: "[warning\n", suffix: '\n"unfinished\n]', emitted: [child] },
+      { prefix: "[warning\ndetails: [\n", suffix: "\n]", emitted: [child] },
+      { prefix: "[warning\n", suffix: "", emitted: [child] },
+    ];
+    for (const { prefix, suffix, emitted } of cases) {
+      const raw = `${prefix}${child}${suffix}\n${next}`;
+      expect(extractBalancedJsonFragments(raw, { recoverAtLineStart: true }), raw).toEqual(
+        fragmentsAt(raw, [...emitted, next]),
+      );
+    }
+  });
+
+  it("copies only finally selected spans and retires each original owner at most once", () => {
+    const depth = 2048;
+    const nested = "[\n".repeat(depth) + '{"leaf":true}' + "\n]".repeat(depth);
+    for (const damaged of [false, true]) {
+      const raw = damaged ? `[warning\n${nested}\n{]${"}]".repeat(depth)}` : nested;
+      const pop = Array.prototype.pop;
+      const slice = String.prototype.slice;
+      let pops = 0;
+      let sourceCopies = 0;
+      let copiedUnits = 0;
+      let result: ReturnType<typeof extractBalancedJsonFragments>;
+      Array.prototype.pop = function (this: unknown[]) {
+        pops++;
+        return Reflect.apply(pop, this, []);
+      };
+      String.prototype.slice = function (this: string, start, end) {
+        const value = Reflect.apply(slice, this, [start, end]);
+        if (String(this) === raw) {
+          sourceCopies++;
+          copiedUnits += value.length;
+        }
+        return value;
+      };
+      try {
+        result = extractBalancedJsonFragments(raw, { recoverAtLineStart: true });
+      } finally {
+        Array.prototype.pop = pop;
+        String.prototype.slice = slice;
+      }
+      expect(result).toEqual(fragmentsAt(raw, [nested]));
+      expect(pops).toBeLessThanOrEqual(depth + 3);
+      expect(sourceCopies).toBe(1);
+      expect(copiedUnits).toBe(nested.length);
+    }
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
     "uses the same recovery boundary for completed records and invalid strings (%j)",
     (newline) => {
       const child = '{"ok":true}';
