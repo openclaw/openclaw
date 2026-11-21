@@ -225,6 +225,7 @@ declare module "@solidjs/web" {
           "prop:agentId"?: ContributionsElement["agentId"];
           "prop:navigationMenus"?: ContributionsElement["navigationMenus"];
           "prop:composer"?: ContributionsElement["composer"];
+          "prop:bindActionMenu"?: ContributionsElement["bindActionMenu"];
         };
     }
   }
