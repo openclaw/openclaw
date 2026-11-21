@@ -318,7 +318,12 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 backHref={pathForRoute("templates", view().basePath)}
                 backLabel={t("tabs.templates")}
                 onBack={view().onBack}
-                icon={<TemplateArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
+                icon={
+                  <TemplateArtwork
+                    src={detail() ? detail()?.iconUrl : selected().iconUrl}
+                    packageName={selected().packageName}
+                  />
+                }
                 rail
                 identity={renderPublisherIdentity({
                   // The handle names the publisher; a display name only when it says more.
