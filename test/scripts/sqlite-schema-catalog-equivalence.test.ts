@@ -14,6 +14,7 @@ import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
 import { getOpenClawAgentMigrationSchema } from "../../src/state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
+import { withLegacySkillSelectionCompanionAbsent } from "../../src/state/openclaw-state-db-schema-skill-selection.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import { withLegacyApprovalProfile } from "../../src/state/openclaw-state-db-schema-v41-approval-profile.js";
@@ -135,7 +136,9 @@ describe("generated SQLite schema catalogs", () => {
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
       const predecessor = withLegacyWorkerProvisionSource(
-        withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL),
+        withLegacySkillSelectionCompanionAbsent(
+          withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL),
+        ),
       );
       const historical = flags
         ? getOpenClawStateRuntimeSchema(
@@ -156,7 +159,11 @@ describe("generated SQLite schema catalogs", () => {
     const historical = getOpenClawStateRuntimeSchema(
       options,
       withLegacyWorkspaceBootstrapDeferred(
-        withLegacyWorkerProvisionSource(withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL)),
+        withLegacyWorkerProvisionSource(
+          withLegacySkillSelectionCompanionAbsent(
+            withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL),
+          ),
+        ),
       ),
     );
     expect(createHash("sha256").update(historical).digest("hex")).toBe(
