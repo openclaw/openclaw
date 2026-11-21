@@ -199,6 +199,54 @@ it("records quote text in pending history for skipped quote-only group messages"
 });
 
 it.each([
+  { name: "bot UUID", authorUuid: "bot-uuid", dispatched: true },
+  { name: "bot phone", authorNumber: "+15550002222", dispatched: true },
+  { name: "legacy bot phone", author: "+15550002222", dispatched: true },
+  { name: "another author", authorUuid: "other-user", dispatched: false },
+  {
+    name: "disabled quote activation",
+    authorUuid: "bot-uuid",
+    quotedBot: false,
+    dispatched: false,
+  },
+  { name: "denied sender", authorUuid: "bot-uuid", senderAllowed: false, dispatched: false },
+])("applies Signal quote activation rules: $name", async (testCase) => {
+  const groupAllowFrom = testCase.senderAllowed === false ? ["+15550003333"] : ["group:g1"];
+  const handler = createMentionHandler({
+    account: "+15550002222",
+    accountUuid: "bot-uuid",
+    groupPolicy: "allowlist",
+    groupAllowFrom,
+    cfg: {
+      messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: [] } },
+      channels: {
+        defaults: { implicitMentions: { quotedBot: testCase.quotedBot } },
+        signal: {
+          groups: { g1: { requireMention: true } },
+          groupPolicy: "allowlist",
+          groupAllowFrom,
+        },
+      },
+    },
+  });
+  await handler(
+    groupEvent("A follow-up", {
+      quote: {
+        author: testCase.author,
+        authorNumber: testCase.authorNumber,
+        authorUuid: testCase.authorUuid,
+        text: "Earlier answer",
+      },
+    }),
+  );
+  if (testCase.dispatched) {
+    expect(getCapturedCtx()).toMatchObject({ WasMentioned: true, ReplyToBody: "Earlier answer" });
+  } else {
+    expect(capturedCtx).toBeUndefined();
+  }
+});
+
+it.each([
   [{ accountUuid: "bot-uuid" }, "Hi X!", { uuid: "bot-uuid", start: 3, length: 1 }, "Hi X!"],
   [
     { account: "+15550002222" },
