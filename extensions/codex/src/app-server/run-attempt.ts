@@ -202,6 +202,7 @@ export async function runCodexAppServerAttempt(
             connection.assertModelExecutionCurrent();
             return finalizedResult;
           } finally {
+            clearTimeout(turnRuntime.state.finalSourceReplyCompletionTimer);
             turnRuntime.deadlines.dispose();
           }
         } finally {

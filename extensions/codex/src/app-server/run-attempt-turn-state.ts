@@ -59,8 +59,16 @@ class CodexAttemptState {
     response: CodexDynamicToolRuntimeResponse;
     durationMs: number;
   };
+  finalSourceReplyCompletionTimer?: NodeJS.Timeout;
   terminalDynamicToolReleaseCheckScheduled = false;
   currentTurnHadNonTerminalDynamicToolResult = false;
+  finalSourceReplyDelivered = false;
+
+  get acceptsSteering() {
+    return (
+      !this.completed && !this.finalSourceReplyDelivered && !this.terminalTurnNotificationQueued
+    );
+  }
 }
 
 export function createCodexAttemptTurnState(resources: StartedCodexAttemptResources) {
@@ -91,6 +99,8 @@ export function createCodexAttemptTurnState(resources: StartedCodexAttemptResour
     if (state.completed) {
       return;
     }
+    clearTimeout(state.finalSourceReplyCompletionTimer);
+    state.finalSourceReplyCompletionTimer = undefined;
     state.completed = true;
     steeringQueueRef.current?.cancel();
     deadlines.beginSettlement(Date.now());
