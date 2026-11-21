@@ -87,6 +87,59 @@ it("retains a saved unavailable model without offering it for another default se
   expect(onUtilityFallbackChange).toHaveBeenLastCalledWith("fixture/last");
 });
 
+it("chooses a harness for the primary or fallback without offering the primary again", async () => {
+  const onPrimaryChange = vi.fn();
+  const onFallbackChange = vi.fn();
+  const container = mount(
+    props({
+      configuredModels: ["First", "Second"].map((name) => ({
+        id: name.toLowerCase(),
+        name,
+        provider: "openai",
+        available: true,
+        agentRuntime: { id: "openclaw", source: "model" },
+        runtimeChoices: [
+          { agentRuntime: { id: "codex", source: "model" }, available: true },
+          { agentRuntime: { id: "hidden", source: "model" }, manualSelectionAllowed: false },
+          { agentRuntime: { id: "offline", source: "model" }, available: false },
+        ],
+      })),
+      defaultModels: {
+        primary: "openai/first",
+        fallbacks: ["openai/second"],
+        utilityModel: null,
+        runtimes: { "openai/first": { id: "codex" } },
+      },
+      onPrimaryChange,
+      onFallbackChange,
+    }),
+  );
+  await updatePickers(container);
+  const primary = settingsRow(container, "Model").querySelector<HTMLButtonElement>(
+    ".picker-select__trigger",
+  )!;
+  const fallback = settingsRow(container, "Fallback model").querySelector<HTMLButtonElement>(
+    ".picker-select__trigger",
+  )!;
+  expect(primary.textContent).toContain("First · Codex");
+  const menu = await openPicker(primary);
+  const option = (parent: Element, label: string) =>
+    [...parent.querySelectorAll<HTMLElement>('[role="option"]')].find((row) =>
+      row.textContent?.includes(label),
+    );
+  expect(option(menu, "Hidden")).toBeUndefined();
+  expect(option(menu, "First · Offline")?.getAttribute("aria-disabled")).toBe("true");
+  option(menu, "First · OpenClaw")!.click();
+  expect(onPrimaryChange).toHaveBeenCalledWith("openai/first", {
+    id: "openclaw",
+    base: "openclaw",
+  });
+  const backup = await openPicker(fallback);
+  expect(option(backup, "First")).toBeUndefined();
+  option(backup, "Second · Codex")!.click();
+  expect(onFallbackChange).toHaveBeenCalledWith("openai/second", { id: "codex", base: "openclaw" });
+});
+
 it("names agents with their own utility settings and opens their Overview", async () => {
   const onOpenAgent = vi.fn();
   const container = mount(
