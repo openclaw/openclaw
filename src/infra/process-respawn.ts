@@ -42,6 +42,7 @@ type GatewayRespawnResult = {
 
 type GatewayUpdateRespawnResult =
   | { mode: "spawned"; pid?: number; child: ChildProcess }
+  | (GatewayRespawnResult & { mode: "supervised" })
   | { mode: "disabled" | "failed"; detail?: string };
 type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
@@ -250,10 +251,7 @@ export function registerGatewayRuntimeRecovery(params: {
 export function restartGatewayProcessWithFreshPid(
   opts: GatewayRespawnOptions = {},
 ): GatewayRespawnResult {
-  const decision: GatewayRestartDecision =
-    (opts.env?.OPENCLAW_LAUNCHER_IPC ?? process.env.OPENCLAW_LAUNCHER_IPC) === "1"
-      ? { mode: "supervised", supervisor: "launcher" }
-      : (opts.decision ?? resolveGatewayRestartDecision());
+  const decision = opts.decision ?? resolveGatewayRestartDecision();
   if (decision.mode === "disabled") {
     return decision.reason === "no-respawn"
       ? { mode: "disabled" }
@@ -324,6 +322,10 @@ export function respawnGatewayProcessForUpdate(
       args: entryArgs,
     });
     assertGatewayRespawnOutsideMaintenance(env);
+    // A launcher child has no service marker; its launcher starts the successor after this exit.
+    if (decision.mode === "supervised" && decision.supervisor === "launcher") {
+      return { mode: "supervised", exitCode: 0 };
+    }
     const child = spawn(invocation.command, invocation.args, {
       env,
       detached: true,
