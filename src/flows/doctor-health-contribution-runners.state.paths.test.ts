@@ -194,31 +194,28 @@ describe("Doctor Windows database path repair", () => {
     ["update Doctor", "clean", 0],
     ["active update", "clean", 0],
     ["check only", "alias", 0],
-  ] as const)(
-    "leaves inventory unchanged: %s, %s registry",
-    async (mode, registry, skipped) => {
-      const state = seedDatabase();
-      if (registry === "clean") {
-        state.removeAlias();
-      }
-      const before = state.readRows();
-      if (mode === "active update") {
-        fixture.beforeAdmission = state.startUpdate;
-      }
-      const env = mode === "update Doctor" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {};
-      const ctx = context(env, mode !== "check only");
-      await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
-      expect(state.readRows()).toEqual(before);
-      if (skipped) {
-        expect(ctx.updateWarnings).toEqual([
-          `Skipped agent database path repair for ${skipped} registration(s) during update Doctor. Run openclaw doctor --fix to repair agent database paths.`,
-        ]);
-      } else {
-        expect(ctx.updateWarnings).toBeUndefined();
-        expect(fixture.note).not.toHaveBeenCalled();
-      }
-    },
-  );
+  ] as const)("leaves inventory unchanged: %s, %s registry", async (mode, registry, skipped) => {
+    const state = seedDatabase();
+    if (registry === "clean") {
+      state.removeAlias();
+    }
+    const before = state.readRows();
+    if (mode === "active update") {
+      fixture.beforeAdmission = state.startUpdate;
+    }
+    const env = mode === "update Doctor" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {};
+    const ctx = context(env, mode !== "check only");
+    await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
+    expect(state.readRows()).toEqual(before);
+    if (skipped) {
+      expect(ctx.updateWarnings).toEqual([
+        `Skipped agent database path repair for ${skipped} registration(s) during update Doctor. Run openclaw doctor --fix to repair agent database paths.`,
+      ]);
+    } else {
+      expect(ctx.updateWarnings).toBeUndefined();
+      expect(fixture.note).not.toHaveBeenCalled();
+    }
+  });
 
   it("refuses unrecognized shared-state ownership before removing aliases", async () => {
     const state = seedDatabase();
