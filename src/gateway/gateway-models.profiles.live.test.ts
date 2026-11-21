@@ -145,6 +145,8 @@ import { toLiveModelConfig } from "./gateway-models.profiles.live.model-config.t
 import {
   createExplicitLiveFallbackModel,
   createGatewayLiveTestModel,
+  createGatewayLiveModelSession,
+  prepareGatewayLiveModelTransport,
   formatGatewayLiveFailureDiagnostic,
   waitForGatewayAgentRun,
   type GatewayLiveProbePhase,
@@ -2917,28 +2919,6 @@ function resolveGatewayLivePreparedProfileId(
     : undefined;
 }
 
-function createGatewayLiveModelSession(params: {
-  agentId: string;
-  credentialAttempt: number;
-  label: string;
-  modelIndex: number;
-  modelKey: string;
-  thinkingLevel?: string;
-}) {
-  const key = `agent:${params.agentId}:${params.label}:model-${params.modelIndex + 1}:attempt-${params.credentialAttempt + 1}`;
-  return {
-    key,
-    // Every attempt owns a fresh key, so create the session and its model/thinking
-    // selection through the single write-scoped lifecycle owner.
-    method: "sessions.create" as const,
-    request: {
-      key,
-      model: params.modelKey,
-      ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
-    },
-  };
-}
-
 describe("gateway live model session policy", () => {
   const modelSession = (credentialAttempt: number, thinkingLevel?: string) =>
     createGatewayLiveModelSession({
@@ -5212,9 +5192,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `${params.label}: gateway-connect`,
       );
       if (ultraWireBaseUrls.length > 0) {
-        // Install the final, lazily loaded transport owner after Gateway startup,
-        // before wrapping it; otherwise startup replaces the capture.
         await import("../agents/ai-transport-runtime-host.js");
+        await prepareGatewayLiveModelTransport({
+          agentId,
+          client,
+          label: params.label,
+          model: expectDefined(ultraCandidates[0], "Ultra preparation requires a model"),
+          requestAgentText: requestGatewayAgentText,
+          withSessionControlTimeout: withGatewayLiveSessionControlTimeout,
+        });
         ultraWireCapture = startOpenAIUltraWireCapture(ultraWireBaseUrls);
         openAIUltraRunsByClient.set(client, new Map());
       }

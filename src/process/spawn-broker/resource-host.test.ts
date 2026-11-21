@@ -313,6 +313,7 @@ it("unrefs passive custody but retains startup, delivery and failed close settle
     id: 1,
     requestId: close.requestId,
     error: encodeNativeWorkerFailure(new Error("synthetic close failure")),
+    resourceError: false,
   });
   await expect(closing).rejects.toThrow("synthetic close failure");
   expect(claims.hasReferencedClaims).toBe(true);

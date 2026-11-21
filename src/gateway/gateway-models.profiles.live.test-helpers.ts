@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeGooglePreviewModelId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -21,6 +22,7 @@ import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-t
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { extractErrorHttpStatus } from "../shared/assistant-error-format.js";
 import type { GatewayClient } from "./client.js";
+import { OPENAI_ULTRA_NORMAL_EFFORT } from "./gateway-models.profiles.live.ultra-wire.test-helpers.js";
 
 /** Keeps strict provider proofs scoped to their admitted agent and child runs. */
 export function isolateLiveGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -429,5 +431,70 @@ export async function waitForGatewayAgentRun(params: {
     context: params.context,
     runId: params.runId,
     result,
+  });
+}
+
+export function createGatewayLiveModelSession(params: {
+  agentId: string;
+  credentialAttempt: number;
+  label: string;
+  modelIndex: number;
+  modelKey: string;
+  thinkingLevel?: string;
+}) {
+  const key = `agent:${params.agentId}:${params.label}:model-${params.modelIndex + 1}:attempt-${params.credentialAttempt + 1}`;
+  return {
+    key,
+    // Every attempt owns a fresh key, so create the session and its model/thinking
+    // selection through the single write-scoped lifecycle owner.
+    method: "sessions.create" as const,
+    request: {
+      key,
+      model: params.modelKey,
+      ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
+    },
+  };
+}
+
+export async function prepareGatewayLiveModelTransport(params: {
+  agentId: string;
+  client: GatewayClient;
+  label: string;
+  model: Pick<Model, "provider" | "id">;
+  withSessionControlTimeout: <T>(work: Promise<T>, context: string) => Promise<T>;
+  requestAgentText: (request: {
+    client: GatewayClient;
+    sessionKey: string;
+    idempotencyKey: string;
+    modelKey: string;
+    message: string;
+    thinkingLevel: string;
+    context: string;
+  }) => Promise<unknown>;
+}): Promise<void> {
+  // The provider's bundled stream loads on its first real Gateway turn,
+  // after source-module imports. Settle a separate preparation session
+  // before composing the observer over that final guarded transport.
+  const modelKey = params.model.provider + "/" + params.model.id;
+  const session = createGatewayLiveModelSession({
+    agentId: params.agentId,
+    credentialAttempt: 0,
+    label: params.label + "-transport-preparation",
+    modelIndex: 0,
+    modelKey,
+    thinkingLevel: OPENAI_ULTRA_NORMAL_EFFORT,
+  });
+  await params.withSessionControlTimeout(
+    params.client.request(session.method, session.request),
+    params.label + ": transport-preparation-session",
+  );
+  await params.requestAgentText({
+    client: params.client,
+    sessionKey: session.key,
+    idempotencyKey: "idem-" + randomUUID(),
+    modelKey,
+    message: "Reply with the single word ready.",
+    thinkingLevel: OPENAI_ULTRA_NORMAL_EFFORT,
+    context: params.label + ": transport-preparation",
   });
 }
