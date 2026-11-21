@@ -90,7 +90,6 @@ function expectPost(
   expect(call[1]?.headers).toEqual({
     "Content-Type": contentType,
     originator: "openclaw",
-    version: "2026.3.22",
     "User-Agent": "openclaw/2026.3.22",
   });
 }

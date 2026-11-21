@@ -18,7 +18,6 @@ export async function fetchCodexUsage(
     Authorization: `Bearer ${token}`,
     Accept: "application/json",
     originator: "openclaw",
-    ...(version ? { version } : {}),
     "User-Agent": `openclaw/${version || "dev"}`,
   };
   if (accountId) {

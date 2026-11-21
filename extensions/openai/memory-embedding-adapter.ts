@@ -11,9 +11,9 @@ function resolveEmbeddingCacheExcludedHeaders(providerId: string, baseUrl: strin
     return excludedHeaders;
   }
   if (URL.parse(baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com") {
-    // Native attribution changes on every upgrade; cache identity must describe embeddings,
-    // not the OpenClaw build that requested them.
-    excludedHeaders.push("version", "user-agent");
+    // The attribution User-Agent changes on every upgrade; cache identity must describe
+    // embeddings, not the OpenClaw build that requested them.
+    excludedHeaders.push("user-agent");
   }
   return excludedHeaders;
 }
