@@ -6,6 +6,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { expect, it, vi } from "vitest";
 import "./backup-worker.test-support.js";
+import { updateCleanupCommand } from "../../cli/update-cli/cleanup.js";
 import {
   updateFinishCommand,
   updateMigrateCommand,
@@ -34,6 +35,13 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as updateDatabaseBackup from "../update-database-backup.js";
+import { formatUpdateDatabaseSnapshotReceipt } from "../update-database-snapshot-receipt.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
+} from "../update-run-ledger.js";
 import { agentPortProvider } from "./agent-port.js";
 import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture.test-support.js";
 import { crashCaptureAtCommit } from "./backup-schema-capture-crash.test-support.js";
@@ -591,4 +599,85 @@ it.skipIf(!connection)(
       }
     });
   },
+);
+
+it.skipIf(!connection)(
+  "update cleanup drops a superseded snapshot's server captures before removing it and keeps it while the drop fails",
+  () =>
+    withSeededWorkboard(
+      async ({ state, client, namespace, namespaces, storeId, anchorPath, config }) => {
+        const env = state.env;
+        // An earlier update kept its snapshot, with the workboard store captured on the server.
+        const backup = await createUpdateDatabaseBackupWithFixtureTransport({
+          backupRoot: path.join(state.home, ".openclaw.package-backup-4242-1795000000000"),
+          stateDir: state.stateDir,
+          config,
+          env,
+          stopped: true,
+          postgresSchemaCaptures: true,
+        });
+        const exported = backup.databases.find((item) => item.path === anchorPath)?.exportDirectory;
+        assert(exported);
+        const expected = { storeId, namespace };
+        const { schema } = await verifyMatchedPostgresBackup(exported, "exact", expected);
+        assert(schema);
+        namespaces.add(schema);
+        // That run finished; a later verified update supersedes its snapshot.
+        const clock = vi.spyOn(Date, "now");
+        let now = Date.UTC(2026, 10, 1);
+        for (const status of ["failed", "succeeded"] as const) {
+          clock.mockReturnValue((now += 60_000));
+          const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+          const detail = formatUpdateDatabaseSnapshotReceipt(backup.directory);
+          const step = {
+            step: "diagnostic:database snapshot",
+            status: "completed",
+            detail,
+          } as const;
+          const healthy = {
+            serviceRunning: true,
+            versionMatch: true,
+            settled: true,
+            coreReady: true,
+          };
+          if (status === "failed") {
+            recordUpdateRunStep(runId, step, { env });
+          } else {
+            recordUpdateRunVerification(runId, { ...healthy, pluginErrors: [] }, { env });
+          }
+          clock.mockReturnValue((now += 60_000));
+          finishUpdateRun(runId, { status }, { env });
+        }
+        clock.mockRestore();
+        await closeOpenClawStateDatabaseAsync();
+        const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+        const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+        const cleanup = async () => {
+          await updateCleanupCommand({ yes: true, json: true });
+          await closeOpenClawStateDatabaseAsync();
+          const report = output.mock.lastCall?.[0] as { artifacts: Array<{ path: string }> };
+          return report.artifacts.find((item) => item.path === backup.directory);
+        };
+        try {
+          // The server cannot be reached: the capture and its only record both stay.
+          const postgres = { connection: "postgresql://postgres@127.0.0.1:1/postgres" };
+          await state.writeConfig({ ...config, database: { ...config.database, postgres } });
+          expect(await cleanup()).toMatchObject({
+            outcome: "failed",
+            reason: "database-snapshot-retirement-failed",
+            detail: expect.stringContaining("PostgreSQL capture cleanup remains pending at"),
+          });
+          expect(await schemaExists(client, schema)).toBe(true);
+          expect(await fs.readdir(exported)).toContain("manifest.json");
+          await state.writeConfig(config);
+          expect(await cleanup()).toMatchObject({ outcome: "removed" });
+          expect(await schemaExists(client, schema)).toBe(false);
+          expect(await schemaExists(client, namespace)).toBe(true);
+          await expect(fs.stat(backup.directory)).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          exit.mockRestore();
+          output.mockRestore();
+        }
+      },
+    ),
 );

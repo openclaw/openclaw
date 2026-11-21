@@ -1047,6 +1047,17 @@ updater must contain this fix; without it the retry is refused as an
 uninspectable destination until the link is moved back by hand. No journal,
 schema, or protocol change is involved.
 
+Update cleanup retires the pre-migration `.databases` snapshot directory of an
+earlier update once a later update is verified successful. It finds a snapshot
+only through the location that update recorded in update history, including one
+under a previous install root, and deletes nothing an unfinished update or a
+pending recovery owns. This includes the snapshots that older updaters left in a
+Git checkout's `.artifacts` directory. Update history holds no usable location for
+a checkout outside the home directory; those snapshots stay. A verified update's own retained snapshot waits for the
+next verified update. The installed updater or Gateway that finishes the later
+update must contain this change; no schema, journal, or protocol change is
+involved.
+
 ### Migration integrity checks
 
 Cold update-history bookkeeping verifies shared-state integrity before acquiring
@@ -2773,7 +2784,8 @@ and protected or unknown artifacts remain. It is not a substitute for a
 [Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
 resuming interrupted deletion.
 Private package, command-shim, and Git runtime backups remain owned by the update
-transaction and are outside this migration cleanup. An interrupted entry in update
+transaction and are outside this migration cleanup. Their pre-migration database
+snapshot directories are retired once a later update is verified successful. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.
 
 ## After updating
