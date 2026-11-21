@@ -1,0 +1,5 @@
+# PR #196698: exact regression allocation for the protected-store exec warning.
+# Inherited literals stay readable until a sentinel wins; plugin, explicit empty,
+# and final routing overrides must not emit a misleading sentinel warning.
+# Preserve this coverage without changing the shared scalar.
+64

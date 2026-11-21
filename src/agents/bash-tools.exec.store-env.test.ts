@@ -30,6 +30,7 @@ const { mocks, EGRESS_ENV } = vi.hoisted(() => {
     mocks: {
       shellPath: vi.fn<() => string | null>(() => null),
       egressActive: false,
+      pluginEnv: undefined as Record<string, string> | undefined,
       gatewayParams: [] as CapturedEnvironment[],
       nodeHostParams: [] as CapturedEnvironment[],
       spawnInputs: [] as Array<{ env?: Record<string, string> }>,
@@ -39,7 +40,10 @@ const { mocks, EGRESS_ENV } = vi.hoisted(() => {
 });
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => null,
+  getGlobalHookRunner: () => ({
+    hasHooks: (name: string) => name === "resolve_exec_env" && mocks.pluginEnv !== undefined,
+    runResolveExecEnv: async () => mocks.pluginEnv ?? {},
+  }),
   getGlobalHookRunnerRegistry: () => null,
 }));
 
@@ -147,6 +151,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-exec-store-env-"));
   vi.stubEnv("AWS_REGION", undefined);
   mocks.egressActive = false;
+  mocks.pluginEnv = undefined;
   mocks.gatewayParams.length = 0;
   mocks.nodeHostParams.length = 0;
   mocks.spawnInputs.length = 0;
@@ -208,6 +213,65 @@ it("runs exact no-pager requests with empty rather than executable pager values"
   await runGateway({ command: "echo GIT_PAGER PAGER", env: { GIT_PAGER: "cat", PAGER: "cat" } });
   expect(mocks.spawnInputs[0]?.env).toMatchObject({ GIT_PAGER: "", PAGER: "" });
 });
+
+const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
+  result.content
+    .filter((entry) => entry.type === "text")
+    .map((entry) => entry.text ?? "")
+    .join("\n");
+
+it.each(["sentinel", "plugin", "explicit", "routing"] as const)(
+  "warns only when a protected sentinel wins over inherited env (%s)",
+  async (winner) => {
+    const name = winner === "routing" ? "OPENCLAW_CHANNEL_CONTEXT" : "GOG_KEYRING_PASSWORD";
+    const warning = `overrides the inherited "${name}"`;
+    vi.stubEnv(name, "stable-config-literal");
+    mocks.egressActive = true;
+
+    const runEgress = (params: ExecParams, overlay = false) =>
+      createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+        channelContext: overlay ? { sender: { id: "fixture-sender" } } : undefined,
+      }).execute("exec", { yieldMs: 120_000, ...params });
+
+    await runEgress({ command: "echo first" }).then((result) => {
+      expect(mocks.spawnInputs.at(-1)?.env?.[name]).toBe("stable-config-literal");
+      expect(textOf(result)).not.toContain(warning);
+    });
+
+    await writeEntries({}, [
+      {
+        name,
+        value: "protected-store-value",
+        allowedHosts: ["api.example.com"],
+      },
+    ]);
+    mocks.pluginEnv = winner === "plugin" ? { [name]: "plugin-stable" } : undefined;
+    await runEgress(
+      { command: "echo second", env: winner === "explicit" ? { [name]: "" } : undefined },
+      winner === "routing",
+    ).then((result) => {
+      const protectedValue = mocks.spawnInputs.at(-1)?.env?.[name];
+      if (winner !== "sentinel") {
+        expect(protectedValue).toBe(
+          winner === "routing"
+            ? '{"sender":{"id":"fixture-sender"}}'
+            : winner === "plugin"
+              ? "plugin-stable"
+              : "",
+        );
+        expect(textOf(result)).not.toContain(warning);
+        return;
+      }
+      expect(looksLikeSecretSentinel(protectedValue ?? "")).toBe(true);
+      expect(resolveSecretSentinel(protectedValue ?? "")).toBe("protected-store-value");
+      expect(textOf(result)).toContain(warning);
+    });
+  },
+);
 
 it.each([
   [{ PATH: "/explicit/bin" }, /Security Violation: Custom 'PATH' variable is forbidden/],
