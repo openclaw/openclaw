@@ -557,7 +557,6 @@ export async function captureUpdateActivationSchemas(params: {
         })
       : undefined;
   const { run, candidateSchemaVersions, gatewayRestartCompletion } = params;
-  // Existing stores the candidate Doctor must migrate under exclusive maintenance.
   const pendingMigrations =
     schemaVersions && candidateSchemaVersions
       ? listIncompleteUpdateMigrations(schemaVersions, {
@@ -594,23 +593,18 @@ export async function captureUpdateActivationSchemas(params: {
   return { previousSchemaVersions, schemaVersions, pendingMigrations };
 }
 
-/**
- * The candidate Doctor migrates under exclusive maintenance. A Gateway this update
- * did not stop keeps that access, so the migration would fail only after activation.
- */
+/** Doctor migrates under exclusive maintenance, which a Gateway this update did not stop keeps. */
 export async function assertPendingMigrationsAdmitted(params: {
   pendingMigrations: ReadonlyArray<{ path: string; expected: number; found: number | null }>;
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }): Promise<void> {
-  if (params.pendingMigrations.length === 0) {
-    return;
-  }
   // Unreadable ownership leaves the decision to Doctor's own admission.
-  const owner = await readActiveGatewayLockIdentity({
-    env: params.env,
-    timeoutMs: params.timeoutMs,
-  }).catch(() => undefined);
+  const owner = params.pendingMigrations.length
+    ? await readActiveGatewayLockIdentity({ env: params.env, timeoutMs: params.timeoutMs }).catch(
+        () => undefined,
+      )
+    : undefined;
   if (!owner) {
     return;
   }

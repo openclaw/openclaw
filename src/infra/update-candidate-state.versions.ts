@@ -147,9 +147,7 @@ export function addAgentInventoryPaths(
   }
 }
 
-/**
- * Shared and agent stores the candidate Doctor must migrate before activation completes.
- */
+/** Shared and agent stores the candidate Doctor must migrate before activation completes. */
 export function listIncompleteUpdateMigrations(
   versions: readonly UpdateStateSchemaVersion[],
   params: {
