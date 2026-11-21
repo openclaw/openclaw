@@ -7,30 +7,29 @@ import { chatMessage, chatSessionListResponse } from "./chat-flow.test-support.t
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Conversation workspace restore" });
+const session = {
+  key: "agent:main:main",
+  sessionId: "synthetic-garden",
+  kind: "direct",
+  label: "Garden layout",
+  updatedAt: 1,
+  worktree: { id: "garden-workspace", branch: "openclaw/garden", repoRoot: "/synthetic/garden" },
+};
 suite.define(() => {
   it("offers explicit restore before unarchiving a removed workspace", () =>
     suite.withPage({}, async ({ page }) => {
-      const session = {
-        key: "agent:main:main",
-        sessionId: "archived-garden",
-        kind: "direct",
-        label: "Archived garden layout",
+      const archived = {
+        ...session,
         archived: true,
         archivedAt: 1,
-        updatedAt: 1,
-        worktree: {
-          id: "garden-workspace",
-          branch: "openclaw/garden",
-          repoRoot: "/synthetic/garden",
-        },
-        worktreeState: { status: "removed", restore: "snapshot" },
+        worktreeState: "removed-snapshot",
       };
       const gateway = await installMockGateway(page, {
         sessionKey: session.key,
-        sessions: [session],
+        sessions: [archived],
         deferredMethods: ["worktrees.restore"],
         methodResponses: {
-          "chat.startup": { sessionId: session.sessionId, sessionInfo: session, messages: [] },
+          "chat.startup": { sessionId: session.sessionId, sessionInfo: archived, messages: [] },
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -40,7 +39,7 @@ suite.define(() => {
       expect(await page.locator(".chat-send-btn--send").count()).toBe(0);
       await warning.getByRole("button", { name: "Restore", exact: true }).click();
       await gateway.waitForRequest("worktrees.restore");
-      const ready = { ...session, updatedAt: 2, worktreeState: { status: "ready" } };
+      const ready = { ...archived, updatedAt: 2, worktreeState: "ready" };
       await gateway.setSessionsListResponse(chatSessionListResponse([ready]));
       await gateway.resolveDeferred("worktrees.restore", { id: session.worktree.id });
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -59,19 +58,7 @@ suite.define(() => {
     "requires explicit %s restoration before sending",
     (restore) =>
       suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const session = {
-          key: "agent:main:main",
-          sessionId: "synthetic-garden",
-          kind: "direct",
-          label: "Garden layout",
-          updatedAt: 1,
-          worktree: {
-            id: "garden-workspace",
-            branch: "openclaw/garden",
-            repoRoot: "/synthetic/garden",
-          },
-          worktreeState: { status: "removed", restore },
-        };
+        const removed = { ...session, worktreeState: `removed-${restore}` };
         const gateway = await installMockGateway(page, {
           sessionKey: session.key,
           historyMessages: [
@@ -82,7 +69,7 @@ suite.define(() => {
             restore === "snapshot"
               ? ["worktrees.restore", "worktrees.restore"]
               : ["worktrees.restore"],
-          methodResponses: { "sessions.list": chatSessionListResponse([session]) },
+          methodResponses: { "sessions.list": chatSessionListResponse([removed]) },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -128,7 +115,7 @@ suite.define(() => {
             .poll(async () => (await gateway.getRequests("worktrees.restore")).length)
             .toBe(2);
         }
-        const ready = { ...session, updatedAt: 2, worktreeState: { status: "ready" } };
+        const ready = { ...session, updatedAt: 2, worktreeState: "ready" };
         await gateway.setSessionsListResponse(chatSessionListResponse([ready]));
         await gateway.resolveDeferred("worktrees.restore", { id: session.worktree.id });
         await gateway.emitGatewayEvent("sessions.changed", {
@@ -141,13 +128,6 @@ suite.define(() => {
         await warning.waitFor({ state: "detached" });
         await expect.poll(() => send.isEnabled()).toBe(true);
         expect(await composer.inputValue()).toBe(draft);
-        const readyFrame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".chat-footer"),
-          [composer, send],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, `${restore}-restored.png`), readyFrame.png);
         await send.click();
         await gateway.waitForRequest("chat.send");
         expect(await gateway.getRequests("worktrees.list")).toHaveLength(0);

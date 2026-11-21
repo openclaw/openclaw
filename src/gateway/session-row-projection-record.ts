@@ -23,10 +23,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
-import {
-  resolveGatewaySessionActiveModel,
-  sameFallbackModelFacts,
-} from "./session-row-model-facts.js";
+import { resolveGatewaySessionActiveModel } from "./session-row-model-facts.js";
 import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
@@ -47,7 +44,7 @@ export type ProjectionOptions = {
   placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
 };
 
-type SessionRowSharedFacts = {
+type SharedFacts = {
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
@@ -55,18 +52,16 @@ type SessionRowSharedFacts = {
   worktree?: ManagedWorktreeRecord | null;
 };
 
-export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & SessionRowSharedFacts;
+export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & SharedFacts;
 
 /** Undefined shared facets await their owner; null is acknowledged absence. */
-export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
-  Partial<SessionRowSharedFacts>;
+export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts & Partial<SharedFacts>;
 
 export function isPreparedSessionRowDatabaseFacts(
   facts: RetainedSessionRowDatabaseFacts | undefined,
 ): facts is PreparedSessionRowDatabaseFacts {
   return (
-    facts !== undefined &&
-    facts.acpMeta !== undefined &&
+    facts?.acpMeta !== undefined &&
     facts.runtimeOwnership !== undefined &&
     facts.runtimeOwnershipDependencies !== undefined &&
     facts.repositoryWorkspace !== undefined &&
@@ -460,6 +455,15 @@ export function sort<T extends EntryRow>(rows: T[], sortBy: Query["sortBy"]): T[
   return sortBy === null
     ? rows
     : rows.toSorted((a, b) => compareSessionEntryPairs([a.key, a.entry], [b.key, b.entry], sortBy));
+}
+
+function sameFallbackModelFacts(previous: Row["storedEntry"], current: SessionEntry) {
+  return (
+    previous?.modelProvider === current.modelProvider &&
+    previous?.model === current.model &&
+    previous?.lastRunId === current.lastRunId &&
+    isDeepStrictEqual(previous?.fallbackNotice, current.fallbackNotice)
+  );
 }
 
 export function first(candidates: Row[], storePaths: Iterable<string>) {

@@ -10,15 +10,6 @@ const catalog = {
     composer: {
       composerInput: "Chat composer",
       workspaceRemoved: "This conversation’s workspace was removed.",
-      workspaceRestoreSnapshotDetail:
-        "Restore the saved workspace, including uncommitted changes, before sending a message.",
-      workspaceRestoreFreshDetail:
-        "No saved snapshot is available. Restore a fresh checkout of the recorded branch before sending a message.",
-      workspaceRestore: "Restore",
-      workspaceRestoreFresh: "Restore fresh checkout",
-      workspaceRestoring: "Restoring workspace…",
-      workspaceRestoreHelp:
-        "Retry Restore, ask an administrator for help, or start a new conversation.",
       predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",

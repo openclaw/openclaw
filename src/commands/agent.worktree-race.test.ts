@@ -168,7 +168,7 @@ describe("agent command worktree admission", () => {
     });
   });
 
-  it("refuses a removed workspace until explicitly restored before command setup", async () => {
+  it("refuses a removed workspace, then admits its explicitly restored idle checkout", async () => {
     await withTempHome(async (home) => {
       const { id, nested } = await createSessionWorktree(home, true);
       const saved = path.join(nested, "saved.txt");
@@ -177,6 +177,7 @@ describe("agent command worktree admission", () => {
       await expect(prepareSession()).rejects.toThrow("This session's worktree was removed");
       expect(ensureAgentWorkspace).not.toHaveBeenCalled();
       await managedWorktrees.restore({ id });
+      await updateRegistryWorktree(process.env, id, { lastActiveAt: 1 });
       const prepared = await prepareSession();
       try {
         expect(await fs.readFile(saved, "utf8")).toBe("saved command work\n");

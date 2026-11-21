@@ -233,11 +233,9 @@ export const SessionRowSchema = Type.Object(
     ),
     worktreeState: Type.Optional(
       Type.Union([
-        closedObject({ status: Type.Literal("ready") }),
-        closedObject({
-          status: Type.Literal("removed"),
-          restore: Type.Union([Type.Literal("snapshot"), Type.Literal("fresh")]),
-        }),
+        Type.Literal("ready"),
+        Type.Literal("removed-snapshot"),
+        Type.Literal("removed-fresh"),
       ]),
     ),
     repositoryWorkspaceId: Type.Optional(NonEmptyString),

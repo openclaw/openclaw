@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -34,18 +33,6 @@ import {
   resolveSessionDisplayModelIdentityRefCached,
 } from "./session-utils-model.js";
 import type { SessionListModelCatalog } from "./session-utils.types.js";
-
-export function sameFallbackModelFacts(
-  previous: InternalSessionEntry | undefined,
-  current: InternalSessionEntry,
-) {
-  return (
-    previous?.modelProvider === current.modelProvider &&
-    previous?.model === current.model &&
-    previous?.lastRunId === current.lastRunId &&
-    isDeepStrictEqual(previous?.fallbackNotice, current.fallbackNotice)
-  );
-}
 
 /** A conservative vocabulary of admitted identities; never reconstruct thinking facts to reject a query. */
 export function prepareSessionRowModelSearch(

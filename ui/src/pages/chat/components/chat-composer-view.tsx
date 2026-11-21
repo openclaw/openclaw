@@ -695,7 +695,9 @@ export function renderChatComposerView(
       ) : memberWelcome.active() ? (
         memberWelcome.step()
       ) : (
-        <regions.ComposerUnavailable composer={props}>{disabledBanner}</regions.ComposerUnavailable>
+        <regions.ComposerWorkspaceNotice {...props}>
+          {props.disabledBanner?.kind === "composer-replacement" ? disabledBanner : undefined}
+        </regions.ComposerWorkspaceNotice>
       )}
     </div>
   );

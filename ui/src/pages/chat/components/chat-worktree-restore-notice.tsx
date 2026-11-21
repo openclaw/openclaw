@@ -1,11 +1,13 @@
 import { action, createMemo, createOptimistic, createSignal, Errored, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatWorktreeEnglish } from "../../../i18n/locales/en-chat-worktree.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 registerChatComposerEnglish();
+registerChatWorktreeEnglish();
 
 /** The session projection owns readiness; this component presents only the explicit action. */
 export function ChatWorktreeRestoreNotice(
@@ -33,8 +35,7 @@ export function ChatWorktreeRestoreNotice(
         <div>{t("chat.composer.workspaceRemoved")}</div>
         <div>
           {t(
-            props.selectedSession?.worktreeState?.status === "removed" &&
-              props.selectedSession.worktreeState.restore === "fresh"
+            props.selectedSession?.worktreeState === "removed-fresh"
               ? "chat.composer.workspaceRestoreFreshDetail"
               : "chat.composer.workspaceRestoreSnapshotDetail",
           )}
@@ -68,8 +69,7 @@ export function ChatWorktreeRestoreNotice(
         {saving()
           ? t("chat.composer.workspaceRestoring")
           : t(
-              props.selectedSession?.worktreeState?.status === "removed" &&
-                props.selectedSession.worktreeState.restore === "fresh"
+              props.selectedSession?.worktreeState === "removed-fresh"
                 ? "chat.composer.workspaceRestoreFresh"
                 : "chat.composer.workspaceRestore",
             )}

@@ -271,7 +271,7 @@ export function chatSubmitState(
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
   const routePending = state.isRouteSessionPending?.() === true;
-  const workspaceRemoved = session?.worktreeState?.status === "removed";
+  const workspaceRemoved = session?.worktreeState && session.worktreeState !== "ready";
   return {
     initialSubmission:
       nativeChat &&

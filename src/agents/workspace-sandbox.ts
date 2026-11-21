@@ -15,6 +15,7 @@ import {
 } from "./sandbox/runtime-status.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import { recordRegistryWorktreeActivity } from "./worktrees/registry.js";
 import { resolveSessionWorktree } from "./worktrees/session-lifecycle.js";
 
 export type WorkspaceSandboxParams = Pick<
@@ -151,6 +152,13 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         assertCurrent,
         turn: true,
       });
+      if (prepared) {
+        await recordRegistryWorktreeActivity(
+          prepared.context.environment,
+          prepared.worktree,
+          assertCurrent,
+        );
+      }
       preparedWorktreePath = prepared?.worktree.path;
     }
   }

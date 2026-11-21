@@ -6,7 +6,6 @@ import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { worktreePathExists } from "./git.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
 import { retireMissingRegistryWorktree } from "./registry-retirement.js";
-import { recordRegistryWorktreeActivity } from "./registry.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
@@ -16,16 +15,15 @@ const log = createSubsystemLogger("agents/worktrees");
 export function sessionWorktreeAvailability(
   record: ManagedWorktreeRecord | null | undefined,
   sessionKey?: string,
-) {
+): "ready" | "removed-snapshot" | "removed-fresh" | undefined {
   if (!record && sessionKey && captureAgentWorkspaceReadiness(sessionKey)?.isReady?.() === false) {
     return undefined;
   }
   return record && record.removedAt === undefined
-    ? { status: "ready" as const }
-    : {
-        status: "removed" as const,
-        restore: record?.snapshotRef ? ("snapshot" as const) : ("fresh" as const),
-      };
+    ? "ready"
+    : record?.snapshotRef
+      ? "removed-snapshot"
+      : "removed-fresh";
 }
 
 class SessionWorktreeUnavailableError extends SessionWorkStartInvalidatedError {
@@ -91,11 +89,8 @@ export async function resolveSessionWorktree(params: {
     context.environment,
     params.assertCurrent,
   );
-  if (!worktree || sessionWorktreeAvailability(worktree)?.status === "removed") {
+  if (!worktree || sessionWorktreeAvailability(worktree) !== "ready") {
     throw new SessionWorktreeUnavailableError(binding.id);
-  }
-  if (params.turn) {
-    await recordRegistryWorktreeActivity(context.environment, worktree, assertCurrent);
   }
   return { worktree, assertCurrent, context };
 }

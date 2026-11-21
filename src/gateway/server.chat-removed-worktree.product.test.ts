@@ -167,8 +167,7 @@ it.each(["snapshot", "fresh"])(
             restoring &&
             event.event === "sessions.changed" &&
             isRecord(payload.session) &&
-            isRecord(payload.session.worktreeState) &&
-            payload.session.worktreeState.status === "ready"
+            payload.session.worktreeState === "ready"
           ) {
             readyEvent.resolve();
           }
@@ -201,13 +200,13 @@ it.each(["snapshot", "fresh"])(
         await updateRegistryWorktree(process.env, created.worktree.id, { snapshotRef: undefined });
       }
       expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
-        session: { worktreeState: { status: "removed", restore: mode } },
+        session: { worktreeState: `removed-${mode}` },
       });
       expect(await client.request("sessions.list", { rowMode: "sidebar" })).toMatchObject({
         sessions: expect.arrayContaining([
           expect.objectContaining({
             key: sessionKey,
-            worktreeState: { status: "removed", restore: mode },
+            worktreeState: `removed-${mode}`,
           }),
         ]),
       });
@@ -229,7 +228,7 @@ it.each(["snapshot", "fresh"])(
       expect(materialize).toHaveBeenCalledOnce();
       await readyEvent.promise;
       expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
-        session: { worktreeState: { status: "ready" } },
+        session: { worktreeState: "ready" },
       });
       const run = await client.request<{ runId: string }>("chat.send", {
         sessionKey,
