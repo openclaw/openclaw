@@ -134,14 +134,18 @@ suite.define(() => {
           const original = await target.evaluateHandle((el) => el);
           const order = () =>
             list.locator(".systems-group .systems-machine__name").allTextContents();
-          if (reorder) expect((await order()).at(-1)).toBe("Studio Mac");
+          if (reorder) {
+            expect((await order()).at(-1)).toBe("Studio Mac");
+          }
           await gateway.setMethodResponse("environments.list", machines(reorder));
           await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
           await expect
             .poll(() => node.getAttribute("data-status"))
             .toBe(reorder ? "available" : "unavailable");
-          if (reorder) expect((await order())[0]).toBe("Studio Mac");
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1")
+          if (reorder) {
+            expect((await order())[0]).toBe("Studio Mac");
+          }
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({
               path:
                 suite.artifactDir +
@@ -150,6 +154,7 @@ suite.define(() => {
                 ".png",
               animations: "disabled",
             });
+          }
           expect(await original.evaluate((el) => el === document.activeElement)).toBe(true);
           await page.keyboard.press("Enter");
           await expect.poll(() => target.getAttribute("aria-pressed")).toBe("true");
