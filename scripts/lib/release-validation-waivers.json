@@ -442,6 +442,141 @@
           }
         ]
       }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "b0c797d0c667c2cfe5443720ccaaa38381c887ba",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-14 (node)",
+      "reason": "Exact session-scoped chat delivery test passed on unchanged candidate code. Accept the recorded websocket timeout as a local non-reproduction, not a proven flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/session-message-events.test.ts",
+            "test": "session.message websocket events > enforces session-scoped chat delivery on real gateway connections :: Error: timeout\n❯ onceMessage test/helpers/gateway-websocket.ts:114:24\n112| ): Promise<T> {\n113|   // Keep the wait's caller in the stack when a timer eventually rejec…\n114|   const timeoutError = new Error(\"timeout\");\n|                        ^\n115|   return new Promise<T>((resolve, reject) => {\n116|     function cleanup() {\n❯ src/gateway/session-message-events.test.ts:<redacted len=5>\n❯ src/gateway/session-message-events.test.ts:<redacted len=6>"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "b0c797d0c667c2cfe5443720ccaaa38381c887ba",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-17 (node)",
+      "reason": "All 34 unchanged worker-execution tests passed locally, including the exact blocked-input redaction case. Accept only the recorded timeout; no input leak was demonstrated. This is non-reproduction, not proof of a flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-execution.test.ts",
+            "test": "worker turn execution > redacts blocked input before launch ({\"throws\":false,\"revokeAtCommit\":false}) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-execution.test.ts:196:5\n194|     { throws: true, revokeAtCommit: false },\n195|     { throws: false, revokeAtCommit: true },\n196|   ])(\"redacts blocked input before launch (%j)\", async ({ throws, revo…\n|     ^\n197|     await seedActivePlacement();\n198|     const input = turn(\"blocked-input\");"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "b0c797d0c667c2cfe5443720ccaaa38381c887ba",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-2 (node)",
+      "reason": "Exact native user-home models.list catalog test passed locally on unchanged candidate code. Accept only the recorded request timeout as non-reproduction, not a proven flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "test/plugins/codex-model-catalog.gateway.test.ts",
+            "test": "models.list selects a native user-home API-key catalog through the prepared Gateway owner :: GatewayClientRequestTimeoutError: gateway request timeout for models.list\n❯ Object.createRequestTimeoutError packages/gateway-client/src/client.ts:285:9\n283|       createRequestError: (error) => new GatewayClientRequestError(err…\n284|       createRequestTimeoutError: (method, timeoutMs, requestSent) =>\n285|         new GatewayClientRequestTimeoutError({ method, timeoutMs, requ…\n|         ^\n286|       createRequestAbortError: (method) =>\n287|         createAbortError(`gateway request aborted for ${method}`),\n❯ Timeout.<anonymous> packages/gateway-client/src/pending-request.ts:243:23"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "b0c797d0c667c2cfe5443720ccaaa38381c887ba",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-44 (node)",
+      "reason": "Exact bounded remote-tool lifetime and user-cancellation case passed locally on unchanged candidate code. Accept the recorded timeout as non-reproduction, not a proven flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-run-owner.test.ts",
+            "test": "cloud worker run ownership > keeps a bounded remote tool alive until user cancellation with a shared session ID at cancellation :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-run-owner.test.ts:121:14\n119|     { cancellation: \"user\", firstToolDelayMs: 0, collisionAt: \"cancell…\n120|     { cancellation: \"deadline\", firstToolDelayMs: 10 * 60_000, collisi…\n121|   ] as const)(\n|              ^\n122|     \"keeps a bounded remote tool alive until $cancellation cancellatio…\n123|     async ({ cancellation, firstToolDelayMs, collisionAt }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "b0c797d0c667c2cfe5443720ccaaa38381c887ba",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-7 (node)",
+      "reason": "Both unchanged transcript-footprint tests passed locally. Accept only the recorded already-persisted timeout and consequent unjoined-fixture rejection; non-reproduction does not prove a flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
+            "test": "Gateway worker-turn selected transcript preparation > does not hydrate inactive branches for already-persisted input :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts:55:60\n53|   });\n54|\n55|   it.each([\"already-persisted\", \"recorder-owned\"] as const)(\n|                                                            ^\n56|     \"does not hydrate inactive branches for %s input\",\n57|     async (persistence) => {"
+          },
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
+            "test": "Gateway worker-turn selected transcript preparation > does not hydrate inactive branches for recorder-owned input :: Error: Prior worker fixture remains unjoined; retained state must not be replaced\n❯ src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts:45:13\n43|   beforeEach(async () => {\n44|     if (hasUnjoinedOwner) {\n45|       throw new Error(\"Prior worker fixture remains unjoined; retained…\n|             ^\n46|     }\n47|     await fixture.setupWorkerTurnLauncherTest();"
+          }
+        ]
+      }
     }
   ]
 }
