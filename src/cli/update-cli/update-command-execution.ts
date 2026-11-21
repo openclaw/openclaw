@@ -49,7 +49,10 @@ import {
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
-import { captureUpdateActivationSchemas } from "./update-command-schema.js";
+import {
+  assertPendingMigrationsAdmitted,
+  captureUpdateActivationSchemas,
+} from "./update-command-schema.js";
 import {
   collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
@@ -425,7 +428,7 @@ export async function executeMutableUpdate(
       originalServiceVerdict?.kind === "owned" && originalServiceVerdict.requiresInstallRootRefresh
         ? originalServiceVerdict.root
         : params.root;
-    ({ previousSchemaVersions, schemaVersions } = await captureUpdateActivationSchemas({
+    const activationSchemas = await captureUpdateActivationSchemas({
       root: previousRoot,
       env,
       config,
@@ -433,7 +436,8 @@ export async function executeMutableUpdate(
       candidateSchemaVersions,
       gatewayRestartCompletion,
       timeoutMs: params.updateStepTimeoutMs,
-    }));
+    });
+    ({ previousSchemaVersions, schemaVersions } = activationSchemas);
     if (
       preManagedServiceStop?.running &&
       !servicePrepared &&
@@ -486,6 +490,13 @@ export async function executeMutableUpdate(
       await stopManagedServiceBeforeMutableUpdate(roots);
       // Preparation can hold Windows recovery custody without stopping a process.
       servicePrepared = true;
+    }
+    if (params.updateInstallKind === "package") {
+      await assertPendingMigrationsAdmitted({
+        pendingMigrations: activationSchemas.pendingMigrations,
+        env,
+        timeoutMs: activationTimeoutMs,
+      });
     }
     const postStopStartedAt = Date.now();
     await waitForCurrent();
