@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -8,12 +9,18 @@ import {
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
 import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
+import {
   createGateway,
+  createGatewayHarness,
   createSessions,
   createSessionsHarness,
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { agentList, sessionList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
@@ -62,25 +69,71 @@ async function mountNavigation(
   return { ...mounted, setSessionKey, onNavigate };
 }
 
-it("honors deployment policy and existing Community dismissals", async () => {
+it("shows Community after three prompted sessions and honors deployment policy and dismissals", async () => {
   localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
-  const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
-  const fetch = vi.spyOn(globalThis, "fetch");
-  try {
-    for (const enabled of [true, false]) {
-      fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: enabled }));
-      await context.config.refresh();
-      await sidebar.updateComplete;
-      expect(find(".community-invite-card")).toBeNull();
+  let used = 0;
+  const usageReads: Record<string, unknown>[] = [];
+  const request = createGatewayRequestMock(async (method, params) => {
+    if (method !== "sessions.list") {
+      return {};
     }
-    localStorage.removeItem("openclaw:control-ui:community-invite:v2");
-    fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
+    if (isRecord(params) && params.promptedByMe === true) {
+      usageReads.push(params);
+      return { ...sessionsResult([]), totalCount: used };
+    }
+    return sessionsResult([]);
+  });
+  const gateway = createGatewayHarness(createTestGatewayClient(request));
+  const { sidebar, context, find } = await mountAgentSidebar(
+    createTestSessionCapability(gateway.gateway),
+    null,
+    gateway.gateway,
+  );
+  const fetch = vi.spyOn(globalThis, "fetch");
+  // Each enabled publication remounts the card, which reads session use again unless dismissed.
+  const showCommunity = async (enabled: boolean) => {
+    fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: enabled }));
     await context.config.refresh();
     await sidebar.updateComplete;
-    expect(find(".community-invite-card")).not.toBeNull();
+  };
+  try {
+    for (const enabled of [true, false]) {
+      await showCommunity(enabled);
+      expect(find(".community-invite-card")).toBeNull();
+    }
+    expect(usageReads).toEqual([]);
+    localStorage.removeItem("openclaw:control-ui:community-invite:v2");
+    for (const count of [0, 1, 2]) {
+      used = count;
+      await showCommunity(true);
+      await vi.waitFor(() => expect(usageReads).toHaveLength(count + 1));
+      await sidebar.updateComplete;
+      expect(find(".community-invite-card")).toBeNull();
+      await showCommunity(false);
+    }
+    expect(usageReads[0]).toMatchObject({
+      promptedByMe: true,
+      archived: "all",
+      limit: 1,
+      excludeSubagents: true,
+      excludeCron: true,
+      excludeSystem: true,
+      excludeDock: true,
+    });
+    used = 3;
+    await showCommunity(true);
+    await vi.waitFor(() => expect(find(".community-invite-card")).not.toBeNull());
+    // Reaching the threshold reveals the sidebar card in place; nothing opens modally.
+    expect(find(".community-invite-card")!.closest(".sidebar-shell")).not.toBeNull();
+    expect(document.querySelector("dialog[open]")).toBeNull();
     find<HTMLButtonElement>(".invite__close")!.click();
     await sidebar.updateComplete;
     expect(find(".community-invite-card")).toBeNull();
+    const reads = usageReads.length;
+    await showCommunity(false);
+    await showCommunity(true);
+    expect(find(".community-invite-card")).toBeNull();
+    expect(usageReads).toHaveLength(reads);
   } finally {
     fetch.mockRestore();
     localStorage.removeItem("openclaw:control-ui:community-invite:v2");

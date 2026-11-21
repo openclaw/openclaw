@@ -67,6 +67,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-yield-pending-reply.real-gateway.e2e.test.ts",
   "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
+  "ui/src/e2e/community-invite-sessions.real-gateway.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
   "ui/src/e2e/config-form.real-gateway.e2e.test.ts",

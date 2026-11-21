@@ -44,6 +44,7 @@ export async function listSessionFixture(
     entryFilter?: (key: string, entry: SessionEntry) => boolean;
     ownerFirstActorId?: string;
     involvingActorId?: string;
+    viewerProfileId?: string;
   },
 ) {
   await prepareSubagentSessionListReadCache();
@@ -87,7 +88,7 @@ export async function listSessionFixture(
       row.hasBoard = row.facts.hasBoard;
     }
   }
-  const profileId = params.ownerFirstActorId ?? params.involvingActorId;
+  const profileId = params.ownerFirstActorId ?? params.involvingActorId ?? params.viewerProfileId;
   let client: GatewayClient | undefined;
   if (profileId || params.entryFilter) {
     client = { connect: gatewayConnect(["operator.admin"]) };
