@@ -123,7 +123,7 @@ it("explains a removed active session worktree without a snapshot before prepari
   }
 });
 
-it.each(["snapshot", "fresh", "protected-projection"])(
+it.each(["snapshot", "fresh", "protected-projection", "incognito"])(
   "refuses chat.send until explicit workspace restore (%s)",
   { timeout: 90_000 },
   async (mode) => {
@@ -139,9 +139,9 @@ it.each(["snapshot", "fresh", "protected-projection"])(
         responseId: randomUUID(),
       });
     });
-    const sessionKey = "agent:main:explicit-restore-worktree";
-    let restoring = false;
-    const readyEvent = createDeferredCore();
+    const incognito = mode === "incognito";
+    const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}restore`;
+    const workspaceStates: unknown[] = [];
     const failed = createDeferredCore<string>();
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
@@ -166,13 +166,8 @@ it.each(["snapshot", "fresh", "protected-projection"])(
           if (!isRecord(payload) || payload.sessionKey !== sessionKey) {
             return;
           }
-          if (
-            restoring &&
-            event.event === "sessions.changed" &&
-            isRecord(payload.session) &&
-            payload.session.worktreeState === "ready"
-          ) {
-            readyEvent.resolve();
+          if (event.event === "sessions.changed" && isRecord(payload.session)) {
+            workspaceStates.push(payload.session.worktreeState);
           }
           if (event.event === "chat" && (payload.state === "error" || payload.state === "final")) {
             failed.resolve(String(payload.errorMessage));
@@ -185,6 +180,8 @@ it.each(["snapshot", "fresh", "protected-projection"])(
         "sessions.create",
         {
           key: sessionKey,
+          incognito,
+          label: "Synthetic workspace restore",
           worktree: true,
           worktreeSource: "empty",
         },
@@ -226,10 +223,12 @@ it.each(["snapshot", "fresh", "protected-projection"])(
         session: { worktreeState: mode === "fresh" ? "removed-fresh" : "removed-snapshot" },
       });
       expect(await client.request("sessions.list", { rowMode: "sidebar" })).toMatchObject({
-        sessions: expect.arrayContaining([
+        sessions: (incognito ? expect.not : expect).arrayContaining([
           expect.objectContaining({
             key: sessionKey,
-            worktreeState: mode === "fresh" ? "removed-fresh" : "removed-snapshot",
+            ...(!incognito && {
+              worktreeState: mode === "fresh" ? "removed-fresh" : "removed-snapshot",
+            }),
           }),
         ]),
       });
@@ -243,14 +242,14 @@ it.each(["snapshot", "fresh", "protected-projection"])(
         expect(await fs.readFile(uniqueFile, "utf8")).toBe("unique projection bytes\n");
         return;
       }
-      restoring = true;
+      workspaceStates.length = 0;
       using materialize = vi.spyOn(checkout, "materializeManagedWorktree");
       await Promise.all([
         client.request("worktrees.restore", { id: created.worktree.id }),
         client.request("worktrees.restore", { id: created.worktree.id }),
       ]);
       expect(materialize).toHaveBeenCalledOnce();
-      await readyEvent.promise;
+      await vi.waitFor(() => expect(workspaceStates).toContain("ready"));
       expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
         session: { worktreeState: "ready" },
       });
@@ -269,7 +268,7 @@ it.each(["snapshot", "fresh", "protected-projection"])(
       ).toMatchObject({ status: "ok" });
       expect(requests).toHaveLength(1);
       expect(failures).toEqual([]);
-      if (mode === "snapshot") {
+      if (mode !== "fresh") {
         expect(await fs.readFile(saved, "utf8")).toBe("saved work survives cleanup\n");
         expect(await client.request("sessions.diff", { sessionKey })).toMatchObject({
           files: expect.arrayContaining([expect.objectContaining({ path: "saved-task.txt" })]),

@@ -7,6 +7,7 @@ import {
   pluginStatePublication,
   pluginStateReadDependenciesAffected,
 } from "../plugin-state/plugin-state-publication.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   emitSessionLifecycleEvent,
   onSessionIdentityMutation,
@@ -377,6 +378,13 @@ export function subscribeSessionRowPublications({
             continue;
           }
           const worktree = rowToRecord(fact.value);
+          if (isIncognitoSessionKey(fact.value.owner_id)) {
+            // Memory-only conversations never enter the resident roster.
+            const sessionKey = fact.value.owner_id;
+            queueMicrotask(() =>
+              emitSessionLifecycleEvent({ sessionKey, reason: "workspace", scope: "runtime" }),
+            );
+          }
           for (const id of byKey.get(`key:${worktree.ownerId}`) ?? []) {
             const row = rows.get(id);
             if (!row || row.storedEntry?.worktree?.id !== worktree.id) {
