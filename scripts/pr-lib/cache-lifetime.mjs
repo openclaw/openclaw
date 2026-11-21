@@ -885,9 +885,9 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
             try {
               lockIdentity = identityRecord(directory(path));
               leaseIdentity = identityRecord(physicalFile(leasePath));
-            } catch (error) {
-              if (error.code !== "ENOENT") {
-                throw error;
+            } catch (inspectionError) {
+              if (inspectionError.code !== "ENOENT") {
+                throw inspectionError;
               }
               // The previous owner can finish releasing after our directory read.
               assertCache();
