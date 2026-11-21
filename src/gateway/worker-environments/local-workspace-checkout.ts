@@ -3,7 +3,10 @@ import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
-import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
+import {
+  nativeWorktreeFilesystem,
+  prepareWorktreeFilesystemMutation,
+} from "../../agents/worktrees/filesystem-native.js";
 import { commandError, gitEnvironment, requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
@@ -253,7 +256,7 @@ export async function prepareLocalWorkspaceCheckout(
     await configureProjectionFetch({ ...params, assertCurrent: current }, cleanEnv);
   } finally {
     phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
-    await fs.rm(temporary, { recursive: true, force: true });
+    await nativeWorktreeFilesystem.remove(temporary, { commitGuard: () => {} });
   }
 }
 
@@ -316,7 +319,7 @@ export async function initializeLocalWorkspaceProjection(
   current();
   // No runtime can use an uncommitted initial projection. Only this durable
   // reservation owns interrupted preparation; never recreate a ready checkout.
-  await fs.rm(params.projectionPath, { recursive: true, force: true });
+  await nativeWorktreeFilesystem.remove(params.projectionPath, filesystem);
   await prepare();
   current();
   const temporary = await fs.mkdtemp(path.join(parent, ".prepare-"));
@@ -398,6 +401,6 @@ export async function initializeLocalWorkspaceProjection(
     return { ...initial, buildCacheInputs };
   } finally {
     phases.mark(`${RECONCILE_PHASE}.cleanup`);
-    await fs.rm(temporary, { recursive: true, force: true });
+    await nativeWorktreeFilesystem.remove(temporary, { commitGuard: () => {} });
   }
 }
