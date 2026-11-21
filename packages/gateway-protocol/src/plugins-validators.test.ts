@@ -59,14 +59,13 @@ describe("plugin lifecycle protocol validators", () => {
     }
     expect(catalogEntry.Check({ ...plugin, hasToolBrandIcon: "true" })).toBe(false);
   });
-  it("accepts bounded activation report batches while retaining per-plugin receipts", () => {
+  it("accepts complete activation reports while retaining per-plugin receipt validation", () => {
     const receipt = { pluginId: "review", revision: "one", status: "activated" };
     const batch = (length: number) => Array.from({ length }, () => ({ ...receipt }));
-    report.accepts({ reports: [receipt] }, { reports: batch(64) });
+    report.accepts({ reports: [receipt] }, { reports: batch(65) });
     report.rejects(
       receipt,
       { reports: [] },
-      { reports: batch(65) },
       { reports: [{ ...receipt, status: "pending" }] },
       { reports: [{ ...receipt, error: "x".repeat(513) }] },
       { reports: [{ ...receipt, extra: true }] },
