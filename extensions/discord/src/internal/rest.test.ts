@@ -197,6 +197,85 @@ describe("RequestClient", () => {
     },
   );
 
+  it.each([0, 0.1])(
+    "does not hold interaction callbacks for a global rate limit (route wait %s)",
+    async (routeWait) => {
+      vi.useFakeTimers({ now: 0 });
+      const first = createDeferred<Response>();
+      const fetch = vi.fn(async () => {
+        if (fetch.mock.calls.length === 1) {
+          return await first.promise;
+        }
+        if (routeWait > 0 && fetch.mock.calls.length === 2) {
+          return rateLimitResponse(routeWait, {});
+        }
+        if (fetch.mock.calls.length === (routeWait > 0 ? 3 : 2)) {
+          return createJsonResponse({ ok: "callback" });
+        }
+        return createJsonResponse({ id: "after-global" });
+      });
+      const client = requestClient(fetch);
+      const limited = client.get(messagePath);
+      await Promise.resolve();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      first.resolve(
+        rateLimitResponse(5, { "X-RateLimit-Global": "true", "X-RateLimit-Scope": "global" }, true),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const callback = client.post("/interactions/123/token/callback", { body: { type: 6 } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      if (routeWait > 0) {
+        await vi.advanceTimersByTimeAsync(99);
+        expect(fetch).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(fetch).toHaveBeenCalledTimes(3);
+      }
+      await expect(callback).resolves.toEqual({ ok: "callback" });
+      const callbackRequests = routeWait > 0 ? 3 : 2;
+      await vi.advanceTimersByTimeAsync(4_999 - routeWait * 1000);
+      expect(fetch).toHaveBeenCalledTimes(callbackRequests);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(limited).resolves.toEqual({ id: "after-global" });
+      expect(fetch).toHaveBeenCalledTimes(callbackRequests + 1);
+    },
+  );
+
+  it("honors a callback's own global Retry-After without pausing other callbacks", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const limitedPath = "/interactions/123/token/callback";
+    const otherPath = "/interactions/456/token/callback";
+    const attempts: Array<{ path: string; at: number }> = [];
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(new Request(input).url).pathname.replace(/^\/api\/v\d+/, "");
+      attempts.push({ path, at: Date.now() });
+      if (attempts.length === 1) {
+        return rateLimitResponse(0.1, { "Retry-After": "0.1", "X-RateLimit-Global": "true" }, true);
+      }
+      return createJsonResponse({ ok: path });
+    });
+    const client = requestClient(fetch);
+    const limited = client.post(limitedPath, { body: { type: 6 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toEqual([{ path: limitedPath, at: 0 }]);
+    const ordinary = client.get(messagePath);
+    await expect(client.post(otherPath, { body: { type: 6 } })).resolves.toEqual({ ok: otherPath });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(attempts).toEqual([
+      { path: limitedPath, at: 0 },
+      { path: otherPath, at: 0 },
+    ]);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(limited).resolves.toEqual({ ok: limitedPath });
+    await expect(ordinary).resolves.toEqual({ ok: messagePath });
+    expect(attempts).toEqual([
+      { path: limitedPath, at: 0 },
+      { path: otherPath, at: 0 },
+      { path: limitedPath, at: 100 },
+      { path: messagePath, at: 100 },
+    ]);
+  });
+
   it("aborts stalled REST response bodies after the idle timeout", async () => {
     let cancelReason: unknown;
     const response = new Response(
