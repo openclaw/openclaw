@@ -74,7 +74,16 @@ for (const scenario of [
       const token = "conflict-fixture-token";
       const state = await createOpenClawTestState({
         label: "completion-conflict",
-        env: createGatewayBackgroundTestEnv(token),
+        env: {
+          ...createGatewayBackgroundTestEnv(token),
+          // The synthetic provider is local even when the test host uses an HTTP proxy.
+          NO_PROXY: [process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+            .filter(Boolean)
+            .join(","),
+          no_proxy: [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+            .filter(Boolean)
+            .join(","),
+        },
       });
       const sessionKey = "agent:main:main",
         sessionId = "conflict-parent-" + scenario,
