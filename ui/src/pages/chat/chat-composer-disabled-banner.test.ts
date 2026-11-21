@@ -10,7 +10,7 @@ import {
 afterEach(() => resetComposerFixture());
 
 type Banner = NonNullable<Parameters<typeof renderComposerFixture>[0]>["disabledBanner"];
-function drawBanner(overrides: Partial<NonNullable<Banner>> = {}) {
+async function drawBanner(overrides: Partial<NonNullable<Banner>> = {}) {
   const view = renderComposerFixture({
     canSend: false,
     disabledBanner: {
@@ -21,6 +21,9 @@ function drawBanner(overrides: Partial<NonNullable<Banner>> = {}) {
       ...overrides,
     },
   });
+  await vi.waitFor(() =>
+    expect(view.container.querySelector(".agent-chat__disabled-banner")).not.toBeNull(),
+  );
   const banner = view.container.querySelector(".agent-chat__disabled-banner")!;
   const update = (disabledBanner: Banner) =>
     renderComposerInto(view.container, { ...view.props, disabledBanner });
@@ -29,14 +32,14 @@ function drawBanner(overrides: Partial<NonNullable<Banner>> = {}) {
 
 it.each(["action", "stop"] as const)(
   "keeps %s focus and its current callback through refresh",
-  (kind) => {
+  async (kind) => {
     const initial = vi.fn();
     const current = vi.fn();
     const controls = (callback: () => void) =>
       kind === "stop"
         ? { actionLabel: undefined, onAction: undefined, stop: { onAbort: callback } }
         : { actionLabel: "Unarchive", onAction: callback };
-    const { container, update, banner } = drawBanner(controls(initial));
+    const { container, update, banner } = await drawBanner(controls(initial));
     const selector = kind === "stop" ? '[aria-label="Stop generating"]' : "button";
     const findAction = () => banner.querySelector<HTMLButtonElement>(selector);
     const action = findAction()!;
@@ -59,20 +62,20 @@ it.each(["action", "stop"] as const)(
   },
 );
 
-it("disables its action with the mutation reason", () => {
+it("disables its action with the mutation reason", async () => {
   const onAction = vi.fn();
   const reason = "Operator write access is required.";
-  const { action } = drawBanner({ disabledReason: reason, onAction });
+  const { action } = await drawBanner({ disabledReason: reason, onAction });
   expect(action).toMatchObject({ disabled: true, title: reason });
   action?.click();
   expect(onAction).not.toHaveBeenCalled();
 });
 
-it("renders a standard primary action with progress feedback", () => {
+it("renders a standard primary action with progress feedback", async () => {
   const title = "This session is archived.";
   const text = "Unarchive this session to continue.";
   const busyLabel = "Restoring…";
-  const { banner, action } = drawBanner({
+  const { banner, action } = await drawBanner({
     title,
     text,
     tone: "neutral",

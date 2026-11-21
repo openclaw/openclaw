@@ -522,7 +522,8 @@ export async function runBtwSideQuestion(
         : undefined);
     if (cliProvider) {
       if (params.sessionFork) {
-        throw new Error(`Session forks are not supported for CLI runtime ${cliProvider}.`);
+        // The fork owner runs subscription logins through the CLI backend itself.
+        return await params.sessionFork();
       }
       return runCliBtwSideQuestion({
         cfg: params.cfg,

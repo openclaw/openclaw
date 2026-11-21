@@ -11,7 +11,10 @@ import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/type
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import {
+  sessionWorktreeAvailability,
+  type SessionWorktreeObservation,
+} from "../agents/worktrees/session-lifecycle.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
@@ -26,11 +29,7 @@ import { resolveSessionModelOverrideSource } from "../config/sessions/model-over
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildProjectedAgentRunIndex,
-  resolveProjectedAgentRunModel,
-  type ProjectedAgentRunIndex,
-} from "../infra/agent-run-registry.js";
+import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -39,8 +38,6 @@ import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-statu
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
-import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
-import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { channelAvatarRevision } from "./channel-avatar-reference.js";
@@ -57,7 +54,10 @@ import {
   freezeSessionRow,
   freezeSessionRowPatch,
 } from "./session-row-identity.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import {
+  readSessionRowModelFacts,
+  resolveGatewaySessionActiveModel,
+} from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
@@ -108,6 +108,7 @@ export function readSessionRowInputs(params: {
   runtimeResolution?: SessionRuntimeResolution;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
+  preparedWorktree?: SessionWorktreeObservation | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   preparedTitle?: Pick<
@@ -208,6 +209,10 @@ export function readSessionRowInputs(params: {
 
   return {
     inputs: {
+      worktreeState:
+        entry?.worktree && params.preparedWorktree !== undefined
+          ? sessionWorktreeAvailability(params.preparedWorktree, key)
+          : undefined,
       cfg,
       key,
       entry,
@@ -308,65 +313,6 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-export function resolveGatewaySessionActiveModel(params: {
-  cfg: OpenClawConfig;
-  active?: boolean;
-  activeModel?: { provider: string; model: string } | null;
-  terminalModel?: { modelProvider: string; model: string } | null;
-  agentId: string;
-  storeAgentId?: string;
-  sessionId?: string;
-  sessionKey: string;
-  projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel: { provider: string; model: string };
-  entry?: InternalSessionEntry;
-  storePath: string;
-}): { provider: string; model: string } | undefined {
-  const liveModel = resolveProjectedAgentRunModel({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    index: params.projectedAgentRuns,
-  });
-  if (params.active ?? liveModel !== undefined) {
-    return liveModel ?? undefined;
-  }
-  if (!params.entry?.fallbackNotice) {
-    return undefined;
-  }
-  const { selectedModel } = params;
-
-  const fallbackEntry =
-    params.activeModel === undefined
-      ? readSessionFallbackModel({
-          selectedProvider: selectedModel.provider,
-          selectedModel: selectedModel.model,
-          sessionEntry: params.entry,
-          config: params.cfg,
-          terminalModel: params.terminalModel ?? null,
-          sessionScope: {
-            agentId: params.storeAgentId ?? params.agentId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          },
-        })
-      : params.activeModel
-        ? { modelProvider: params.activeModel.provider, model: params.activeModel.model }
-        : undefined;
-  const { selected, active } = resolveSelectedAndActiveModel({
-    selectedProvider: selectedModel.provider,
-    selectedModel: selectedModel.model,
-    sessionEntry: fallbackEntry ?? params.entry,
-  });
-  return resolveActiveFallbackState({
-    selectedModelRef: selected.label,
-    activeModelRef: active.label,
-    config: params.cfg,
-    state: params.entry,
-  }).active
-    ? { provider: active.provider, model: active.model }
-    : undefined;
-}
-
 export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
   return replaceSessionRowFacts(materialized, projectSessionRowProfiles(materialized.source));
 }
@@ -422,6 +368,7 @@ export function materializeSessionRow(
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     ...definedSessionRowField("worktree", entry?.worktree),
+    ...definedSessionRowField("worktreeState", input.worktreeState),
     ...definedSessionRowField("deviceFolder", entry?.deviceFolder),
     ...definedSessionRowField("repositoryWorkspaceId", entry?.repositoryWorkspaceId),
     ...(input.repository ? { repository: input.repository } : {}),

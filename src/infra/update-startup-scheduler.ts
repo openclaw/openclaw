@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   UpdateAvailable,
   UpdateScheduleState,
@@ -37,7 +38,9 @@ export function createGatewayUpdateCheck(params: {
   let started = false;
   let stopConfigListener: (() => void) | undefined;
   const updatePolicy = () => JSON.stringify(params.getConfig().update ?? {});
+  const catalogSource = () => JSON.stringify(params.getConfig().models?.catalogRefresh ?? {});
   let policy = updatePolicy();
+  let source = catalogSource();
   const check = async () => {
     if (isConstrainedProcessLowOnMemory()) {
       return 60_000;
@@ -74,6 +77,42 @@ export function createGatewayUpdateCheck(params: {
     const next = computeNextRunAtMs({ kind: "cron", expr }, now);
     return next === undefined ? interval : Math.min(interval, Math.max(1, next - now));
   };
+  const checkRemoteCatalog = async () => {
+    // Leave scarce cgroup memory to requests before allocating a new catalog generation.
+    if (isConstrainedProcessLowOnMemory()) {
+      return 60_000;
+    }
+    let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
+    try {
+      const result = await refreshRemoteModelCatalog({
+        config: params.getConfig(),
+        signal: lifecycle.signal,
+      });
+      if (lifecycle.signal.aborted) {
+        return REMOTE_MODEL_CATALOG_TTL_MS;
+      }
+      nextCheckInMs =
+        result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
+      if (result.status === "error") {
+        params.log.info(
+          "remote model catalog refresh failed; next check in 6 hours, or run openclaw models refresh",
+          { error: result.error },
+        );
+      } else if (result.status !== "disabled") {
+        const state = await params.applyRemoteCatalogUpdate(lifecycle.signal);
+        if (state === "published") {
+          params.log.info("remote model catalog applied");
+        } else if (state === "superseded") {
+          params.log.info("remote model catalog check superseded; deferred to the next check");
+        }
+      }
+    } catch (error) {
+      if (!lifecycle.signal.aborted) {
+        params.log.info("remote model catalog check failed", { error: String(error) });
+      }
+    }
+    return nextCheckInMs;
+  };
   return {
     initialize: lifecycle.initialize,
     stop: () => {
@@ -87,62 +126,37 @@ export function createGatewayUpdateCheck(params: {
       started = true;
       // Config publication already emits these notifications after installing the
       // live snapshot. Re-arm the existing owner, not a second polling scheduler.
+      // Jobs keep their registrant's async context, and a notification runs inside the
+      // publishing reload, whose plugin inventory retires when it ends. Re-arm as this owner.
+      const asOwner = AsyncLocalStorage.snapshot();
       stopConfigListener = sessionChanges.subscribe((change) => {
         if (
           !("all" in change) ||
           typeof change.scope !== "string" ||
-          !change.scope.startsWith("config")
+          !change.scope.startsWith("config") ||
+          lifecycle.signal.aborted
         ) {
           return;
         }
+        // A new catalog source applies now, not at the next 6-hour check.
+        const nextSource = catalogSource();
+        if (source !== nextSource) {
+          source = nextSource;
+          asOwner(() => lifecycle.schedule("update.remote-model-catalog", checkRemoteCatalog));
+        }
         const nextPolicy = updatePolicy();
-        if (policy === nextPolicy || lifecycle.signal.aborted) {
+        if (policy === nextPolicy) {
           return;
         }
         policy = nextPolicy;
         if (lifecycle.campaign?.getState()?.state !== "applying") {
           lifecycle.campaign?.clear();
         }
-        lifecycle.schedule("update.check", check);
+        asOwner(() => lifecycle.schedule("update.check", check));
       });
       lifecycle.signal.addEventListener("abort", () => stopConfigListener?.(), { once: true });
       lifecycle.schedule("update.check", check);
-      lifecycle.schedule("update.remote-model-catalog", async () => {
-        // Leave scarce cgroup memory to requests before allocating a new catalog generation.
-        if (isConstrainedProcessLowOnMemory()) {
-          return 60_000;
-        }
-        let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
-        try {
-          const result = await refreshRemoteModelCatalog({
-            config: params.getConfig(),
-            signal: lifecycle.signal,
-          });
-          if (lifecycle.signal.aborted) {
-            return REMOTE_MODEL_CATALOG_TTL_MS;
-          }
-          nextCheckInMs =
-            result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
-          if (result.status === "error") {
-            params.log.info(
-              "remote model catalog refresh failed; next check in 6 hours, or run openclaw models refresh",
-              { error: result.error },
-            );
-          } else if (result.status !== "disabled") {
-            const state = await params.applyRemoteCatalogUpdate(lifecycle.signal);
-            if (state === "published") {
-              params.log.info("remote model catalog applied");
-            } else if (state === "superseded") {
-              params.log.info("remote model catalog check superseded; deferred to the next check");
-            }
-          }
-        } catch (error) {
-          if (!lifecycle.signal.aborted) {
-            params.log.info("remote model catalog check failed", { error: String(error) });
-          }
-        }
-        return nextCheckInMs;
-      });
+      lifecycle.schedule("update.remote-model-catalog", checkRemoteCatalog);
     },
   };
 }

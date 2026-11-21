@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { getPreparedModelRuntimeTestApi, usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -585,22 +586,63 @@ describe("remote catalog publication boundaries", () => {
     }
   });
 
+  // Other async owners can schedule timers while pricing is held.
+  function trackPublicationTimers() {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const scope = new AsyncLocalStorage<boolean>();
+    const pending = new Set<unknown>();
+    const schedule = globalThis.setTimeout;
+    const cancel = globalThis.clearTimeout;
+    const scheduled = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, ms, ...args) => {
+        const owned = scope.getStore() === true;
+        const timer = schedule(
+          (...values) => {
+            pending.delete(timer);
+            scope.run(owned, callback, ...values);
+          },
+          ms,
+          ...args,
+        );
+        if (owned) {
+          pending.add(timer);
+        }
+        return timer;
+      });
+    const cancelled = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+      pending.delete(timer);
+      cancel(timer);
+    });
+    return {
+      pending,
+      run<T>(operation: () => T): T {
+        return scope.run(true, operation);
+      },
+      [Symbol.dispose]() {
+        scheduled.mockRestore();
+        cancelled.mockRestore();
+        scope.disable();
+        vi.useRealTimers();
+      },
+    };
+  }
+
   it("releases the pricing deadline when preparation settles", async () => {
     await setup();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    using timers = trackPublicationTimers();
     const { preparing, commit, pricingSpy } = holdPricing();
-    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    const adoption = timers.run(() => applyRemoteModelCatalogUpdate(() => config));
     try {
       await preparing.promise;
-      expect(vi.getTimerCount()).toBe(1);
+      expect(timers.pending.size).toBe(1);
       commit.resolve();
       expect(await adoption).toBe("published");
-      expect(vi.getTimerCount()).toBe(0);
+      expect(timers.pending.size).toBe(0);
     } finally {
       commit.resolve();
       await Promise.allSettled([adoption]);
       pricingSpy.mockRestore();
-      vi.useRealTimers();
     }
   });
 
@@ -615,7 +657,7 @@ describe("remote catalog publication boundaries", () => {
         { provenance: "configured", catalogMode: "static" },
       );
     }
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    using timers = trackPublicationTimers();
     getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(100);
     const started = [createDeferred(), createDeferred()];
     const finished = [createDeferred(), createDeferred()];
@@ -635,13 +677,17 @@ describe("remote catalog publication boundaries", () => {
         return pending;
       });
     let settled = false;
-    const adoption = applyRemoteModelCatalogUpdate(() => config).catch((error: unknown) => {
-      settled = true;
-      return error;
-    });
+    const unrelated = vi.fn();
+    const unrelatedTimer = setTimeout(unrelated, 1_000);
+    const adoption = timers
+      .run(() => applyRemoteModelCatalogUpdate(() => config))
+      .catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
     try {
       await started[0]!.promise;
-      expect(vi.getTimerCount()).toBe(1);
+      expect(timers.pending.size).toBe(1);
       await vi.advanceTimersByTimeAsync(80);
       finished[0]!.resolve();
       await started[1]!.promise;
@@ -654,16 +700,17 @@ describe("remote catalog publication boundaries", () => {
         cause: { name: "TimeoutError", message: "The operation was aborted due to timeout" },
       });
       expect(calls).toBe(2);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(unrelated).not.toHaveBeenCalled();
+      expect(timers.pending.size).toBe(0);
       expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
       expect(readSnapshot(fixture.agentInput("default", config))?.isCurrent()).toBe(true);
     } finally {
+      clearTimeout(unrelatedTimer);
       for (const gate of finished) {
         gate.resolve();
       }
       await Promise.allSettled([adoption, ...pendingPricing]);
       pricingSpy.mockRestore();
-      vi.useRealTimers();
     }
     expect(calls).toBe(2);
   });

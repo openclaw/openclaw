@@ -8,7 +8,7 @@ import {
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
 } from "../../src/infra/agent-events.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -60,12 +60,7 @@ deliveries = 0;
 captured = 0;
 globalThis.gc?.();
 const inspector = new Session();
-inspector.connect();
-await inspector.post("HeapProfiler.startSampling", {
-  samplingInterval: 1024,
-  includeObjectsCollectedByMajorGC: true,
-  includeObjectsCollectedByMinorGC: true,
-});
+await startCollectedHeapSampling(inspector, 1024);
 const start = performance.now();
 for (let index = 0; index < events; index++) {
   emitAgentEvent(event);

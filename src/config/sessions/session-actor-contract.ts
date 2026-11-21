@@ -1,4 +1,4 @@
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
 import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
