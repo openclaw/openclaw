@@ -774,7 +774,7 @@ it("shows only live author resolutions, closes dismissed chips, and retires acce
         tray();
         return state.chatMessages;
       },
-      busyIds: new Set(),
+      busyIds: new Set<string>(),
       archived: false,
       canResolve: false,
       onResolve: vi.fn(),

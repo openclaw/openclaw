@@ -37,8 +37,8 @@ import {
   type ChatPanePlacementProps,
 } from "./chat-pane-placement.tsx";
 import type { HeaderMenuSessionAction } from "./chat-quick-action.tsx";
-import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
 import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
+import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -188,22 +188,45 @@ export function ChatPaneMobileComposition(props: {
     mentionPerson: (name: string) => t("chat.sessionHeader.mentionPerson", { name }),
     morePeople: (count: number) => t("chat.sessionHeader.morePeople", { count: String(count) }),
   };
-  const adapter = createChatSessionSharingMobileAdapter(sharing, {
-    onOpenSharing: () => {
-      const current = host();
-      // Sharing opened within People retains the People trigger as its return focus.
-      current?.navigate(
-        sharingPage,
-        current.open && current.destination === people ? undefined : actionSource(),
-      );
+  const sharingAvailable = () => {
+    const session = sharing()?.session;
+    return Boolean(session && canManageChatSessionSharing(session));
+  };
+  const openSharing = () => {
+    const current = sharing();
+    if (!sharingAvailable() || current?.openDisabledReason) {
+      return;
+    }
+    current?.onOpen();
+    const target = host();
+    target?.navigate(
+      sharingPage,
+      target.open && target.destination === people ? undefined : actionSource(),
+    );
+  };
+  const createAdapter = createMemo(
+    async () => {
+      const { createChatSessionSharingMobileAdapter } =
+        await import("./chat-session-sharing-mobile-adapter.ts");
+      return createChatSessionSharingMobileAdapter;
     },
-    onOpenAccess: () => host()?.navigate(accessPage),
-    onApplied: () => host()?.navigate(sharingPage),
-    accessTarget: () =>
-      presented() && host()?.open && !host()?.suspended && host()?.destination === accessPage
-        ? accessPage
-        : undefined,
-  });
+    { lazy: true },
+  );
+  // Retained destination content keeps this presentation alive after its first use.
+  const adapter = createMemo(
+    () => {
+      return createAdapter()(sharing, {
+        onOpenSharing: openSharing,
+        onOpenAccess: () => host()?.navigate(accessPage),
+        onApplied: () => host()?.navigate(sharingPage),
+        accessTarget: () =>
+          presented() && host()?.open && !host()?.suspended && host()?.destination === accessPage
+            ? accessPage
+            : undefined,
+      });
+    },
+    { lazy: true },
+  );
   const people: MobileHostDestination = {
     area: "details",
     backTo: { area: "details" },
@@ -253,8 +276,13 @@ export function ChatPaneMobileComposition(props: {
                   }
                 }}
                 sharingOptions={
-                  <Show when={adapter.available}>
-                    <ChatSessionSharingOptions {...adapter.options} />
+                  <Show when={sharingAvailable()}>
+                    <ChatSessionSharingOptions
+                      visibility={sharing()?.session.visibility ?? "shared"}
+                      publicShare={Boolean(sharing()?.state?.result?.publicShare)}
+                      openDisabledReason={sharing()?.openDisabledReason}
+                      onOpen={openSharing}
+                    />
                   </Show>
                 }
               />
@@ -278,7 +306,7 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return t("chat.sessionSharing.sharingOptions");
       },
-      render: retainPage(() => <ChatSessionSharingMobile {...adapter.sharing} />),
+      render: retainPage(() => <ChatSessionSharingMobile {...adapter().sharing} />),
     },
   };
   const accessPage: MobileHostDestination = {
@@ -289,7 +317,7 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return t("chat.sessionSharing.sessionAccess");
       },
-      render: retainPage(() => <ChatSessionAccessMobile {...adapter.access} />),
+      render: retainPage(() => <ChatSessionAccessMobile {...adapter().access} />),
     },
   };
   const machinePage: MobileHostDestination = {
@@ -467,14 +495,14 @@ export function ChatPaneMobileComposition(props: {
           },
         ]
       : []),
-    ...(adapter.available && (!props.header.mobilePeople?.header.length || incognito())
+    ...(sharingAvailable() && (!props.header.mobilePeople?.header.length || incognito())
       ? [
           {
             id: "header-sharing",
             label: t("chat.sessionSharing.sharingOptions"),
             icon: "users" as const,
             onActivate: () => {
-              adapter.options.onOpen();
+              openSharing();
             },
           },
         ]

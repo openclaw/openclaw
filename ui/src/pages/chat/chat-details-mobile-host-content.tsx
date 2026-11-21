@@ -33,7 +33,7 @@ import {
   retainedPublication,
 } from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
-import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.tsx";
+import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.ts";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 import type { ChatSessionVersionsMobileProps } from "./components/chat-session-versions-mobile.tsx";
 import { createSessionAutomationInventory } from "./components/chat-summary-automations.tsx";

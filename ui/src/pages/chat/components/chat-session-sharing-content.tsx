@@ -31,13 +31,15 @@ import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
 import {
+  createChatSessionSharingPresentation,
+  projectChatSessionSharingRoster,
+  chatSessionPermissionLabel,
+} from "./chat-session-sharing-presentation.ts";
+import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
   CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
-  createChatSessionSharingPresentation,
   ChatSessionSharingModeIcon,
-  projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 

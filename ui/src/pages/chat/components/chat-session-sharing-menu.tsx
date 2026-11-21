@@ -18,13 +18,15 @@ import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
 import {
+  projectChatSessionSharingRoster,
+  chatSessionPermissionLabel,
+  createChatSessionSharingPresentation,
+} from "./chat-session-sharing-presentation.ts";
+import {
   type ChatSessionSharingProps,
   type ChatSessionSharingOutcome,
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
-  projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
-  createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionSharingEnglish);

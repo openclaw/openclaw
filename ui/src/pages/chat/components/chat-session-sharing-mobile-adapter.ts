@@ -1,21 +1,20 @@
 import { createMemo } from "solid-js";
-import type { SessionVisibility } from "../../../api/types.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type {
   ChatSessionAccessMobileProps,
   ChatSessionSharingMobileLabels,
   ChatSessionSharingMobileProps,
-  ChatSessionSharingModePresentation,
 } from "./chat-session-sharing-mobile.tsx";
 import type { ChatSessionSharingOptionsProps } from "./chat-session-sharing-options.tsx";
+import {
+  projectChatSessionSharingRoster,
+  createChatSessionSharingPresentation,
+} from "./chat-session-sharing-presentation.ts";
 import type { PreparedChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 import {
   canManageChatSessionSharing,
-  CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
-  ChatSessionSharingModeIcon,
-  projectChatSessionSharingRoster,
-  createChatSessionSharingPresentation,
+  createChatSessionSharingModes,
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -69,18 +68,7 @@ export function createChatSessionSharingMobileAdapter(
       source()?.state?.result?.allowedVisibilities ??
       source()?.allowedVisibilities ?? [visibility()],
   );
-  const mode = (value: SessionVisibility) => ({
-    get description() {
-      return t(CHAT_SESSION_SHARING_DESCRIPTION_KEYS[value]);
-    },
-    icon: () => <ChatSessionSharingModeIcon visibility={value} />,
-  });
-  const modes: ChatSessionSharingModePresentation = {
-    shared: mode("shared"),
-    "read-only": mode("read-only"),
-    suggest: mode("suggest"),
-    draft: mode("draft"),
-  };
+  const modes = createChatSessionSharingModes();
   const labels: ChatSessionSharingMobileLabels = {
     get sessionAccess() {
       return t("chat.sessionSharing.sessionAccess");
