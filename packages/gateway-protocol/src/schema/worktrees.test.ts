@@ -23,6 +23,11 @@ describe("managed worktree protocol schemas", () => {
   it("accepts the additive worktree method payloads", () => {
     expect(createWorktree({ repoRoot: "/repo", name: "task-one", baseRef: "main" })).toBe(true);
     expect(remove({ id: "id", force: true })).toBe(true);
+    expect(remove({ id: "id", ifLossless: true, ownerCleanup: { terminalBefore: 1 } })).toBe(true);
+    accepts(RemoveResult, {
+      removed: false,
+      cleanup: { outcome: "retained-busy", at: 3, reason: "owner active" },
+    });
     expect(gc({})).toBe(true);
     expect(createSession({ agentId: "main", worktree: true })).toBe(true);
     expect(createSession({ agentId: "main", catalogId: "claude" })).toBe(true);

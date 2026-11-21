@@ -21,13 +21,19 @@ import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../../sessions/session-row-changes.js";
-import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import { WorktreeRemovalLockError } from "./removal-errors.js";
 import { IDLE_GC_MS } from "./retention.js";
-import type { ManagedWorktreeOwnerKind } from "./types.js";
+import type {
+  ManagedWorktreeOwnerKind,
+  ManagedWorktreeRecord,
+  WorktreeCleanupOwnerPolicy,
+} from "./types.js";
+
+export type WorktreeOwnerCleanup = { terminalBefore: number };
 
 export function createManagedWorktreeOwnerPolicy(
   cfg: OpenClawConfig,
+  conditional?: WorktreeOwnerCleanup,
 ): Required<
   Pick<WorktreeCleanupOwnerPolicy, "prepareOwners" | "readOwnerState" | "withOwnerCleanup">
 > {
@@ -38,6 +44,7 @@ export function createManagedWorktreeOwnerPolicy(
   let preparedOwners = new Map<string, ResolvedSessionEntryStoreTarget>();
   const cleanupOwner = new AsyncLocalStorage<{
     ownerId: string;
+    record: ManagedWorktreeRecord;
     scope: string;
     entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">;
     target: ResolvedSessionEntryStoreTarget;
@@ -66,6 +73,29 @@ export function createManagedWorktreeOwnerPolicy(
       }
       const entry = target.entry;
       const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
+      if (conditional) {
+        const record = ownsCleanup ? cleanup.record : undefined;
+        const binding = entry?.worktree;
+        const lastActivity = Math.max(activityAt, entry?.endedAt ?? 0, entry?.archivedAt ?? 0);
+        // Conditional operator cleanup needs positive terminal and idle facts,
+        // including the current session-to-checkout binding. Native GC is unchanged.
+        if (
+          !record ||
+          !entry ||
+          !isTerminalSessionStatus(entry.status) ||
+          !Number.isFinite(lastActivity) ||
+          lastActivity <= 0 ||
+          lastActivity > conditional.terminalBefore ||
+          !Number.isFinite(record.lastActiveAt) ||
+          record.lastActiveAt <= 0 ||
+          record.lastActiveAt > conditional.terminalBefore ||
+          binding?.id !== record.id ||
+          binding.branch !== record.branch ||
+          binding.repoRoot !== record.repoRoot
+        ) {
+          return "active";
+        }
+      }
       if (
         entry?.archivedAt === undefined &&
         !isTerminalSessionStatus(entry?.status) &&
@@ -201,6 +231,12 @@ export function createManagedWorktreeOwnerPolicy(
     readOwnerState: (kind, id) => state(kind, id),
     withOwnerCleanup: async (record, run, signal) => {
       if (record.ownerKind !== "session" || !record.ownerId) {
+        if (conditional) {
+          throw new WorktreeRemovalLockError(
+            "busy",
+            "conditional cleanup requires a terminal session owner",
+          );
+        }
         return await run((mutation) => mutation());
       }
       const ownerId = record.ownerId;
@@ -234,6 +270,7 @@ export function createManagedWorktreeOwnerPolicy(
         const entry = initial.entry;
         const owner = {
           ownerId,
+          record,
           scope,
           target,
           hasChanged: () => changed,

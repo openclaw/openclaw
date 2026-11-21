@@ -93,13 +93,14 @@ export function readSessionWorktreeOwnerFactsInDatabase(
       "updatedAt",
       "archivedAt",
       "lastInteractionAt",
+      "endedAt",
       "lifecycleRevision",
       "worktree",
       "status",
     ]);
     const revision = fields.first.get("lifecycleRevision");
     const worktree = fields.first.get("worktree");
-    const invalidOptionalNumber = (key: "archivedAt" | "lastInteractionAt") => {
+    const invalidOptionalNumber = (key: "archivedAt" | "lastInteractionAt" | "endedAt") => {
       const token = fields.first.get(key);
       return token !== undefined && token.kind !== "number";
     };
@@ -113,6 +114,7 @@ export function readSessionWorktreeOwnerFactsInDatabase(
       (worktree !== undefined && worktree.kind !== "object") ||
       invalidOptionalNumber("archivedAt") ||
       invalidOptionalNumber("lastInteractionAt") ||
+      invalidOptionalNumber("endedAt") ||
       jsonScannedValue(fields.first.get("updatedAt"), "numeric") !== row.updated_at ||
       jsonScannedValue(fields.first.get("archivedAt")) !== row.archived_at ||
       jsonScannedValue(fields.first.get("lastInteractionAt")) !== row.last_interaction_at
@@ -124,6 +126,7 @@ export function readSessionWorktreeOwnerFactsInDatabase(
     // The raw token retains opaque UTF-16 code units that SQLite scalar extraction replaces.
     const lifecycleRevision = readJsonPredicateScalar(revision);
     const status = readJsonPredicateScalar(fields.first.get("status"));
+    const endedAt = readJsonPredicateScalar(fields.first.get("endedAt"));
     if (lifecycleRevision !== undefined && typeof lifecycleRevision !== "string") {
       throw new Error("Session lifecycle revision metadata requires repair");
     }
@@ -134,6 +137,7 @@ export function readSessionWorktreeOwnerFactsInDatabase(
           sessionId: row.current_session_id,
           updatedAt: row.updated_at,
           ...(isTerminalSessionStatus(status) ? { status } : {}),
+          ...(typeof endedAt === "number" ? { endedAt } : {}),
           ...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
           ...(row.last_interaction_at === null
             ? {}

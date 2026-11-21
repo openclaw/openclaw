@@ -21,6 +21,7 @@ import {
   createWorktreeGcRemoval,
   removeWorktreeIfLossless,
   type ManagedWorktreeGcParams,
+  type WorktreeLosslessRemovalOptions,
 } from "./gc-removal.js";
 import { createWorktreeGcPrefilter, lockState, unlockWorktree } from "./git-lock.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
@@ -766,7 +767,7 @@ export class ManagedWorktreeService {
     });
   }
 
-  async removeIfLossless(id: string, guard: WorktreeMutationGuard = {}): Promise<boolean> {
+  async removeIfLossless(id: string, guard: WorktreeLosslessRemovalOptions = {}): Promise<boolean> {
     return withWorktreeRunEnd(this.env, async () => {
       guard.signal?.throwIfAborted();
       guard.commitGuard?.();
@@ -778,15 +779,14 @@ export class ManagedWorktreeService {
         ),
         env: this.env,
         getConfig: this.getConfig ?? getRuntimeConfig,
-        prepareRecord: (record) => rebindLiveWorktreeRepository(this.env, record, guard),
+        prepareRecord: (record, commitGuard) =>
+          rebindLiveWorktreeRepository(this.env, record, { ...guard, commitGuard }),
         remove: async (params) => {
-          await this.release(id, guard);
+          await this.release(id, { ...guard, commitGuard: params.commitGuard });
           return await this.remove({
             ...guard,
             ...params,
             reason: "run-end",
-            requireLossless: true,
-            runEndCleanup: { outcome: "removed-lossless", at: Date.now() },
           });
         },
       });

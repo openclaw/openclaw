@@ -438,7 +438,7 @@ it("reads captured registry records and provisioned snapshots without host SQL o
     ownerId: "agent:main:task",
     createdAt: 10,
     lastActiveAt: 30,
-    runEndCleanup: { outcome: "retained-dirty", at: 30 },
+    runEndCleanup: { outcome: "retained-dirty", at: 30, reason: "ignored-files" },
   });
   const removed = recordFixture(stateDir, "a-removed", {
     ...older,

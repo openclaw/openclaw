@@ -8,9 +8,9 @@ import type { startGitOperationTiming } from "../../infra/git-operation-timing.j
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
+import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import type { WorktreeCleanupMutation } from "./gc-removal.js";
 import { lockState } from "./git-lock.js";
 import { commandError, requireGit, runGit } from "./git.js";
 import {
@@ -54,6 +54,7 @@ import type {
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
+  WorktreeCleanupMutation,
   WorktreeWorkerAuthority,
   WorktreeRemovalDeferral,
 } from "./types.js";
@@ -90,6 +91,8 @@ export type RemoveWorktreeParams = Pick<CreateManagedWorktreeParams, "signal" | 
   /** Explicit owner-fenced detached retirement; never combined with force or clean-only removal. */
   exactState?: ExactStateRetirement;
   requireLossless?: boolean;
+  /** Conditional owner cleanup also refuses files outside ordinary snapshot custody. */
+  requireIgnoredCustody?: boolean;
   inspectedHead?: string;
   claimToken?: string;
   rollbackGuard?: () => void;
@@ -403,12 +406,13 @@ async function removeSettledManagedWorktree(
         gitOptions,
       );
       if (changed) {
+        const cleanup = { outcome: "retained-dirty" as const, at: Date.now() };
         await abortWorktreeRemoval(env, record.id, claimToken);
         await updateRegistryWorktree(
           env,
           record.id,
           {
-            runEndCleanup: { outcome: "retained-dirty", at: Date.now() },
+            runEndCleanup: cleanup,
           },
           {
             onlyIfLive: true,
@@ -416,7 +420,7 @@ async function removeSettledManagedWorktree(
             workerAuthority: params.workerAuthority,
           },
         );
-        return { removed: false };
+        return { removed: false, cleanup };
       }
     }
     if (snapshot) {
@@ -424,11 +428,11 @@ async function removeSettledManagedWorktree(
     }
     // Pin the completed capture before deletion. Failed or interrupted deletion
     // must never replace it with a snapshot of a partially removed checkout.
-    await git.require(
-      record.repoRoot,
-      ["update-ref", pendingRef, snapshot ?? head, ""],
-      gitOptions,
-    );
+    const pinRecovery = () =>
+      git.require(record.repoRoot, ["update-ref", pendingRef, snapshot ?? head, ""], gitOptions);
+    if (!params.requireIgnoredCustody) {
+      await pinRecovery();
+    }
     const finalize = async (recoveryPath?: string): Promise<RemoveManagedWorktreeResult> => {
       timing?.markRemovalStage("finalization");
       const runEndCleanup = params.runEndCleanup;
@@ -463,7 +467,9 @@ async function removeSettledManagedWorktree(
           snapshotRef,
           ...(runEndCleanup ? { runEndCleanup } : {}),
         });
-      await (withOwnerMutation ? withOwnerMutation(publish, { settle: true }) : publish());
+      await (withOwnerMutation && !params.requireIgnoredCustody
+        ? withOwnerMutation(publish, { settle: true })
+        : publish());
       exactFinalized = true;
       try {
         if (deletionOptions) {
@@ -556,15 +562,38 @@ async function removeSettledManagedWorktree(
         },
       });
     }
-    await removeManagedCheckout(
-      record,
-      git,
-      params.requireLossless,
-      "bounded",
-      params.commitGuard,
-      params.signal,
-    );
-    // Admitted deletion must publish its terminal facts even after caller cancellation.
-    return await runOutsideCommandProcessScope(() => finalize());
+    const removeAndFinalize = async () => {
+      if (params.requireIgnoredCustody) {
+        const custody = await inspectManagedWorktreeCheckout(record, "custody", {
+          env,
+          getConfig,
+          signal: params.signal,
+          beforeRun: params.commitGuard,
+          provisionedPaths: capturedProvisionedPaths,
+        });
+        if (custody.retainedReason) {
+          throw new WorktreeRemovalLockError(
+            "busy",
+            "ignored-files: checkout contains files or nested filesystems outside snapshot custody",
+          );
+        }
+        await pinRecovery();
+      }
+      await removeManagedCheckout(
+        record,
+        git,
+        params.requireLossless,
+        "bounded",
+        params.commitGuard,
+        params.signal,
+      );
+      // Once deletion is admitted, publish its actual outcome even if cancelled.
+      return await runOutsideCommandProcessScope(() => finalize());
+    };
+    // Conditional cleanup holds the existing lifecycle fence across final effects
+    // and settlement, not across the potentially long snapshot inspection.
+    return await (params.requireIgnoredCustody && params.withOwnerMutation
+      ? params.withOwnerMutation(removeAndFinalize)
+      : removeAndFinalize());
   });
 }

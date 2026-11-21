@@ -54,7 +54,13 @@ function parseRunEndCleanup(
     case "retained-dirty":
     case "retained-unpushed":
     case "retained-provisioned-drift":
-      return parsed.reason === undefined ? { outcome: parsed.outcome, at } : undefined;
+      return parsed.reason === undefined
+        ? { outcome: parsed.outcome, at }
+        : typeof parsed.reason === "string" &&
+            parsed.reason.length > 0 &&
+            parsed.reason.length <= 500
+          ? { outcome: parsed.outcome, at, reason: parsed.reason }
+          : undefined;
     default:
       return undefined;
   }

@@ -13,7 +13,7 @@ import {
   readWorktreeSourceDependencies,
 } from "./eviction.runtime.js";
 import { readWorktreeCleanupFingerprint } from "./gc-fingerprint.runtime.js";
-import { splitNullBuffer } from "./git-path-inventory.js";
+import { splitNullBuffer, checkoutPathFromGitBytes, gitPathKey } from "./git-path-inventory.js";
 import type {
   GitWorktreeOperation,
   GitWorktreeOperationResult,
@@ -84,6 +84,52 @@ async function inspectCleanup(
         ? "nested-repository"
         : undefined,
     };
+  }
+  if (input.kind === "custody") {
+    // Ordinary snapshots exclude dependency paths even when provisioned. A
+    // collapsed directory is not proof of custody: retain it, including empty
+    // ignored directories/subvolumes, rather than treating its name as disposable.
+    const covered = new Set(
+      (input.provisionedPaths ?? [])
+        .filter((entry) => !/(^|\/)node_modules\//u.test(entry))
+        .map((entry) => gitPathKey(Buffer.from(entry))),
+    );
+    for (const ignored of [true, false]) {
+      const paths = splitNullBuffer(
+        await requireGitBuffer(input.checkoutPath, [
+          "ls-files",
+          "--others",
+          ...(ignored ? ["--ignored"] : []),
+          "--exclude-standard",
+          "--directory",
+          "-z",
+        ]),
+      );
+      if (paths.some((entry) => !covered.has(gitPathKey(entry)))) {
+        return { retainedReason: "ignored-files" };
+      }
+    }
+    // Tracked paths can live inside a nested filesystem without appearing in
+    // Git's untracked inventory. Do not let Git recursively delete through it.
+    const root = await fs.stat(input.checkoutPath);
+    const btrfs =
+      process.platform === "linux" && (await fs.statfs(input.checkoutPath)).type === 0x9123683e;
+    const directories = new Map<string, Buffer>();
+    for (const file of splitNullBuffer(
+      await requireGitBuffer(input.checkoutPath, ["ls-files", "-z"]),
+    )) {
+      for (let end = file.indexOf(47); end !== -1; end = file.indexOf(47, end + 1)) {
+        const directory = file.subarray(0, end);
+        directories.set(gitPathKey(directory), directory);
+      }
+    }
+    for (const directory of directories.values()) {
+      const stat = await fs.lstat(checkoutPathFromGitBytes(input.checkoutPath, directory));
+      if (stat.isDirectory() && (stat.dev !== root.dev || (btrfs && stat.ino === 256))) {
+        return { retainedReason: "ignored-files" };
+      }
+    }
+    return { retainedReason: undefined };
   }
   if (input.kind === "provisioned") {
     return {

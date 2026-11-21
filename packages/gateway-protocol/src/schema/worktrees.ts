@@ -31,6 +31,7 @@ const WorktreeRunEndCleanupSchema = Type.Union([
       ],
     }),
     at: Type.Integer({ minimum: 0 }),
+    reason: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   }),
   closedObject({
     outcome: Type.Literal("failed"),
@@ -84,6 +85,11 @@ export const WorktreesRemoveParamsSchema = closedObject({
   force: Type.Optional(Type.Boolean()),
   retryPreserved: Type.Optional(Type.Boolean()),
   ifLossless: Type.Optional(Type.Boolean()),
+  ownerCleanup: Type.Optional(
+    closedObject({
+      terminalBefore: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    }),
+  ),
   exactState: Type.Optional(WorktreeExactStateSchema),
   expectedOwnerId: Type.Optional(NonEmptyString),
 });

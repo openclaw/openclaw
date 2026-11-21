@@ -19,7 +19,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
-import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import { formatWorktreeGcResult } from "./gc-result.js";
 import { requireGit } from "./git.js";
 import {
@@ -36,7 +35,7 @@ import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
-import type { ManagedWorktreeGcResult } from "./types.js";
+import type { ManagedWorktreeGcResult, WorktreeCleanupOwnerPolicy } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
