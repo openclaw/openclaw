@@ -293,6 +293,8 @@ suite.define(() => {
           ),
           `${route} mobile content column`,
         ).toBe(12);
+        const subtitle = page.locator(".content-header--settings .page-subtitle").last();
+        expect((await subtitle.boundingBox())?.x, `${route} mobile subtitle column`).toBe(12);
       }
 
       for (const { route, contentSelector } of mobileGeometryCases) {
