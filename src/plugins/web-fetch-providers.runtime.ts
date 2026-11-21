@@ -38,13 +38,6 @@ export function resolvePluginWebFetchProviders(
   return resolvePluginWebProviders(params, providerResolution);
 }
 
-/** Resolves already-eligible runtime web fetch providers without setup-mode activation. */
-export function resolveRuntimeWebFetchProviders(
-  params: ResolveRuntimeWebProvidersParams,
-): PluginWebFetchProviderEntry[] {
-  return resolvePluginWebProviders(params, providerResolution);
-}
-
 /** Resolves fetch providers with yielding preparation for cold plugin sources. */
 export function resolvePluginWebFetchProvidersAsync(
   params: ResolvePluginWebProvidersParams,
