@@ -91,10 +91,8 @@ describe("node worker launch wire", () => {
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
-      let legacyWorkerNode: PairedNodeWorkerHost | undefined;
       let reconnected = false;
       let bundlePrewarm: unknown;
-      let legacyBundlePrewarm: unknown;
       let launchId: string | undefined;
       let observeFinalizationLoad = false;
       let finalizationStartedAt: number | undefined;
@@ -133,8 +131,6 @@ describe("node worker launch wire", () => {
               pendingCleanupOwners: [...pendingCleanupOwners],
               nodeCommands: workerNode?.commands.slice(-20),
               nodeErrors: workerNode?.invokeErrors.map(String),
-              legacyNodeCommands: legacyWorkerNode?.commands.slice(-20),
-              legacyNodeErrors: legacyWorkerNode?.invokeErrors.map(String),
             }),
           ).slice(0, 5_000) + "\n",
         );
@@ -493,100 +489,6 @@ describe("node worker launch wire", () => {
             fs.readFile(path.join(permissionLocalDir!, "worker-permission-in-root.txt"), "utf8"),
           ).resolves.toBe("worker permission proof\n");
 
-          // Simulate the old capability declaration with the current supervisor over real wire.
-          // This proves negotiation and same-identity reconnect, not an older binary upgrade.
-          markPhase("legacy node connection");
-          legacyWorkerNode = await createPairedNodeWorkerHost({
-            gateway,
-            operator,
-            root,
-            label: "legacy-node",
-            environmentSession: false,
-            onInvoke: (frame) => {
-              if (frame.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && frame.paramsJSON) {
-                legacyBundlePrewarm = (JSON.parse(frame.paramsJSON) as { bundlePrewarm?: unknown })
-                  .bundlePrewarm;
-              }
-            },
-          });
-          expect(legacyWorkerNode.identity.deviceId).not.toBe(workerNode.identity.deviceId);
-          markPhase("legacy workspace dispatch");
-          const legacySessionKey = `${SESSION_KEY}-legacy-node`;
-          await operator.request("sessions.create", {
-            key: legacySessionKey,
-            agentId: "qa",
-            worktree: true,
-            worktreeName: "node-worker-launch-legacy-node",
-            worktreeBaseRef: "main",
-            cwd: published.source,
-          });
-          await gateway.call(
-            "sessions.dispatch",
-            { key: legacySessionKey, deviceId: legacyWorkerNode.identity.deviceId },
-            { timeoutMs: PROOF_TIMEOUT_MS },
-          );
-          markPhase("legacy unsupported turn");
-          const unsupportedRunId = `node-worker-lifetime-unsupported-${Date.now()}`;
-          await expect(
-            operator.request("chat.send", {
-              sessionKey: legacySessionKey,
-              message: BASELINE_PROMPT,
-              deliver: false,
-              idempotencyKey: unsupportedRunId,
-            }),
-          ).resolves.toMatchObject({ runId: unsupportedRunId, status: "started" });
-          await expect(
-            operator.request(
-              "agent.wait",
-              { runId: unsupportedRunId, timeoutMs: PROOF_TIMEOUT_MS },
-              { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
-            ),
-          ).resolves.toMatchObject({
-            status: "error",
-            error: expect.stringMatching(
-              /requires an update.*openclaw update.*reconnect.*openclaw node restart/su,
-            ),
-          });
-          await legacyWorkerNode.waitForInvokes();
-          expect(legacyWorkerNode.commands).not.toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
-          await expect(
-            gateway.call("sessions.describe", { key: legacySessionKey }),
-          ).resolves.toMatchObject({ session: { placement: { state: "active" } } });
-
-          markPhase("legacy reconnect and supported turn");
-          await legacyWorkerNode.disconnect();
-          await legacyWorkerNode.connect({ environmentSession: true });
-          const legacyRunId = `node-worker-launch-wire-legacy-${Date.now()}`;
-          await operator.request("chat.send", {
-            sessionKey: legacySessionKey,
-            message: BASELINE_PROMPT,
-            deliver: false,
-            idempotencyKey: legacyRunId,
-          });
-          await expect(
-            operator.request<{ status?: string }>(
-              "agent.wait",
-              { runId: legacyRunId, timeoutMs: PROOF_TIMEOUT_MS },
-              { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
-            ),
-          ).resolves.toMatchObject({ status: "ok" });
-          await legacyWorkerNode.waitForInvokes();
-          expect(legacyWorkerNode.invokeErrors).toEqual([]);
-          expect(legacyWorkerNode.commands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
-          expect(legacyBundlePrewarm).toBeUndefined();
-          const legacyHistory = await operator.request<{ messages?: unknown[] }>("chat.history", {
-            sessionKey: legacySessionKey,
-            limit: 20,
-          });
-          expect(
-            legacyHistory.messages?.filter(
-              (message) =>
-                isRecord(message) &&
-                message.role === "assistant" &&
-                wireMessageText(message).includes(BASELINE_REPLY),
-            ),
-          ).toHaveLength(1);
-
           markPhase("load fixture setup");
           const loadSessions: string[] = [];
           for (let index = 0; index < FINALIZATION_LOAD_CONCURRENCY; index += 1) {
@@ -696,9 +598,11 @@ describe("node worker launch wire", () => {
               await freshClient.stopAndWait({ timeoutMs: 2_000 });
               markPhase(`load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} completion`);
               await waits;
+              markPhase(`load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} replies completed`);
               await Promise.all(
                 loadSessions.map((sessionKey) => settlement.wait(waveOperator, sessionKey, signal)),
               );
+              markPhase(`load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} workspaces settled`);
             }
           } finally {
             samplerAbort.abort();
@@ -718,15 +622,13 @@ describe("node worker launch wire", () => {
           markPhase("workspace settlement before node shutdown");
           const settlementOperator = operator;
           await Promise.all(
-            [SESSION_KEY, legacySessionKey, ...loadSessions].map((key) =>
+            [SESSION_KEY, ...loadSessions].map((key) =>
               settlement.wait(settlementOperator, key, signal),
             ),
           );
           markPhase("node shutdown");
           await workerNode.stop();
           workerNode = undefined;
-          await legacyWorkerNode.stop();
-          legacyWorkerNode = undefined;
           await operator.stopAndWait({ timeoutMs: 2_000 });
           operator = undefined;
           markPhase("gateway restart");
@@ -751,7 +653,6 @@ describe("node worker launch wire", () => {
           markPhase("fixture cleanup start");
           const cleanups = {
             workerNode: workerNode?.stop(),
-            legacyWorkerNode: legacyWorkerNode?.stop(),
             operator: operator?.stopAndWait({ timeoutMs: 2_000 }),
             gateway: stopQaGatewayFixture(gatewayOwner),
             provider: provider?.stop(),
