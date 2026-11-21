@@ -2243,6 +2243,11 @@ export function isSessionsFilesPreviewParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsFilesPreviewParamsSchema
 >;
+export function isSessionsFilesStatParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesStatParamsSchema
+>;
 export function isSessionsFilesPreviewReleaseParams(
   value: unknown,
 ): value is import("typebox").Static<
