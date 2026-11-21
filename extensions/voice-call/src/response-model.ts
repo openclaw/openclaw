@@ -1,4 +1,8 @@
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
@@ -19,6 +23,20 @@ export function resolveVoiceResponseModel(params: {
     return { provider: configured.provider, model: configured.model };
   }
   const modelRef = params.voiceConfig.responseModel;
+  // Configured aliases own their target; everything else keeps the legacy split.
+  const selection = {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider: params.agentRuntime.defaults.provider,
+  };
+  const aliased = resolveModelRefFromString({
+    ...selection,
+    raw: modelRef,
+    aliasIndex: buildModelAliasIndex(selection),
+  });
+  if (aliased?.alias) {
+    return { provider: aliased.ref.provider, model: aliased.ref.model };
+  }
   const slashIndex = modelRef.indexOf("/");
 
   return {

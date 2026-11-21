@@ -44,6 +44,71 @@ describe("resolveVoiceResponseModel", () => {
     });
   });
 
+  it("resolves configured model aliases to their target", () => {
+    expect(
+      resolveVoiceResponseModel({
+        cfg: {
+          agents: {
+            defaults: {
+              models: { "anthropic/claude-sonnet-5-5": { alias: "medium" } },
+            },
+          },
+        },
+        agentId: "main",
+        voiceConfig: normalizeVoiceCallConfig({
+          responseModel: "medium",
+        }),
+        agentRuntime,
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+    });
+  });
+
+  it("keeps non-alias overrides unchanged when aliases are configured", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: { "anthropic/claude-sonnet-5-5": { alias: "medium" } },
+        },
+      },
+    };
+    expect(
+      resolveVoiceResponseModel({
+        cfg,
+        agentId: "main",
+        voiceConfig: normalizeVoiceCallConfig({ responseModel: "gpt-5.4-mini" }),
+        agentRuntime,
+      }),
+    ).toEqual({ provider: "together", model: "gpt-5.4-mini" });
+    expect(
+      resolveVoiceResponseModel({
+        cfg,
+        agentId: "main",
+        voiceConfig: normalizeVoiceCallConfig({ responseModel: "openai/gpt-5.4-mini" }),
+        agentRuntime,
+      }),
+    ).toEqual({ provider: "openai", model: "gpt-5.4-mini" });
+  });
+
+  it("keeps a literal provider/model verbatim when it is also an alias target", () => {
+    expect(
+      resolveVoiceResponseModel({
+        cfg: {
+          agents: {
+            defaults: {
+              models: { "anthropic/claude-sonnet-5-5": { alias: "medium" } },
+            },
+          },
+        },
+        agentId: "main",
+        voiceConfig: normalizeVoiceCallConfig({ responseModel: "anthropic/claude-sonnet-5-5" }),
+        agentRuntime,
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-sonnet-5-5" });
+  });
+
   it("inherits the call agent's configured model when responseModel is unset", () => {
     expect(
       resolveVoiceResponseModel({
