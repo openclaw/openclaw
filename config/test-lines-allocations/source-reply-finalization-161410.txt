@@ -1,0 +1,7 @@
+517
+# PR #161410: exact own net LF regression growth against
+# f24a3f03cd16176b2704ec2e51aba9b459a09f90.
+# Preserve canonical completed-source custody across finalization failure,
+# while progress, partial, legacy-only, and steered-input evidence keeps fallback.
+# Native binding-retention and Discord message-tool/loopback REST paths exercise
+# contracts that isolated receipt predicates cannot prove. Shared scalar unchanged.
