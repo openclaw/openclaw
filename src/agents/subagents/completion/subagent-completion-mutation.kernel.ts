@@ -351,6 +351,11 @@ function mutateRequesterBatch(
     // Expiry transfers settlement to the wake, including its terminal failure outcome.
     const settleExpiredDelivery =
       subagent.delivery?.status === "suspended" && subagent.delivery.suspendedReason === "expiry";
+    const settleDeliveredYieldBatch =
+      params.outcome.delivered &&
+      subagent.delivery?.status === "suspended" &&
+      subagent.delivery.suspendedReason === "permanent_failure" &&
+      subagent.requesterSettleWake?.requesterYieldBatch === true;
     let mutation: CompletionMutation = { subagent };
     if (
       subagent.pauseReason !== "sessions_yield" &&
@@ -359,7 +364,8 @@ function mutateRequesterBatch(
         (!params.outcome.delivered &&
           subagent.delivery?.status === "failed" &&
           subagent.delivery.disposition === "retryable") ||
-        settleExpiredDelivery)
+        settleExpiredDelivery ||
+        settleDeliveredYieldBatch)
     ) {
       if (params.outcome.delivered) {
         markDelivered(subagent, params.outcome.deliveredAt ?? now);
