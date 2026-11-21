@@ -1816,12 +1816,9 @@ describe("createTelegramBot", () => {
           profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
         };
       });
-    const runProviderChannelLoginFlow = providerAuth.runProviderChannelLoginFlow;
     const providerLogin = vi
-      .spyOn(providerAuth, "runProviderChannelLoginFlow")
-      .mockImplementation((params) =>
-        runProviderChannelLoginFlow({ ...params, runLoginFlow: runModelsAuthLoginFlow }),
-      );
+      .spyOn(await import("../../../src/commands/models/auth.js"), "runModelsAuthLoginFlowCore")
+      .mockImplementation(runModelsAuthLoginFlow);
     loadConfig.mockReturnValue({
       messages: { inbound: { debounceMs: 0 } },
       commands: { native: true, ownerAllowFrom: ["9"] },
