@@ -207,6 +207,9 @@ catalog consumers, retaining cancellation and any explicit request deadline.
 - Rows include `contextWindow` (the model's maximum) and the effective
   `contextTokens` budget when those values are known, so pickers can show the
   active budget without session metadata.
+- Rows omit `available` when model readiness is unknown, in every view. Provider
+  discovery success does not establish model readiness; `available: false`
+  reports known unavailability.
 - `includeDetails: true` also includes available input modalities and a `local`
   endpoint classification. It does not expose endpoint URLs, headers,
   credentials, costs or runtime request parameters.

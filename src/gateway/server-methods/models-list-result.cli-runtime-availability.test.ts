@@ -246,8 +246,13 @@ it.each([
         });
         expect(model).toMatchObject({
           agentRuntime: expect.objectContaining({ id: "claude-cli" }),
-          available: !expired,
         });
+        if (expired && oauth) {
+          expect(model).not.toHaveProperty("available");
+          expect(model).not.toHaveProperty("unavailableReason");
+        } else {
+          expect(model).toHaveProperty("available", !expired);
+        }
         expect(model?.unavailableReason).toBe(expired && !oauth ? "auth-failed" : undefined);
       },
     );
@@ -259,9 +264,9 @@ const cli = "claude-cli",
 it.each([
   ["direct ready", cli, cli, cli, false, false, true, undefined],
   ["direct unavailable", cli, cli, cli, true, true, false, "auth-failed"],
-  ["direct refresh-needed", cli, cli, cli, true, false, false, undefined],
+  ["direct refresh-needed", cli, cli, cli, true, false, undefined, undefined],
   ["canonical pin", api, api, cli, true, false, true, undefined],
-  ["CLI pin", api, cli, api, true, false, false, undefined],
+  ["CLI pin", api, cli, api, true, false, undefined, undefined],
 ] as const)(
   "uses the selected execution owner for %s",
   async (_name, provider, pinProvider, sharedProvider, expired, noRefresh, available, reason) =>
@@ -291,7 +296,14 @@ it.each([
         preferredProfileId: "selected",
         pinnedProfileId: "selected",
       });
-      expect([model?.available, model?.unavailableReason]).toEqual([available, reason]);
+      expect(model).toMatchObject({ id: modelId });
+      if (available === undefined) {
+        expect(model).not.toHaveProperty("available");
+        expect(model).not.toHaveProperty("unavailableReason");
+      } else {
+        expect(model).toHaveProperty("available", available);
+      }
+      expect(model?.unavailableReason).toBe(reason);
     }),
 );
 

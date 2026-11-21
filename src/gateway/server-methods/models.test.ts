@@ -171,14 +171,17 @@ function modelPayload(respond: ReturnType<typeof vi.fn>) {
   return respond.mock.calls[0]?.[1] as { models: Array<Record<string, unknown>> };
 }
 
-async function expectDemoAvailability(available: boolean, runtimeConfig?: OpenClawConfig) {
+async function expectDemoAvailability(
+  available: boolean | undefined,
+  runtimeConfig?: OpenClawConfig,
+) {
   await expectModelsList(
     {
       view: "all",
       runtimeConfig,
       loadGatewayModelCatalog: catalogLoader([EXPECTED_DEMO_IDENTITY]),
     },
-    [{ ...EXPECTED_DEMO_IDENTITY, available }],
+    [{ ...EXPECTED_DEMO_IDENTITY, ...(available === undefined ? {} : { available }) }],
   );
 }
 
@@ -595,6 +598,29 @@ describe("models.list", () => {
     }
   });
 
+  it.each(["configured", "all"] as const)(
+    "preserves unknown Ollama readiness in the %s catalog",
+    async (view) => {
+      const model = { id: "local-model", name: "Local Model", provider: "ollama" };
+      const respond = await listModels({
+        view,
+        includeDefaultModels: false,
+        runtimeConfig: {
+          agents: { defaults: { models: { "ollama/local-model": {} } } },
+          models: configForProviders({
+            ollama: { baseUrl: "http://127.0.0.1:11434", apiKey: "ollama-local", models: [] },
+          }).models,
+        },
+        loadGatewayModelCatalog: catalogLoader([model]),
+      });
+      const rows = modelPayload(respond).models;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject(model);
+      expect(rows[0]).not.toHaveProperty("available");
+      expect(rows[0]).not.toHaveProperty("unavailableReason");
+    },
+  );
+
   it("omits unknown provider-config availability", async () => {
     const config = {
       secrets: FILE_SECRETS,
@@ -750,7 +776,7 @@ describe("models.list", () => {
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
 
-  it("keeps SecretRef configured rows unavailable without acquiring auth", async () => {
+  it("keeps SecretRef configured readiness unknown without acquiring auth", async () => {
     const catalog = createDeferred<never>();
     const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
     const runtimeConfig = {
@@ -771,7 +797,7 @@ describe("models.list", () => {
         runtimeConfig,
         loadGatewayModelCatalog,
       },
-      [{ ...LLAMA_SECURE, local: false, available: false, tags: ["default"] }],
+      [{ ...LLAMA_SECURE, local: false, tags: ["default"] }],
     );
   });
 
@@ -797,7 +823,6 @@ describe("models.list", () => {
           {
             ...GPT_TEST,
             agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
-            available: false,
             cyberAccessProgramDefault: "standard",
           },
         ]);
@@ -883,8 +908,6 @@ describe("models.list", () => {
             id: "claude-test",
             name: "Claude Test",
             provider: "anthropic",
-            available: false,
-            unavailableReason: "missing-auth",
           },
           ...configuredModels,
         ],
@@ -1086,7 +1109,7 @@ describe("models.list", () => {
           } as unknown as OpenClawConfig,
           loadGatewayModelCatalog: catalogLoader([model]),
         },
-        [{ ...model, available: false }],
+        [model],
       );
     },
   );
@@ -1157,7 +1180,7 @@ describe("models.list", () => {
         }),
       );
 
-      await expectDemoAvailability(false);
+      await expectDemoAvailability(undefined);
     });
   });
 
@@ -1180,7 +1203,7 @@ describe("models.list", () => {
         },
       ]);
 
-      await expectDemoAvailability(false);
+      await expectDemoAvailability(undefined);
     });
   });
 
@@ -1197,7 +1220,7 @@ describe("models.list", () => {
       tokenRef: { source: "file", provider: "mounted-json", id: "/providers/demo/token" },
       env: {},
       runtimeConfig: { secrets: FILE_SECRETS },
-      available: false,
+      available: undefined,
     },
   ] as const)("projects $name SecretRef-backed profile availability", async (fixture) => {
     await withModelsTestState({ env: fixture.env }, async (state) => {
@@ -1325,7 +1348,7 @@ describe("models.list", () => {
       name: "unhydrated file SecretRef",
       apiKey: VLLM_KEY_REF,
       secrets: FILE_SECRETS,
-      available: false,
+      available: undefined,
       unavailableReason: undefined,
     },
     {
@@ -1384,7 +1407,7 @@ describe("models.list", () => {
           [
             {
               ...LLAMA_SECURE,
-              available: fixture.available,
+              ...(fixture.available === undefined ? {} : { available: fixture.available }),
               ...(fixture.unavailableReason
                 ? { unavailableReason: fixture.unavailableReason }
                 : {}),
@@ -1416,8 +1439,6 @@ describe("models.list", () => {
         {
           ...EXPECTED_DEMO_IDENTITY,
           local: false,
-          available: false,
-          unavailableReason: "missing-auth",
         },
       ],
     );
@@ -1504,8 +1525,6 @@ describe("models.list", () => {
           id: "vision-model",
           name: "Vision Model",
           provider: "demo-provider",
-          available: false,
-          unavailableReason: "missing-auth",
           contextWindow: 128_000,
           contextTokens: 96_000,
         },

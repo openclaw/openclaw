@@ -135,7 +135,7 @@ describe("models.list OpenAI routes", () => {
       reasoning: true,
     } as ModelCatalogEntry;
 
-    await expect(listModels({ catalog: [row], routeResolverFactory })).resolves.toEqual({
+    await expect(listModels({ catalog: [row], routeResolverFactory })).resolves.toStrictEqual({
       models: [
         {
           id: "gpt-5.6",
@@ -143,7 +143,6 @@ describe("models.list OpenAI routes", () => {
           provider: "openai",
           agentRuntime: IMPLICIT_CODEX_RUNTIME,
           cyberAccessProgramDefault: "standard",
-          available: false,
         },
       ],
     });
