@@ -60,6 +60,8 @@ type SidebarProjectionInput = {
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   emptyGroupsMode: SidebarEmptyGroupsMode;
+  /** Empty Other still renders as a target for rows that can arrive or be dropped there. */
+  showEmptyOther: boolean;
   /** "owner" selects exactly one owner; "involvingMe" can span several. */
   ownerFilter: "owner" | "involvingMe" | null;
   visibleSessionLimits: ReadonlyMap<string, number>;
@@ -85,6 +87,9 @@ export type SidebarVisibleSections = {
     visibleLimit: number;
     collapsedVisibleRowCount: number;
     renderHeader: boolean;
+    /** The section is the whole list: reaching its end shows its next page.
+     *  Pinned and cached-snapshot sections leave it out and page by click. */
+    continuesOnScroll?: boolean;
   })[];
   visibleRows: SidebarRecentSession[];
 };
@@ -570,8 +575,13 @@ export class SidebarSessionProjection {
       ).filter(
         (section) =>
           section.id !== "pinned" &&
-          // Catalog rows have their own projection; these sections are placeholders.
-          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
+          // The one decision about which sections render: the renderer draws
+          // every returned section. Empty Coding never renders.
+          (section.rows.length > 0 ||
+            (section.id !== "work" &&
+              (section.id !== "ungrouped" || input.showEmptyOther) &&
+              // Catalog rows have their own projection; these sections are placeholders.
+              (!hideEmptyGroups || section.id.startsWith("catalog:")))),
       );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.#stickySections.keys()) {
@@ -580,7 +590,7 @@ export class SidebarSessionProjection {
       }
     }
     // A lone catch-all sits directly under the global Sessions toolbar. Empty
-    // Coding does not render, while empty custom/Groups sections remain targets.
+    // custom/Groups sections remain targets.
     // Headerless means no collapse control, so a stored ungrouped-collapsed
     // preference is deliberately inert here; it re-applies once a peer returns.
     // Flat mode ("none") holds every native row, so its "Other" label would
@@ -595,11 +605,13 @@ export class SidebarSessionProjection {
       pinnedKeys.size > 0 ||
       (input.grouping !== "none" &&
         sections.some(
-          (section) =>
-            section.id !== "ungrouped" &&
-            section.id !== soloOwnerSectionId &&
-            (section.id !== "work" || section.rows.length > 0),
+          (section) => section.id !== "ungrouped" && section.id !== soloOwnerSectionId,
         ));
+    // A lone section (flat list, or Other with no peers) shows its next page when
+    // its end scrolls into view. With several, each waits for Show more so none
+    // buries the others (1700+ sessions on a team server) or changes paging on
+    // reorder. Roster cards (input.sections) keep their own paging.
+    const continuesOnScroll = !input.sections && sections.length === 1;
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
@@ -655,6 +667,7 @@ export class SidebarSessionProjection {
           visibleLimit,
           collapsedVisibleRowCount,
           renderHeader,
+          continuesOnScroll,
         }),
       );
     }
