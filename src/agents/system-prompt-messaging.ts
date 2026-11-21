@@ -96,6 +96,8 @@ export function buildMessagingSection(params: {
     ];
   }
   const showGenericInlineButtonHint = !params.customInlineButtonHint;
+  const groupMessageToolOnly =
+    messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
@@ -116,6 +118,9 @@ export function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Proactive send/channel action (poll, reaction, etc.): `message`.",
+          groupMessageToolOnly
+            ? "- Group/channel: stale/joke/light ack/low-value chatter => a reaction may be enough. Needed text reply => `message(action=send)`; final text private."
+            : "",
           messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- Proactive send needs \`channel\` (${params.messageChannelOptions}).`
