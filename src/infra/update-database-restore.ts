@@ -126,6 +126,34 @@ async function withDatabaseExclusion<T>(
   return outcome.value;
 }
 
+/**
+ * Converts one restored database image back to the journal mode its path
+ * resolves to. Snapshots are single DELETE-journal files by design; leaving a
+ * restored database in rollback-journal mode makes the next update's
+ * maintenance lease fail sqlite-busy against the updater's own readers and
+ * rolls the same failure forward on every retry. The client credential store
+ * is excluded by the caller: its exclusive custody design requires DELETE
+ * mode. Throws so per-file failures stay collectable by the restore owner.
+ */
+export async function reestablishRestoredDatabaseJournalMode(databasePath: string): Promise<void> {
+  if (resolvePathJournalPolicy(databasePath) !== "wal") {
+    return;
+  }
+  // sqlite-allow-raw -- one-shot offline journal-mode conversion; the caller
+  // holds the database exclusion window, so this process is the only holder.
+  const database = new DatabaseSync(databasePath);
+  try {
+    const row = database.prepare("PRAGMA journal_mode = WAL").get() as
+      | { journal_mode?: unknown }
+      | undefined;
+    if (String(row?.journal_mode).toLowerCase() !== "wal") {
+      throw new Error(`journal_mode reported ${String(row?.journal_mode)}`);
+    }
+  } finally {
+    database.close();
+  }
+}
+
 /** The caller owns a settled failed candidate that has never admitted user work. */
 export async function restoreUpdateDatabaseBackup(params: {
   backup: UpdateDatabaseBackup;
@@ -136,6 +164,15 @@ export async function restoreUpdateDatabaseBackup(params: {
   pluginCohortRecovery?: PluginCohortRecoveryBinding;
   /** Fires before the first live database changes; a failure before it left them untouched. */
   onLiveMutation?: () => void;
+  /**
+   * Receives recoverable journal-policy reconciliation failures after credential
+   * rebinding completes. The databases are restored either way, so callers report
+   * these separately from state restoration instead of failing the rollback or
+   * blocking Gateway restart.
+   */
+  onJournalReconciliationFailures?: (failures: readonly string[]) => void;
+  /** Conversion seam for injected-failure regressions; defaults to the real policy-driven conversion. */
+  reestablishJournalMode?: (databasePath: string) => Promise<void>;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -357,9 +394,10 @@ export async function restoreUpdateDatabaseBackup(params: {
         // maintenance lease fail sqlite-busy against the updater's own readers and
         // rolls the same failure forward on every retry. The client credential
         // store is excluded: its exclusive custody design requires DELETE mode.
-        // A conversion failure fails the rollback loudly after all files have been
-        // attempted, naming the exact recovery (`PRAGMA journal_mode=WAL` while no
-        // process holds the files).
+        // Journal reconciliation is recoverable: credential rebinding below always
+        // completes first, and failures surface through
+        // onJournalReconciliationFailures instead of failing the published
+        // restoration or blocking Gateway restart.
         const credentialStorePath = resolvePathViaExistingAncestorSync(
           resolveClientCredentialStorePath(params.env),
         );
@@ -369,35 +407,19 @@ export async function restoreUpdateDatabaseBackup(params: {
           if (entry.path === credentialStorePath) {
             continue;
           }
-          if (resolvePathJournalPolicy(entry.path) !== "wal") {
-            continue;
-          }
           try {
-            // sqlite-allow-raw -- one-shot offline journal-mode conversion; the
-            // exclusion window guarantees this process is the only holder.
-            const database = new DatabaseSync(entry.path);
-            try {
-              const row = database.prepare("PRAGMA journal_mode = WAL").get() as
-                | { journal_mode?: unknown }
-                | undefined;
-              if (String(row?.journal_mode).toLowerCase() !== "wal") {
-                journalModeFailures.push(
-                  `${entry.path}: journal_mode reported ${String(row?.journal_mode)}`,
-                );
-              }
-            } finally {
-              database.close();
-            }
+            await (params.reestablishJournalMode ?? reestablishRestoredDatabaseJournalMode)(
+              entry.path,
+            );
           } catch (error) {
             journalModeFailures.push(`${entry.path}: ${formatErrorMessage(error)}`);
           }
         }
-        if (journalModeFailures.length > 0) {
-          throw new Error(
-            `Restored databases did not re-establish WAL journal mode; while no process holds them, run PRAGMA journal_mode=WAL on each: ${journalModeFailures.join("; ")}`,
-          );
-        }
         restoreClientCredentials?.();
+        assertOwned();
+        if (journalModeFailures.length > 0) {
+          params.onJournalReconciliationFailures?.(journalModeFailures);
+        }
         assertOwned();
         return displaced;
       },

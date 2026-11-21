@@ -247,6 +247,50 @@ it("restores databases back to the filesystem's WAL journal policy", async () =>
   });
 });
 
+it("completes credential rebinding when journal reconciliation fails", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "update-journal-reconcile-", scenario: "minimal" },
+    async (state) => {
+      runClientCredentialOperation(state.env, {
+        kind: "socket.ensure",
+        fallback: {
+          socket_key: "current",
+          socket_path: "/synthetic/native.sock",
+          socket_token: "synthetic-before-update",
+          updated_at_ms: 123,
+        },
+        requested: { token: "synthetic-before-update" },
+      });
+      const fixture = await createRestoreFixture(state);
+      const reportedFailures: string[][] = [];
+      const displaced = await restoreUpdateDatabaseBackup({
+        backup: fixture.backup,
+        runId: fixture.run.runId,
+        env: state.env,
+        assertCurrent() {},
+        reestablishJournalMode: async () => {
+          throw new Error("injected conversion failure");
+        },
+        onJournalReconciliationFailures: (failures) => {
+          reportedFailures.push([...failures]);
+        },
+      });
+      // Journal reconciliation is recoverable: the published restoration, its
+      // credential receipt rebinding, and the failure report all complete
+      // instead of the throw blocking Gateway restart.
+      expect(displaced).not.toBeNull();
+      expect(reportedFailures.flat().length).toBeGreaterThan(0);
+      using restored = new DatabaseSync(resolveClientCredentialStorePath(state.env), {
+        readOnly: true,
+      });
+      expect(
+        restored.prepare("SELECT socket_token FROM native_exec_socket_credentials").all(),
+      ).toEqual([{ socket_token: "synthetic-before-update" }]);
+      await fixture.close();
+    },
+  );
+});
+
 it("captures and restores exact local daemon intent with its independent schema", async () => {
   await withOpenClawTestState(
     { layout: "split", prefix: "update-daemon-restore-", scenario: "minimal" },
