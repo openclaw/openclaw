@@ -256,12 +256,10 @@ export function createIMessageDurableIngress(options: {
     },
     start: monitor.start,
     stop: () => {
-      stopTask ??= (async () => {
-        // iMessage debounce must own every accepted claim before disposal so a
-        // restart replays only rows that were never handed to a flush.
-        await monitor.waitForIdle();
-        await monitor.stop();
-      })();
+      // stop() aborts pre-adoption work, then joins in-flight deliveries and
+      // settlement writes. Waiting for idle first never reaches that abort.
+      // Deferred rows stay for the debouncer to abandon on its next flush.
+      stopTask ??= monitor.stop();
       return stopTask;
     },
     waitForIdle: monitor.waitForIdle,
