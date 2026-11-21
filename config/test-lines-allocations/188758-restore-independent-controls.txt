@@ -1,0 +1,2 @@
+9
+# #188758 companion: restore pre-existing completion execution, timeout, message, and option controls while retaining default-model assertions.

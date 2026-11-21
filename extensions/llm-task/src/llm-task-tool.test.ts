@@ -70,6 +70,15 @@ it.each([
   const call = isolatedCompletionCall();
   expect(call.model).toBeUndefined();
   expect(call.systemPrompt).toContain("JSON-only");
+  expect(call).toMatchObject({
+    reasoning: undefined,
+    maxTokens: undefined,
+    temperature: undefined,
+  });
+  expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 30_000 });
+  expect(call.messages).toEqual([
+    { role: "user", content: expect.stringContaining("TASK:\nreturn ok") },
+  ]);
 });
 
 it("validates caller schemas with repeated $id independently across calls", async () => {
