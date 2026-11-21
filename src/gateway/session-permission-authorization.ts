@@ -59,7 +59,7 @@ export function readSessionPermissionAuthority(
 }
 
 /** Only actual invitees acquire the extra ceiling; all other writers retain normal policy. */
-export function authorizeSessionPermissionModeChange(params: {
+function authorizeSessionPermissionModeChange(params: {
   existingEntry: SessionEntry | undefined;
   permissionMode: SessionEntry["permissionMode"];
   authority: PermissionAuthority;
