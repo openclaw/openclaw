@@ -230,11 +230,22 @@ export function executeOpenClawStateLeaseCommand(
         : "state.lease.release",
     (db) => {
       if (command.type === "stateLease.renew") {
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, command.input.identity, "renew");
+        const recoverExpired = command.input.recoverExpired === true;
+        if (recoverExpired) {
+          requestSqliteWorkerOperationAdmission({
+            stage: "transaction",
+            facts: { kind: "state-lease-recover", identity: command.input.identity },
+          });
+        } else {
+          assertOpenClawStateLeaseWorkerOwnedInTransaction(db, command.input.identity, "renew");
+        }
         const expiresAt = renewOpenClawStateLeaseInTransaction(
           db,
           command.input.identity,
           command.input.leaseMs,
+          undefined,
+          undefined,
+          recoverExpired,
         );
         if (expiresAt === undefined) {
           throw createOpenClawStateLeaseLostError(
@@ -243,12 +254,19 @@ export function executeOpenClawStateLeaseCommand(
             readOpenClawStateLeaseLoss(db, command.input.identity),
           );
         }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(
-          db,
-          command.input.identity,
-          "renew",
-          "commit",
-        );
+        if (recoverExpired) {
+          requestSqliteWorkerOperationAdmission({
+            stage: "commit",
+            facts: { kind: "state-lease-recover", identity: command.input.identity },
+          });
+        } else {
+          assertOpenClawStateLeaseWorkerOwnedInTransaction(
+            db,
+            command.input.identity,
+            "renew",
+            "commit",
+          );
+        }
         if (shared) {
           stageLeaseExpiryObservation(db, shared, expiresAt);
         }

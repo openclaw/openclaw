@@ -58,6 +58,8 @@ export type OpenClawStateLeaseLifecycleOperations = {
       identity: OpenClawStateLeaseIdentity;
       leaseMs: number;
       operationLabel: string;
+      /** One timer-owned recovery after observing durable expiry. */
+      recoverExpired?: true;
     };
     output: number;
   };

@@ -218,13 +218,14 @@ function repairMissingProcessStartTime(
   });
 }
 
-/** The caller owns the write transaction; expired or replaced owners cannot renew. */
+/** Recovery may renew an overdue row only while its unique acquisition owner still matches. */
 export function renewOpenClawStateLeaseInTransaction(
   db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   processOwner?: StateLeaseProcessOwner,
   nowMs?: number,
+  recoverExpired = false,
 ): number | undefined {
   return withSqliteDatabaseWriteScope(db, [stateLeaseWriteScope(identity)], () => {
     const now = nowMs ?? Date.now();
@@ -243,7 +244,7 @@ export function renewOpenClawStateLeaseInTransaction(
         .where("scope", "=", identity.scope)
         .where("lease_key", "=", identity.key)
         .where("owner", "=", identity.owner)
-        .where("expires_at", ">", now),
+        .$if(!recoverExpired, (query) => query.where("expires_at", ">", now)),
     );
     return result.numAffectedRows === 1n ? expiresAt : undefined;
   });

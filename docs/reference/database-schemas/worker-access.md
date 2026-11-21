@@ -3375,8 +3375,14 @@ filesystem owner still renews every 15 seconds. Renewal keeps its FULL commit
 durability: an in-progress commit can still hold SQLite's single writer lock.
 Startup identity repair and
 explicit verification retain their current checks. Closing one lease leaves its siblings running;
-closing the last joins native worker exit. Renewal remains independent of the
-Gateway event loop, including during concurrent worktree creation.
+closing the last joins native worker exit. Scheduling remains independent of the
+Gateway event loop, including during concurrent worktree creation. Database writes
+still require host admission, so a stalled host can delay their completion.
+Parent-timer runtime leases instead join a pending renewal at observed expiry or
+attempt one recovery through the same writer admission. Recovery renews only the
+exact acquisition owner, even if its expiry passed; a replacement or missing row
+still loses ownership. Effect-time checks continue to require an unexpired lease,
+including the interval between event-loop resumption and recovery settlement.
 Workspace reservation keeps its existing lease acquisition order and native
 preparation path. Each authority check reads placement and pending-result or
 reconciliation presence in one indexed statement, including orphan results when
