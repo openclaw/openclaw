@@ -254,6 +254,9 @@ describe("resolveRuntimeProcessEntrypointUrl", () => {
         "file:///relay/service-child-relay.mjs",
       );
       const anchor = new URL("file:///relay/service-child-group-anchor.mjs");
+      expect(resolveRuntimeProcessEntrypointUrl("serviceChildRelay")).toEqual(
+        new URL("file:///relay/service-child-relay.mjs"),
+      );
       expect(resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor")).toEqual(anchor);
       expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(originalGithub);
       registerSealedRuntimeProcessEntrypoints("worker", "file:///worker/worker.mjs");

@@ -2,7 +2,53 @@ import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { sendServiceChildMessage } from "./service-child-protocol.js";
 import type { ProcessCleanupResult } from "./types.js";
+
+/** The outside subreaper, not its command anchor, certifies a strict Linux tree. */
+export function retainServiceChildNativeCustody(params: {
+  child: ChildProcess;
+  generation: string;
+  nextSequence: () => number;
+  onLost: (message: string) => void;
+}) {
+  const closed = createDeferredCore();
+  let confirmed = false;
+  let exited = false;
+  let disconnected = false;
+  const finish = () => {
+    if (exited && disconnected && !confirmed) {
+      params.onLost("custody owner exited without kernel descendant extinction");
+    }
+  };
+  params.child.once("exit", () => {
+    exited = true;
+    finish();
+  });
+  params.child.once("disconnect", () => {
+    disconnected = true;
+    finish();
+  });
+  return {
+    confirm() {
+      confirmed = true;
+      closed.resolve();
+    },
+    get confirmed() {
+      return confirmed;
+    },
+    wait: (cleanup: Promise<void>) => Promise.race([closed.promise, cleanup]),
+    // Kill only the retained inner anchor; this owner must survive to reap it.
+    force: () =>
+      sendServiceChildMessage(params.child, {
+        type: "cancel",
+        generation: params.generation,
+        sequence: params.nextSequence(),
+        signal: "SIGKILL",
+      }),
+  };
+}
 
 /** Retain admitted transport for cancellation; transport loss asks the native owner to drain. */
 export function stopServiceChildOwner(

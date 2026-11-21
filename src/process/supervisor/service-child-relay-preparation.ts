@@ -1,9 +1,12 @@
+import type { ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
+import { prepareChildRuntimeFailure } from "../../infra/child-runtime-viability.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 import { ServiceChildLaunchNotInitiatedError } from "../spawn-broker/relay-integration.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
+import { createManagedChildStdin } from "./adapters/child-stdin.js";
 import { toStringEnv } from "./adapters/env.js";
 import {
   getInheritedNativeProcessOwner,
@@ -12,9 +15,11 @@ import {
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
 import {
   supportsNodeWorkerProcessOwner,
+  sendServiceChildMessage,
   type ServiceChildControlPayload,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
+import { joinStartupFailureCleanup } from "./service-child-relay-retirement.js";
 import { reserveStdioEntry } from "./service-child-stdio.js";
 import type {
   ProcessAdapterConstruction,
@@ -44,6 +49,7 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   windowsShellCommand?: string;
   /** Hand off descendants after root exit; ignored where custody cannot be handed off. */
   releaseOnRootExit?: true;
+  retainNativeCustody?: true;
 } & (
     | {
         ownedWorker: true;
@@ -77,6 +83,84 @@ export function assertServiceChildSpawn(
   params.beforeSpawn?.();
 }
 
+/** Join startup and private input without replacing admission failure with pipe errors. */
+export function startServiceChildRelayInput(options: {
+  params: ServiceChildRelayParams;
+  preparation: ReturnType<typeof prepareServiceChildRelay>;
+  child: ChildProcess;
+  start: ServiceChildStart;
+  startup: Promise<void>;
+  constructionAbort: Promise<never>;
+  cleanup: Promise<void>;
+  onConstructionAbort: () => void;
+  getStartupAcknowledgement: () => Promise<void> | undefined;
+  getWaitError: () => Error | undefined;
+  hasCommand: () => boolean;
+  retire: () => void;
+  sendControl: (payload: ServiceChildControlPayload) => Promise<void>;
+  onControlError: (error: unknown) => void;
+  onInputError: (error: Error) => void;
+}) {
+  const { params, child } = options;
+  const stdin = createManagedChildStdin(
+    child.stdin,
+    params.terminateOnHostLoss
+      ? () => {
+          void options
+            .sendControl({ type: "stdin-end" })
+            .then(() => child.stdin?.end(), options.onControlError);
+        }
+      : undefined,
+    params.terminateOnHostLoss ? options.onInputError : undefined,
+  );
+  params.abortSignal?.addEventListener("abort", options.onConstructionAbort, { once: true });
+  const ready = (async () => {
+    using delivery = options.preparation.transferSecretInput();
+    try {
+      assertServiceChildSpawn(params, options.onConstructionAbort);
+      await Promise.race([
+        sendServiceChildMessage(child, options.start),
+        options.constructionAbort,
+      ]);
+      params.assertCurrent?.();
+      const [startupResult, secretDeliveryResult] = await Promise.allSettled([
+        options.startup,
+        delivery?.deliverTo(child, { abortSignal: params.abortSignal }),
+      ]);
+      if (startupResult.status === "rejected") {
+        throw await joinStartupFailureCleanup(
+          startupResult.reason,
+          options.getStartupAcknowledgement(),
+          options.cleanup,
+        );
+      }
+      if (secretDeliveryResult.status === "rejected") {
+        throw secretDeliveryResult.reason;
+      }
+      if (params.input !== undefined && params.prepareInput) {
+        await params.prepareInput();
+      }
+      const waitError = options.getWaitError();
+      if (params.abortSignal?.aborted || waitError) {
+        throw waitError ?? new Error("service child construction aborted");
+      }
+      params.assertCurrent?.();
+      if (params.input !== undefined) {
+        stdin?.write(params.input);
+        stdin?.end();
+      } else if (params.stdinMode === "pipe-closed") {
+        stdin?.end();
+      }
+    } catch (error) {
+      options.retire();
+      throw (await prepareChildRuntimeFailure({ error, started: options.hasCommand() })) ?? error;
+    } finally {
+      params.abortSignal?.removeEventListener("abort", options.onConstructionAbort);
+    }
+  })();
+  return { stdin, ready };
+}
+
 /** Prepare transport facts; the host revalidates authority immediately before spawning. */
 export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
   const nativeProcessOwner =
@@ -89,6 +173,7 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
     nativeProcessOwner !== undefined &&
     (!params.ownedWorker || params.nativeProcessOwnerSupported === true);
   const useLinuxSubreaper = process.platform === "linux" && useNativeProcessOwner;
+  const retainNativeCustody = useLinuxSubreaper && params.retainNativeCustody === true;
   if (!useLinuxSubreaper) {
     assertProcessGroupControl();
   }
@@ -135,6 +220,7 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
         parentLineageFds.length === 0,
       useWindowsJobAnchor,
       useLinuxSubreaper,
+      retainNativeCustody,
       nativeProcessOwner: useNativeProcessOwner ? nativeProcessOwner : undefined,
       controlFd,
       lineageFd,
@@ -149,11 +235,12 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
           : { lineageFd, parentLineageFds },
       spawn: {
         executionIntent: params.executionIntent,
-        workerUrl: useLinuxSubreaper
-          ? new URL(nativeProcessOwner!)
-          : resolveRuntimeProcessEntrypointUrl(
-              useWindowsJobAnchor ? "serviceChildWindowsJobAnchor" : "serviceChildRelay",
-            ),
+        workerUrl:
+          useLinuxSubreaper && !retainNativeCustody
+            ? new URL(nativeProcessOwner!)
+            : resolveRuntimeProcessEntrypointUrl(
+                useWindowsJobAnchor ? "serviceChildWindowsJobAnchor" : "serviceChildRelay",
+              ),
         env: params.ownedWorker ? params.env : process.env,
         ...(useLinuxSubreaper ? { nativeProcessOwner } : {}),
         detached:
@@ -176,7 +263,12 @@ export function createServiceChildStart(
   params: ServiceChildRelayParams,
   preparation: Pick<
     ReturnType<typeof prepareServiceChildRelay>,
-    "controlFd" | "ownership" | "useLinuxSubreaper" | "nativeProcessOwner" | "releaseOnRootExit"
+    | "controlFd"
+    | "ownership"
+    | "useLinuxSubreaper"
+    | "nativeProcessOwner"
+    | "releaseOnRootExit"
+    | "retainNativeCustody"
   >,
   generation: string,
   acknowledgeClosing: boolean,
@@ -197,6 +289,7 @@ export function createServiceChildStart(
     controlFd: preparation.controlFd,
     ...preparation.ownership,
     treeOwnership: preparation.useLinuxSubreaper ? "linux-subreaper" : undefined,
+    ...(preparation.retainNativeCustody ? { retainNativeCustody: true as const } : {}),
     nativeProcessOwner: preparation.nativeProcessOwner,
     ...(acknowledgeClosing ? { acknowledgeClosing: true as const } : {}),
     ...(preparation.releaseOnRootExit ? { releaseOnRootExit: true as const } : {}),

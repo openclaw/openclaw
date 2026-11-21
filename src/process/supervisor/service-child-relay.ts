@@ -12,6 +12,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
+import type { acquireLinuxChildSubreaper } from "./linux-child-subreaper.js";
 import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import type {
   ServiceChildControlMessage,
@@ -35,6 +36,7 @@ function runServiceChildRelay(): void {
   let anchorExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   let parentLineageFds: number[] = [];
   let parentLineageReleased = false;
+  let subreaper: ReturnType<typeof acquireLinuxChildSubreaper> | undefined;
 
   const report = (message: ServiceChildRelayMessage) => {
     if (!process.connected) {
@@ -57,11 +59,23 @@ function runServiceChildRelay(): void {
     }
   };
   const releaseParentLineage = async () => {
+    if (subreaper) {
+      // Anchor death adopts even setsid/double-fork descendants into this
+      // dedicated owner. Only its retained kernel wait can certify extinction.
+      while (!subreaper.drain("SIGKILL")) {
+        await delay(10);
+      }
+      if (process.connected) {
+        await new Promise<void>((resolve) => {
+          process.send?.({ type: "custody-closed", generation }, () => resolve());
+        });
+      }
+    }
     if (parentLineageFds.length > 0) {
       let reportedFailure = false;
       for (;;) {
         try {
-          if (isOwnedProcessGroupGone(anchor!.pid!)) {
+          if (subreaper || isOwnedProcessGroupGone(anchor!.pid!)) {
             break;
           }
         } catch (error) {
@@ -103,7 +117,7 @@ function runServiceChildRelay(): void {
   process.once("disconnect", notifyParentLoss);
   process.on("SIGTERM", notifyParentLoss);
   process.on("SIGINT", notifyParentLoss);
-  process.on("message", (raw: unknown) => {
+  const onMessage = async (raw: unknown) => {
     // SAFETY: the spawned host is the sole sender on this private IPC channel.
     const start = raw as ServiceChildStart | ServiceChildControlMessage | ServiceChildRelayRelease;
     if (start?.type === "release") {
@@ -180,6 +194,16 @@ function runServiceChildRelay(): void {
     }
     reserveStdioEntry(stdio, "ipc");
     try {
+      if (start.retainNativeCustody) {
+        if (
+          start.treeOwnership !== "linux-subreaper" ||
+          start.releaseOnRootExit ||
+          start.ownedWorker
+        ) {
+          throw new Error("Retained native custody requires a strict Linux command scope");
+        }
+        subreaper = (await import("./linux-child-subreaper.js")).acquireLinuxChildSubreaper();
+      }
       const executable = resolveLaunchableNodePath();
       const env = resolveRuntimeWorkerEnv(anchorUrl, process.env);
       if (env.NODE_OPTIONS !== undefined) {
@@ -195,6 +219,9 @@ function runServiceChildRelay(): void {
         windowsHide: true,
         env,
       });
+      if (anchor.pid) {
+        subreaper?.retainSpawnedChild(anchor.pid, anchor);
+      }
     } catch (error) {
       report({
         type: "relay-error",
@@ -248,6 +275,14 @@ function runServiceChildRelay(): void {
           error: error instanceof Error ? error.message : String(error),
         });
       });
+    });
+  };
+  process.on("message", (raw: unknown) => {
+    void onMessage(raw).catch((error: unknown) => {
+      if (generation) {
+        report({ type: "relay-error", generation, error: String(error) });
+      }
+      notifyParentLoss();
     });
   });
 }

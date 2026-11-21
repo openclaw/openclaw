@@ -31,6 +31,8 @@ export type ServiceChildStart = {
    */
   releaseOnRootExit?: true;
   treeOwnership?: "linux-subreaper";
+  /** Strict native scopes retain an outside-anchor subreaper until kernel extinction. */
+  retainNativeCustody?: true;
   /** Package-owned helper inherited by an admitted portable worker, never a remote command. */
   nativeProcessOwner?: string;
 } & (
@@ -106,6 +108,7 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
 
 export type ServiceChildRelayMessage =
   | ServiceChildStart
+  | { type: "custody-closed"; generation: string }
   | { type: "relay-error"; generation: string; error: string };
 
 /** Host to relay: the anchor released its group; exit without joining group extinction. */
