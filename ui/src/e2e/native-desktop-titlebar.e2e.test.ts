@@ -309,7 +309,7 @@ async function alignsNativeHeaders(
     : row.getByRole("button", { name: "Collapse sidebar" });
   await collapse.waitFor();
   expect(await collapse.getAttribute("aria-expanded")).toBe("true");
-  // The header's only link is New session, beside Filter & sort and Collapse.
+  // The header's only link is New session, after Collapse and Filter & sort.
   expect(await row.locator("a").count()).toBe(1);
   expect(await row.getByRole("link", { name: "New session", exact: true }).count()).toBe(1);
   const geometry = await row.evaluate((element) => {
@@ -352,6 +352,7 @@ async function alignsNativeHeaders(
     const collapseBounds = element
       .querySelector(".sidebar-session-toolbar__collapse")!
       .getBoundingClientRect();
+    const trailingBounds = [...element.querySelectorAll("button")].at(-1)!.getBoundingClientRect();
     const headerBounds = element.getBoundingClientRect();
     return {
       x: title.x,
@@ -359,7 +360,7 @@ async function alignsNativeHeaders(
       height: headerBounds.height,
       center: title.y + title.height / 2,
       collapseCenter: collapseBounds.y + collapseBounds.height / 2,
-      collapseRight: collapseBounds.right,
+      trailingRight: trailingBounds.right,
       right: headerBounds.right,
     };
   });
@@ -367,7 +368,7 @@ async function alignsNativeHeaders(
   expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
   if (!macNavigation) {
     expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
-    expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
+    expect(panelGeometry.trailingRight).toBe(panelGeometry.right - 8);
   }
   // Empty header space must stay non-interactive so it can drag the window.
   const dragGap = await header.evaluate((element) => {

@@ -293,11 +293,14 @@ suite.define(() => {
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
 
-        // Every panel shares the Sessions header geometry, including the collapse control.
+        // Every panel shares the Sessions header geometry, and its last action holds the edge.
         await page.setViewportSize({ width: 1280, height: 320 });
         const headerGeometry = async () => ({
           header: await header.boundingBox(),
-          collapse: await header.getByRole("button", { name: "Collapse sidebar" }).boundingBox(),
+          trailingRight: await header.evaluate(
+            (element) =>
+              [...element.querySelectorAll("button, a")].at(-1)!.getBoundingClientRect().right,
+          ),
         });
         const usersGeometry = await headerGeometry();
         await page.locator('[data-navigation-view="sessions"]').click();

@@ -123,29 +123,36 @@ export function renderSessionListToolbar(
       ? t("common.active")
       : t(`sessionsView.${host.sessionsStatusFilter}`);
   return (
-    <SidebarPanelHeader class="sidebar-session-toolbar" onToggleSidebar={host.onToggleSidebar}>
+    <SidebarPanelHeader
+      class="sidebar-session-toolbar"
+      onToggleSidebar={host.onToggleSidebar}
+      actions={
+        <>
+          <SidebarPanelFilter
+            menus={host.sidebarMenus}
+            menu="sessionSort"
+            expanded={host.sidebarMenus.sessionSortMenuPosition !== null}
+            filtered={countSidebarSessionFilters(host) > 0}
+            title={t("chat.sidebar.sortSessions")}
+            label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
+            description={`${t("sessionsView.status")}: ${statusLabel()}`}
+          />
+          <NewSessionLink
+            basePath={host.basePath}
+            agentId={host.expandedAgentId()}
+            class="sidebar-session-toolbar__button sidebar-new-session"
+            label={t("agentChip.newConversation")}
+            showShortcut
+            disabledReason={(() => {
+              const access = newSessionAccess();
+              return access.allowed ? undefined : access.reason;
+            })()}
+            onOpen={(agentId, target) => host.requestOpenNewSession(agentId, target)}
+          />
+        </>
+      }
+    >
       <SidebarOwnerPicker host={host} />
-      <SidebarPanelFilter
-        menus={host.sidebarMenus}
-        menu="sessionSort"
-        expanded={host.sidebarMenus.sessionSortMenuPosition !== null}
-        filtered={countSidebarSessionFilters(host) > 0}
-        title={t("chat.sidebar.sortSessions")}
-        label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
-        description={`${t("sessionsView.status")}: ${statusLabel()}`}
-      />
-      <NewSessionLink
-        basePath={host.basePath}
-        agentId={host.expandedAgentId()}
-        class="sidebar-session-toolbar__button sidebar-new-session"
-        label={t("agentChip.newConversation")}
-        showShortcut
-        disabledReason={(() => {
-          const access = newSessionAccess();
-          return access.allowed ? undefined : access.reason;
-        })()}
-        onOpen={(agentId, target) => host.requestOpenNewSession(agentId, target)}
-      />
     </SidebarPanelHeader>
   );
 }
