@@ -257,40 +257,51 @@ describe("FeishuStreamingSession", () => {
     return { session: newSession(), newSession, authTokens, requests, create, reply, remove };
   }
 
-  it.each([
-    {
-      mode: "create",
-      options: undefined,
-      method: "create",
-      data: expect.not.objectContaining({ root_id: expect.anything() }),
-    },
-    {
-      mode: "root_create",
-      options: { rootId: "root_1" },
-      method: "create",
-      data: expect.objectContaining({ root_id: "root_1" }),
-    },
-    {
-      mode: "reply",
-      options: { replyToMessageId: "inbound_1", replyInThread: true, rootId: "root_1" },
-      method: "reply",
-      data: expect.objectContaining({ reply_in_thread: true }),
-    },
-  ] as const)(
-    "retries, updates and closes an accepted $mode card without its optional message receipt",
-    async ({ mode, options, method, data }) => {
-      vi.useFakeTimers();
+  it.each(
+    [
+      {
+        mode: "create",
+        options: undefined,
+        method: "create",
+        data: expect.not.objectContaining({ root_id: expect.anything() }),
+      },
+      {
+        mode: "root_create",
+        options: { rootId: "root_1" },
+        method: "create",
+        data: expect.objectContaining({ root_id: "root_1" }),
+      },
+      {
+        mode: "reply",
+        options: { replyToMessageId: "inbound_1", replyInThread: true, rootId: "root_1" },
+        method: "reply",
+        data: expect.objectContaining({ reply_in_thread: true }),
+      },
+    ].flatMap((scenario) => [
+      { ...scenario, retry: false },
+      { ...scenario, retry: true },
+    ]),
+  )(
+    "updates and closes an accepted $mode card without its optional message receipt (retry=$retry)",
+    async ({ mode, options, method, data, retry }) => {
+      if (retry) {
+        vi.useFakeTimers();
+      }
       const { session, requests, create, reply } = mockAcceptedStreamingCard({
-        accountId: `accepted-without-receipt-${mode}`,
+        accountId: `accepted-without-receipt-${mode}-${retry}`,
       });
 
       const send = method === "reply" ? reply : create;
-      send.mockRejectedValueOnce(
-        Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-      );
+      if (retry) {
+        send.mockRejectedValueOnce(
+          Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+        );
+      }
       const started = session.start("chat_1", "chat_id", options);
       const accepted = expect(started).resolves.toBeUndefined();
-      await vi.runAllTimersAsync();
+      if (retry) {
+        await vi.runAllTimersAsync();
+      }
       await accepted;
       await session.update("The accepted answer");
 
@@ -298,14 +309,16 @@ describe("FeishuStreamingSession", () => {
         visibleReplySent: true,
         content: "The accepted answer",
       });
-      expect(send).toHaveBeenCalledTimes(2);
+      expect(send).toHaveBeenCalledTimes(retry ? 2 : 1);
       expect(send).toHaveBeenCalledWith(
         expect.objectContaining({
           data,
           ...(method === "reply" ? { path: { message_id: "inbound_1" } } : {}),
         }),
       );
-      expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
+      if (retry) {
+        expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
+      }
       expect(method === "reply" ? create : reply).not.toHaveBeenCalled();
       expect(requests.map(({ path }) => path)).toEqual([
         "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
