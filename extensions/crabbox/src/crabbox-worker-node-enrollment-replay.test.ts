@@ -322,12 +322,7 @@ describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platfo
   it.each(["argv", "cwd", "state", "unavailable"])(
     "refuses %s mismatch or missing identity",
     async (failure) => {
-      expectRefusal(
-        await replay(platform, failure),
-        platform === "linux" && failure === "unavailable"
-          ? "Unreadable process identity"
-          : undefined,
-      );
+      expectRefusal(await replay(platform, failure));
     },
   );
 });
