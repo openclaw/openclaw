@@ -357,7 +357,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
   return (
     <SettingsPage wide={true} carapace={true}>
       <PluginDetailShell
-        registerRemovalHeading={props.registerRemovalHeading}
+        registerHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
         rail
         name={plugin().name}
