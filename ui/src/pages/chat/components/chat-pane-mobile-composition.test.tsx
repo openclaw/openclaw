@@ -7,8 +7,24 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
-import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import { chatPaneHeaderSharing, mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
+
+const adapterFactory = vi.hoisted(() => ({ loaded: vi.fn(), created: vi.fn() }));
+vi.mock("./chat-session-sharing-mobile-adapter.ts", async (importOriginal) => {
+  adapterFactory.loaded();
+  const original =
+    await importOriginal<typeof import("./chat-session-sharing-mobile-adapter.ts")>();
+  return {
+    ...original,
+    createChatSessionSharingMobileAdapter: (
+      ...args: Parameters<typeof original.createChatSessionSharingMobileAdapter>
+    ) => {
+      adapterFactory.created();
+      return original.createChatSessionSharingMobileAdapter(...args);
+    },
+  };
+});
 
 const containers: HTMLElement[] = [];
 
@@ -75,7 +91,17 @@ it("retains the People page and lookup across native host replacement and deskto
     presentation: true,
     setRef: vi.fn(),
   };
+  const initialSharing = chatPaneHeaderSharing();
+  const success = async () => ({ status: "success" as const });
   const mounted = mountHeader({
+    mobileSharing: {
+      ...initialSharing,
+      session: initialSharing.session!,
+      onVisibilityChange: success,
+      onMemberChange: success,
+      onPublicShareChange: success,
+      onCopyPublicLink: success,
+    },
     mergedChrome: true,
     detailsControl,
     mobilePeople: {
@@ -98,11 +124,12 @@ it("retains the People page and lookup across native host replacement and deskto
   );
   const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-people-grid")!;
   expect(mentions.activate).not.toHaveBeenCalled();
+  expect(adapterFactory.loaded).not.toHaveBeenCalled();
   trigger.click();
   const renderPage = mobileHost.destination.page!.render!;
-  const mountPage = () =>
+  const mountPage = (render = renderPage) =>
     mountSolid(() => {
-      const Page = dynamic(() => renderPage);
+      const Page = dynamic(() => render);
       return <Page />;
     });
   const firstPage = mountPage();
@@ -139,6 +166,24 @@ it("retains the People page and lookup across native host replacement and deskto
   expect(returnedPage.container.querySelector("#pane-1-mobile-people")).toBe(retainedPage);
   expect(returnedPage.getByRole("alert").textContent).toContain("Retained lookup needs retry");
   expect(mentions.activate).toHaveBeenCalledTimes(2);
+  expect(adapterFactory.loaded).not.toHaveBeenCalled();
+  returnedPage.getByRole("button", { name: /Sharing options/ }).click();
+  const sharingPage = mobileHost.destination;
+  const sharingView = mountPage(sharingPage.page!.render!);
+  await waitForSolid(() =>
+    expect(sharingView.getByRole("button", { name: /SharedEveryone/ })).not.toBeNull(),
+  );
+  expect(adapterFactory.created).toHaveBeenCalledOnce();
+  sharingView.getByRole("button", { name: /SharedEveryone/ }).click();
+  const accessView = mountPage(mobileHost.destination.page!.render!);
+  await waitForSolid(() =>
+    expect(accessView.getByRole("group", { name: "Session access" })).not.toBeNull(),
+  );
+  expect(adapterFactory.created).toHaveBeenCalledOnce();
+  mobileHost.navigate(sharingPage);
+  expect(adapterFactory.created).toHaveBeenCalledOnce();
+  sharingView.unmount();
+  accessView.unmount();
   mounted.unmount();
   expect(release).toHaveBeenCalledTimes(2);
   expect(renderPage()).toBeUndefined();

@@ -6,7 +6,7 @@ import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "../chat-pane-mounted.test-support.ts";
-import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
+import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.ts";
 import {
   ChatSessionAccessMobile,
   ChatSessionSharingMobile,

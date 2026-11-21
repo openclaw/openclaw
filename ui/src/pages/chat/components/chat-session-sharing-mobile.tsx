@@ -33,7 +33,7 @@ import "../../../styles/chat/sharing-mobile.css";
 import {
   chatSessionPermissionLabel,
   type ChatSessionSharingRosterRow,
-} from "./chat-session-sharing-shared.tsx";
+} from "./chat-session-sharing-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionSharingEnglish);
 
