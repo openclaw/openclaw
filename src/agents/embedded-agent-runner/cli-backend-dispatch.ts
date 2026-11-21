@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
@@ -63,6 +64,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const toolsAllow = [...new Set(names)];
+  using preparationPhase = observeDiagnosticsTimelinePhases("run.prepare.cli_backend");
   const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync(params);
   if (!eligibility) {
     return undefined;
@@ -188,6 +190,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
         ? { lifecycleGeneration: params.lifecycleGeneration }
         : undefined,
     );
+    preparationPhase[Symbol.dispose]();
     const result = await runCliAgent({
       admittedRunContext,
       sessionManager: params.sessionManager,

@@ -10,6 +10,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   bindSessionControllerSourceTurnId,
   type ReplyOperation,
@@ -91,10 +92,12 @@ export function createReplyInputAdmission(params: {
         return;
       }
       if (!sessionKey || !storePath) {
+        using _ = observeDiagnosticsTimelinePhases("reply.storage.input.persist");
         await recorder.persistApproved();
         bindSource();
         return;
       }
+      using phases = observeDiagnosticsTimelinePhases("reply.storage.input.read");
       const { entry, stagedWorkerInput } = await readReplyAdmissionSession({
         sessionId: replyOperation.sessionId,
         placementContext: recorder?.getPendingInputMessage?.()
@@ -114,6 +117,7 @@ export function createReplyInputAdmission(params: {
         )
       ) {
         bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire });
+        phases.mark("reply.storage.input.persist");
         const persisted = await recorder.persistApproved({
           target: {
             agentId: followupRun.run.agentId,

@@ -1,5 +1,6 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ChannelRunAuthorizationError } from "./run-authorization-error.js";
 
@@ -116,6 +117,7 @@ export function bindChildSessionPublication(
 export async function prepareChildSessionPublication(context: object): Promise<void> {
   const publication: unknown = Reflect.get(context, PUBLICATION);
   if (publication instanceof ChildSessionPublication) {
+    using _ = observeDiagnosticsTimelinePhases("reply.prepare.child_publication");
     await publication.prepare();
   }
 }

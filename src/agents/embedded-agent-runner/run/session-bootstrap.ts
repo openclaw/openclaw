@@ -25,6 +25,7 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
+import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
@@ -37,6 +38,7 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isCurrentSessionControllerOperation } from "../../../sessions/session-controller.identity.js";
@@ -59,6 +61,7 @@ import {
   AGENT_RUN_SUPERSEDED_ERROR,
   AGENT_RUN_SUPERSEDED_STOP_REASON,
 } from "../../run-termination.js";
+import { waitForSessionMaintenance } from "../../session-maintenance/coordinator.js";
 import { captureSessionManagerIncognitoBinding } from "../../sessions/session-manager-incognito-scope.js";
 import { redactRunIdentifier } from "../../workspace-run.js";
 import { log } from "../logger.js";
@@ -271,8 +274,33 @@ async function backfillSessionIdentity(
   }
 }
 
+/** Settle this session's deferred rewrite before taking the shared execution lane. */
+export async function waitForEmbeddedSessionMaintenance(
+  params: Pick<RunEmbeddedAgentParams, "sessionManager" | "replyOperation" | "sessionKey">,
+  runSessionTarget: Parameters<typeof waitForSessionTranscriptProjection>[0],
+  signal: AbortSignal,
+) {
+  // Same-session reads below must see any prior deferred transcript rewrite.
+  // Checkpoint before the global lane so unrelated sessions can still start
+  // while this session waits on its own maintenance lane.
+  if (!params.sessionManager || params.sessionManager.getSessionTarget()) {
+    params.replyOperation?.markWaitingForDeferredMaintenance();
+    try {
+      using phases = observeDiagnosticsTimelinePhases("run.storage.maintenance");
+      await waitForSessionMaintenance(params.sessionKey);
+      // Maintenance can finish while its transcript projection is still rebuilding.
+      // Settle that projection before the next attempt reads the bounded history.
+      phases.mark("run.storage.transcript_projection");
+      await waitForSessionTranscriptProjection(runSessionTarget, signal);
+    } finally {
+      params.replyOperation?.markDeferredMaintenanceWaitEnded();
+    }
+  }
+}
+
 /** Prepare canonical session identity without acquiring execution or placement ownership. */
 export async function prepareEmbeddedRunSession(paramsInput: RunEmbeddedAgentInternalParams) {
+  using phases = observeDiagnosticsTimelinePhases("run.session.identity");
   const contextEngineAgentId =
     normalizeOptionalString(paramsInput.sessionTarget?.agentId) ??
     normalizeOptionalString(paramsInput.agentId);
@@ -297,8 +325,10 @@ export async function prepareEmbeddedRunSession(paramsInput: RunEmbeddedAgentInt
     : undefined;
   const prepareTarget = reader
     ? async (scope: SessionTranscriptRuntimeScope) => {
+        using admissionPhases = observeDiagnosticsTimelinePhases("run.storage.session_admission");
         sessionAdmission = await assertAgentHarnessRunAdmission(paramsBase, scope);
         assertWorkerSelection();
+        admissionPhases.mark("run.storage.transcript_target");
         const target =
           sessionAdmission?.runtimeTarget ?? (await resolveSessionTranscriptRuntimeTarget(scope));
         return {
@@ -312,9 +342,11 @@ export async function prepareEmbeddedRunSession(paramsInput: RunEmbeddedAgentInt
       }
     : undefined;
   if (!prepareTarget) {
+    phases.mark("run.storage.session_admission");
     sessionAdmission = await assertAgentHarnessRunAdmission(paramsBase);
     assertWorkerSelection();
   }
+  phases.mark("run.storage.session_target");
   const runSessionTarget = await resolveAgentRunSessionTarget(
     { ...paramsBase, missingSessionKey: "create" },
     prepareTarget,
@@ -385,6 +417,7 @@ export async function prepareInitialSessionWriter(params: {
   };
   const assertAbsent = async () => {
     assertActive();
+    using _ = observeDiagnosticsTimelinePhases("run.storage.initial_writer_presence");
     const present = await presence.read();
     assertActive();
     if (present) {
@@ -394,6 +427,7 @@ export async function prepareInitialSessionWriter(params: {
   // Existing-row callers can be inside their creation lifecycle; reject before
   // attempting to acquire an admission that their enclosing mutation excludes.
   await assertAbsent();
+  using _ = observeDiagnosticsTimelinePhases("run.storage.initial_writer_admission");
   const admission = await beginSessionEffect({
     agentId: ownerTarget.agentId,
     scope: presence.storePath,
@@ -562,6 +596,7 @@ async function claimPersistedAgentSessionWriter(
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
+  using _ = observeDiagnosticsTimelinePhases("run.storage.writer_claim");
   const claimed = await applySessionEntryOperation(
     {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
@@ -647,6 +682,8 @@ async function claimPersistedAgentSessionWriter(
 export async function claimAgentSessionWriter(
   params: RunEmbeddedAgentParams,
 ): Promise<AgentSessionWriterFence | undefined> {
+  using phase = observeDiagnosticsTimelinePhases("run.storage.writer_admission");
   const snapshot = await assertAgentHarnessRunAdmission(params);
+  phase[Symbol.dispose]();
   return snapshot ? claimPersistedAgentSessionWriter(params, snapshot) : undefined;
 }

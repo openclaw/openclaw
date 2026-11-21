@@ -2,6 +2,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { withProviderRateLimitRetryDeadline } from "../../llm/provider-rate-limit.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
@@ -167,6 +168,7 @@ export async function runPreparedEmbeddedLoop(
   let lastRetryFailoverReason: FailoverReason | null = null;
   let codexAppServerRecoveryRetries = 0;
   let emptyErrorRetries = 0;
+  using phases = observeDiagnosticsTimelinePhases("run.storage.session_prompt");
   const sessionPromptState = await createEmbeddedRunSessionPromptState({
     runParams: params,
     sessionAgentId,
@@ -190,13 +192,16 @@ export async function runPreparedEmbeddedLoop(
     preparedRuntime,
     getSessionId: () => sessionPromptState.sessionId,
   });
+  phases.mark("run.prepare.context_engine");
   const { contextEngine, contextEngineLogicalTurnLease, ownsContextEngineLogicalTurnLease } =
     await admitEmbeddedContextEngine(admittedRunInput, initialHarness);
   const permissionChanges = createEmbeddedRunPermissionChanges(params);
   try {
     startupStages.mark("context-engine");
     notifyExecutionPhase("context_engine", { provider, model: modelId });
+    phases.mark("run.storage.provider_review");
     await providerReview.admit();
+    phases[Symbol.dispose]();
     const compactionRuntime = createEmbeddedRunCompactionRuntime({
       runParams: params,
       contextEngine,

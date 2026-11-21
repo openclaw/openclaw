@@ -6,6 +6,7 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { adoptExecRequestSession } from "../../../infra/exec-request-context.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -321,6 +322,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
       // A caller's manager owns the transcript even when metadata has a durable target.
       // Waiting on that borrowed identity can block an unrelated in-memory retry.
       if (settleOwnedTranscriptProjection && !params.sessionManager && target && sessionId) {
+        using _ = observeDiagnosticsTimelinePhases("run.storage.dispatch_transcript_projection");
         settleOwnedTranscriptProjection = false;
         const { waitForSessionTranscriptProjection } =
           await import("../../../config/sessions/session-transcript-reconcile.js");

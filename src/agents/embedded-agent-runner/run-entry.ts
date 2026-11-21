@@ -6,6 +6,7 @@ import {
   emitAgentEventForRunContext,
 } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { modelKey } from "../../shared/model-key.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
@@ -121,6 +122,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   };
   assertCurrent();
+  using phases = observeDiagnosticsTimelinePhases("run.entry.model_selection");
   const hookSelection = await resolveRunEntryModelSelection({
     ...params,
     workspaceDir: params.harness.workspaceDir,
@@ -176,6 +178,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     }
   };
   const awaitSessionDiffBaseline = params.modelResolve?.awaitSessionDiffBaseline;
+  phases.mark("run.entry.context_engine");
   const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
     identity: params.identity,
     config: params.selection.cfg,
@@ -239,6 +242,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       : undefined;
   const hasCommittedSideEffect = canFallback ? () => !canFallback() : undefined;
   const recordedFallbackTargets = new Set<string>();
+  phases[Symbol.dispose]();
   try {
     let capturedCyberRefusal:
       | { provider: string; model: string; authProfileId?: string }

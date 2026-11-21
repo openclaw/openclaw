@@ -5,6 +5,7 @@
  */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { logWarn } from "../logger.js";
 import { classifySessionKeyShape } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -51,6 +52,7 @@ export async function resolveRunBootstrapWorkspaceDir(
   if (!root || root === agentWorkspace) {
     return agentWorkspace;
   }
+  using _ = observeDiagnosticsTimelinePhases("run.prepare.bootstrap_workspace");
   const { runGitWorkerOperation } = await import("../infra/git-worker.js");
   return (await runGitWorkerOperation({
     type: "checkout.bootstrap-workspace",

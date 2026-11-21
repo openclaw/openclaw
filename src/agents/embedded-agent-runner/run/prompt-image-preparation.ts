@@ -1,4 +1,5 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../../../media/media-facts.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -42,6 +43,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
 
   const { attempt } = input;
   let localRoots: readonly string[] | undefined;
+  using phases = observeDiagnosticsTimelinePhases("run.dispatch.media");
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
@@ -74,6 +76,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
       `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for plugin harness input`,
     );
   }
+  phases.mark("run.storage.media_transcript");
   const message = await attempt.userTurnTranscriptRecorder?.resolveMessage();
   const media = ((message ? readPersistedMediaFacts(message) : undefined) ?? attempt.media)?.filter(
     (fact) => !isImageMediaFact(fact),

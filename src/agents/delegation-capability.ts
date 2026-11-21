@@ -1,3 +1,4 @@
+import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { copyPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -120,7 +121,9 @@ export function prepareDelegationCapability(params: {
     },
   };
   return params.fallbackActive && run.trustedInternalHandoff?.settleBatch
-    ? withPreparedSessionCapabilityRead(() => resolveDelegationCapability(input))
+    ? measureDiagnosticsTimelineSpan("run.storage.delegation", () =>
+        withPreparedSessionCapabilityRead(() => resolveDelegationCapability(input)),
+      )
     : resolveDelegationCapability(input);
 }
 

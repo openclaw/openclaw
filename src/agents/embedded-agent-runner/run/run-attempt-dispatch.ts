@@ -1,5 +1,6 @@
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
@@ -246,6 +247,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const assertActiveRun = requireActiveAssertion(params.abortSignal);
   assertActiveRun();
   if (runtime.pluginHarnessOwnsTransport) {
+    using _ = observeDiagnosticsTimelinePhases("run.dispatch.baseline");
     await params.awaitSessionDiffBaseline?.();
     assertActiveRun();
   }

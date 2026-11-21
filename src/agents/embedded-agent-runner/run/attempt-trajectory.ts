@@ -1,3 +1,4 @@
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
@@ -29,6 +30,7 @@ export async function prepareEmbeddedHarnessTrajectory(input: {
   ) {
     return undefined;
   }
+  using _ = observeDiagnosticsTimelinePhases("run.dispatch.trajectory");
   return await createTrajectoryRuntimeRecorder({
     cfg: attempt.config,
     env: process.env,

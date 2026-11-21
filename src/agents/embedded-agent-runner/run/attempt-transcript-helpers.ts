@@ -13,6 +13,7 @@ import {
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -35,6 +36,7 @@ export async function resolveAttemptDispatchSessionTarget(params: {
     "sessionTarget" | "sessionTargetAdopted" | "sessionId" | "sessionWriterFence"
   >;
 }) {
+  using _ = observeDiagnosticsTimelinePhases("run.dispatch.session_target");
   const state = params.promptState;
   const existing = state.sessionTarget;
   const reusable =

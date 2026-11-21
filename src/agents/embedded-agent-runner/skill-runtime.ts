@@ -1,4 +1,5 @@
 import path from "node:path";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
@@ -175,6 +176,7 @@ export async function preparePluginHarnessSkills(
     readPath: path.posix.join(mount.containerPath, "SKILL.md"),
   }));
   if (sandbox?.enabled && !sandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
+    using _ = observeDiagnosticsTimelinePhases("run.dispatch.skills");
     const prepared = await prepareEmbeddedSkills({
       ...params,
       applySkillEnvironment: false,

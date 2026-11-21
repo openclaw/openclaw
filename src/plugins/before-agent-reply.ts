@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { runOncePerAgentRun } from "../infra/agent-events.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readClaimingHookAdmission, withClaimingHookAdmission } from "./hook-claim-admission.js";
@@ -70,6 +71,7 @@ export function runBeforeAgentReplyForTurn(params: {
       if (!hookRunner?.hasHooks("before_agent_reply", context)) {
         return undefined;
       }
+      using phases = observeDiagnosticsTimelinePhases("run.prepare.reply_hook_baseline");
       await params.awaitSessionDiffBaseline?.();
       assertCurrent?.();
       const observerScope = beforeAgentReplyObserver.getStore();
@@ -82,12 +84,14 @@ export function runBeforeAgentReplyForTurn(params: {
       if (observer && !observer.runId) {
         observer.runId = params.runId;
       }
+      phases.mark("run.storage.reply_hook_admission");
       if ((await observer?.beforeDispatch()) === false) {
         return undefined;
       }
       assertCurrent?.();
       params.onDispatch?.();
       assertCurrent?.();
+      phases.mark("run.prepare.before_reply_hook");
       let result = await hookRunner.runBeforeAgentReply(params.event, context);
       assertCurrent?.();
       if (!result?.handled) {
@@ -95,6 +99,7 @@ export function runBeforeAgentReplyForTurn(params: {
       }
       assertCurrent?.();
       if (observer) {
+        phases.mark("run.storage.reply_hook_settlement");
         result = await observer.afterDispatch(result);
       }
       assertCurrent?.();

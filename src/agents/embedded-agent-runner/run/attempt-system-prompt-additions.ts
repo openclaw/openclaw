@@ -4,6 +4,7 @@ import {
 } from "../../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasPairedCardRenderer } from "../../../infra/device-pairing.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
@@ -28,6 +29,7 @@ export async function prepareAttemptSystemPromptAdditions(params: {
   storePath?: string;
   toolsAllow?: string[];
 }) {
+  using phases = observeDiagnosticsTimelinePhases("run.dispatch.prompt_additions");
   let extraSystemPrompt = params.extraSystemPrompt;
   const incognito =
     isIncognitoSessionKey(params.sessionKey) ||
@@ -82,6 +84,7 @@ export async function prepareAttemptSystemPromptAdditions(params: {
         : PROGRESS_CARD_SYSTEM_PROMPT;
     }
   }
+  phases.mark("run.storage.git_coauthor");
   const gitCoauthorPrompt = await resolveSessionGitCoauthorPrompt({
     config: params.config,
     agentId: params.agentId,

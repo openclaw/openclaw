@@ -2,6 +2,7 @@ import { resolveSessionStorePathForScope } from "../../../config/sessions/sessio
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readScheduledMemoryParent } from "../../../cron/execution-context-registry.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import {
   assertMemoryAudienceSession,
   isHostMemoryAudience,
@@ -52,6 +53,7 @@ export async function resolveEmbeddedAttemptMemoryAudience(params: {
   if (!params.admission || resolveLoadedMemoryProviderKind(run.config ?? {}) !== "native") {
     return { release: retainedAudience };
   }
+  using _ = observeDiagnosticsTimelinePhases("run.storage.memory_audience");
   const resolution = await resolveMemoryAudienceFromEntry(
     {
       agentId: params.agentId,

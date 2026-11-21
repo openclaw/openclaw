@@ -31,6 +31,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { bindAgentRunTerminalWriteSettlement } from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import {
@@ -183,6 +184,7 @@ async function executeAgentTurnInternalLoop(
   let currentTurnImages: CurrentTurnImages;
   let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
+    using phases = observeDiagnosticsTimelinePhases("reply.prepare.images");
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
@@ -210,11 +212,13 @@ async function executeAgentTurnInternalLoop(
             imageOrder: params.opts?.imageOrder,
           }),
         );
+    phases.mark("reply.prepare.mcp_app_context");
     const modelContextLease = await prepareMcpAppModelContext();
     if (modelContextLease) {
       params = { ...params, mcpAppContextLease: modelContextLease };
     }
     ({ params, currentTurnImages } = applyMcpAppModelContext(params, currentTurnImages));
+    phases.mark("reply.storage.model_patch");
     modelPatch = await createAgentPatchedSessionModelRunGuard({
       cfg: runtimeConfig,
       agentId: params.followupRun.run.agentId,

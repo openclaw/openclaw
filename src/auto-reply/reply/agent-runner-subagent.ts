@@ -1,6 +1,7 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
@@ -35,8 +36,10 @@ export async function prepareReplySubagentContinuation(
   assertCurrent();
   // Browser chat bypasses agent RPC admission. Bind its actual executing run,
   // not a queued/collected input, to the retained child's completion owner.
+  using phases = observeDiagnosticsTimelinePhases("reply.prepare.subagent_import");
   const { reactivateCompletedSubagentSession } =
     await import("../../gateway/session-subagent-reactivation.js");
+  phases.mark("reply.storage.subagent_continuation");
   await reactivateCompletedSubagentSession({
     sessionKey: turn.sessionKey,
     runId,

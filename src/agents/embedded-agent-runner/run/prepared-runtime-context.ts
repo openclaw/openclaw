@@ -1,4 +1,5 @@
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { isCurrentPluginMetadataSnapshotRuntimeGeneration } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
@@ -96,6 +97,7 @@ export async function initializeReadOnlyRunModelCatalog(
   }
   // This is explicit setup demand; passive turns must never wait for provider discovery.
   // The lease remains read-only and owns cancellation and worker cleanup.
+  using _ = observeDiagnosticsTimelinePhases("run.prepare.model_catalog");
   await racePromiseWithAbortSignal(
     snapshot.loadFullModelCatalog({ providerIds: [model.provider], refresh: true, wait: true }),
     signal,

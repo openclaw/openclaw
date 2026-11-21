@@ -15,6 +15,7 @@ import {
   captureAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { registerReplyOperationSuccessorBarrier } from "../sessions/session-controller.js";
@@ -121,7 +122,8 @@ export function installSessionPlacementAdmissionProvider(
 export async function resolveSessionPlacementRuntimeOverride(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
 ): Promise<string | undefined> {
-  return state.provider?.resolveRuntimeOverride?.(identity);
+  using _ = observeDiagnosticsTimelinePhases("run.entry.placement_runtime");
+  return await state.provider?.resolveRuntimeOverride?.(identity);
 }
 
 const requiredPlacementScope = resolveGlobalSingleton(
@@ -184,9 +186,11 @@ export async function withRequiredSessionPlacement<T>(
     }
   });
   assertCurrent();
+  using phase = observeDiagnosticsTimelinePhases("run.prepare.placement");
   return await provider.withRequiredSession(
     identity,
     async (assertPlacementCurrent) => {
+      phase[Symbol.dispose]();
       assertCurrent();
       assertPlacementCurrent();
       return await requiredPlacementScope.run(
@@ -202,6 +206,7 @@ export async function withRequiredSessionPlacement<T>(
 export async function sessionPlacementUsesWorkerInference(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
 ): Promise<boolean> {
+  using _ = observeDiagnosticsTimelinePhases("run.entry.worker_inference");
   return (await state.provider?.usesWorkerInference?.(identity)) === true;
 }
 

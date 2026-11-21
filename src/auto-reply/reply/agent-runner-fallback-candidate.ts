@@ -14,6 +14,7 @@ import {
 } from "../../cron/isolated-agent/run-admission.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -334,10 +335,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             }
             runStart.signalExecutionPhaseForTyping(info);
           };
-        await turn.opts?.dashboardReadAdmission?.prepare?.();
-        await readUserTurnPromptReactionSource(
-          turn.followupRun.userTurnTranscriptRecorder,
-        )?.prepare?.();
+        {
+          using phases = observeDiagnosticsTimelinePhases("reply.prepare.dashboard_admission");
+          await turn.opts?.dashboardReadAdmission?.prepare?.();
+          phases.mark("reply.prepare.prompt_reactions");
+          await readUserTurnPromptReactionSource(
+            turn.followupRun.userTurnTranscriptRecorder,
+          )?.prepare?.();
+        }
         const messageActionTurnCapability = turn.followupRun.run.scheduledAutomation
           ? params.scheduledMessageActionTurnCapability
           : mintReplyMessageActionTurnCapability(turn, params.runId);

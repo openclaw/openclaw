@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./embedded-agent-runner/session-prompt-state.js";
 import { resolveProjectKey } from "./project-memory-scope.js";
 import { resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
@@ -29,7 +30,9 @@ export function prepareAgentPromptRepoRoot(
 export async function prepareAgentPromptProjects(
   params: Parameters<typeof prepareAgentPromptRepoRoot>[0] & { sessionId: string },
 ) {
+  using phases = observeDiagnosticsTimelinePhases("run.prepare.project_repo");
   const repoRoot = (await prepareAgentPromptRepoRoot(params)) ?? null;
+  phases.mark("run.prepare.project_key");
   const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
   return {
     repoRoot,

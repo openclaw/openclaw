@@ -3,7 +3,6 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { acquireCronRootTranscriptLease } from "../../config/sessions/transcript-lease.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -11,6 +10,7 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { captureExecRequestOwners, withExecRequestTurn } from "../../infra/exec-request-context.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
@@ -62,7 +62,6 @@ import {
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
-import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { withRequiredSessionPlacement } from "../session-placement-admission.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import { captureSessionSuspension, type SessionSuspensionParams } from "../session-suspension.js";
@@ -98,7 +97,10 @@ import {
   resolveEmbeddedRuntimePluginSelections,
   resolveInitialEmbeddedRunModel,
 } from "./run/runtime-resolution.js";
-import { prepareEmbeddedRunSession } from "./run/session-bootstrap.js";
+import {
+  prepareEmbeddedRunSession,
+  waitForEmbeddedSessionMaintenance,
+} from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -216,20 +218,7 @@ async function runEmbeddedAgentForSession(
   const requestOwners = captureExecRequestOwners(params);
   const runSession = async () => {
     throwIfAborted();
-    // Same-session reads below must see any prior deferred transcript rewrite.
-    // Checkpoint before the global lane so unrelated sessions can still start
-    // while this session waits on its own maintenance lane.
-    if (!params.sessionManager || params.sessionManager.getSessionTarget()) {
-      params.replyOperation?.markWaitingForDeferredMaintenance();
-      try {
-        await waitForSessionMaintenance(params.sessionKey);
-        // Maintenance can finish while its transcript projection is still rebuilding.
-        // Settle that projection before the next attempt reads the bounded history.
-        await waitForSessionTranscriptProjection(runSessionTarget, laneController.abortSignal);
-      } finally {
-        params.replyOperation?.markDeferredMaintenanceWaitEnded();
-      }
-    }
+    await waitForEmbeddedSessionMaintenance(params, runSessionTarget, laneController.abortSignal);
     throwIfAborted();
     return enqueueGlobal(async () => {
       const started = Date.now();
@@ -260,12 +249,14 @@ async function runEmbeddedAgentForSession(
           return cliDispatched;
         }
         const preReply = { ...runSessionTarget, ...params.sessionTarget };
+        using leasePhase = observeDiagnosticsTimelinePhases("run.storage.cron_transcript_lease");
         const preReplyGeneration = await acquireCronRootTranscriptLease(
           chatRef({ ...preReply, sessionKey: params.sessionKey ?? preReply.sessionKey }),
           { sessionId: params.sessionId, lifecycleRevision: preReply.expectedLifecycleRevision },
           (reason) => laneController.laneTaskAbortController.abort(reason),
         );
         using _ = { [Symbol.dispose]: () => preReplyGeneration?.release() };
+        leasePhase[Symbol.dispose]();
         const preReplyAssertCurrent = () => {
           laneController.assertCurrent();
           preReplyGeneration?.assertCurrent();
@@ -327,6 +318,7 @@ async function runEmbeddedAgentForSession(
         let initialWriterResource: AsyncDisposable | undefined;
         let initialWriterCleanup = Promise.resolve();
         const runPreparedCandidate = async () => {
+          using preparationPhases = observeDiagnosticsTimelinePhases("run.prepare.runtime_acquire");
           // Configless direct hosts reuse one idle generation. The prepared-runtime lifecycle keeps
           // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
           // Runtime acquisition owns its build bound before the attempt budget starts.
@@ -366,6 +358,7 @@ async function runEmbeddedAgentForSession(
               laneController.setLaneTaskDeadline(undefined);
             });
           preparedRuntimeResource = preparedModelRuntimeLease;
+          preparationPhases[Symbol.dispose]();
           startupStages.mark("prepared-runtime");
           let preparedLeaseActive = true;
           try {
@@ -415,7 +408,11 @@ async function runEmbeddedAgentForSession(
                 sessionId: params.sessionId,
                 tracker: startupStages,
               });
+              using executionPhase = observeDiagnosticsTimelinePhases(
+                "run.prepare.execution_start",
+              );
               await params.onExecutionStarted?.({ lifecycleGeneration });
+              executionPhase[Symbol.dispose]();
               preReplyAssertCurrent();
               notifyExecutionPhase("runner_entered");
               const canonicalWorkspace = resolveUserPath(

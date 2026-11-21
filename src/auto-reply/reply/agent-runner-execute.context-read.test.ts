@@ -8,6 +8,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -118,45 +119,58 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
     });
     const typing = createMockTypingController();
     followupRun.turnAdoptionLifecycle = { onAdopted: adopted };
-    const inbound = executePreparedReplyAgentRun({
-      ...target,
-      ...inputAdmission,
-      followupRun,
-      replyOperation,
-      typing,
-      activeIsNewSession: false,
-      activeSessionStore: undefined,
-      cfg: {},
-      commandBody: "incoming DM",
-      defaultModel: "test",
+    const storagePhases: string[] = [];
+    const pendingStoragePhases = new Set<string>();
+    const inbound = withDiagnosticsTimelineObserver(
+      (name) => {
+        if (!name.startsWith("reply.storage.input.")) {
+          return undefined;
+        }
+        storagePhases.push(name);
+        pendingStoragePhases.add(name);
+        return () => pendingStoragePhases.delete(name);
+      },
+      () =>
+        executePreparedReplyAgentRun({
+          ...target,
+          ...inputAdmission,
+          followupRun,
+          replyOperation,
+          typing,
+          activeIsNewSession: false,
+          activeSessionStore: undefined,
+          cfg: {},
+          commandBody: "incoming DM",
+          defaultModel: "test",
 
-      queueKey: target.sessionKey,
-      resolvedQueue: { mode: "followup" },
-      sessionCtx: { Provider: "telegram" },
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      resolvedVerboseLevel: "off",
-      shouldInjectGroupIntro: false,
-      pendingToolTasks: new Set(),
-      preflightCompactionApplied: false,
-      replyMediaContext: { normalizePayload: async (payload) => payload },
-      replyRouteThreadId: undefined,
-      replyToChannel: "telegram",
-      replyToMode: "off",
-      typingMode: "never",
-      typingSignals: createTypingSignaler({ typing, mode: "never" }),
-      applyReplyToMode: (payload) => payload,
-      getActiveSessionEntry: () => entry,
-      onCompactionNoticePayload: () => {},
-      resolveVisibleReplyDelivery: async () => false,
-      returnWithQueuedFollowupDrain: (value) => value,
-      setRunFollowupTurn: () => {},
-      runFollowupTurn: async () => {},
-      shouldEmitToolOutput: () => false,
-      shouldEmitToolResult: () => false,
-      traceAgentPhase: async (_name, run) => await run(),
-    });
+          queueKey: target.sessionKey,
+          resolvedQueue: { mode: "followup" },
+          sessionCtx: { Provider: "telegram" },
+          blockReplyPipeline: null,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: "message_end",
+          resolvedVerboseLevel: "off",
+          shouldInjectGroupIntro: false,
+          pendingToolTasks: new Set(),
+          preflightCompactionApplied: false,
+          replyMediaContext: { normalizePayload: async (payload) => payload },
+          replyRouteThreadId: undefined,
+          replyToChannel: "telegram",
+          replyToMode: "off",
+          typingMode: "never",
+          typingSignals: createTypingSignaler({ typing, mode: "never" }),
+          applyReplyToMode: (payload) => payload,
+          getActiveSessionEntry: () => entry,
+          onCompactionNoticePayload: () => {},
+          resolveVisibleReplyDelivery: async () => false,
+          returnWithQueuedFollowupDrain: (value) => value,
+          setRunFollowupTurn: () => {},
+          runFollowupTurn: async () => {},
+          shouldEmitToolOutput: () => false,
+          shouldEmitToolResult: () => false,
+          traceAgentPhase: async (_name, run) => await run(),
+        }),
+    );
     try {
       await awaitGateBeforeSettlement(
         admitting.promise,
@@ -165,12 +179,15 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
       );
       expect(recorder.hasPersisted()).toBe(false);
       expect(inboundStarted).not.toHaveBeenCalled();
+      expect(pendingStoragePhases.size).toBe(1);
       releaseRead.resolve();
       await expect(cron).resolves.toMatchObject([{ role: "user", content: "prior turn" }]);
       await inbound;
       expect(inboundStarted).toHaveBeenCalledOnce();
       expect(adopted).toHaveBeenCalledOnce();
       expect(recorder.hasPersisted()).toBe(true);
+      expect(storagePhases).toEqual(["reply.storage.input.read", "reply.storage.input.persist"]);
+      expect(pendingStoragePhases.size).toBe(0);
       const messages = await SessionManager.readSessionContextAsync(target, (rows) => [...rows]);
       expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
       expect(recorder.getPersistedMessage?.()?.idempotencyKey).toBe(sourceTurnId);
