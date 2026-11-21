@@ -14,12 +14,9 @@ import {
 } from "./launchd-service-files.js";
 import { stopLaunchAgent } from "./launchd-stop.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
-import {
-  readScheduledTaskDefinition,
-  restoreScheduledTaskDefinition,
-  setScheduledTaskXmlEnabled,
-} from "./schtasks-control.js";
+import { readScheduledTaskDefinition, restoreScheduledTaskDefinition } from "./schtasks-control.js";
 import { resolveTaskLauncherScriptPath, resolveTaskScriptPath } from "./schtasks-layout.js";
+import { scheduledTaskXmlPolicy } from "./schtasks-xml-enabled.js";
 import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import {
@@ -54,7 +51,7 @@ type Context = {
 const backupPath = (file: string, id: string) => `${file}.reconcile-${id}.bak`;
 const taskBytes = (xml: string) =>
   Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, "utf16le")]);
-const taskPolicy = (xml: string) => sha256Hex(setScheduledTaskXmlEnabled(xml, false));
+const taskPolicy = (xml: string) => sha256Hex(scheduledTaskXmlPolicy(xml));
 const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
   `${receipt.files[0]!.sourcePath}.reconcile-${receipt.id}.receipt.bak`;
 

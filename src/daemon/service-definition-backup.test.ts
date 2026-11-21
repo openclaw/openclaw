@@ -549,6 +549,29 @@ describe("service definition backup receipts", () => {
     },
   );
 
+  it("restores after Task Scheduler exports the update's own disable in schema order", async () => {
+    const f = await fixture("win32");
+    await f.install();
+    const receipt = await f.capture.finish();
+    // Exports omit Enabled=true; the updater's /DISABLE appears after StopIfGoingOnBatteries.
+    f.setTask(
+      f
+        .task()
+        .replace(/<Settings>[\s\S]*?<\/Settings>/u, (settings) =>
+          settings
+            .replace(/\s*<Enabled>(?:true|false)<\/Enabled>/u, "")
+            .replace(
+              "</StopIfGoingOnBatteries>",
+              "</StopIfGoingOnBatteries>\n    <Enabled>false</Enabled>",
+            ),
+        ),
+    );
+    await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(f.task()).toContain("<Count>0</Count>");
+    expect(f.task()).toContain("<Enabled>false</Enabled>");
+  });
+
   it.each([
     { platform: "linux", dropIn: false },
     { platform: "darwin", dropIn: false },
