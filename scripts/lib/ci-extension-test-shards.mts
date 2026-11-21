@@ -11,6 +11,7 @@ import {
   resolveExtensionTestConfig,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
+import { groupBy } from "./group-by.mts";
 import {
   mergeVitestPretestBuildModes,
   resolveVitestPretestBuildMode,
@@ -42,22 +43,22 @@ export function createChangedExtensionConfigShards(
   options: { cwd?: string; targets: ReadonlySet<string> },
 ): ChangedExtensionConfigShard[] {
   const selectedRoots = new Set(extensionRoots);
-  const rootsByConfig = new Map<string, string[]>();
-  for (const root of extensionRoots) {
-    const config = resolveExtensionTestConfig(root);
-    rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
-  }
-  const filesByConfig = new Map<string, string[]>();
-  for (const file of rootsByConfig.size > 0
-    ? listExtensionTestFilesForRoots(["extensions"], options.cwd)
-    : []) {
-    const config = resolveExtensionTestConfig(file);
-    filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
-    const root = file.split("/").slice(0, 2).join("/");
-    if (selectedRoots.has(root)) {
-      const roots = rootsByConfig.get(config) ?? [];
-      if (!roots.includes(root)) {
-        rootsByConfig.set(config, [...roots, root]);
+  const rootsByConfig = groupBy(extensionRoots, resolveExtensionTestConfig);
+  // Explicit targets cannot select unrelated roots; keep filesystem discovery
+  // scoped while retaining untracked files and each file's migrated config.
+  const filesByConfig = groupBy(
+    rootsByConfig.size > 0 ? listExtensionTestFilesForRoots(extensionRoots, options.cwd) : [],
+    resolveExtensionTestConfig,
+  );
+  for (const [config, files] of filesByConfig) {
+    for (const file of files) {
+      const root = file.split("/").slice(0, 2).join("/");
+      if (selectedRoots.has(root)) {
+        const roots = rootsByConfig.get(config) ?? [];
+        if (!roots.includes(root)) {
+          roots.push(root);
+          rootsByConfig.set(config, roots);
+        }
       }
     }
   }
