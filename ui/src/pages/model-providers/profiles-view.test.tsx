@@ -124,6 +124,51 @@ afterEach(() => {
   Reflect.deleteProperty(document, "elementFromPoint");
 });
 
+it("reconnects only expired, locally managed OAuth accounts through their credential owner", () => {
+  const onReconnect = vi.fn();
+  const onSignInAgain = vi.fn();
+  const providerCard = card({
+    profiles: [
+      {
+        profileId: "xai:expired",
+        type: "oauth",
+        status: "expired",
+        reasonCode: "refresh_failed",
+        reconnectSupported: true,
+      },
+    ],
+    profileProviderIds: { "xai:expired": "xai" },
+  });
+  const viewProps = props({
+    canReconnect: (provider) => provider === "xai",
+    onReconnect,
+    canSignInAgain: () => true,
+    onSignInAgain,
+  });
+  const { container, update } = mount(providerCard, viewProps);
+  const button = () =>
+    container.querySelector<HTMLButtonElement>(".model-providers__profile-reconnect");
+  expect(button()?.textContent).toBe("Reconnect");
+  expect(container.querySelector("[data-models-sign-in-again]")).toBeNull();
+  button()!.click();
+  expect(onReconnect).toHaveBeenCalledWith("xai");
+  for (const blocked of [{ canMutate: false }, { reconnectDisabled: true }]) {
+    update(providerCard, { ...viewProps, ...blocked });
+    expect(button()?.disabled).toBe(true);
+  }
+  for (const profile of [
+    { profileId: "xai:expired", type: "oauth", status: "ok", reconnectSupported: true },
+    { profileId: "xai:expired", type: "api_key", status: "expired", reconnectSupported: true },
+  ] as const) {
+    update({ ...providerCard, profiles: [profile] }, viewProps);
+    expect(button()).toBeNull();
+  }
+  update(providerCard, { ...viewProps, canReconnect: () => false });
+  expect(button()).toBeNull();
+  container.querySelector<HTMLButtonElement>("[data-models-sign-in-again]")!.click();
+  expect(onSignInAgain).toHaveBeenCalledOnce();
+});
+
 it("retains account summary focus while refreshed snapshots update account data and recovery", () => {
   const profileId = "account:shared";
   const cards = ["one", "two"].map((name) =>

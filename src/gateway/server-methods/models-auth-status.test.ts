@@ -23,6 +23,7 @@ import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.j
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
 import {
+  configBoundOAuthOwnershipCases,
   createOpenAiCodexOauthHealthSummary,
   createStaticApiKeyProvider,
   healthProfile,
@@ -481,6 +482,23 @@ describe("models.authStatus", () => {
     expect(provider?.profiles[0]?.source).toBe("external");
     expect(provider?.profiles[0]?.logoutSupported).toBeUndefined();
   });
+
+  it.each(configBoundOAuthOwnershipCases)(
+    "projects reconnect ownership for a config-bound $name OAuth profile",
+    async ({ config, store, supported, logoutSupported }) => {
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      setPreparedAuthStore(store);
+      mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+      const profile = expectDefined(
+        (await firstAuthStatusProvider())?.profiles[0],
+        "OAuth profile",
+      );
+      expect(profile.source).toBe("config");
+      expect(Object.hasOwn(profile, "reconnectSupported")).toBe(supported);
+      expect(profile.reconnectSupported).toBe(supported ? true : undefined);
+      expect(profile.logoutSupported).toBe(logoutSupported);
+    },
+  );
 
   it("locks alias priority to the configured credential", async () => {
     const boundProfileId = "minimax:cn";

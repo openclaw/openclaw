@@ -78,6 +78,9 @@ export type ProviderProfilesViewProps = {
    * existing profile id, replacing the failed grant; another account adds a row.
    */
   onSignInAgain?: () => void;
+  canReconnect: (provider: string) => boolean;
+  reconnectDisabled: boolean;
+  onReconnect: (provider: string) => void;
 };
 
 const PROFILE_SOURCE_LABELS = new Map([
@@ -534,6 +537,11 @@ function ProviderProfileRow(
     props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId))
       ?.provider;
   const logoutLabel = () => t("modelProviders.logout.actionFor", { account: props.identity });
+  const canReconnect = () =>
+    profile().type === "oauth" &&
+    profile().status === "expired" &&
+    profile().reconnectSupported === true &&
+    props.canReconnect(provider());
   const canSignInAgain = () => needsOAuthSignIn(profile()) && props.canSignInAgain?.() === true;
   const logoutBlocked = () =>
     !props.canMutate ? (props.mutationBlockedReason ?? "") : logoutLabel();
@@ -626,8 +634,19 @@ function ProviderProfileRow(
             }}
           />
         </Show>
+        {canReconnect() ? (
+          <button
+            type="button"
+            class="btn btn--sm model-providers__profile-reconnect"
+            disabled={!props.canMutate || props.reconnectDisabled}
+            title={!props.canMutate ? (props.mutationBlockedReason ?? "") : undefined}
+            onClick={() => props.onReconnect(provider())}
+          >
+            {t("modelProviders.profiles.reconnect")}
+          </button>
+        ) : undefined}
         {firstApiKey() ? props.keyAction?.() : undefined}
-        {canSignInAgain() ? (
+        {!canReconnect() && canSignInAgain() ? (
           <button
             type="button"
             class="btn btn--sm"
