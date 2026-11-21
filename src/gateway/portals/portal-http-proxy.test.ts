@@ -205,6 +205,19 @@ describe("portal HTTP proxy", () => {
     expect(targetPaths).toEqual(["/preview?x=1", "/cookie?y=2"]);
   });
 
+  it.each([
+    ["Vue style imports", "/src/App.vue?vue&type=style&index=0&lang.css"],
+    ["encoded app queries", "/search?q=a%20b~&path=%2f%2F&flag&tag=one&tag=two"],
+  ])("preserves %s when removing portal credentials", async (_name, path) => {
+    target.handler = (req, res) => res.end(req.url);
+    const portal = await openPortal();
+
+    expect(await authenticatedCall(portal, path)).toMatchObject({ status: 200, body: path });
+    const token = portal.tokenQuery.slice("openclaw_portal=".length);
+    const launchPath = `${path}&openclaw%5Fportal=${token}&${portal.tokenQuery}`;
+    expect(await httpCall(portal, launchPath)).toMatchObject({ status: 200, body: path });
+  });
+
   it.for(["unauthorized", "unavailable", "unknown"] as const)(
     "flushes %s upgrades before closing",
     async (failure, { signal }) => {
@@ -618,7 +631,7 @@ describe("portal HTTP proxy", () => {
     expect(await authenticatedCall(portal)).toMatchObject({ status: 200, body: "target" });
     targetWebSocketSetCookie = "socket=ready; Domain=target.example; Path=/; HttpOnly";
     const { socket: ws, setCookies: upgradeCookies } = await openWebSocket(
-      `ws://127.0.0.1:${portal.listenPort}/hmr?channel=dev`,
+      `ws://127.0.0.1:${portal.listenPort}/hmr?channel=dev&token=a%2fb%20~&flag`,
       {
         ...privateHeaders,
         Cookie: `${privateHeaders.Cookie}; ${portalAuthCookie(portal)}`,
@@ -632,7 +645,7 @@ describe("portal HTTP proxy", () => {
       },
     );
     await expectEcho(ws, "hot reload");
-    expect(upgradeRequest?.url).toBe("/hmr?channel=dev");
+    expect(upgradeRequest?.url).toBe("/hmr?channel=dev&token=a%2fb%20~&flag");
     expectSafeHeaders(upgradeRequest?.headers, portal.publicUrl);
     expect(upgradeCookies).toHaveLength(1);
     expect(upgradeCookies?.[0]).toMatch(
