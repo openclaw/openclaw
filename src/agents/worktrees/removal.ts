@@ -11,7 +11,6 @@ import type { WorktreeAllocationGuard } from "./allocation.js";
 import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import type { WorktreeCleanupMutation } from "./gc-removal.js";
 import { lockState } from "./git-lock.js";
 import { commandError, requireGit, runGit } from "./git.js";
 import {
@@ -55,6 +54,7 @@ import type {
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
+  WorktreeCleanupMutation,
   WorktreeWorkerAuthority,
   WorktreeRemovalDeferral,
 } from "./types.js";

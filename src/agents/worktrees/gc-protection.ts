@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
-import { deferWorktreeGcRecord, type WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
+import { deferWorktreeGcRecord } from "./gc-removal.js";
 import type { createWorktreeGcPrefilter } from "./git-lock.js";
 import { worktreeGcRevision } from "./registry-read.kernel.js";
 import { deferFailedWorktreeRemoval, worktreeCleanupProtection } from "./registry-retirement.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord, WorktreeCleanupOwnerPolicy } from "./types.js";
 
 export type WorktreeCleanupDeferrals = Map<
   string,

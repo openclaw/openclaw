@@ -37,39 +37,17 @@ import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeGcResult,
-  ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
+  WorktreeCleanupMutation,
+  WorktreeCleanupOwnerPolicy,
   WorktreeMutationGuard,
   WorktreeWorkerAuthority,
 } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-
-export type WorktreeCleanupMutation = <T>(
-  run: () => Promise<T>,
-  options?: { settle?: true },
-) => Promise<T>;
-
-export type WorktreeCleanupOwnerPolicy = {
-  retryDeferred?: boolean;
-  beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
-  prepareOwners?: (
-    records: readonly ManagedWorktreeRecord[],
-  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt">>;
-  readOwnerState?: (
-    ownerKind: ManagedWorktreeOwnerKind,
-    ownerId: string,
-  ) => "active" | "retired" | "idle" | "other";
-  readOwnerActivityAt?: (ownerId: string) => number | undefined;
-  withOwnerCleanup?: <T>(
-    record: ManagedWorktreeRecord,
-    run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
-    signal?: AbortSignal,
-  ) => Promise<T>;
-};
 
 export type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
   WorktreeMutationGuard & {

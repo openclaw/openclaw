@@ -53,6 +53,29 @@ export type ManagedWorktreeRecord = Omit<
   gcRetry?: WorktreeRemovalDeferral;
 };
 
+export type WorktreeCleanupMutation = <T>(
+  run: () => Promise<T>,
+  options?: { settle?: true },
+) => Promise<T>;
+
+export type WorktreeCleanupOwnerPolicy = {
+  retryDeferred?: boolean;
+  beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
+  prepareOwners?: (
+    records: readonly ManagedWorktreeRecord[],
+  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt">>;
+  readOwnerState?: (
+    ownerKind: ManagedWorktreeOwnerKind,
+    ownerId: string,
+  ) => "active" | "retired" | "idle" | "other";
+  readOwnerActivityAt?: (ownerId: string) => number | undefined;
+  withOwnerCleanup?: <T>(
+    record: ManagedWorktreeRecord,
+    run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
+    signal?: AbortSignal,
+  ) => Promise<T>;
+};
+
 export type WorktreeRegistryPredicate =
   | { kind: "activity"; id: string; lastActiveAt: number }
   | { kind: "session-owner"; id: string; sessionKey: string }

@@ -21,10 +21,13 @@ import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../../sessions/session-row-changes.js";
-import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import { WorktreeRemovalLockError } from "./removal-errors.js";
 import { IDLE_GC_MS } from "./retention.js";
-import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
+import type {
+  ManagedWorktreeOwnerKind,
+  ManagedWorktreeRecord,
+  WorktreeCleanupOwnerPolicy,
+} from "./types.js";
 
 export type WorktreeOwnerCleanup = { terminalBefore: number };
 
