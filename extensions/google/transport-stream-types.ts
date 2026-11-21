@@ -29,6 +29,7 @@ export type GoogleTransportOptions = SimpleStreamOptions &
   ProviderCallStreamOptions & {
     cachedContent?: string;
     topP?: number;
+    seed?: number;
     toolChoice?:
       | "auto"
       | "none"
