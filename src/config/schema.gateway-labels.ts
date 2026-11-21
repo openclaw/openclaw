@@ -59,6 +59,9 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.auth.identityScopes": "Gateway Identity Scope Grants",
   "gateway.auth.rateLimit": "Gateway Auth Rate Limit",
   "gateway.auth.trustedProxy": "Gateway Trusted Proxy Auth",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt": "Cloudflare Access JWT Verification",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.issuer": "Cloudflare Access Team Domain",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.audience": "Cloudflare Access Application AUD Tag",
   "gateway.auth.trustedProxy.cloudflareAccessOidc": "Cloudflare Access OIDC GitHub Identity",
   "gateway.auth.trustedProxy.delegation": "Enterprise Browser Delegation",
   "gateway.auth.trustedProxy.delegation.credentialFile": "Delegation Credential File",
@@ -69,6 +72,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
     "Trusted Proxy Device Auto-Approval Enabled",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes": "Trusted Proxy Device Auto-Approval Scopes",
+  "gateway.auth.trustedProxy.narrowToDeviceGrant": "Trusted Proxy Narrow To Device Grant",
   "gateway.roles": "Gateway Operator Roles",
   "gateway.roles.default": "Default Operator Role",
   "gateway.roles.assignments": "Operator Role Assignments",

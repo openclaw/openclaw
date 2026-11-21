@@ -11,7 +11,6 @@ import {
   type CommandInteraction,
   type CommandOptions,
 } from "../internal/discord.js";
-import { formatMention } from "../mentions.js";
 import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
 import {
   createDiscordLivePolicyReader,
@@ -19,6 +18,7 @@ import {
 } from "../monitor/live-policy.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
+import { formatMention } from "../target-parsing.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
 import { isVoiceChannel } from "./session.js";

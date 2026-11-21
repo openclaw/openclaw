@@ -94,8 +94,6 @@ export type SidebarToolActivity = {
 
 export type SidebarRecentSession = Readonly<{
   key: string;
-  /** Visible occurrence for range selection; never a Gateway/session identity. */
-  selectionKey?: string;
   agentId?: string;
   sessionId?: string;
   displayName?: string;

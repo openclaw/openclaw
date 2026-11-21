@@ -426,6 +426,15 @@ suite.define(() => {
           featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
           heldMethods: ["wizard.next"],
           methodResponses: {
+            // An agent with a model: this sign-in only adds the account.
+            "config.get": {
+              config: { agents: { defaults: { model: "example/existing" } } },
+              sourceConfig: { agents: { defaults: { model: "example/existing" } } },
+              hash: "models-login-callback",
+              issues: [],
+              raw: JSON.stringify({ agents: { defaults: { model: "example/existing" } } }),
+              valid: true,
+            },
             "models.authStatus": { ts: 1, providers: [], providerCapabilities },
             "models.authLogin": { done: false, status: "running" },
           },
@@ -681,6 +690,15 @@ suite.define(() => {
             "wizard.cancel",
           ],
           methodResponses: {
+            // The agent already has a model, so adding an account only saves it.
+            "config.get": {
+              config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+              sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+              hash: "models-login-accounts",
+              issues: [],
+              raw: JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.5" } } }),
+              valid: true,
+            },
             "models.authStatus": {
               ts: now,
               providers: [

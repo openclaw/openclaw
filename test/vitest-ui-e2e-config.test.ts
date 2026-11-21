@@ -34,14 +34,18 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-send-leaf-ancestor chat-steer-deferred-custody chat-steer-send-now chat-yield-pending-reply deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter plugin-inline-view session-management.new-nested theme-startup template-upload`
+  `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-send-leaf-ancestor chat-steer-deferred-custody chat-steer-send-now chat-yield-pending-reply deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter labs-graduation plugin-inline-view session-management.new-nested theme-startup template-upload`
     .split(/\s+/u)
-    .concat("required-human-action", "model-provider-remove-offline")
+    .concat(
+      "required-human-action",
+      "model-provider-remove-offline",
+      "provider-browser-login-first-model",
+    )
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
   "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts",
-  "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-sidebar-pins.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
 ];
