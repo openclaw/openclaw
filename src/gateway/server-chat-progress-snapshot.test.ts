@@ -271,3 +271,39 @@ it.each([Number.NaN, Infinity, -Infinity, -0, undefined, Symbol("omitted")])(
     expect(events?.[0]?.data).toStrictEqual({ phase: "warning", ...expected });
   },
 );
+
+it.each(["full", "summary"] as const)(
+  "replays only redacted approval status in %s mode",
+  (mode) => {
+    const state = createChatRunState();
+    const emit = (seq: number, phase: string, approvalId: string) =>
+      state.recordProgressEvent(
+        "r",
+        {
+          runId: "r",
+          seq,
+          ts: seq,
+          stream: "lifecycle",
+          data: {
+            phase,
+            approvalId,
+            toolCallId: "tool",
+            command: "private command",
+            decisionToken: "secret",
+          },
+        },
+        mode,
+      );
+    emit(1, "waiting-approval", "a");
+    emit(2, "waiting-approval", "b");
+    emit(3, "approval-resolved", "a");
+    emit(2, "waiting-approval", "a");
+    expect(
+      projectInFlightRunSnapshot({ chatRunState: state, runId: "r" }).events?.map((e) => e.data),
+    ).toEqual([{ phase: "waiting-approval", approvalId: "b", toolCallId: "tool" }]);
+    emit(4, "approval-resolved", "b");
+    expect(projectInFlightRunSnapshot({ chatRunState: state, runId: "r" }).events ?? []).toEqual(
+      [],
+    );
+  },
+);

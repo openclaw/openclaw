@@ -3,6 +3,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
 import type {
   ReplyDeliveryFactsObserver,
   ReplyDeliveryObserver,
@@ -52,6 +53,7 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  participationCeiling?: ParticipationCeiling;
   /** Normalize a machine-selected thinking preference against the execution model. */
   normalizeThinkingLevelOverride?: boolean;
   /** Dispatch-owned command requester binding; never part of the public plugin API. */

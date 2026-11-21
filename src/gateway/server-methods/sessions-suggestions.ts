@@ -244,6 +244,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         const sharing = prepareProjectedSessionSharing({
           cfg: policy,
           client,
+          memberAccess: (value, id) =>
+            actorFacts
+              ? actorFacts.readCurrent().memberAccess[id]
+              : projection.memberAccess(value.storePath, value.storeKey, id),
           isMember: (value, id) =>
             actorFacts
               ? actorFacts.readCurrent().membership.has(id)

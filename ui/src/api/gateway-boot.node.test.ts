@@ -36,12 +36,18 @@ async function handshake() {
 async function acceptHello(
   { socket, connect }: Awaited<ReturnType<typeof handshake>>,
   auth?: GatewayHelloOk["auth"],
+  features?: GatewayHelloOk["features"],
 ) {
   socket.emitMessage({
     type: "res",
     id: connect.id,
     ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, ...(auth ? { auth } : {}) },
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      ...(auth ? { auth } : {}),
+      ...(features ? { features } : {}),
+    },
   });
   await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
@@ -428,3 +434,20 @@ it("does not admit history after retirement while its runtime is loading", async
     vi.doUnmock("../lib/sessions/session-message-subscriptions.runtime.ts");
   }
 });
+
+it.each([false, true])(
+  "gates identity-only early approval replay on the advertised recipient capability: %s",
+  async (advertised) => {
+    const connection = await handshake();
+    const subscription = await acceptHello(
+      connection,
+      {
+        role: "operator",
+        scopes: ["operator.sessions.read"],
+        profileActivityViewerId: "creator",
+      },
+      { capabilities: advertised ? ["session-approval-recipients-v1"] : [] },
+    );
+    expect(subscription.params.includeApprovals === true).toBe(advertised);
+  },
+);

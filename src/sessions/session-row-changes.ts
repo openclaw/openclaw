@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
   SessionMembershipFact,
+  SessionMember,
   SessionParticipantRecord,
 } from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
@@ -41,7 +42,13 @@ export type SessionRowFacts =
       communicationBinding?: string;
       lifecycleChanged?: boolean;
     }
-  | { kind: "member"; sessionId: string; identityId: string; present: boolean }
+  | {
+      kind: "member";
+      sessionId: string;
+      identityId: string;
+      present: boolean;
+      access?: SessionMember["access"];
+    }
   | {
       kind: "owner";
       sessionId: string;

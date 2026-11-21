@@ -16,6 +16,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { isNewerSessionMention, mergeSessionProfileInvolvement } from "./session-involvement.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import { addSessionMemberInTransaction } from "./session-sharing-store.native.js";
 import type {
   SessionInvolvementMutation,
@@ -26,7 +27,11 @@ import type {
 export function updatePreparedSessionProfileInvolvement(
   scope: SessionAccessScope,
   params: SessionInvolvementMutation & { assertCurrent?: () => void },
-  profiles: readonly { profileId: string; aliases: readonly string[] }[],
+  profiles: readonly {
+    profileId: string;
+    aliases: readonly string[];
+    access?: SessionMember["access"];
+  }[],
 ): SessionSharingWorkerOperations["involvement"]["output"] {
   const resolved = resolveSqliteScope(scope);
   return runOpenClawAgentWriteTransaction(
@@ -42,7 +47,11 @@ export function updateSessionProfileInvolvementInTransaction(
   database: OpenClawAgentDatabase,
   resolved: Pick<ResolvedSqliteScope, "agentId" | "sessionKey">,
   params: SessionInvolvementMutation & { assertCurrent?: () => void },
-  profiles: readonly { profileId: string; aliases: readonly string[] }[],
+  profiles: readonly {
+    profileId: string;
+    aliases: readonly string[];
+    access?: SessionMember["access"];
+  }[],
 ): SessionSharingWorkerOperations["involvement"]["output"] {
   params.assertCurrent?.();
   const current = readExactSessionEntryRow(database, resolved.sessionKey)?.entry;
@@ -57,7 +66,7 @@ export function updateSessionProfileInvolvementInTransaction(
   }
   const involvement = { ...current.profileInvolvement?.profiles };
   let changed = false;
-  for (const { profileId, aliases } of profiles) {
+  for (const { profileId, aliases, access } of profiles) {
     const previous = mergeSessionProfileInvolvement(
       [...aliases].map((alias) => involvement[alias]),
     );
@@ -83,6 +92,7 @@ export function updateSessionProfileInvolvementInTransaction(
     ) {
       addSessionMemberInTransaction(database, resolved, {
         identityId: profileId,
+        access,
         addedBy: change.invitation.addedBy,
         expectedSessionId: params.expectedSessionId,
         expectedEntry: change.invitation.expectedEntry,

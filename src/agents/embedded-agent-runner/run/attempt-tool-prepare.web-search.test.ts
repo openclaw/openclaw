@@ -334,3 +334,22 @@ it.each([
   catalog.refreshTools(() => {});
   expect(catalog.toolSearchRunPlan.hasCallableTools).toBe(false);
 });
+
+it.each(["full", null] as const)(
+  "retains participation through live permission refresh to %s",
+  async (mode) => {
+    const participationCeiling = {
+      kind: "send" as const,
+      profileId: "guest",
+      sessionKey: dashboardSessionKey,
+    };
+    await using fixture = await createFixture({
+      participationCeiling,
+      approvalReviewerDeviceId: "guest-device",
+    });
+    await fixture.result.refreshPermissionMode(mode, () => {});
+    const options = codingTools.mock.calls.at(-1)?.[0];
+    expect(options).toMatchObject({ participationCeiling, approvalReviewerDeviceId: undefined });
+    expect(fixture.attempt.participationCeiling).toBe(participationCeiling);
+  },
+);

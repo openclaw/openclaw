@@ -92,6 +92,9 @@ export function captureSessionEntrySnapshot(
       ? {
           sideTables: {
             memberIdsJson: selected.row.member_ids_json,
+            ...(selected.row.member_access_json && selected.row.member_access_json !== "{}"
+              ? { memberAccessJson: selected.row.member_access_json }
+              : {}),
             hasBoard: selected.row.board_present === 1,
           },
         }

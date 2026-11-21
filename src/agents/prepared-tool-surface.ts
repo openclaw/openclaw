@@ -4,6 +4,7 @@ import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
 import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
+import { participationPermission } from "./participation-ceiling.js";
 import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 
@@ -12,6 +13,7 @@ type CoreToolPolicyOptions = Pick<
   | "config"
   | "agentId"
   | "sessionPermissionPolicy"
+  | "participationCeiling"
   | "requireWorkspaceOnly"
   | "trigger"
   | "memoryFlushWritePath"
@@ -30,20 +32,27 @@ export function prepareCoreToolPolicy(
     ? resolveSessionPermissionCoreToolPolicy(options.sessionPermissionPolicy)
     : undefined;
   const workspaceOnly =
+    options.participationCeiling !== undefined ||
     options.requireWorkspaceOnly === true ||
     options.trigger === "memory" ||
     (sessionPolicy?.workspaceOnly ??
       resolveToolFsConfig({ cfg: options.config, agentId: options.agentId }).workspaceOnly ===
         true);
-  const readOnly = sessionPolicy?.readOnly ?? false;
+  const readOnly =
+    sessionPolicy?.readOnly === true ||
+    (options.participationCeiling !== undefined &&
+      participationPermission(options.participationCeiling) === "read-only");
   const patch = execConfig.applyPatch;
-  const applyPatchContainmentSource: ApplyPatchContainmentSource = options.requireWorkspaceOnly
-    ? "required-root"
-    : sessionPolicy
-      ? "session"
-      : "config";
+  const applyPatchContainmentSource: ApplyPatchContainmentSource =
+    options.participationCeiling || options.requireWorkspaceOnly
+      ? "required-root"
+      : sessionPolicy
+        ? "session"
+        : "config";
   return {
     workspaceOnly,
+    // Participation is Gateway-local; ordinary worker policies retain their wire shape.
+    ...(options.participationCeiling ? { strictWorkspaceRoot: true } : {}),
     readOnly,
     applyPatchEnabled:
       !readOnly &&

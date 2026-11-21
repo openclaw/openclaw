@@ -20,9 +20,7 @@ import { authorizeOwnSessionMutation } from "../session-sharing-policy.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
-  canManageSessionSharing,
   prepareProjectedSessionSharing,
-  resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -42,6 +40,7 @@ import { assertValidParams } from "./validation.js";
 export const sessionTypingHandler: GatewayRequestHandlers[string] = async (options) => {
   const { params: requestParams, respond, client, context, hasCurrentClientAuthority } = options;
   const ownSessionOnly =
+    !options.sessionMutationAuthorization?.participationCeiling &&
     readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.write";
   const params = normalizeTypingRequestParams(requestParams);
   if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
@@ -63,6 +62,7 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     },
     () => {
       if (
+        options.sessionMutationAuthorization?.participationSignal?.aborted ||
         client?.invalidated ||
         client?.connectionSignal?.aborted ||
         hasCurrentClientAuthority?.() === false
@@ -91,6 +91,10 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     prepareProjectedSessionSharing({
       cfg: projection.getPolicyConfig(),
       client,
+      memberAccess: (value, id) =>
+        actorFacts
+          ? actorFacts.readCurrent().memberAccess[id]
+          : projection.memberAccess(value.storePath, value.storeKey, id),
       isMember: (value, identity) =>
         actorFacts
           ? actorFacts.readCurrent().membership.has(identity)
@@ -130,13 +134,7 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     ) {
       return false;
     }
-    const role = access.roleForTarget(current);
-    const visibility = resolveSessionVisibility(current.entry);
-    return (
-      !(role === "viewer" && access.sessionCap === "view") &&
-      (visibility !== "draft" || canManageSessionSharing(role)) &&
-      (role !== "viewer" || visibility === "shared" || visibility === "suggest")
-    );
+    return access.accessForTarget(current).canType;
   };
   if (
     params.sessionId !== target.entry.sessionId ||
@@ -178,8 +176,12 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     signature: `${effectiveTyping}\0${preview ?? ""}\0${cursor ?? ""}`,
     intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
     now,
+    release: options.sessionMutationAuthorization?.participationCeiling
+      ? options.sessionMutationAuthorization.retain?.()
+      : undefined,
     emit: () => {
       if (
+        options.sessionMutationAuthorization?.participationSignal?.aborted ||
         client?.invalidated ||
         client?.connectionSignal?.aborted ||
         hasCurrentClientAuthority?.() === false ||

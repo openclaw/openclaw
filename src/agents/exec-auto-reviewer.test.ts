@@ -481,3 +481,17 @@ describe("createModelExecAutoReviewer", () => {
     );
   });
 });
+
+it("tells the reviewer that a participant cannot grant creator authority", async () => {
+  const complete = vi.fn(
+    async (
+      _request: Parameters<typeof completionRuntime.completeWithPreparedSimpleCompletionModel>[0],
+    ) => response(),
+  );
+  const reviewer = withCompletion(async () => preparedModel("reviewer"), complete, {
+    cfg: {},
+    participation: true,
+  });
+  await reviewer(input);
+  expect(complete.mock.calls[0]?.[0].context.systemPrompt).toContain("never the participant");
+});

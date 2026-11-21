@@ -13,6 +13,7 @@ export type SessionEntryWritePostimage = {
   transcriptWatermark?: SessionTranscriptWatermark;
   sideTables: {
     memberIdsJson: string;
+    memberAccessJson?: string;
     hasBoard: boolean;
   };
 };

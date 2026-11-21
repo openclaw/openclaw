@@ -247,7 +247,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (usesSystemPromptSeries) {
     beginSessionSystemPrompt(sessionPromptState);
   }
-  const toolPolicyDigest = resolveSessionToolPolicyDigest(attempt.config, sessionAgentId);
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(
+    attempt.config,
+    sessionAgentId,
+    attempt.participationCeiling,
+  );
   if (usesSystemPromptSeries) {
     const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
       prepareSessionPublicationToolListing({

@@ -45,12 +45,17 @@ import { getReplyOperationSessionReader } from "../../../sessions/session-contro
 import { supersedeReplyRunByRunId } from "../../../sessions/session-controller.stop-runtime.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  readAdmittedRunOperatorAuthority,
+  readPreparedRunOperatorAuthority,
+} from "../../admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import {
   resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
 } from "../../command/session.js";
+import { intersectParticipationCeilings } from "../../participation-ceiling.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -497,6 +502,21 @@ export async function assertAgentHarnessRunAdmission(
     runtimeTarget?: SessionTranscriptRuntimeTarget,
   ) => {
     assertCurrent();
+    if (entry?.inheritedToolPolicySource === "participant" || entry?.participationCeiling) {
+      const authority =
+        readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
+        readPreparedRunOperatorAuthority(params.preparedRunAdmission);
+      if (
+        !entry.participationCeiling?.source ||
+        !params.participationCeiling?.source ||
+        !authority?.participationCeiling?.source
+      ) {
+        throw new Error("Participant child requires current original-source admission.");
+      }
+      authority.assertCurrent();
+      intersectParticipationCeilings(entry.participationCeiling, params.participationCeiling);
+      intersectParticipationCeilings(entry.participationCeiling, authority.participationCeiling);
+    }
     const admissionError = resolveAgentHarnessRunAdmissionError({
       agentHarnessId: params.agentHarnessId,
       entry,

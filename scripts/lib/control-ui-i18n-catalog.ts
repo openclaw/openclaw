@@ -70,6 +70,7 @@ import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new
 import { registerOpenClawIdDialogsEnglish } from "../../ui/src/i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../ui/src/i18n/locales/en-openclaw-id.ts";
 import { registerPermissionErrorsEnglish } from "../../ui/src/i18n/locales/en-permission-errors.ts";
+import { registerPermissionPickerEnglish } from "../../ui/src/i18n/locales/en-permission-picker.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
@@ -192,6 +193,7 @@ const sourceFiles = [
   "en-model-account-list.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
+  "en-permission-picker.ts",
   "en-model-favorites.ts",
   "en-model-provider-auth.ts",
   "en-model-setup.ts",
@@ -382,7 +384,29 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   const sessionSharing: TranslationMap = {};
   const sharingCopy = registerChatSessionSharingEnglish.catalog.chat.sessionSharing;
   for (const [key, value] of Object.entries(
-    registerChatSessionEnglish.catalog.chat.sessionSharing,
+    Object.assign(
+      {
+        loweringAccessCancelsQueued: sharingCopy.loweringAccessCancelsQueued,
+        sessionAccess: registerChatSessionEnglish.catalog.chat.sessionSharing.sessionAccess,
+        sharedDescription: sharingCopy.sharedDescription,
+        readOnlyDescription: sharingCopy.readOnlyDescription,
+        suggestDescription: sharingCopy.suggestDescription,
+        draftDescription: sharingCopy.draftDescription,
+        linkSharing: sharingCopy.linkSharing,
+        anyoneWithLink: sharingCopy.anyoneWithLink,
+        publicLinkDescription: sharingCopy.publicLinkDescription,
+        publicDraftDescription: sharingCopy.publicDraftDescription,
+        linkUnavailable: sharingCopy.linkUnavailable,
+        permissions: sharingCopy.permissions,
+        creator: registerChatSessionEnglish.catalog.chat.sessionSharing.creator,
+        canRead: sharingCopy.canRead,
+        canSuggest: sharingCopy.canSuggest,
+        canSend: sharingCopy.canSend,
+        searchPeople: sharingCopy.searchPeople,
+        closeSearch: sharingCopy.closeSearch,
+      },
+      registerChatSessionEnglish.catalog.chat.sessionSharing,
+    ),
   )) {
     sessionSharing[key] = value;
     const coldKeys: Array<keyof typeof sharingCopy> =
@@ -607,6 +631,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,
+          ...registerChatSessionSharingEnglish.catalog.chat.sessionSuggestions,
         },
         commandResults,
         commands: registerCommandPaletteEnglish.catalog.chat.commands,
@@ -690,7 +715,41 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerMemoryImportEnglish.catalog,
     registerModelAccountsEnglish.catalog,
     registerCronScheduleEnglish.catalog,
-    registerModelControlsEnglish.catalog,
+    {
+      chat: {
+        ...registerModelControlsEnglish.catalog.chat,
+        permissionControls: {
+          setByCreator: registerModelControlsEnglish.catalog.chat.permissionControls.setByCreator,
+          creator: registerModelControlsEnglish.catalog.chat.permissionControls.creator,
+          label: registerModelControlsEnglish.catalog.chat.permissionControls.label,
+          help: registerModelControlsEnglish.catalog.chat.permissionControls.help,
+          default: registerModelControlsEnglish.catalog.chat.permissionControls.default,
+          agentDefault:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.agentDefault,
+          agentDefaultWithMode:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.agentDefaultWithMode,
+          defaultDescription:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.defaultDescription,
+          defaultWithMode:
+            registerModelControlsEnglish.catalog.chat.permissionControls.defaultWithMode,
+          fullRequiresAdmin:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.fullRequiresAdmin,
+          requiresAdmin:
+            registerPermissionPickerEnglish.catalog.chat.permissionControls.requiresAdmin,
+          updateFailed: registerModelControlsEnglish.catalog.chat.permissionControls.updateFailed,
+          refreshFailed: registerModelControlsEnglish.catalog.chat.permissionControls.refreshFailed,
+          modes: Object.fromEntries(
+            (["read-only", "guarded", "workspace", "full"] as const).map((mode) => [
+              mode,
+              {
+                ...registerModelControlsEnglish.catalog.chat.permissionControls.modes[mode],
+                ...registerPermissionPickerEnglish.catalog.chat.permissionControls.modes[mode],
+              },
+            ]),
+          ),
+        },
+      },
+    },
     registerModelFavoritesEnglish.catalog,
     registerModelSetupEnglish.catalog,
     registerPersonalInstructionsEnglish.catalog,

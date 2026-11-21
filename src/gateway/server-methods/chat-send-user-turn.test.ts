@@ -37,7 +37,7 @@ import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
-import { prepareSessionPrincipalRunAuthority } from "../session-sharing-authorization-async.js";
+import { prepareSessionPrincipalRunAuthority } from "../session-principal-run-authority.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import { createClientInfo, createAttachments } from "./chat-send-user-turn.test-support.js";
@@ -77,6 +77,41 @@ function requesterProfile(text: string) {
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each(["/new", "/stop", "/btw hello", "/model other/model", "/queue collect"])(
+    "keeps participating %s input literal and removes the requesting approval device",
+    (text) => {
+      const prepared = prepareTurn({
+        inputText: text,
+        request: {
+          inboundMessage: text,
+          participationCeiling: { kind: "send", profileId: "guest", sessionKey: "agent:main:main" },
+        },
+        attachments: { parsedMessage: text },
+        client: {
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: createClientInfo(),
+            device: {
+              id: "guest-device",
+              publicKey: "key",
+              signature: "sig",
+              signedAt: 1,
+              nonce: "n",
+            },
+            scopes: ["operator.write"],
+          },
+        },
+      });
+      const ctx = finalizeInboundContext(prepared.ctx);
+      expect(ctx.agentText).toBe(text);
+      expect(ctx.CommandInterpretationSuppressed).toBe(true);
+      expect(ctx.CommandAuthorized).toBe(false);
+      expect(ctx.CommandTurn).toMatchObject({ kind: "normal", authorized: false });
+      expect(ctx).not.toHaveProperty("ApprovalReviewerDeviceId");
+      expect(prepared.isInternalTextSlashCommandTurn).toBe(false);
+    },
+  );
   it.each([
     { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI },
     { id: GATEWAY_CLIENT_IDS.WEBCHAT_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },

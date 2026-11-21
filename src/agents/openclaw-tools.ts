@@ -461,6 +461,7 @@ function* createOpenClawToolsSteps(
   // sessions_create runs through the visible-spawn owner, so both tools share one trusted context.
   const sessionsSpawnToolOptions = {
     ...options,
+    assertActive: options?.assertInvocationCurrent,
     // Only a keyed parent has a stored incarnation for spawn to check.
     expectedParentSessionId:
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,

@@ -7,7 +7,7 @@ import {
   validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
+import { canSubscribeOperatorApprovals } from "../exec-approval-delivery.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
@@ -107,11 +107,11 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       if (!key) {
         return;
       }
-      if (params.includeApprovals === true && !canReviewOperatorApproval(client)) {
+      if (params.includeApprovals === true && !canSubscribeOperatorApprovals(client)) {
         respondError(
           respond,
           ErrorCodes.INVALID_REQUEST,
-          `sessions.messages.subscribe includeApprovals requires a paired device and gateway scope: ${APPROVALS_SCOPE}`,
+          `sessions.messages.subscribe includeApprovals requires a directly authenticated person or a paired device with gateway scope: ${APPROVALS_SCOPE}`,
         );
         return;
       }
@@ -215,7 +215,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               client?.invalidated ||
               signal?.aborted ||
               hasCurrentClientAuthority?.() === false ||
-              !canReviewOperatorApproval(client) ||
+              !canSubscribeOperatorApprovals(client) ||
               !sessionAccess?.canRead({
                 sessionKey: canonicalKey,
                 agentId: requestedAgentId,

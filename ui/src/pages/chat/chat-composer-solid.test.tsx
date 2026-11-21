@@ -633,3 +633,35 @@ it("keeps a pending dictation send bound to the action that started it", async (
   expect(firstSend).toHaveBeenCalledOnce();
   expect(laterSend).not.toHaveBeenCalled();
 });
+
+it("preserves keyboard input-history traversal with hydrated member evidence", () => {
+  const { state, view } = mountOwnedComposer({ draft: "Unsent draft" });
+  state.chatLocalInputHistoryBySession[state.sessionKey] = [
+    { text: "Recent input", ts: 2 },
+    { text: "Older input", ts: 1 },
+  ];
+  view.update({
+    mentionDirectory: {
+      client: state.client!,
+      ownerKey: "owner",
+      params: { sessionKey: state.sessionKey },
+      members: [],
+    },
+    onHistoryKeydown: state.handleChatInputHistoryKey,
+  });
+  const press = (key: string) => {
+    const textarea = view.textarea();
+    const caret = key === "ArrowUp" ? 0 : textarea.value.length;
+    textarea.setSelectionRange(caret, caret);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    flush();
+  };
+  press("ArrowUp");
+  expect(state.chatMessage).toBe("Recent input");
+  press("ArrowUp");
+  expect(state.chatMessage).toBe("Older input");
+  press("ArrowDown");
+  expect(state.chatMessage).toBe("Recent input");
+  press("ArrowDown");
+  expect(state.chatMessage).toBe("Unsent draft");
+});

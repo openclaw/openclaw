@@ -32,6 +32,7 @@ export function sameChatItemsStructuralInput(
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.guardianNotices === next.guardianNotices &&
+    previous.sharingNotices === next.sharingNotices &&
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.reasoning?.runId === next.reasoning?.runId &&

@@ -33,6 +33,7 @@ import {
 } from "../../local-model-lean.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
+import { participationToolAllowlist } from "../../participation-ceiling.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
@@ -123,6 +124,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const toolsAllowWithForcedRuntimeTools = toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
+  const participationTools = attempt.participationCeiling
+    ? participationToolAllowlist(attempt.participationCeiling)
+    : undefined;
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
     trigger: attempt.trigger,
@@ -132,8 +136,16 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     model: attempt.model,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
-    codeModeOverride: attempt.codeModeOverride,
-    disableToolSearch: attempt.disableToolSearch,
+    codeModeOverride: attempt.participationCeiling ? false : attempt.codeModeOverride,
+    participationCeiling: attempt.participationCeiling,
+    // Without its controls, discovery would hide allowed tools or re-add forbidden ones.
+    disableToolSearch:
+      attempt.disableToolSearch ||
+      (attempt.participationCeiling && attempt.swarmCollector) ||
+      (participationTools &&
+        [...TOOL_SEARCH_CONTROL_TOOL_NAMES].some((name) => !participationTools.includes(name)))
+        ? true
+        : undefined,
     modelToolsEnabled: toolsEnabled,
     disableTools: attempt.disableTools,
     isRawModelRun,
@@ -496,7 +508,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         sessionKey: params.setup.sandboxSessionKey,
         sessionId: attempt.sessionId,
         runId: attempt.runId,
-        approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
+        approvalReviewerDeviceId: attempt.participationCeiling
+          ? undefined
+          : attempt.approvalReviewerDeviceId,
         channelId: attempt.currentChannelId,
         trace: params.runTrace,
         onToolOutcome: attempt.onToolOutcome,

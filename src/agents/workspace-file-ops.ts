@@ -12,8 +12,9 @@ export async function writeHostWorkspaceFile(
   content: string,
   abortSignal?: AbortSignal,
   prepareMutation?: HostFileMutationPreparer,
+  strictWorkspaceRoot?: boolean,
 ) {
-  const selectedRoot = await resolveHostRootAsync(root, absolutePath);
+  const selectedRoot = await resolveHostRootAsync(root, absolutePath, strictWorkspaceRoot);
   // Reject lexical escapes before opening the lazily created workspace root.
   const relative = toRelativeWorkspacePath(selectedRoot, absolutePath);
   const rootHandle = await getRoot(selectedRoot);
@@ -24,7 +25,10 @@ export async function writeHostWorkspaceFile(
     mutationSymlinks: "follow-parents-within-root",
     assertBeforeMutation: () => {
       effect.assertCurrent();
-      toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, absolutePath), absolutePath);
+      toRelativeWorkspacePath(
+        resolveHostWorkspaceRoot(root, absolutePath, strictWorkspaceRoot),
+        absolutePath,
+      );
     },
   });
 }

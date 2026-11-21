@@ -14,6 +14,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { authorizeParticipationExecApprovalMethod } from "../exec-approval-participation.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import {
@@ -99,7 +101,10 @@ function captureApprovalSourcePolicy(config: OpenClawConfig, source: ApprovalSou
 }
 
 /** Retain the original invocation; copying options loses its request-owner binding. */
-export function createApprovalRequestAuthority(options: GatewayRequestHandlerOptions) {
+export function createApprovalRequestAuthority(
+  options: GatewayRequestHandlerOptions,
+  execApprovalManager: ExecApprovalManager | undefined = options.context.execApprovalManager,
+) {
   const authority = readGatewayRequestMutationAuthority(options);
   const { client } = options;
   const method = options.req.method;
@@ -173,15 +178,23 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   const assertPolicyCurrent = () => {
     const currentActor = resolveGatewayOperatorRoleActor(client);
     const legacy = method.startsWith("exec.approval.") || method.startsWith("plugin.approval.");
-    const allowed = legacy
-      ? authority.family === "native-compatibility" ||
-        authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed ||
-        isHostPluginApprovalCall(method, client)
-      : method === "approval.resolve"
-        ? canResolveOperatorApproval(client)
-        : method === "approval.history"
-          ? authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed
-          : canReviewOperatorApproval(client);
+    const participation = authorizeParticipationExecApprovalMethod({
+      method,
+      params: options.params,
+      client,
+      manager: execApprovalManager,
+    });
+    const allowed =
+      participation ??
+      (legacy
+        ? authority.family === "native-compatibility" ||
+          authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed ||
+          isHostPluginApprovalCall(method, client)
+        : method === "approval.resolve"
+          ? canResolveOperatorApproval(client)
+          : method === "approval.history"
+            ? authorizeOperatorScopesForMethod(method, client?.connect.scopes ?? []).allowed
+            : canReviewOperatorApproval(client));
     if (
       closed ||
       !allowed ||

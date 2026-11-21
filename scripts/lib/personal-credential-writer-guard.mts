@@ -546,10 +546,17 @@ const nativeSdkExports = new Map<string, readonly string[]>([
 // Exact edges, not worker-file exemptions: every new entry needs an owner audit.
 const callers = new Map<string, readonly string[]>([
   ...publicationWriters,
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, string[]] => [
-    key(sessionMembers, name),
-    [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
-  ]),
+  ...["addSessionMember", "setSessionMemberAccess", "removeSessionMember"].map(
+    (name): [string, string[]] => [
+      key(sessionMembers, name),
+      [
+        key(
+          "src/config/sessions/session-sharing-store.worker.ts",
+          "bindSqliteWorkerBackend/execute",
+        ),
+      ],
+    ],
+  ),
   [
     key(sessionMembers, "addSessionMemberInTransaction"),
     [
@@ -733,10 +740,9 @@ const sinks = new Map<string, number>([
     ),
     2,
   ],
-  ...["addSessionMemberInTransaction", "removeSessionMember"].map((name): [string, number] => [
-    key(sessionMembers, name),
-    1,
-  ]),
+  ...["addSessionMemberInTransaction", "setSessionMemberAccess", "removeSessionMember"].map(
+    (name): [string, number] => [key(sessionMembers, name), 1],
+  ),
   ...[
     "clearSessionCollaborationForKey",
     "copySessionNodeArtifactsForRepair",

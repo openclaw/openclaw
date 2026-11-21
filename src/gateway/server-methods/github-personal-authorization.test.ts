@@ -238,6 +238,7 @@ it.each(["options", "shared-observation"] as const)(
       readCurrent: () => ({
         target: { ...replacement, storeKey: replacement.canonicalKey },
         membership: new Set(["profile-cache-test"]),
+        memberAccess: {},
         sourcePath: replacement.storePath,
         sourceAgentId: replacement.agentId,
       }),

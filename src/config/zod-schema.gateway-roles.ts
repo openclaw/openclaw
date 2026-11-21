@@ -1,6 +1,7 @@
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { isParticipationToolAllowed } from "../agents/participation-ceiling.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -34,10 +35,46 @@ export const OperatorScopeSchema = z.enum([
 ]);
 
 export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
-  sessions: z.strictObject({
-    /** Maximum access to another person's sessions without explicit membership. */
-    others: z.enum(["none", "invited", "view", "suggest", "write"]),
-  }),
+  sessions: z
+    .strictObject({
+      /** Maximum access to another person's sessions without explicit membership. */
+      others: z.enum(["none", "invited", "view", "suggest", "write"]),
+      maxInvitedAccess: z.enum(["read", "suggest", "send"]).optional(),
+      invitedPermission: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
+      invitedTools: z
+        .array(
+          z
+            .string()
+            .trim()
+            .refine(
+              isParticipationToolAllowed,
+              "Expected a session-contained participant tool; cross-session controls, plugin/MCP tools, groups, and wildcards are not supported",
+            ),
+        )
+        .transform(uniqueValues)
+        .optional(),
+    })
+    .refine(
+      (sessions) => sessions.invitedPermission === undefined || sessions.others === "invited",
+      {
+        message: 'invitedPermission requires sessions.others to be "invited"',
+        path: ["invitedPermission"],
+      },
+    )
+    .refine(
+      (sessions) => sessions.maxInvitedAccess === undefined || sessions.others === "invited",
+      {
+        message: 'maxInvitedAccess requires sessions.others to be "invited"',
+        path: ["maxInvitedAccess"],
+      },
+    )
+    .refine(
+      (sessions) => sessions.invitedTools === undefined || sessions.maxInvitedAccess !== undefined,
+      {
+        message: "invitedTools requires sessions.maxInvitedAccess",
+        path: ["invitedTools"],
+      },
+    ),
   /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
   sandbox: z.enum(["inherit", "required"]).optional(),
   /** Agent IDs available for session creation and runs, or all agents when set to "*". */

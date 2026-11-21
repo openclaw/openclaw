@@ -8,6 +8,13 @@ const catalog = {
       workingDetails: "Agent is working. View details",
     },
     composer: {
+      inviteLevelsStale: "Reselect @{name} to refresh available invitation levels.",
+      inviteAs: "Invite {name} to this session as",
+      inviteLevel: "Invitation level for {name}",
+      inviteRead: "Can read",
+      inviteSuggest: "Can suggest",
+      inviteSend: "Can send",
+      textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",
       predictionHint: "Tab to complete",
       predictionAvailable:

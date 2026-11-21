@@ -54,6 +54,7 @@ import type {
   SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
+import { sessionMemberSharingFacts } from "./session-member-access-facts.js";
 import type {
   SessionStoreReadCandidate,
   SessionStoreReadCustody,
@@ -496,10 +497,9 @@ export async function withSessionEntriesFromStoreInWorker<T>(
               source: database,
               databaseIdentity: memory.source.databaseIdentity,
               placeholders: [],
-              members: [...facts].map(([sessionKey, value]) => ({
-                sessionKey,
-                identityIds: value.members.map((member) => member.identityId),
-              })),
+              members: [...facts].map(([key, value]) =>
+                sessionMemberSharingFacts(key, value.members),
+              ),
             },
           }
         : {}),

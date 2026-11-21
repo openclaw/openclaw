@@ -47,6 +47,7 @@ function normalizeRegistration(
     targetSessionKey,
     targetSessionId,
     idempotencyKey,
+    participationCeiling: params.participationCeiling,
     ...(settleBatch
       ? { settleBatch: { ...settleBatch, sourceSessionKeys: [...settleBatch.sourceSessionKeys] } }
       : {}),
@@ -132,6 +133,7 @@ export function consumeSubagentCompletionToolHandoff(params: {
   handoffs.delete(handoffId);
   return {
     kind: "subagent-completion",
+    participationCeiling: entry.participationCeiling,
     sourceSessionKey,
     ...(sourceSessionId ? { sourceSessionId } : {}),
     targetSessionKey,

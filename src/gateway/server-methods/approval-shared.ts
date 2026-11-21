@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   ApprovalChannelReviewer,
@@ -18,6 +17,10 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import {
+  canResolveParticipationExecApproval,
+  participationApprovalTurnActor,
+} from "../exec-approval-participation.js";
 import type { OperatorApprovalTerminalReason } from "../operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "../operator-approval-store.types.js";
 import {
@@ -35,6 +38,7 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 import { assertValidParams, type Validator } from "./validation.js";
 
 export {
+  bindApprovalReviewerDeviceIds,
   listVisiblePendingApprovalRequests,
   resolvePendingApprovalRecord,
   respondPendingApprovalLookupError,
@@ -55,6 +59,7 @@ type RequestedApprovalEvent<
 > = {
   approvalKind?: TKind;
   id: string;
+  canDecide?: boolean;
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
@@ -101,16 +106,6 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
 }
 
-export function bindApprovalReviewerDeviceIds<TPayload>(params: {
-  record: ExecApprovalRecord<TPayload>;
-  deviceIds?: readonly string[] | null;
-}): void {
-  const deviceIds = normalizeUniqueTrimmedStringList(params.deviceIds);
-  if (deviceIds.length > 0) {
-    params.record.approvalReviewerDeviceIds = deviceIds;
-  }
-}
-
 export function respondApprovalStorageUnavailable(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
@@ -134,10 +129,13 @@ export function buildRequestedApprovalEvent<
   record: ExecApprovalRecord<TPayload>,
   approvalKind?: TKind,
 ): RequestedApprovalEvent<TPayload, TKind> {
+  const turnActor = participationApprovalTurnActor(record);
   return {
     ...(approvalKind ? { approvalKind } : {}),
     id: record.id,
-    request: record.request,
+    // Participation delivery admits only the exact creator/admin, not ordinary reviewers.
+    ...(record.participation ? { canDecide: true } : {}),
+    request: turnActor ? { ...record.request, turnActor } : record.request,
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
   };
@@ -179,8 +177,15 @@ function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
       approvalKind: params.approvalKind,
       excludeConnId: params.excludeConnId,
       record: params.record,
-      filter: (client) => isApprovalRecordVisibleToClient({ record: params.record, client }),
-    }) ?? null
+      filter: (client) =>
+        (params.approvalKind === "exec"
+          ? canResolveParticipationExecApproval(params.record, client)
+          : undefined) ??
+        isApprovalRecordVisibleToClient({
+          record: params.record,
+          client,
+        }),
+    }) ?? (params.record.participation ? new Set<string>() : null)
   );
 }
 
@@ -555,6 +560,7 @@ export async function handleApprovalResolve<
     client: params.client,
     exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     recordFilter,
+    resolving: true,
   };
   let resolved: ApprovalRecordLookupResult<TPayload>;
   try {
@@ -634,11 +640,15 @@ export async function handleApprovalResolve<
         !isApprovalRecordVisibleToClient({
           record: resolved.snapshot,
           client: params.client,
+          resolving: true,
           ...(params.authority.guard.family === "native-compatibility"
             ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
             : {}),
         }) ||
-        !retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot)) ||
+        !(
+          canResolveParticipationExecApproval(resolved.snapshot, params.client) ??
+          retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot))
+        ) ||
         (params.reviewer && !custody?.isCurrent(resolved.snapshot))
       ) {
         throw new Error("approval resolver authority is no longer active");

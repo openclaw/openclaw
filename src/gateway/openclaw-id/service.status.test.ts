@@ -102,7 +102,7 @@ it("exposes configured and undefined member roles without replacing their opaque
       roles: {
         definitions: {
           guest: {
-            sessions: { others: "view" },
+            sessions: { others: "invited", maxInvitedAccess: "send" },
             agents: "*",
             scopes: ["operator.sessions.read"],
             sandbox: "required",
@@ -118,7 +118,7 @@ it("exposes configured and undefined member roles without replacing their opaque
     const status = await service.linkStatus();
     expect(status).toMatchObject({
       roles: [
-        { name: "guest", defined: true, requiresSandbox: true },
+        { name: "guest", defined: true, requiresSandbox: true, maxInvitedAccess: "send" },
         { name: "operator", defined: true, requiresSandbox: false },
         { name: "removed-role", defined: false, requiresSandbox: false },
         { name: "viewer", defined: true, requiresSandbox: false },
@@ -239,7 +239,10 @@ it("checks each agent's own sandbox image and leaves roles without a sandbox unp
         { name: "operator", requiresSandbox: false },
       ],
     });
-    expect(status.linked ? status.roles[1]?.sandbox : "unlinked").toBeUndefined();
+    const operator = status.linked
+      ? status.roles.find((role) => role.name === "operator")
+      : undefined;
+    expect(operator?.defined ? operator.sandbox : "undefined role").toBeUndefined();
   } finally {
     await service.stop();
   }

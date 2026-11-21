@@ -2,6 +2,7 @@
 
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
@@ -15,6 +16,7 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createTestChatPane,
@@ -383,3 +385,24 @@ describe("chat pane session access", () => {
     );
   });
 });
+
+it.each(["FORBIDDEN", "UNAVAILABLE"])(
+  "classifies %s server failures from header rename and restore",
+  async (code) => {
+    const { pane, state, patch } = createPatchPane();
+    pane.context.gateway.snapshot.hello = hello();
+    const failure = new GatewayRequestError({ code, message: "Mutation rejected" });
+    patch.mockRejectedValue(failure);
+    const row = sessionRow({ sessionId: "session-a", sharingRole: "owner" });
+    state.sessionsResult = sessionsResult([row], 0);
+    pane.beginHeaderRename(row);
+    pane.headerPresentation.renameValue = "A new title";
+    pane.commitHeaderRename();
+    await vi.waitFor(() => expect(state.lastError).toBe("Mutation rejected"));
+    expect(state.lastErrorDetail).toBe(code === "FORBIDDEN" ? EXPECTED_CHAT_REFUSAL : failure);
+    state.lastError = null;
+    await pane.restoreArchivedSession(state.sessionKey, "session-a");
+    expect(state.lastError).toBe("Mutation rejected");
+    expect(state.lastErrorDetail).toBe(code === "FORBIDDEN" ? EXPECTED_CHAT_REFUSAL : failure);
+  },
+);

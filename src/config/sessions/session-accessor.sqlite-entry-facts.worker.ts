@@ -16,6 +16,7 @@ import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
+import { sessionMemberWithAccess } from "./session-member-access-facts.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -81,6 +82,7 @@ export function readExactSessionEntryFactsInDatabase(
           builder.ref("identity_id"),
           builder.ref("added_by"),
           builder.ref("added_at"),
+          builder.ref("access"),
         ]),
         [builder.ref("identity_id")],
         "not-null",
@@ -128,11 +130,16 @@ export function readExactSessionEntryFactsInDatabase(
       }),
     );
     entries.push({ sessionKey, entry: withProjectedParticipants(entry, records) });
-    members[sessionKey] = readRows(row.members_json).map((member) => ({
-      identityId: expectDefined(readStringValue(member[0]), "session member identity ID"),
-      addedBy: expectDefined(readStringValue(member[1]), "session member added-by identity"),
-      addedAt: readInteger(member[2]),
-    }));
+    members[sessionKey] = readRows(row.members_json).map((member) =>
+      sessionMemberWithAccess(
+        {
+          identityId: expectDefined(readStringValue(member[0]), "session member identity ID"),
+          addedBy: expectDefined(readStringValue(member[1]), "session member added-by identity"),
+          addedAt: readInteger(member[2]),
+        },
+        member[3],
+      ),
+    );
     if (records.length) {
       participantRecords[sessionKey] = records;
     }

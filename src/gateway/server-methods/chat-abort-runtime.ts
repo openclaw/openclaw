@@ -291,7 +291,7 @@ export async function abortChatRunsForSessionKeyWithPartials(
   prepareSession?: () => Promise<ChatAbortSessionSnapshot>,
 ): Promise<ChatSessionAbortResult> {
   let params = initialParams;
-  if (params.cascadeDescendants) {
+  if (params.cascadeDescendants && !params.requester.participationOnly) {
     const dormantAbort = abortDormantSubagentSession(params, prepareSession);
     if (dormantAbort) {
       const result = await dormantAbort;

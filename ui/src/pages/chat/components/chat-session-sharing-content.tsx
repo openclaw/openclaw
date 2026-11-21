@@ -29,15 +29,17 @@ import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
+import {
+  createChatSessionSharingPresentation,
+  projectChatSessionSharingRoster,
+  chatSessionPermissionLabel,
+} from "./chat-session-sharing-presentation.ts";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
   CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
-  createChatSessionSharingPresentation,
   ChatSessionSharingModeIcon,
-  ChatSessionSharingError,
-  projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 
@@ -209,6 +211,9 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
           const person = () => row().identity;
           const isCreator = () => row().owner;
           const reason = () => row().disabledReason;
+          const loweringAccessNote = (
+            <p class="chat-pane__sharing-status">{row().loweringAccessNote}</p>
+          );
           const activity = () =>
             personActivityLink(
               creator()?.identity?.type === "profile" ? creator()?.identity?.id : undefined,
@@ -275,13 +280,21 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               }
             },
             get children() {
-              return row().options.map((level) => ({
+              const options: MenuEntry[] = row().options.map((level) => ({
                 id: `permission:${level}:${person().id}`,
                 label: chatSessionPermissionLabel(level),
                 type: "radio" as const,
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
+              if (row().loweringAccessNote) {
+                options.push({
+                  kind: "content",
+                  id: `permission-note:${person().id}`,
+                  content: loweringAccessNote,
+                });
+              }
+              return options;
             },
           };
           return {
@@ -318,8 +331,8 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     { lazy: true },
   );
   const showPermissions = () =>
-    visibility() !== "shared" &&
-    visibility() !== "draft" &&
+    ((visibility() !== "shared" && visibility() !== "draft") ||
+      people().some((row) => row.invitedAccess)) &&
     props.membersAvailable !== false &&
     (!props.state?.error || Boolean(result())) &&
     (!result() ||

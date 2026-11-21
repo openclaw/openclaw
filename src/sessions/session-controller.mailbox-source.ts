@@ -62,6 +62,7 @@ export function beginSessionControllerSourceInjection(
   options: { keepOrderOnDecline?: boolean; retryWithdrawnSteer?: boolean } = {},
 ): SessionControllerSourceInjection {
   if (
+    input.source?.run.participationCeiling !== undefined ||
     (input.phase !== "preparing" && input.phase !== "waiting") ||
     (input.injectionAttempted &&
       !(options.retryWithdrawnSteer && input.steerNow && input.custody.enqueued)) ||
@@ -213,7 +214,7 @@ export function retireSessionControllerSourceCancellation(input: SessionControll
 /** Resolve inline/reset policy on the original input before publishing runnable work. */
 export function updateSessionControllerSourcePolicy(
   input: SessionControllerInput,
-  policy: QueueSettings,
+  requestedPolicy: QueueSettings,
 ): void {
   const assertConfigurable = () => {
     if (
@@ -229,6 +230,9 @@ export function updateSessionControllerSourcePolicy(
   assertConfigurable();
   input.sourceAdapter?.authority?.assertCurrent();
   assertConfigurable();
+  const policy = input.source?.run.participationCeiling
+    ? { ...requestedPolicy, mode: "followup" as const }
+    : requestedPolicy;
   const wasInterrupt = input.policy.mode === "interrupt";
   input.policy = Object.freeze({ ...policy });
   if (policy.mode === "interrupt" && !wasInterrupt && !input.claim) {

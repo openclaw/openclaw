@@ -556,7 +556,7 @@ export function isConfiguredAgentMainSessionKey(params: {
 
 export async function createConfiguredAgentMainSession(params: {
   mode?: "followup" | "steer" | "notify" | "resume";
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "participant";
   callGateway: AgentToolGatewayRequestCaller;
   agentId: string;
   sessionKey: string;

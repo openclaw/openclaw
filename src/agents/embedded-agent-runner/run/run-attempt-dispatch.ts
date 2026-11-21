@@ -12,6 +12,7 @@ import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { resolveTurnCyberAccessProgram } from "../../model-catalog-access-programs.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
+import { assertParticipationRuntime } from "../../participation-ceiling.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
@@ -90,6 +91,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     resolveRunAttemptAuthProfileStore,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
+  assertParticipationRuntime(params.participationCeiling, runtime.agentHarness.id);
   const effectiveModel = attachModelProviderRuntimePluginHandle(
     runtime.effectiveModel,
     runtime.providerRuntimeHandle,
@@ -442,6 +444,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     ...resolveHarnessWorkspace(workspaceDir, params, pluginWorkspace, pluginSandbox),
     bootstrapWorkspaceDir,
     permissionMode: params.permissionMode,
+    participationCeiling: params.participationCeiling,
     requireWorkspaceOnly: params.requireWorkspaceOnly,
     agentDir,
     preparedModelRuntime: runInput.preparedModelRuntime,

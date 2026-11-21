@@ -16,15 +16,17 @@ import type { MenuControls, MenuEntry, MenuItem } from "../../../components/soli
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
+import {
+  projectChatSessionSharingRoster,
+  chatSessionPermissionLabel,
+  createChatSessionSharingPresentation,
+} from "./chat-session-sharing-presentation.ts";
 import {
   type ChatSessionSharingProps,
   type ChatSessionSharingOutcome,
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
-  projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
-  ChatSessionSharingError,
-  createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionSharingEnglish);
@@ -48,7 +50,9 @@ export function useChatSessionSharingMenu(
       owner()?.label,
     );
   const showPermissions = () =>
-    props.membersAvailable !== false && visibility() !== "shared" && visibility() !== "draft";
+    props.membersAvailable !== false &&
+    ((visibility() !== "shared" && visibility() !== "draft") ||
+      people().some((row) => row.invitedAccess));
   const people = createMemo(() =>
     projectChatSessionSharingRoster(props).filter((row) => !row.owner),
   );
@@ -254,6 +258,9 @@ export function useChatSessionSharingMenu(
         () => (!showPermissions() ? [] : matches()),
         (row): MenuEntry => {
           const identity = () => row().identity;
+          const loweringAccessNote = (
+            <p class="chat-pane__sharing-status">{row().loweringAccessNote}</p>
+          );
           const branch: MenuEntry = {
             id: `permission:${identity().id}`,
             class: "chat-pane__sharing-permission",
@@ -278,13 +285,21 @@ export function useChatSessionSharingMenu(
               }
             },
             get children() {
-              return row().options.map((level) => ({
+              const options: MenuEntry[] = row().options.map((level) => ({
                 id: `permission:${level}:${identity().id}`,
                 label: chatSessionPermissionLabel(level),
                 type: "radio" as const,
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
+              if (row().loweringAccessNote) {
+                options.push({
+                  kind: "content",
+                  id: `permission-note:${identity().id}`,
+                  content: loweringAccessNote,
+                });
+              }
+              return options;
             },
           };
           return {

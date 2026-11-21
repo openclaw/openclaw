@@ -62,6 +62,11 @@ import {
   AGENT_INDEX_RETIREMENT_SQL,
   withLegacyAgentPostgresIndexes,
 } from "./openclaw-agent-index-retirement-migration.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL,
+  withoutAgentPostgresMemberAccess,
+} from "./openclaw-agent-member-access-schema.js";
 import { withLegacyAgentPostgresMemoryPaths } from "./openclaw-agent-memory-path-migration.js";
 import {
   AGENT_MEMORY_REVISION_POSTGRES_SQL,
@@ -130,7 +135,8 @@ export function admitAgentEngineSearchExtensions(
 
 function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
   const agentPostgresSql = agentEngineSchema.postgres;
-  const agentPostgresV42Sql = withoutAgentPostgresPendingInputEndings(agentPostgresSql);
+  const agentPostgresV43Sql = withoutAgentPostgresMemberAccess(agentPostgresSql);
+  const agentPostgresV42Sql = withoutAgentPostgresPendingInputEndings(agentPostgresV43Sql);
   const agentPostgresV41Sql = withoutAgentPostgresToolUsage(agentPostgresV42Sql);
   const agentPostgresV40Sql = withoutAgentPostgresActiveEventFacts(agentPostgresV41Sql);
   const agentPostgresV39Sql = withoutAgentPostgresCreationOperations(agentPostgresV40Sql);
@@ -407,7 +413,7 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
         postgresTextSearchVersion: 2,
       },
       schema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV43Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
@@ -415,6 +421,26 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
       sql: `${AGENT_PENDING_INPUT_ENDINGS_POSTGRES_MIGRATION_SQL}
         UPDATE schema_meta
         SET schema_version = ${AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+      fromSchema: {
+        postgres: agentPostgresV43Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `${AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL}
+        UPDATE schema_meta SET schema_version = ${AGENT_MEMBER_ACCESS_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

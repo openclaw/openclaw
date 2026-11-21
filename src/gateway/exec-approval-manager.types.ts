@@ -47,6 +47,15 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByClientId?: string | null;
   requestedByDeviceTokenAuth?: boolean;
   approvalReviewerDeviceIds?: string[];
+  /** Server-only, process-local binding from a validated participation-clamped run. */
+  participation?: Readonly<{
+    creatorProfileId?: string;
+    /** Descendant execution remains bound to the original session creator. */
+    creatorOnly?: true;
+    participantProfileId: string;
+    participantLabel?: string;
+    sessionKey: string;
+  }>;
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;
   consumedDecision?: ExecApprovalDecision;

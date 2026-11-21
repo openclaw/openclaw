@@ -152,7 +152,7 @@ export function renderComposerTextarea(
           context().handleBlur(event);
         }}
         onPaste={(event: ClipboardEvent) => {
-          if (context().canCompose && !composer.suggestionComposer) {
+          if (context().canCompose) {
             handleChatAttachmentPaste(event, composer);
           }
         }}

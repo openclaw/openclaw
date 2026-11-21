@@ -6,7 +6,11 @@ import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
-import { normalizeChatSendRequest, type NormalizedChatSendRequest } from "./chat-send-request.js";
+import {
+  attachChatSendParticipationCeiling,
+  normalizeChatSendRequest,
+  type NormalizedChatSendRequest,
+} from "./chat-send-request.js";
 import {
   prepareChatSendNativeRuntimeRestriction,
   prepareChatSendSession,
@@ -85,6 +89,16 @@ export async function prepareAndAdmitChatSend(
       assertCurrent?.();
     } catch (error) {
       respondChatSendAdmissionError(error, respond);
+      return undefined;
+    }
+  }
+  if (sessionMutationAuthorization?.participationCeiling) {
+    const attached = attachChatSendParticipationCeiling(
+      normalizedRequest.value,
+      sessionMutationAuthorization.participationCeiling,
+    );
+    if (!attached.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, attached.error));
       return undefined;
     }
   }

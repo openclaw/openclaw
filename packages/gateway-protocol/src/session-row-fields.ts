@@ -89,6 +89,7 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
   "hiddenFromInvolvingMe",
   "visibility",
   "sharingRole",
+  "invitedAccess",
   "communication",
   "effectiveCommunication",
   "hasActiveRun",

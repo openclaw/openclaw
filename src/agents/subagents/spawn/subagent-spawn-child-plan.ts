@@ -62,7 +62,9 @@ export async function resolveSubagentChildPlan(params: {
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
-  const requesterRoot = params.ctx.sessionPermissionPolicy?.root ?? params.ctx.workspaceDir;
+  const participationRoot = params.ctx.participationCeiling?.source?.root;
+  const requesterRoot =
+    participationRoot ?? params.ctx.sessionPermissionPolicy?.root ?? params.ctx.workspaceDir;
   if (
     senderRestricted &&
     (params.request.worktree ||
@@ -81,7 +83,7 @@ export async function resolveSubagentChildPlan(params: {
   const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
     config: params.cfg,
     targetAgentId: params.targetAgentId,
-    explicitWorkspaceDir: inheritedWorkspaceDir,
+    explicitWorkspaceDir: participationRoot ?? inheritedWorkspaceDir,
   });
   const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
   const requesterOrigin = normalizeDeliveryContext({
@@ -135,7 +137,8 @@ export async function resolveSubagentChildPlan(params: {
       preparedSessionEntry: null,
     }).sandboxed;
   const childCwd =
-    requestedCwd ?? (senderRestricted && !childRuntimeSandboxed ? requesterRoot : undefined);
+    requestedCwd ??
+    ((senderRestricted || participationRoot) && !childRuntimeSandboxed ? requesterRoot : undefined);
   const spawnedCwd = childCwd ? resolveUserPath(childCwd) : undefined;
   const sandboxError = resolveSpawnSandboxError({
     backend: "subagent",
@@ -215,7 +218,7 @@ export async function resolveSubagentChildPlan(params: {
   // decides before model resolution, so re-check admission once the runtime is
   // knowable, mirroring the cron seam guard. The run seam enforces the same
   // invariant for fallback candidates and post-spawn runtime overrides.
-  if (childRuntimeSandboxed) {
+  if (childRuntimeSandboxed || params.ctx.participationCeiling) {
     const { useCliExecution, cliExecutionProvider } = resolveRunEntryCliRuntime({
       config: params.cfg,
       provider: modelPlan.modelRef.provider,
@@ -226,7 +229,9 @@ export async function resolveSubagentChildPlan(params: {
     if (useCliExecution) {
       return rejectSubagentSpawnRequest(
         "forbidden",
-        `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
+        params.ctx.participationCeiling
+          ? "Participating helpers require the OpenClaw runtime; host-executed CLI models are unavailable."
+          : `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
       );
     }
   }
@@ -259,6 +264,12 @@ export async function resolveSubagentChildPlan(params: {
     authProfileId: modelPlan.initialSessionPatch.authProfileOverride,
   });
   params.ctx.assertActive?.();
+  if (params.ctx.participationCeiling && billingRoute.resolvedRuntime !== "openclaw") {
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      "Participating helpers require the OpenClaw runtime. Select an OpenClaw model for the child.",
+    );
+  }
   const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
     ? { modelOverride: modelPlan.modelRef }
     : undefined;

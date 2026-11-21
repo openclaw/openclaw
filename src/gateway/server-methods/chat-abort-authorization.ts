@@ -34,6 +34,7 @@ export type ChatAbortRequester = {
   connId?: string;
   deviceId?: string;
   isAdmin: boolean;
+  participationOnly?: boolean;
   /** Current personal requester, independently authorized for this exact session. */
   personalAuthority?: {
     profileId: string;
@@ -147,6 +148,7 @@ export function resolveChatAbortRequester(
     connId: normalizeOptionalString(client?.connId),
     deviceId: normalizeOptionalString(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
+    participationOnly: authorization?.participationCeiling !== undefined,
     ...(personalAuthority ? { personalAuthority } : {}),
     ...(assertCurrent && sessionTarget
       ? { sessionAuthority: { target: sessionTarget, assertCurrent } }
@@ -166,6 +168,7 @@ export function captureChatAbortAuthority(options: GatewayRequestHandlerOptions)
   return {
     requester,
     narrow:
+      requester.participationOnly === true ||
       authority.sessionScope === "operator.sessions.write" ||
       requester.sessionAuthority !== undefined,
     assertRequesterCurrent: authority.assertCurrent,
@@ -191,7 +194,7 @@ export function canRequesterAbortChatRun(
   requester: ChatAbortRequester,
   options: { requireOwnerMatch?: boolean } = {},
 ): boolean {
-  if (requester.sessionAuthority) {
+  if (requester.sessionAuthority && !requester.participationOnly) {
     requester.sessionAuthority.assertCurrent();
     const { target } = requester.sessionAuthority;
     return (
@@ -218,6 +221,9 @@ export function canRequesterAbortChatRun(
     ) {
       return true;
     }
+  }
+  if (requester.participationOnly) {
+    return false;
   }
   const ownerDeviceId = normalizeOptionalString(entry.requester?.deviceId);
   const ownerConnId = normalizeOptionalString(entry.requester?.connectionId);

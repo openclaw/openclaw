@@ -177,7 +177,11 @@ export const ApprovalPresentationSchema = Type.Union([
   SystemAgentApprovalPresentationSchema,
 ]);
 
+/** Server-bound initiating person; display attribution never grants approval authority. */
+const ApprovalTurnActorSchema = closedObject({ id: NonEmptyString, label: NonEmptyString });
+
 const ApprovalRecordCommonFields = {
+  turnActor: Type.Optional(ApprovalTurnActorSchema),
   id: ApprovalIdSchema,
   urlPath: NonEmptyString,
   createdAtMs: Type.Integer({ minimum: 0 }),
@@ -206,6 +210,8 @@ const ApprovalResolutionFields = {
 export const PendingApprovalSnapshotSchema = closedObject({
   ...ApprovalRecordCommonFields,
   status: Type.Literal("pending"),
+  /** Recipient-local decision eligibility; the Gateway rechecks the exact live binding on resolve. */
+  canDecide: Type.Optional(Type.Boolean()),
   /** Canonical raising session when projected into a session-scoped reviewer surface. */
   sourceSessionKey: Type.Optional(NonEmptyString),
 });
@@ -327,10 +333,26 @@ export const TerminalSessionApprovalEventSchema = withSince(
   }),
 );
 
+/** Own-turn waiting status, without command, review URL, or decision capability. */
+const ParticipantSessionApprovalEventSchema = closedObject({
+  sessionKey: NonEmptyString,
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+  phase: Type.Literal("participant"),
+  approvalId: ApprovalIdSchema,
+  runId: NonEmptyString,
+  participantId: NonEmptyString,
+  status: stringLiteralUnion(["pending", "terminal"]),
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+});
+
 /** Sanitized approval transition delivered only to an opted-in session audience. */
 export const SessionApprovalEventSchema = withSince(
   "2026.7",
-  Type.Union([PendingSessionApprovalEventSchema, TerminalSessionApprovalEventSchema]),
+  Type.Union([
+    PendingSessionApprovalEventSchema,
+    TerminalSessionApprovalEventSchema,
+    ParticipantSessionApprovalEventSchema,
+  ]),
 );
 
 /** Authoritative pending approval set returned when a session stream subscribes. */
@@ -340,6 +362,7 @@ export const SessionApprovalReplaySchema = withSince(
     sessionKey: NonEmptyString,
     updatedAtMs: Type.Integer({ minimum: 0 }),
     approvals: Type.Array(PendingApprovalSnapshotSchema),
+    participantApprovals: Type.Optional(Type.Array(ParticipantSessionApprovalEventSchema)),
     truncated: Type.Boolean(),
   }),
 );

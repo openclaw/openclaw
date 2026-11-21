@@ -22,6 +22,7 @@ import type {
   SessionExactEntriesWorkerRequest,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
+import { sessionMemberSharingFacts } from "./session-member-access-facts.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import {
@@ -226,10 +227,7 @@ export function readRetainedSessionEntryFacts(
       if (facts.members) {
         members[key] = facts.members;
         if (request.projection === "sharing") {
-          sharingMembers.push({
-            sessionKey: key,
-            identityIds: facts.members.map(({ identityId }) => identityId),
-          });
+          sharingMembers.push(sessionMemberSharingFacts(key, facts.members));
         }
       }
       if (facts.participants?.length) {

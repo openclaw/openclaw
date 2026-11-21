@@ -3,6 +3,7 @@ import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js
 import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildAgentInternalEventContext } from "../internal-events.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
+import { assertParticipationRuntime } from "../participation-ceiling.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -26,6 +27,7 @@ export async function preparePluginHarnessParams(
   webSearchModel?: ModelRef | null,
   setToolPolicyScope?: (scope: "conversation" | "turn" | undefined) => void,
 ): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
+  assertParticipationRuntime(params.participationCeiling, harness.id);
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)

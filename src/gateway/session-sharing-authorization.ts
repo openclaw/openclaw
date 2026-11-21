@@ -26,6 +26,7 @@ import {
   isAgentRunStartMethod,
   isSessionArchiveMutation,
   isSessionProfileDependentMethod,
+  isRequiredSessionTargetMethod,
 } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
@@ -44,6 +45,7 @@ import type {
 } from "./session-sharing-read.js";
 import {
   resolveChatSendAuthorizationParams,
+  resolveSessionMutationTargets,
   resolveTalkSessionTargetInput,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
@@ -62,6 +64,10 @@ export type SessionMutationAuthorizationParams = {
   assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
+  /** Resolve this pending requirement against the exact existing session. */
+  participationRequired?: true;
+  /** Prepared against the child's original invitation, never request data. */
+  participantRunAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Database access classified by the host-owned method registry. */
   databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
@@ -161,6 +167,7 @@ export function prepareSessionMutationAuthorizationRequest(
       requiresCommunicationAuthority ||
       bindsProgressLifecycle ||
       bindsTalkTarget ||
+      params.method === "chat.send" ||
       params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:
@@ -481,4 +488,45 @@ export function resolveSessionMutationWriteRoute(
     ...identity,
     storePath: memory?.path ?? resolveSessionStorePathCore(cfg.session?.store, identity),
   };
+}
+
+export function resolveRequiredSessionMutationTargets(
+  params: SessionMutationAuthorizationParams,
+  talkTargets: SessionMutationTarget[] | undefined,
+): { targets?: SessionMutationTarget[]; error: ErrorShape | null } {
+  const targetRefs =
+    talkTargets ??
+    resolveSessionMutationTargets({
+      participationRequired: params.participationRequired,
+      sessionScope: params.sessionScope,
+      client: params.client,
+      method: params.method,
+      requestParams: params.requestParams,
+      context: params.context,
+    }) ??
+    (params.sessionScope === "operator.sessions.write" &&
+    !isRequiredSessionTargetMethod(params.method)
+      ? []
+      : undefined);
+  if (params.expectedTarget && targetRefs?.length !== 1) {
+    return {
+      error: sessionMutationTargetChanged(params.method, params.expectedTarget.sessionKey).error,
+    };
+  }
+  if (params.participationRequired && targetRefs?.length !== 1) {
+    return {
+      error: errorShape(ErrorCodes.FORBIDDEN, "Participation requires one existing session."),
+    };
+  }
+  if (!targetRefs) {
+    if (isRequiredSessionTargetMethod(params.method)) {
+      return {
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
+          details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
+        }),
+      };
+    }
+    return { error: null };
+  }
+  return { targets: targetRefs, error: null };
 }

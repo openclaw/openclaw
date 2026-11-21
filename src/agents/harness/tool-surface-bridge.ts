@@ -13,6 +13,7 @@ import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
 } from "../local-model-lean.js";
+import type { ParticipationCeiling } from "../participation-ceiling.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-protocol.js";
@@ -59,6 +60,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     preparedToolOverrideAllowlist?: readonly string[];
     sessionId?: string;
     scheduledToolPolicy?: ScheduledToolPolicyContext;
+    participationCeiling?: ParticipationCeiling;
     sourceReplyDeliveryMode?: string;
   },
 ) {

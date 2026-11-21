@@ -143,7 +143,44 @@ it.each([false, true])(
   },
 );
 
+it("keeps roster copy deferred until the sharing presentation loads", async () => {
+  const { manager } = await loadI18n();
+  await import("../pages/chat/components/chat-session-sharing.solid.tsx");
+  await import("../pages/chat/components/chat-session-sharing-options.tsx");
+  expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
+  expect(manager.t("chat.sessionSharing.canRead")).toBe("chat.sessionSharing.canRead");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("sessionsView.noPeopleMatch");
+  await import("../pages/chat/components/chat-session-sharing-mobile-adapter.ts");
+  expect(manager.t("chat.sessionSharing.canRead")).toBe("Can read");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No people or agents match your search.");
+});
+
 it.each([
+  [
+    "chat.sessionSuggestions.state.accepted",
+    "Accepted",
+    () => import("../pages/chat/components/chat-session-suggestions.solid.tsx"),
+  ],
+  [
+    "chat.sessionSuggestions.pausedDraftState",
+    "Draft",
+    () => import("../pages/chat/components/chat-typing-indicator.tsx"),
+  ],
+  [
+    "chat.sessionSharing.sharedDescription",
+    "Everyone with access can send",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.searchPeople",
+    "Search people…",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.canRead",
+    "Can read",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
   [
     "chat.sessionSharing.copyPublicLink",
     "Copy public link",
@@ -203,7 +240,7 @@ it.each([
   await load();
 
   expect(manager.t(key)).toBe(copy);
-  if (key.startsWith("chat.sessionSharing.")) {
+  if (key.startsWith("chat.sessionSharing.") || key.startsWith("chat.sessionSuggestions.")) {
     expect(manager.t("chat.sessionDetails.contextProject")).toBe(
       "chat.sessionDetails.contextProject",
     );

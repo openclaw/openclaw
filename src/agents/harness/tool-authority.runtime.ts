@@ -61,6 +61,7 @@ type ToolAuthorityAttempt = Pick<
   | "sessionTarget"
   | "toolAuthorityFingerprint"
   | "userTurnTranscriptRecorder"
+  | "participationCeiling"
 > & { hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"] };
 
 /** Execution-only: policy preparation must finish before authority reaches a publisher. */
@@ -447,6 +448,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {
             watchdogAttempt,
             personalToolParticipants,
+            participationCeiling: attempt.participationCeiling,
             operation: turn,
             ...(!turn ? { detached: true as const } : {}),
             source: operation ? "reply" : "attempt",

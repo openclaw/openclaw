@@ -586,6 +586,7 @@ export abstract class ChatPaneStateOwner {
   readonly collaboration: {
     sharingStates: Map<string, ChatSessionSharingState>;
     suggestions: SessionSuggestion[];
+    liveResolutions: Map<string, boolean>;
     role: SessionSharingRole | undefined;
     busyIds: Set<string>;
     addOperation: symbol | undefined;
@@ -596,6 +597,7 @@ export abstract class ChatPaneStateOwner {
   } = {
     sharingStates: new Map(),
     suggestions: [],
+    liveResolutions: new Map(),
     role: undefined,
     busyIds: new Set(),
     addOperation: undefined,
@@ -738,7 +740,7 @@ export abstract class ChatPaneStateOwner {
   protected abstract reconcileWaitingApprovalSnapshot(
     approvalQueue?: ApplicationContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean;
-  protected abstract publishHeaderError(error: unknown, owner?: string): void;
+  protected abstract publishHeaderError(error: unknown, owner?: string, expected?: boolean): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
   protected abstract initialProgressCardTarget():
     | ReturnType<typeof resolveUiConversationIdentity>

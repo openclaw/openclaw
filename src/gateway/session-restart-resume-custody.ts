@@ -1,3 +1,4 @@
+import { resolveSubagentCompletionParticipation } from "../agents/subagents/registry/subagent-child-owner-match.js";
 import {
   getSubagentRunsForRequesterSession,
   subagentRuns,
@@ -5,6 +6,7 @@ import {
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { readSessionSubmittedInput } from "../config/sessions/session-pending-input-source.js";
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
 import { isRestartResumeEntryOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
@@ -29,6 +31,7 @@ import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import { prepareSessionParticipationRun } from "./session-principal-run-authority.js";
 import type {
   PreparedRestartStore,
   RestartResumeParams,
@@ -128,15 +131,7 @@ async function recoverRequesterCompletionCustody(params: {
   if (!pending.length) {
     return [];
   }
-  const authority = await prepareSessionSystemTurnAuthority({
-    context,
-    agentId,
-    sessionKey,
-    storePath,
-    sessionId: entry.sessionId,
-    preserveRecordedSource: true,
-    assertCurrent,
-  });
+  let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>>;
   let target: TranscriptLease | undefined;
   try {
     target = await acquireTranscriptLease(
@@ -145,36 +140,66 @@ async function recoverRequesterCompletionCustody(params: {
       { env: params.env },
     );
     const requester = target;
-    await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-      withOperatorToolGatewayAuthority(
-        {
-          operatorRunAuthority: authority?.authority,
-          operatorRoleActor: { kind: "system" },
-          scopes: authority?.authority.scopes ?? [ADMIN_SCOPE],
+    await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
+      for (const child of pending) {
+        const childEntry = await readSessionEntryReadOnlyInWorker(
+          {
+            agentId: child.childAgentId ?? agentId,
+            sessionKey: child.childSessionKey,
+          },
           assertCurrent,
-        },
-        async () => {
-          for (const child of pending) {
-            const custody = await captureOperatorToolGatewayContinuationContext({
+        );
+        const participant = await prepareSessionParticipationRun({
+          context,
+          agentId,
+          entry: childEntry,
+          turnCeiling: resolveSubagentCompletionParticipation([child], childEntry),
+          assertCurrent,
+        });
+        try {
+          if (!participant && !authority) {
+            authority = await prepareSessionSystemTurnAuthority({
+              context,
               agentId,
               sessionKey,
+              storePath,
+              sessionId: entry.sessionId,
+              preserveRecordedSource: true,
+              assertCurrent,
             });
-            if (!custody) {
-              throw new Error("Restart completion has no current Gateway authority");
-            }
-            try {
-              assertCurrent();
-              requester.assertCurrent();
-              bindGatewayContextResolver(child, context.resolveGatewayContext);
-              subagentRuns.bindCompletionAuthority(child, custody);
-            } catch (error) {
-              custody.release();
-              throw error;
-            }
           }
-        },
-      ),
-    );
+          const selected = participant ?? authority;
+          await withOperatorToolGatewayAuthority(
+            {
+              operatorRunAuthority: selected?.authority,
+              operatorRoleActor: { kind: "system" },
+              scopes: selected?.authority.scopes ?? [ADMIN_SCOPE],
+              assertCurrent,
+            },
+            async () => {
+              const custody = await captureOperatorToolGatewayContinuationContext({
+                agentId,
+                sessionKey,
+              });
+              if (!custody) {
+                throw new Error("Restart completion has no current Gateway authority");
+              }
+              try {
+                assertCurrent();
+                requester.assertCurrent();
+                bindGatewayContextResolver(child, context.resolveGatewayContext);
+                subagentRuns.bindCompletionAuthority(child, custody);
+              } catch (error) {
+                custody.release();
+                throw error;
+              }
+            },
+          );
+        } finally {
+          participant?.release();
+        }
+      }
+    });
   } finally {
     target?.release();
     authority?.release();

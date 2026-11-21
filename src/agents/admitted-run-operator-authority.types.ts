@@ -17,6 +17,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     modelPolicy?: PreparedOperatorModelPolicy;
   }>;
   scopes: readonly string[];
+  /** Live original-source restriction on a participant child or completion turn. */
+  participationCeiling?: import("./participation-ceiling.js").ParticipationCeiling;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: SessionSourceAssertion;

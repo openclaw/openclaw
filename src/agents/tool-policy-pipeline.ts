@@ -47,6 +47,8 @@ export type ToolPolicyPipelineStep = {
   label: string;
   source?: ToolPolicySource;
   stripPluginOnlyAllowlist?: boolean;
+  /** Exact core allowlist: no aliases, implicit grants, or plugin/MCP name collisions. */
+  coreOnly?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
   unavailableCoreToolReason?: string;
@@ -215,6 +217,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     }
     const before = filtered;
     filtered = filterToolsByPolicy(before, expanded);
+    if (step.coreOnly) {
+      filtered = filtered.filter(
+        (tool) => !params.toolMeta(tool) && policy.allow?.includes(tool.name),
+      );
+    }
     params.onFilter?.({ step, policy: expanded, before, after: filtered });
     auditToolPolicyFilter({
       stepLabel: step.label,

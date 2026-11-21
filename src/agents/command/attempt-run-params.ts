@@ -16,6 +16,7 @@ export function buildCommonCommandRunParams(
   // Read session fields at invocation time, after admitted CLI binding recovery.
   return {
     preparedRunAdmission: params.preparedRunAdmission,
+    participationCeiling: params.opts.participationCeiling,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: params.sessionTarget,

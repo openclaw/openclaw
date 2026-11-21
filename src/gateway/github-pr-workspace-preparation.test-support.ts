@@ -44,7 +44,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-principal-run-authority.js";
 import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,

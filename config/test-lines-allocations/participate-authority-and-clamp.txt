@@ -1,0 +1,13 @@
+# Participate epic, measured against the branch merge-base with origin/main.
+# Reconciled against 39dabcb06b86877a72eab393f8f5f118bf2b8194, the actual
+# merge-base after rebase2, rather than a narrowed stage.
+# The whole feature adds 7,643 net test lines; all allocation records total 7,243
+# above the ordinary 400-line allowance. Stage B itself adds 1,622 lines and has
+# its own 1,222-line excess record. This corrects the earlier accumulated feature
+# budget, not a production or test assertion exemption. The additional cases
+# prove independent permission/model/tool clamp intersections, durable input
+# isolation and revocation across storage reopen, host-only creator bindings,
+# direct/unified resolution and merged-identity boundaries, live/reconnect
+# disclosure and pre-limit eligibility, plus producer rollover/recovery/typing
+# lifetime and own-input Stop. Existing shared fixtures and table tests are used.
+5395

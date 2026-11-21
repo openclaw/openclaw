@@ -422,6 +422,70 @@ with role-wide `view`, `suggest`, or `write` access, even if they are also membe
 Existing scope checks still apply: `full` and `sandboxMode` changes require
 `operator.admin`. See [Session permission modes](/gateway/permission-modes).
 
+The opt-in Participate policy adds `sessions.maxInvitedAccess` (`"read"`,
+`"suggest"`, or `"send"`) only to roles with `sessions.others: "invited"`.
+Its per-session resolver uses the lower of the stored invitation level and this
+ceiling, treating an unspecified invitation level as `"read"`. Omitting the field
+preserves existing membership behavior. A `"send"` invitation permits bounded
+participation with a session-read scope, not general operator write authority.
+
+Set `sessions.invitedPermission` on an invited-session role to choose `read-only`,
+`guarded`, `workspace` (default), or `full`. Each input captures the lower of this
+ceiling and the session's permission mode. Read-only also denies file mutations;
+guarded uses human approval, workspace uses the command reviewer, and full removes
+the participation-specific exec ceiling. Session, model, host, and tool restrictions
+still apply. File tools remain contained to the session root in every mode. Shell
+execution is not an OS filesystem sandbox; isolate untrusted programs separately.
+Human approvals remain creator/admin-only, and the participant cannot grant them.
+Queued and recovered inputs retain the captured ceiling; policy changes may narrow
+it but never widen it. Stored inputs predating this field retain guarded authority.
+
+On a role with `maxInvitedAccess`, `sandbox: "required"` governs sessions the
+role creates or owns. Admitted send-level participation in another person's
+session uses that session's sandbox settings plus the captured participant
+ceiling. Invited members may read that session's workspace at their granted
+level. The role's own unsandboxed sessions remain blocked; roles without this
+opt-in keep the existing sandbox requirement for all sessions.
+
+Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the participant
+tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
+`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`, `web_search`,
+`web_fetch`, `tool_search`, `tool_describe`, and `dispatch_action`. An empty list
+permits no tools. Only these session-contained names are accepted; the result
+still intersects the agent's tool policy and every tool's own authorization checks.
+Cross-session controls, messaging, and Gateway/configuration tools are not eligible. Retained inputs also discard names outside this supported surface. Listing a tool does not make an unavailable or
+agent-denied tool available.
+
+Participant `sessions_spawn` calls create only hidden, same-agent, Gateway-local
+OpenClaw children. They cannot change the original root through `cwd`, projects,
+worktrees, thread binding, visible sessions, worker placement, ACP, or CLI runtimes.
+Every child and descendant retains the original invitation, creator, incarnation,
+root, tool ceiling, and permission ceiling. A new child turn, restart, or private
+completion rechecks that original invitation and the participant's current role.
+The parent's independent turns do not acquire the child's ceiling. Child exec
+approvals require the original session creator, not an assignee, participant, or
+unrelated administrator. Process tools expose only the child's own process scope.
+
+Removing or reducing membership blocks new child work and completion admission.
+There is no invitation epoch: reinviting the same person may admit a retained child
+under the intersection of its stored ceiling and the current invitation. Missing
+child rows or envelopes never restore owner authority; the retained spawn record
+and private completion capability require the original child constraint.
+
+Use exact names, not groups or wildcards. Unknown names, plugin-owned tools
+(including `browser` and `memory_search`), and MCP tools are rejected. A plugin
+or MCP implementation with an allowed core name never gains access, including
+through Tool Search or exact-ID dispatch. Include the discovery tools when the
+participant needs deferred core tools. Review broader tools carefully: they can
+expose more of the agent's delegated authority.
+
+The Gateway captures this ceiling on each accepted input and preserves it in
+queued input and restart recovery. Re-admission may narrow the captured list but
+never widens it; a wider role policy applies to newly submitted inputs. Participant
+turns require Gateway-local **OpenClaw** execution, not a native/CLI harness or
+remote worker. Allowing `exec` never disables the admitted permission ceiling, host approval
+requirements, sandbox policy, or file-tool containment.
+
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.
 Assign the intended profiles to that role, then reconnect them. The creator or an

@@ -808,6 +808,54 @@ describe("session tool surface", () => {
     ).toEqual(["message", "read"]);
   });
 
+  it.each([false, true])(
+    "separates participation pins across warm and restored turns (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const ceiling = {
+        kind: "send" as const,
+        profileId: "guest",
+        sessionKey: "agent:main:shared",
+        tools: ["read", "ls"],
+      };
+      const creatorPolicy = resolveSessionToolPolicyDigest({}, "main");
+      const participantPolicy = resolveSessionToolPolicyDigest({}, "main", ceiling);
+      expect(participantPolicy).not.toBe(creatorPolicy);
+      expect(
+        resolveSessionToolPolicyDigest({}, "main", {
+          ...ceiling,
+          profileId: "other",
+          tools: ["ls", "read", "read"],
+        }),
+      ).toBe(participantPolicy);
+      const defaultPolicy = resolveSessionToolPolicyDigest({}, "main", {
+        ...ceiling,
+        tools: undefined,
+      });
+      expect(defaultPolicy).not.toBe(participantPolicy);
+      expect(defaultPolicy).not.toBe(creatorPolicy);
+      for (const [policy, offered] of [
+        [participantPolicy, ["ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+        [participantPolicy, ["ls", "read"]],
+        [defaultPolicy, ["exec", "ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+      ] as const) {
+        const tools = surface(
+          offered.map((name) => tool(name)),
+          entries,
+          routeKey,
+          policy,
+        );
+        expect(names(tools)).toEqual(offered);
+        await persist(entries);
+        if (restored) {
+          fixture.reload();
+        }
+      }
+    },
+  );
+
   it("drops pinned tools when the tool policy changes", () => {
     surface([tool("read"), tool("exec")]);
     expect(surface([tool("read")], [], routeKey, "policy-b").map((entry) => entry.name)).toEqual([

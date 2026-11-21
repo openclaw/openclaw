@@ -46,6 +46,7 @@ import {
   type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import { sessionMemberAccessFacts } from "./session-member-access-facts.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
@@ -381,6 +382,7 @@ export function createSqliteSessionActorExecutor(
                       new Set(
                         committed.receipt.postimage.members.map((member) => member.identityId),
                       ),
+                      sessionMemberAccessFacts(committed.receipt.postimage.members),
                     );
                     if (entry && (previousEntry || !metadata?.length)) {
                       // Metadata publication owns initial age facts; later settlement can release claims.
