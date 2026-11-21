@@ -17,7 +17,7 @@ describe("receiver-owned source URLs", () => {
   it.each([
     "//other.example/chat/research/planning",
     "https://other.example/chat/research/planning",
-    "/chat/research/planning?token=x",
+    "/chat/research/planning?q=x",
     "/chat/research/planning#x",
     "/chat/research/../planning",
     "/chat/research/%2E%2E/planning",
@@ -27,18 +27,18 @@ describe("receiver-owned source URLs", () => {
   ])("refuses unbound source path %s", (sourcePath) => {
     expect(sessionShareOriginalUrl(origin, key, sourcePath, "/control")).toBeUndefined();
   });
-  it.each(["//other.example", "/a/../control", "/control?token=x", "/control#x", "/a\\b"])(
+  it.each(["//other.example", "/a/../control", "/control?q=x", "/control#x", "/a\\b"])(
     "refuses a rewritten base path %s",
     (basePath) => {
       expect(sessionShareOriginalUrl(origin, key, path, basePath)).toBeUndefined();
     },
   );
   it.each([
-    "https://user:secret@source.example",
+    "https://user@source.example",
     "https://source.example/path",
     "//source.example",
     "javascript:alert(1)",
-    "https://source.example?token=x",
+    "https://source.example?q=x",
     "https://source.example#x",
   ])("refuses an unapproved origin %s", (value) =>
     expect(sessionShareControlUiOrigin(value)).toBeUndefined(),
