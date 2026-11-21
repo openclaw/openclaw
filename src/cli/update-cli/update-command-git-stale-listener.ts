@@ -74,7 +74,7 @@ export async function recoverStaleGitListener(
       assertCurrent();
       if (firstSignal && getFileLockProcessStartTime(pid, env) !== lock.startTime) {
         throw new Error(
-          "Refusing stale Gateway cleanup: the process start time could not be verified against the profile lock.",
+          "Refusing stale Gateway cleanup: the process start time could not be verified against the profile lock. Inspect `openclaw gateway status --deep` before retrying.",
         );
       }
       firstSignal = false;

@@ -36,7 +36,10 @@ import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js"
 import { recoverStaleGitListener } from "./update-command-git-stale-listener.js";
 import { recordMutableUpdateSignalPhase } from "./update-command-mutable-signals.js";
 import { recordOwedUpdateStep } from "./update-command-owed.js";
-import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
+import {
+  hasRunningGatewayService,
+  observeUpdateGatewayReadiness,
+} from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordServiceReconciliationWarning,
@@ -321,7 +324,7 @@ export async function maybeRestartService(
   };
   let activationAccepted = false;
   let skipFurtherHealthRecovery = false;
-  let updatedInstallRestartNeedsServiceRootProof = false;
+  let needsServiceRootProof = false;
   const verifyRestartedGateway = async (
     opts: Pick<
       Parameters<typeof verifyUpdatedGateway>[0],
@@ -606,7 +609,7 @@ export async function maybeRestartService(
           expectedGatewayVersion = normalizeOptionalString(activation.result.after?.version);
         }
         if (isPackageUpdate) {
-          updatedInstallRestartNeedsServiceRootProof = !canVerifyUpdatedGatewayByVersion;
+          needsServiceRootProof = !canVerifyUpdatedGatewayByVersion;
         }
       }
       if (requiresInstallRootRefresh && (await serviceUsesUpdatedRoot()) !== true) {
@@ -627,6 +630,7 @@ export async function maybeRestartService(
       );
       return healthy ?? (await failed("restart-health-failed"));
     }
+    const requireRunning = needsServiceRootProof || activation.requireRunningServiceAfterRestart;
     let restartHealth: GatewayRestartSnapshot | undefined;
     if (canRestartUpdatedInstall() || (!isPackageUpdate && !activation.skipLegacyServiceRestart)) {
       if (!preserveDefinition) {
@@ -639,6 +643,7 @@ export async function maybeRestartService(
           onReadiness: (health) => {
             if (
               health?.healthy &&
+              (!requireRunning || hasRunningGatewayService(health)) &&
               health.portUsage?.port === activation.gatewayPort &&
               expectedGatewayVersion &&
               health.gatewayVersion === expectedGatewayVersion &&
@@ -662,7 +667,7 @@ export async function maybeRestartService(
       });
       restarted = true;
       activationAccepted = restart === "accepted";
-      if (updatedInstallRestartNeedsServiceRootProof && (await serviceUsesUpdatedRoot()) !== true) {
+      if (needsServiceRootProof && (await serviceUsesUpdatedRoot()) !== true) {
         if (!activation.opts.json) {
           defaultRuntime.log(
             theme.warn("Gateway service did not point at the updated install after restart."),
@@ -674,12 +679,9 @@ export async function maybeRestartService(
       defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
     }
 
-    const shouldVerifyRestart = restarted || activation.requireRunningServiceAfterRestart;
-    if (shouldVerifyRestart) {
-      const requireRunningService =
-        updatedInstallRestartNeedsServiceRootProof || activation.requireRunningServiceAfterRestart;
+    if (restarted || activation.requireRunningServiceAfterRestart) {
       const restartHealthy = await verifyRestartedGateway(
-        { requireRunningService, health: restartHealth },
+        { requireRunningService: requireRunning, health: restartHealth },
         expectedGatewayVersion,
       );
       if (!restartHealthy) {
@@ -705,7 +707,7 @@ export async function maybeRestartService(
         return await serviceDefinitionRefused(refusal);
       }
     }
-    if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {
+    if (err instanceof GatewayRestartHealthError && !needsServiceRootProof) {
       // The installed CLI owns restart retries; observe its final health result
       // without another native mutation.
       const healthy = await verifyRestartedGateway({

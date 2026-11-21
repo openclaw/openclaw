@@ -499,6 +499,7 @@ it.each([
   { activation: "native restart", exhausted: true },
   { activation: "receipt", exhausted: false },
   { activation: "mismatched receipt", exhausted: false },
+  { activation: "stopped receipt", exhausted: false },
   { activation: "service refresh", exhausted: false },
   { activation: "service refresh", exhausted: true },
   { activation: "child readiness timeout", exhausted: true },
@@ -510,9 +511,7 @@ it.each([
     if (childTimeout) {
       command.mockImplementationOnce(async () => {
         restart.monotonicClock.nowMs = 60_000;
-        throw new GatewayRestartHealthError(
-          "Gateway restart timed out after 60s waiting for health checks.",
-        );
+        throw new GatewayRestartHealthError("Gateway restart timed out waiting for health checks.");
       });
     }
     gatewayFixture({ server: { ...candidate, bootId: "slow-boot" } }, { readyAtMs: 90_000 });
@@ -528,6 +527,8 @@ it.each([
         });
         if (activation === "mismatched receipt") {
           health.gatewayBuildId = "previous-build";
+        } else if (activation === "stopped receipt") {
+          health.runtime = { status: "stopped" };
         }
         onReadiness?.(health);
         return "accepted";
@@ -543,7 +544,7 @@ it.each([
     expect(outcome).toBe(pending ? "readiness-pending" : "ok");
     const facts = vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1];
     expect(facts?.versionMatch).toBe(pending ? undefined : true);
-    expect(rpc).toHaveBeenCalledTimes(pending ? 0 : activation === "mismatched receipt" ? 2 : 1);
+    expect(rpc).toHaveBeenCalledTimes(pending ? 0 : activation.endsWith(" receipt") ? 2 : 1);
   },
 );
 

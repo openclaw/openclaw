@@ -224,7 +224,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         spyOnLease().mockImplementation(unreadable);
         const kill = spyOnSignal().mockReturnValue(true);
         const controller = new AbortController();
-        const wait = withCommandProcessScope(waitForHandoff, controller.signal);
+        const wait = withCommandProcessScope(() => waitForHandoff(), controller.signal);
         await vi.advanceTimersByTimeAsync(1_000);
         controller.abort();
         await expect(wait).rejects.toThrow();
