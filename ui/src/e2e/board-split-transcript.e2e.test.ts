@@ -10,7 +10,7 @@ const suite = createBoardE2eSuite("Board split transcript restore", { sandbox: f
 const viewport = { width: 1400, height: 900 };
 
 async function newPage(size = viewport) {
-  return { page: await suite.newPage({ viewport: size }) };
+  return { page: await suite.newPage({ viewport: size, locale: "en-US" }) };
 }
 
 async function retainDashboard(page: Page) {
@@ -151,7 +151,7 @@ async function expectMinimizedDashboard(page: Page) {
 
 suite.define(() => {
   it("repaints the transcript after expanded -> split", async () => {
-    const { page } = await newPage();
+    const { page } = await newPage({ width: 1920, height: 1080 });
     const now = Date.now();
     await installBoard(page, ["chat.history"], {
       historyMessages: Array.from({ length: 40 }, (_, index) => ({
@@ -165,7 +165,12 @@ suite.define(() => {
     await page.locator(".board-session-surface").waitFor();
     await page.getByText("Message number 39:").first().waitFor({ timeout: 15_000 });
 
+    const marker = page.locator(".chat-position-rail__marker").first();
+    await marker.waitFor({ state: "visible" });
+
     await focusChatSidePanel(page);
+    await expect.poll(() => marker.isVisible()).toBe(false);
+    expect(await marker.count()).toBe(1);
     await expect
       .poll(async () => (await visibleTranscriptState(page)).intersectingRows, { timeout: 5_000 })
       .toBe(0);
@@ -183,6 +188,7 @@ suite.define(() => {
       .getByText("Message number 39:")
       .first()
       .waitFor({ state: "visible", timeout: 2_000 });
+    await marker.waitFor({ state: "visible" });
   }, 120_000);
 
   it("keeps adjacent chat rows separated throughout a real dashboard-panel resize", async () => {

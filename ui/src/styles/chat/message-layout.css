@@ -35,7 +35,7 @@
 
 .chat-position-rail[data-overflow] {
   opacity: 1;
-  visibility: visible;
+  visibility: inherit;
 }
 
 .chat-thread[data-restoring] > .chat-position-rail {
