@@ -20,6 +20,11 @@ import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import {
+  isNamedOperatorRoleEnforcementEnabled,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
+import {
+  resolveOperatorRolePolicy,
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
@@ -166,13 +171,13 @@ export function resolveProjectedControlUiSessionPrTarget(
 
 /** Audience and lineage are part of snapshot identity, never inherited from another viewer. */
 function withControlUiTaskPrTarget(
-  target: ControlUiSessionPrTarget | undefined,
+  target: ControlUiSessionPrTarget,
   projection: SessionRowProjection,
   root: EntryRow,
   getAllows: Parameters<typeof prepareTaskPublicationSessions>[2],
   ownerProfileId?: string,
-): ControlUiSessionPrTarget | undefined {
-  if (!target || root.entry.incognito || isIncognitoSessionKey(root.key)) {
+): ControlUiSessionPrTarget {
+  if (root.entry.incognito || isIncognitoSessionKey(root.key)) {
     return target;
   }
   const selected = {
@@ -190,10 +195,7 @@ function withControlUiTaskPrTarget(
     branchIdentity: target.branchIdentity ?? target.identity,
     taskReceipts,
     identity: JSON.stringify([target.identity, JSON.stringify(taskReceipts)]),
-    assertCurrent: () => {
-      target.assertCurrent?.();
-      selection.assertCurrent();
-    },
+    assertCurrent: selection.assertCurrent,
   };
 }
 
@@ -231,7 +233,6 @@ export async function prepareControlUiSessionPrServiceTarget(
         ? {
             ...target,
             assertCurrent: () => {
-              target.assertCurrent?.();
               if (
                 getProjection() !== projection ||
                 projection.capture(lookup) !== record ||
@@ -301,6 +302,7 @@ export function createControlUiSessionPrRead(params: {
         sharing: object | undefined;
         configRevision: ReturnType<typeof getRuntimeConfigSnapshotMetadata>;
         profileVersion: number;
+        member: boolean;
         profile: GatewayClient["preparedSessionProfile"];
         assertAgentAdmitted: () => void;
       }
@@ -342,6 +344,7 @@ export function createControlUiSessionPrRead(params: {
       const sharing = projection.sharingRevision;
       const configRevision = getRuntimeConfigSnapshotMetadata();
       const profileVersion = readUserProfileVersion();
+      const member = operatorRoleSubject(client.preparedSessionProfile).openclawIdMember;
       if (
         capture &&
         sharing &&
@@ -349,9 +352,13 @@ export function createControlUiSessionPrRead(params: {
         capture.cfg === cfg &&
         capture.configRevision === configRevision &&
         capture.profileVersion === profileVersion &&
+        capture.member === member &&
         capture.profile === client.preparedSessionProfile &&
         !client.internal?.operatorRunAuthority &&
-        (!cfg.gateway?.roles ||
+        (!(
+          isNamedOperatorRoleEnforcementEnabled(cfg) ||
+          resolveOperatorRolePolicy(client, cfg) !== undefined
+        ) ||
           actorKind === "system" ||
           (actorProfile && client.preparedSessionProfile?.aliases.has(actorProfile)))
       ) {
@@ -404,6 +411,7 @@ export function createControlUiSessionPrRead(params: {
         sharing,
         configRevision,
         profileVersion,
+        member,
         profile: client.preparedSessionProfile,
         assertAgentAdmitted: captureAgentDatabaseAdmission(requested.agentId),
       };
@@ -494,9 +502,7 @@ export function createControlUiSessionPrRead(params: {
         },
         actorProfile,
       );
-      return target
-        ? { target, repository, projectedIdentity: projectedTarget.identity }
-        : undefined;
+      return { target, repository, projectedIdentity: projectedTarget.identity };
     } catch (error) {
       if (error instanceof SessionRowFactsPending) {
         throw error;

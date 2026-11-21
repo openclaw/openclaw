@@ -1,5 +1,10 @@
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
+import {
+  CORE_TOOL_DEFINITIONS,
+  isKnownCoreToolId,
+  isPluginBuiltCoreToolId,
+} from "../../agents/core-tool-facts.js";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
@@ -15,6 +20,23 @@ function registeredPluginIds(key: "webFetchProviderIds" | "webSearchProviderIds"
 }
 
 describe("plugin contract registry", () => {
+  it("marks exactly the catalog ids bundled plugins build as plugin-built", () => {
+    // A manifest may claim only plugin-built ids, so an unmarked id here would break that
+    // plugin's fork grant, and a marked id that core builds would be claimable by any plugin.
+    const claimed = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) => entry.toolNames).filter(
+        isKnownCoreToolId,
+      ),
+    );
+    const marked = CORE_TOOL_DEFINITIONS.filter((tool) => isPluginBuiltCoreToolId(tool.id)).map(
+      (tool) => tool.id,
+    );
+    expect(marked.toSorted()).toEqual([...claimed].toSorted());
+    for (const id of ["exec", "read", "sessions_create", "skills_search", "skills_read"]) {
+      expect(isPluginBuiltCoreToolId(id), id).toBe(false);
+    }
+  });
+
   function expectUniqueIds(ids: readonly string[]) {
     expect(ids).toEqual([...new Set(ids)]);
   }
@@ -133,7 +155,6 @@ describe("plugin contract registry", () => {
     const plugin = registry.plugins.find(
       (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
     );
-
     expect(plugin?.providerAuthChoices).toEqual([
       {
         provider: "github-copilot",
@@ -146,6 +167,7 @@ describe("plugin contract registry", () => {
         choiceLabel: "GitHub Copilot",
         choiceHint: "Device login with your GitHub account",
         assistantPriority: 1,
+        onboardingFeatured: true,
         groupId: "copilot",
         groupLabel: "Copilot",
         groupHint: "GitHub, GitHub Enterprise + Local Proxy",

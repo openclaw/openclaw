@@ -90,7 +90,7 @@ After a Gateway update, already-open tabs reload the current build when they enc
 
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker caches matching current-build public URLs for offline reuse.
 
-The build precompresses bundled assets of at least 4 KiB into Brotli and gzip
+The build precompresses bundled assets of at least 16 KiB into Brotli and gzip
 sidecars, keeping each sidecar only when it is smaller than the original. CSS
 and the startup assets measured by the performance gate are compressed at any
 size. This limits file counts in installed packages while preserving startup
@@ -98,7 +98,8 @@ transfer costs. Missing sidecars fall back to the
 original asset without on-the-fly compression; performance budgets count those
 identity bytes. Gzip uses
 the pinned, build-only libdeflate WebAssembly encoder at level 12 rather than a
-host-native library. Brotli remains at quality 10. Both encode the final emitted
+host-native library. Brotli uses quality 11 for startup assets and `sw.js`, and
+quality 10 otherwise. Both encode the final emitted
 asset bytes; no decompressor is added to the browser bundle. Compare gzip size
 and encoder CPU/wall time on an existing build with
 `node ui/scripts/bench-gzip.mjs dist/control-ui 5`. This serial, interleaved
@@ -109,6 +110,12 @@ request does not read the original and gzip bodies. Cold file admission and read
 run in a worker so simultaneous page loads do not block chat delivery. Custom
 roots continue to read current files on each request. Rewritten index documents
 use a separate bounded compression cache.
+
+For direct fingerprinted JavaScript and CSS assets, the bundled root retains one
+asynchronous directory listing to skip known-absent compressed variants. Source
+files and present variants still pass through canonical file admission. If the
+listing fails or a path is uncertain, the Gateway probes variants normally.
+Disabling the Control UI or stopping the root retires the listing with its asset cache.
 
 Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
 

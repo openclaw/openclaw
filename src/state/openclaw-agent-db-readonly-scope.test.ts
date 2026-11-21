@@ -323,11 +323,11 @@ it("keeps one connection while nested reads retain independent committed snapsho
 
 it.each(["successor", "omitted"] as const)(
   "reopens a reader with revoked admission when its next receipt is %s",
-  (nextReceipt) => {
+  async (nextReceipt) => {
     const options = { agentId: "main", env: state.env };
     const owner = openAgentDb(options);
     const target = { agentId: owner.agentId, path: owner.path };
-    const initial = captureOpenClawAgentDatabaseReadValidation(owner);
+    const initial = await captureOpenClawAgentDatabaseReadValidation(owner);
     if (!initial) {
       throw new Error("Expected the owner's initial read validation");
     }
@@ -352,7 +352,7 @@ it.each(["successor", "omitted"] as const)(
     invalidateOpenClawAgentDatabaseValidation(owner.path);
     expect(Atomics.load(new Int32Array(initial.validation.valid), 0)).toBe(0);
     setOpenClawAgentDatabaseValidation(owner);
-    const successor = captureOpenClawAgentDatabaseReadValidation(owner);
+    const successor = await captureOpenClawAgentDatabaseReadValidation(owner);
     if (!successor) {
       throw new Error("Expected the owner's successor read validation");
     }

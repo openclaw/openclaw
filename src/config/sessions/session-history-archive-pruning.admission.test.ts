@@ -24,6 +24,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
@@ -109,8 +110,12 @@ function interceptArchives(
   vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
     <T>(...args: Parameters<typeof withPages<T>>) => {
       const [input, run] = args;
-      return withPages(input, (reclaim, assertCurrent, options, archives) =>
-        run(reclaim, assertCurrent, options, wrap(archives, options)),
+      return withPages(
+        input,
+        (reclaim, assertCurrent, options, archives) =>
+          run(reclaim, assertCurrent, options, wrap(archives, options)),
+        args[2],
+        args[3],
       );
     },
   );
@@ -480,6 +485,67 @@ it.each(["reader", "writer"] as const)(
     }
   },
 );
+
+it("admits queued foreground writes before the next archive page reclaim pass", async () => {
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  seedFreePages(database, "page-priority", 4 * 1024 * 1024);
+  const before = freePages(database);
+  const order: string[] = [];
+  await own(
+    pageReclamation.withSqliteSessionPageReclamation(
+      options,
+      async (reclaim, _current, prepared) => {
+        expect(await reclaim(1)).toMatchObject({ vacuumPagesRequested: 1 });
+        const { entered, release } = gate();
+        const holder = own(
+          runExclusiveSqliteSessionWrite(
+            prepared,
+            async () => {
+              entered.resolve();
+              await release.promise;
+            },
+            "session.transcript.batch",
+          ),
+        );
+        await entered.promise;
+        const requested = createDeferred();
+        const write = writeAdmission.runOpenClawAgentWorkerWrite;
+        vi.spyOn(writeAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
+          <T>(...args: Parameters<typeof write<T>>) => {
+            if (args[2]?.operationLabel === "session.history.free-pages") {
+              const run = args[1];
+              args[1] = () => {
+                order.push("reclaim");
+                return run();
+              };
+            }
+            const result = write(...args);
+            if (args[2]?.operationLabel === "session.history.free-pages") {
+              requested.resolve();
+            }
+            return result;
+          },
+        );
+        const next = own(reclaim(1));
+        await requested.promise;
+        const foreground = own(
+          runExclusiveSqliteSessionWrite(
+            prepared,
+            async () => {
+              order.push("foreground");
+            },
+            "session.transcript.batch",
+          ),
+        );
+        release.resolve();
+        await Promise.all([holder, foreground, next]);
+        expect(order).toEqual(["foreground", "reclaim"]);
+        expect(before - freePages(database)).toBe(2);
+      },
+    ),
+  );
+});
 
 it("bounds broker page reclamation and stops when its owner is revoked between units", async () => {
   const options = { agentId: "main", env: state.env };

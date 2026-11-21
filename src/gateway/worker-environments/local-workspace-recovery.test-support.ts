@@ -45,8 +45,11 @@ export async function proveRejectedWorkspaceCheckpoint(
   // Model an old, already-staged result refused by reconciliation admission.
   const admission = vi
     .spyOn(staging, "stageWorkerWorkspaceResult")
-    .mockImplementationOnce(async (params) => {
-      await stage(params);
+    .mockImplementation(async (params) => {
+      const result = await stage(params);
+      if (params.blobsOnly) {
+        return result;
+      }
       throw Object.assign(
         new Error("Result changes too many files; add build outputs to .gitignore"),
         {
@@ -292,7 +295,6 @@ export async function proveAggregateWorkspaceRecovery({
       "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
   );
   const sourceText = "authored edit survives aggregate recovery\n";
-  await fs.writeFile(path.join(projection, ".gitignore"), ".env.local\n**/bin/\n**/obj/\n");
   for (const relative of artifacts) {
     const file = path.join(projection, relative);
     await fs.mkdir(path.dirname(file), { recursive: true });

@@ -26,6 +26,7 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
@@ -246,6 +247,7 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
     } = await callGateway({
       method: "tts.providers",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
     return {
       ...payload,
@@ -290,6 +292,7 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
     return await callGateway({
       method: "tts.personas",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
   const cfg = await captureRuntimeConfigAsyncReader()();
@@ -336,6 +339,7 @@ export async function runTtsStateMutation(params: {
             ? { persona: params.persona ?? "off" }
             : undefined,
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
 
@@ -362,7 +366,7 @@ export async function runTtsStateMutation(params: {
     return { persona: persona.id };
   }
   if (!params.provider) {
-    throw new Error("--provider is required");
+    throwExpectedCliError("--provider is required");
   }
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
   if (!provider) {

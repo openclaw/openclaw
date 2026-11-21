@@ -7,11 +7,8 @@ import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnInput,
-  UserTurnMessagePersistenceParams,
-} from "./user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
+import type { UserTurnMessagePersistenceParams } from "./user-turn-transcript.types.js";
 
 const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
@@ -67,6 +64,9 @@ export function buildPersistedUserTurnMetadata(
     : undefined;
   return {
     ...(requesterOrigin ? { requesterOrigin } : {}),
+    ...(input.subagentCompletions?.length
+      ? { subagentCompletions: input.subagentCompletions.map((completion) => ({ ...completion })) }
+      : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}
@@ -83,6 +83,7 @@ export function buildPersistedUserTurnMetadata(
     ...(input.mentions?.length
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
       : {}),
+    ...(input.humanAddressed ? { humanAddressed: true } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
@@ -195,6 +196,10 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   if (preparedMeta?.humanMentions !== undefined && contentUnchanged) {
     runtimeMeta.humanMentions = preparedMeta.humanMentions;
   }
+  delete runtimeMeta.humanAddressed;
+  if (preparedMeta?.humanAddressed === true) {
+    runtimeMeta.humanAddressed = true;
+  }
   delete nextMessage["__openclaw"];
   if (Object.keys(runtimeMeta).length > 0) {
     nextMessage["__openclaw"] = runtimeMeta;
@@ -270,6 +275,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     : undefined;
   const originalTransport = originalMeta?.transport;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(originalMeta?.steerTargetRunId);
+  const humanAddressed = originalMeta?.humanAddressed === true;
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
@@ -328,6 +334,11 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {
     protectedMeta.steerTargetRunId = steerTargetRunId;
+  }
+  // Admission already skipped the agent turn; a rewrite cannot make the row disturb an active one.
+  delete protectedMeta.humanAddressed;
+  if (humanAddressed) {
+    protectedMeta.humanAddressed = true;
   }
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,

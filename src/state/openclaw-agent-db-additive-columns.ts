@@ -5,7 +5,7 @@ type BareNullableSqliteDatatype = "INTEGER" | "TEXT";
 type LazyAdditiveAgentColumnDefinition = {
   columnName: string;
   dataType: BareNullableSqliteDatatype;
-  tableName: "session_nodes" | "session_key_contract";
+  tableName: "session_nodes" | "session_key_contract" | "session_pending_inputs";
 };
 
 // Session responsibility is feature-local and remains absent until the first

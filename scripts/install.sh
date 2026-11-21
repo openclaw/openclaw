@@ -231,6 +231,19 @@ has_visible_prompt_output() {
     [[ -t 1 ]]
 }
 
+# Prints the controlling terminal's own device, such as /dev/ttys003, for OpenClaw stdin.
+# macOS resolves /dev/tty against the caller's session on every use, so a detached
+# Node grandchild that inherits it aborts at startup (#200244). The device keeps working.
+controlling_tty_path() {
+    local name=""
+    name="$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')" || true
+    if [[ -n "$name" && -c "/dev/$name" && -r "/dev/$name" && -w "/dev/$name" ]]; then
+        echo "/dev/$name"
+    else
+        echo "/dev/tty"
+    fi
+}
+
 resolve_subprocess_stdin_path() {
     local prompt_output_visible="${1:-0}"
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
@@ -241,7 +254,7 @@ resolve_subprocess_stdin_path() {
         return 1
     fi
     if has_controlling_tty && [[ "$prompt_output_visible" == "1" ]]; then
-        echo "/dev/tty"
+        controlling_tty_path
     else
         echo "/dev/null"
     fi
@@ -3409,7 +3422,7 @@ retire_git_wrapper_after_npm_install() {
     ui_success "Previous git wrapper retired"
 }
 
-# These metadata documents contain only objects and unescaped ASCII strings.
+# Metadata uses objects, unescaped ASCII strings, and boolean values.
 # Reject other JSON forms and duplicate keys instead of guessing their meaning.
 bun_metadata_string() {
     LC_ALL=C awk -v wanted="$2" '
@@ -3420,9 +3433,13 @@ bun_metadata_string() {
             if (match(json, /^[ \t\r\n]+/)) { json=substr(json,RLENGTH+1); continue }
             if (done) fail()
             quoted=match(json, /^"[A-Za-z0-9_.+\/-]*"/)
+            boolean=!quoted && match(json, /^(true|false)/)
             token=quoted ? substr(json,2,RLENGTH-2) : substr(json,1,1)
-            json=substr(json,quoted ? RLENGTH+1 : 2)
-            if (quoted) {
+            json=substr(json,(quoted || boolean) ? RLENGTH+1 : 2)
+            if (boolean) {
+                if (!depth || state[depth]!="value") fail()
+                state[depth]="end"
+            } else if (quoted) {
                 if (!depth) fail()
                 if (state[depth]=="first" || state[depth]=="key") {
                     if (token ~ /\// || seen[path[depth] "/" token]++) fail()
@@ -3780,7 +3797,7 @@ install_with_bun() {
         run_quiet_step "Pinning existing Gateway to Bun" "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
     elif [[ "$NO_ONBOARD" != 1 ]] && ! has_openclaw_config; then
         if is_promptable; then
-            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun </dev/tty
+            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun <"$(controlling_tty_path)"
             # Onboarding has no runtime-path option; record the exact fork now.
             "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
         else
@@ -3920,18 +3937,6 @@ main() {
     OPENCLAW_BIN="$(resolve_installed_openclaw_bin || true)"
     warn_duplicate_openclaw_global_installs || true
 
-    # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
-    local npm_bin=""
-    npm_bin="$(npm_global_bin_dir || true)"
-    if [[ "$INSTALL_METHOD" == "npm" ]]; then
-        warn_shell_path_missing_dir "$npm_bin" "npm global bin dir"
-    fi
-    if [[ "$INSTALL_METHOD" == "git" ]]; then
-        if [[ -x "$HOME/.local/bin/openclaw" ]]; then
-            warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir (~/.local/bin)"
-        fi
-    fi
-
     local config_present=false defer_success=false
     if has_openclaw_config; then
         config_present=true
@@ -3962,7 +3967,7 @@ main() {
             if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
             else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty || doctor_exit=$?
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" <"$(controlling_tty_path)" || doctor_exit=$?
             fi
             if (( doctor_exit == 130 )); then
                 abort_install_int
@@ -4014,15 +4019,34 @@ main() {
         return 1
     fi
 
+    # Keep caller-shell setup separate from PATH changes in this child process.
+    local shell_bin="" shell_bin_label=""
+    if [[ "$INSTALL_METHOD" == "npm" ]]; then
+        shell_bin="$(npm_global_bin_dir || true)"
+        shell_bin_label="npm global bin dir"
+    elif [[ -x "$HOME/.local/bin/openclaw" ]]; then
+        shell_bin="$HOME/.local/bin"
+        shell_bin_label="user-local bin dir (~/.local/bin)"
+    fi
+    local shell_setup_needed=false
+    if [[ -n "$shell_bin" ]] && ! path_has_dir "$ORIGINAL_PATH" "$shell_bin"; then
+        shell_setup_needed=true
+    fi
+
     local installed_version=""
     installed_version="$(resolve_openclaw_version)"
     echo ""
-    if [[ -n "$installed_version" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        ui_warn "Installed; one shell setup step remains${installed_version:+ (${installed_version})}"
+    elif [[ -n "$installed_version" ]]; then
         ui_celebrate "🦞 OpenClaw installed successfully (${installed_version})!"
     else
         ui_celebrate "🦞 OpenClaw installed successfully!"
     fi
-    if [[ "$is_upgrade" == "true" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        echo "  A piped installer cannot change its parent shell environment."
+        warn_shell_path_missing_dir "$shell_bin" "$shell_bin_label"
+    elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"
     else
         local completion_messages=(
@@ -4071,7 +4095,7 @@ main() {
                     warn_openclaw_not_found
                     return 0
                 fi
-                exec </dev/tty
+                exec <"$(controlling_tty_path)"
                 exec "$claw" onboard
             fi
             local user_claw

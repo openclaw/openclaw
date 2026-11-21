@@ -24,7 +24,7 @@ export type WarmReloadFixtureOptions = {
   dashboardPaneChrome?: boolean;
   pluginActivation?: boolean;
   detailsSessionFacts?: boolean;
-  detailsSubagentActivity?: boolean;
+  detailsSubagentActivity?: number;
   activeTargets?: boolean;
   composerControls?: boolean;
   admission?: Pick<
@@ -417,7 +417,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       label: index === 0 ? "Warm reload verification" : "Reload proof dashboard",
     }));
     const ordinaryChildren = options.detailsSubagentActivity
-      ? Array.from({ length: 2 }, (_, index) => ({
+      ? Array.from({ length: options.detailsSubagentActivity - 1 }, (_, index) => ({
           key: `agent:${agentId}:chat:cd000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
           id: `warm-proof-child-${index}`,
           label: `Synthetic child review ${index + 1}`,
@@ -586,23 +586,25 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           });
         }, database);
       }
-      agentDb.runOpenClawAgentWriteTransaction((owner) => {
-        for (const [index, child] of ordinaryChildren.entries()) {
-          entries.writeSessionEntry(owner, child.key, {
-            sessionId: child.id,
-            label: child.label,
-            displayName: child.label,
-            parentSessionKey: targets[0]!.key,
-            parentSessionId: targets[0]!.id,
-            spawnedBy: targets[0]!.key,
-            createdAt: now - 60_000 + index,
-            startedAt: now - 60_000 + index,
-            endedAt: now - 30_000 + index,
-            updatedAt: now - 30_000 + index,
-            status: "done",
-          });
-        }
-      }, database);
+      if (ordinaryChildren.length) {
+        agentDb.runOpenClawAgentWriteTransaction((owner) => {
+          for (const [index, child] of ordinaryChildren.entries()) {
+            entries.writeSessionEntry(owner, child.key, {
+              sessionId: child.id,
+              label: child.label,
+              displayName: child.label,
+              parentSessionKey: targets[0]!.key,
+              parentSessionId: targets[0]!.id,
+              spawnedBy: targets[0]!.key,
+              createdAt: now - 60_000 + index,
+              startedAt: now - 60_000 + index,
+              endedAt: now - 30_000 + index,
+              updatedAt: now - 30_000 + index,
+              status: "done",
+            });
+          }
+        }, database);
+      }
       const targetKeys = new Set(targets.map((target) => target.key));
       const inventory = Object.entries(
         entries.readSessionEntryStore(agentDb.openOpenClawAgentDatabase(database)),

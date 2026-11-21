@@ -1,6 +1,4 @@
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.entry.js";
@@ -10,6 +8,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../../../test-utils/retention.js";
 import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
@@ -131,12 +130,12 @@ it.each(["completion", "permission change"] as const)(
       const signal = fixture.result.toolAbortSignal;
       let reasonAtAbort: unknown;
       signal.addEventListener("abort", () => (reasonAtAbort = signal.reason), { once: true });
-      await new RetiringRun().settle(fixture.result);
-      return { signal, reasonAtAbort };
+      const run = new RetiringRun();
+      await run.settle(fixture.result);
+      return { signal, reasonAtAbort, run: new WeakRef(run) };
     })();
     // Error matchers can materialize the lazy stack and hide the retained caller.
-    await nextTurn();
-    expect(queryObjects(RetiringRun)).toBe(0);
+    await expectCollected(retained.run);
     expect(retained.signal.aborted).toBe(true);
     expect(retained.signal.reason).toBe(retained.reasonAtAbort);
     if (outcome === "completion") {

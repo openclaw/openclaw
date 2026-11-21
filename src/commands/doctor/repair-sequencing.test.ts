@@ -97,7 +97,7 @@ describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasDeferredRetirement.mockReturnValue(false);
-    mocks.applyPluginAutoEnable.mockImplementation(unchangedConfig);
+    mocks.applyPluginAutoEnableAsync.mockImplementation(unchangedConfig);
     mocks.materializePluginAutoEnableCandidates.mockImplementation(unchangedConfig);
     mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.evaluateStoredCredentialEligibility.mockReturnValue({ eligible: true, reasonCode: "ok" });
@@ -338,14 +338,15 @@ describe("doctor repair sequencing", () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce(
       installedPlugin("brave", "@openclaw/brave-plugin"),
     );
-    mocks.applyPluginAutoEnable.mockImplementationOnce(({ config }: { config: OpenClawConfig }) =>
-      mutation(
-        {
-          ...config,
-          plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
-        },
-        "brave web search provider selected, enabled automatically.",
-      ),
+    mocks.applyPluginAutoEnableAsync.mockImplementationOnce(
+      ({ config }: { config: OpenClawConfig }) =>
+        mutation(
+          {
+            ...config,
+            plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
+          },
+          "brave web search provider selected, enabled automatically.",
+        ),
     );
 
     const result = await runRepairs({
@@ -383,7 +384,7 @@ describe("doctor repair sequencing", () => {
       },
     });
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+    expect(mocks.applyPluginAutoEnableAsync).toHaveBeenCalledWith(
       expect.objectContaining({ manifestRegistry }),
     );
   });

@@ -6,10 +6,11 @@ import { liveValue } from "../lib/reactive/live-value.ts";
 import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import {
   ConfigCollectionDraft,
+  createCollectionDraftSource,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import { configLabelInContext } from "./config-form.label-context.ts";
 import {
   configChildRenderOptions,
@@ -199,33 +200,12 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
     batch: 5,
     enabled: () => props.params.progressive === true,
   });
-  let localEdit: { expected: unknown; retained: unknown } | undefined;
-  let sourceRevision = 0;
-  let sourceSnapshot: { source: unknown; revision: number } | undefined;
-  const draftSource = createMemo(() => {
-    const source = props.params.sourceIdentity ?? props.params.value;
-    if (localEdit && configValuesEqual(source, localEdit.expected)) {
-      return localEdit.retained;
-    }
-    // Returning to the pre-edit value is still an external context change.
-    // Keep its reset distinct from the retained source, without changing draft ownership.
-    if (localEdit) {
-      sourceRevision += 1;
-      localEdit = undefined;
-    }
-    // Unset maps use a symbol, which cannot survive JSON equality in a cloned wrapper.
-    if (
-      !sourceSnapshot ||
-      !Object.is(sourceSnapshot.source, source) ||
-      sourceSnapshot.revision !== sourceRevision
-    ) {
-      sourceSnapshot = { source, revision: sourceRevision };
-    }
-    return sourceSnapshot;
-  });
+  const draftSource = createCollectionDraftSource(
+    () => props.params.sourceIdentity ?? props.params.value,
+  );
   const patchChild: MapParams["onPatch"] = (path, value) => {
     const root = props.params.path;
-    const previous = localEdit;
+    const dispatch = () => props.params.onPatch(path, value);
     if (path.length > root.length && root.every((segment, index) => path[index] === segment)) {
       const next = copyWithPathPatch(
         props.params.value,
@@ -234,15 +214,10 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         "copy-set",
       );
       if (next.ok) {
-        // The parent may synchronously render; record this exact local result before dispatch.
-        localEdit = { expected: next.value, retained: draftSource() };
+        return draftSource.editEntry(next.value, dispatch);
       }
     }
-    const accepted = props.params.onPatch(path, value);
-    if (accepted === false) {
-      localEdit = previous;
-    }
-    return accepted;
+    return dispatch();
   };
   const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
@@ -318,7 +293,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         </div>
         <ConfigCollectionDraft
           {...content().draftProps}
-          sourceIdentity={draftSource()}
+          sourceIdentity={draftSource.draftSource()}
           id={content().draftId}
           ref={(handle) => (draft = handle)}
           onCommit={({ key, value }) =>

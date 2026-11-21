@@ -79,6 +79,10 @@ export function installPaneChromeProbe() {
             ),
             visible: box.height > 0 && box.top < panelBox.bottom && box.bottom > panelBox.top,
             nodes: section.querySelectorAll("*").length,
+            activityRows:
+              section.getAttribute("data-details-group") === "subagents"
+                ? section.querySelectorAll(".chat-subagent-activity__row").length
+                : undefined,
             images: Array.from(section.querySelectorAll("img")).map((image) => ({
               loaded: image.complete && image.naturalWidth > 0,
               src: image.getAttribute("src"),

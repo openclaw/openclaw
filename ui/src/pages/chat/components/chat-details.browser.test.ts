@@ -7,6 +7,12 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { captureChatDetailsSnapshot } from "../chat-details-snapshot.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "../session-message-cache.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -134,6 +140,53 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("retains docking after connection admits geometry measured while offline", async () => {
+    await page.viewport(1700, 900);
+    stubResizeObserver();
+    try {
+      const chatMessagesBySession: ChatMessageCache = new Map();
+      const host = {
+        assistantAgentId: "main",
+        chatMessagesBySession,
+        sessionKey: card.sessionKey,
+        currentSessionId: "details-1",
+        connected: false,
+        connectionEpoch: 0,
+        settings: { gatewayUrl: "wss://details.example" },
+        client: { recoveryScope: "account-a", recoveryScopeReady: true },
+      };
+      const target = { sessionKey: card.sessionKey };
+      cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, {
+        messages: [],
+        pagination: { hasMore: false },
+        sessionId: host.currentSessionId,
+      });
+      const view = await fixture(
+        props({ connected: false, onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write }),
+        1320,
+        false,
+        "desktop",
+        true,
+      );
+      const layout = JSON.stringify([1700]);
+      view.update({ dockingLayout: layout });
+      window.dispatchEvent(new Event("resize"));
+      flush();
+      const saved = () => readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+      expect(saved()?.details?.docking).toBeUndefined();
+
+      host.connected = true;
+      view.updateChat({
+        connected: true,
+        onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write,
+      });
+      flush();
+      expect(saved()?.details?.docking).toEqual({ layout, wide: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps unchanged resize targets and observes replaced refs in the same layout object", async () => {
     await page.viewport(1700, 900);
     const view = await fixture(props(), 1320, false, "desktop", true);
@@ -243,7 +296,7 @@ describe("chat Details presentation", () => {
   );
 
   it.each(["transcript paint", "explicit open"] as const)(
-    "holds automatic content until %s and retains it through later hydration",
+    "keeps automatic Details quiet until %s and retains it through later hydration",
     async (release) => {
       // A cold lazy import must not accidentally satisfy the initial hold assertion.
       await import("./chat-details-session.tsx");
@@ -261,17 +314,34 @@ describe("chat Details presentation", () => {
         panel.getBoundingClientRect().left,
       );
       expect(panel.querySelector(".chat-details-session")).toBeNull();
+      expect(getComputedStyle(panel).visibility).toBe("hidden");
+      expect(getComputedStyle(panel).opacity).toBe("0");
 
       if (release === "transcript paint") {
         update({ contentPending: false });
       } else {
         open(trigger);
       }
+      flush();
+      const fade = panel
+        .getAnimations()
+        .find(
+          (animation) =>
+            animation instanceof CSSTransition && animation.transitionProperty === "opacity",
+        );
+      expect(fade).toBeDefined();
+      fade!.pause();
+      fade!.currentTime = Number(fade!.effect!.getTiming().duration) / 2;
+      expect(Number(getComputedStyle(panel).opacity)).toBeGreaterThan(0);
+      expect(Number(getComputedStyle(panel).opacity)).toBeLessThan(1);
+      fade!.finish();
       await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+      expect(getComputedStyle(panel).visibility).toBe("visible");
       const session = panel.querySelector(".chat-details-session");
       update({ contentPending: true });
       flush();
       expect(panel.querySelector(".chat-details-session")).toBe(session);
+      expect(getComputedStyle(panel).visibility).toBe("visible");
       expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     },
   );

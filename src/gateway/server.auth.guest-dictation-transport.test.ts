@@ -1,6 +1,6 @@
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
@@ -28,8 +28,11 @@ import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-test("guest revocation and discard do not flush queued audio or gracefully finalize the vendor stream", async () => {
-  const origin = "https://control.example.com";
+const origin = "https://control.example.com";
+let guestProfileId: string;
+
+// Keep profile preparation outside the transport assertion deadline.
+beforeEach(async () => {
   const auth: GatewayAuthConfig = {
     mode: "trusted-proxy",
     identityScopes: { "dictation@example.com": ["operator.sessions.write"] },
@@ -54,9 +57,19 @@ test("guest revocation and discard do not flush queued audio or gracefully final
       },
     },
   });
-  const guest = ensureProfileForEmail("dictation@example.com");
-  setUserProfileRole(guest.id, "guest");
-  const guestProfileId = guest.id;
+  guestProfileId = ensureProfileForEmail("dictation@example.com").id;
+  setUserProfileRole(guestProfileId, "guest");
+});
+
+test("guest revocation and discard do not flush queued audio or gracefully finalize the vendor stream", async ({
+  onTestFailed,
+}) => {
+  const started = performance.now();
+  const phases: string[] = [];
+  const mark = (phase: string) =>
+    phases.push(`${Math.round(performance.now() - started)}ms ${phase}`);
+  onTestFailed(() => console.error("[guest-dictation-transport-phase]", phases.join(" -> ")));
+  mark("vendor-setup");
   const vendor = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve) => {
     vendor.once("listening", resolve);
@@ -124,7 +137,9 @@ test("guest revocation and discard do not flush queued audio or gracefully final
   setTestPluginRegistry(registry);
   const identityDir = tempDirs.make("openclaw-guest-dictation-wire-");
   try {
+    mark("gateway-start");
     await withGatewayServer(async ({ port }) => {
+      mark("session-setup");
       const sessionKey = "agent:main:guest-dictation-wire";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -136,6 +151,7 @@ test("guest revocation and discard do not flush queued audio or gracefully final
           visibility: "shared",
         },
       );
+      mark("client-connect");
       const ws = await openWs(port, {
         origin,
         "x-forwarded-for": "203.0.113.7",
@@ -154,8 +170,9 @@ test("guest revocation and discard do not flush queued audio or gracefully final
             })
           ).ok,
         ).toBe(true);
-        const start = async () => {
+        const start = async (label: string) => {
           nextVendor = Promise.withResolvers<VendorConnection>();
+          mark(`${label}-create-rpc`);
           const created = await rpcReq<{ sessionId: string }>(ws, "talk.session.create", {
             sessionKey,
             mode: "transcription",
@@ -163,10 +180,11 @@ test("guest revocation and discard do not flush queued audio or gracefully final
             brain: "none",
           });
           expect(created.ok).toBe(true);
+          mark(`${label}-vendor-connect`);
           return { sessionId: created.payload!.sessionId, wire: await nextVendor.promise };
         };
         // Positive control: both audio and a graceful finish cross the actual wire.
-        const allowed = await start();
+        const allowed = await start("allowed");
         expect(
           (
             await rpcReq(ws, "talk.session.appendAudio", {
@@ -178,13 +196,14 @@ test("guest revocation and discard do not flush queued audio or gracefully final
         expect((await rpcReq(ws, "talk.session.close", { sessionId: allowed.sessionId })).ok).toBe(
           true,
         );
+        mark("allowed-vendor-close");
         await allowed.wire.closed;
         expect(allowed.wire.frames).toEqual([
           { type: "audio", data: "AQI=" },
           { type: "audio.done" },
         ]);
 
-        const discarded = await start();
+        const discarded = await start("discarded");
         expect(
           (
             await rpcReq(ws, "talk.session.close", {
@@ -193,16 +212,19 @@ test("guest revocation and discard do not flush queued audio or gracefully final
             })
           ).ok,
         ).toBe(true);
+        mark("discarded-vendor-close");
         await discarded.wire.closed;
         expect.soft(discarded.wire.frames, "discard must not finalize provider speech").toEqual([]);
 
-        const revoked = await start();
+        const revoked = await start("revoked");
         // A reconnect is a real queueing window: the existing relay remains usable
         // while the replacement provider socket waits for its ready frame.
         holdReady = true;
         nextVendor = Promise.withResolvers<VendorConnection>();
         revoked.wire.socket.close(1012, "replace stream");
+        mark("reconnect-close");
         await revoked.wire.closed;
+        mark("replacement-connect");
         const replacement = await nextVendor.promise;
         expect(
           (
@@ -212,6 +234,7 @@ test("guest revocation and discard do not flush queued audio or gracefully final
             })
           ).ok,
         ).toBe(true);
+        mark("session-delete");
         await deleteSessionEntryLifecycle({
           agentId: "main",
           storePath: resolveDefaultSessionStorePath("main"),
@@ -222,6 +245,7 @@ test("guest revocation and discard do not flush queued audio or gracefully final
         // Ordered behind readiness, this callback forces even the old relay to
         // observe revocation. The close barrier includes every preceding frame.
         replacement.socket.send(JSON.stringify({ type: "transcript" }));
+        mark("revoked-vendor-close");
         await replacement.closed;
         expect(replacement.frames, "revoked buffered audio must never reach the provider").toEqual(
           [],
@@ -231,6 +255,7 @@ test("guest revocation and discard do not flush queued audio or gracefully final
       }
     });
   } finally {
+    mark("vendor-cleanup");
     for (const socket of vendor.clients) {
       socket.terminate();
     }

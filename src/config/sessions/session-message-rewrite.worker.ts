@@ -66,10 +66,8 @@ import {
   readSessionActorRewriteFacts,
   type SessionActorRewriteFacts,
 } from "./session-actor-transcript-publication.worker.js";
-import {
-  assertSessionTranscriptHot,
-  readSessionColdTranscript,
-} from "./session-cold-storage-state.js";
+import { readSessionColdMetadataInDatabase } from "./session-cold-storage-inventory.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   bindSessionWorkerBackend,
   transferSessionEntryWorkerCandidate,
@@ -84,6 +82,8 @@ import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 import type {
   SessionMessageRewriteSelection,
   SessionMessageRewriteSnapshot,
@@ -98,8 +98,8 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 export type SessionMessageRewriteOperations = {
   "session.transcript.lock.cold": {
-    input: { scope: ResolvedTranscriptScope };
-    output: { archive: ReturnType<typeof readSessionColdTranscript> };
+    input: { scope: ResolvedTranscriptScope; readCustody?: readonly SessionStoreReadCustody[] };
+    output: SessionColdMetadataWorkerResult;
   };
   "session.transcript.lock.read": {
     input: { scope: ResolvedTranscriptScope };
@@ -160,7 +160,11 @@ export function bindSqliteWorkerBackend(
     (context, database) => (command) => {
       switch (command.type) {
         case "session.transcript.lock.cold":
-          return { archive: readSessionColdTranscript(database.db, command.input.scope.sessionId) };
+          return readSessionColdMetadataInDatabase(
+            database,
+            command.input.scope.sessionId,
+            command.input.readCustody,
+          );
         case "session.transcript.lock.read":
           return readTranscriptSnapshot(database, command.input.scope.sessionId);
         case "session.transcript.lock.prepare":

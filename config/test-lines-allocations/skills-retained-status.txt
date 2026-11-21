@@ -1,2 +1,0 @@
-# Retained skill rows keep live verdict and missing-requirement status across filtering.
-37

@@ -20,6 +20,7 @@ import {
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
 import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 import controlUiViteConfig, {
@@ -684,7 +685,7 @@ it("composes the complete source without registering runtime English", () => {
   expect(en).toEqual(before);
   expect(source).not.toBe(en);
   expect(source.configView).not.toBe(en.configView);
-  expect(flat.get("activity.title")).toBe("Activity");
+  expect(flat.get("activity.currentWork.title")).toBe("Active sessions");
   expect(flat.get("configView.sections.cron")).toBe("Automations");
 });
 
@@ -697,6 +698,49 @@ it("includes every English dependency in the raw source-hash input", async () =>
   for (const file of englishFiles) {
     expect(sourceRaw, file).toContain(readFileSync(path.join(localesDir, file), "utf8"));
   }
+});
+
+it("keeps namespace URLs in one immutable locale generation across rebuilds", async () => {
+  const buildCatalog = async (label: string) => {
+    let files: string[] = [];
+    await withSourceImport(
+      async () =>
+        catalogImport({
+          common: { health: "Ready" },
+          chat: { title: label },
+          activity: { title: "Activity" },
+        }),
+      async () => {
+        const result = await build({
+          configFile: false,
+          logLevel: "silent",
+          plugins: [controlUiLocaleModulesPlugin()],
+          build: {
+            write: false,
+            rolldownOptions: {
+              input: "virtual:openclaw-control-ui-locale/fr",
+              output: { codeSplitting: controlUiCodeSplitting },
+            },
+          },
+        });
+        if (Array.isArray(result) || !("output" in result)) {
+          throw new Error("Expected one locale fixture build");
+        }
+        files = result.output
+          .map((asset) => asset.fileName)
+          .filter((file) => file.startsWith("assets/locale-namespace-fr-"))
+          .toSorted();
+      },
+    );
+    return files;
+  };
+  const first = await buildCatalog("Chat");
+  const repeated = await buildCatalog("Chat");
+  const changed = await buildCatalog("Conversation");
+  expect(first).toHaveLength(2);
+  expect(new Set(first.map((file) => file.slice(-11, -3))).size).toBe(1);
+  expect(repeated).toEqual(first);
+  expect(changed.every((file) => !first.includes(file))).toBe(true);
 });
 
 it("defers page and config-hint translations until their namespace loads", async () => {
@@ -713,7 +757,7 @@ it("defers page and config-hint translations until their namespace loads", async
   const addWatchFile = vi.fn();
   const baseSource = await loadLocaleSource(load, resolvedBase as string, addWatchFile);
   const { catalog, loadNamespace } = await executeLocale(load, baseSource, true);
-  expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
+  expect(flattenTranslations(catalog).has("activity.currentWork.title")).toBe(false);
   expect(catalog.configHints).toBeUndefined();
   const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
   const loadingText = flattenTranslations(en).get("common.loading");
@@ -728,7 +772,7 @@ it("defers page and config-hint translations until their namespace loads", async
   expect(loadingEntry).toBeDefined();
   expect(flattenTranslations(catalog).get("common.loading")).toBe(loadingEntry?.translated);
   await loadNamespace("activity");
-  expect(flattenTranslations(catalog).get("activity.title")).toBeTypeOf("string");
+  expect(flattenTranslations(catalog).get("activity.currentWork.title")).toBeTypeOf("string");
   expect(catalog.configHints).toBeUndefined();
   expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
   expect(catalog.notificationErrors).toBeUndefined();
@@ -760,7 +804,7 @@ it("bootstraps only an absent locale memory from the English catalog", async () 
   await withoutMemory(async () => {
     const baseSource = await loadLocaleSource(load, baseId, addWatchFile);
     const { catalog, loadAll } = await executeLocale(load, baseSource, true);
-    expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
+    expect(flattenTranslations(catalog).has("activity.currentWork.title")).toBe(false);
     expect(catalog.configHints).toBeUndefined();
     await loadAll();
     expect(flattenTranslations(catalog)).toEqual(flattenTranslations(loadControlUiSourceCatalog()));

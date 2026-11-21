@@ -292,7 +292,7 @@ export function chatGoalCreationObjective(message: string): string | undefined {
   return args;
 }
 
-/** Undefined means first creation: leave it with the ordinary send/admission owner. */
+/** New goals, including successors to completed goals, use ordinary send/admission. */
 export async function replaceExistingChatGoal(
   host: ChatHost,
   objective: string,
@@ -309,7 +309,7 @@ export async function replaceExistingChatGoal(
     );
   const currentGoal = () => currentRow()?.goal;
   const goal = currentGoal();
-  if (!goal) {
+  if (!goal || goal.status === "complete") {
     return undefined;
   }
   const sessionKey = host.sessionKey;

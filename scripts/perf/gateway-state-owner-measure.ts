@@ -1,9 +1,10 @@
 // Real retained ownership assertions; fixture creation and profiling setup stay outside capture.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
+import fs, { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
-import { registerHooks } from "node:module";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -30,6 +31,8 @@ const { values } = parseArgs({
     "start-file": { type: "string" },
     "gc-log": { type: "string" },
     allocations: { type: "boolean", default: false },
+    "fs-counts": { type: "boolean", default: false },
+    "sandbox-capture": { type: "boolean", default: false },
     output: { type: "string" },
     revision: { type: "string" },
   },
@@ -57,6 +60,10 @@ assert(
   "Run allocation sampling separately from the promotion pass",
 );
 assert(!values["gc-log"] || traced, "--gc-log requires --trace-gc-nvp");
+assert(
+  !values["fs-counts"] || (!values.allocations && !traced),
+  "Count filesystem calls separately from timing/allocation proof",
+);
 const fixture: { format: string; sessionCount: number } = JSON.parse(
   readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"),
 );
@@ -80,11 +87,22 @@ process.env = createGatewayBenchEnv(
 
 const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const ownerRoot = values["owner-dir"] ? path.resolve(values["owner-dir"]) : sourceRoot;
+for (const file of [
+  "gateway-state-owner-heartbeat.ts",
+  "gateway-state-owner-heartbeat.runtime.ts",
+]) {
+  assert.equal(
+    readFileSync(path.join(ownerRoot, "src/infra", file), "utf8"),
+    readFileSync(path.join(sourceRoot, "src/infra", file), "utf8"),
+    "Run from the exact checkout when heartbeat worker sources differ; loader overlays do not cross worker threads",
+  );
+}
 const ownerFiles = [
   "src/infra/gateway-state-owner.ts",
   "src/infra/gateway-lock.ts",
   "src/infra/gateway-lock-payload.ts",
   "src/gateway/worker-environments/local-workspace-projection.ts",
+  ...(values["sandbox-capture"] ? ["src/agents/sandbox/state-owner.ts"] : []),
 ];
 const ownerSources = new Map(
   ownerFiles.map((file) => {
@@ -139,13 +157,19 @@ try {
   for (const file of ownerFiles.slice(0, 3)) {
     assert(loadedOwners.has(file), `Owner overlay did not load: ${file}`);
   }
-  const batch = () => {
+  const captureSandbox = values["sandbox-capture"]
+    ? (await import("../../src/agents/sandbox/state-owner.js")).captureSandboxStateOwner
+    : undefined;
+  const batch = async () => {
+    const captured = captureSandbox ? await captureSandbox() : owner;
+    // The baseline sandbox API returned its assertion directly.
+    const assertCurrent = typeof captured === "function" ? captured : captured.assertCurrent;
     for (let index = 0; index < assertionsPerOperation; index++) {
-      owner.assertCurrent();
+      assertCurrent();
     }
   };
   for (let index = 0; index < warmupOperations; index++) {
-    batch();
+    await batch();
     await delay(intervalMs);
   }
   if (values.allocations) {
@@ -178,15 +202,61 @@ try {
     });
   }
   const stopDiagnostics = startGatewayBenchDiagnostics();
+  const fsCounts: Record<string, number> = {};
+  const restoreFs: (() => void)[] = [];
+  if (values["fs-counts"]) {
+    for (const method of [
+      "accessSync",
+      "statSync",
+      "lstatSync",
+      "fstatSync",
+      "openSync",
+      "readSync",
+      "closeSync",
+      "realpathSync",
+    ] as const) {
+      const descriptor = Object.getOwnPropertyDescriptor(fs, method)!;
+      const original = fs[method];
+      Object.defineProperty(fs, method, {
+        ...descriptor,
+        value: new Proxy(original, {
+          apply(target, receiver, args) {
+            fsCounts[method] = (fsCounts[method] ?? 0) + 1;
+            return Reflect.apply(target, receiver, args);
+          },
+        }),
+      });
+      restoreFs.push(() => Object.defineProperty(fs, method, descriptor));
+    }
+    const realpath = fs.realpathSync.native;
+    fs.realpathSync.native = new Proxy(realpath, {
+      apply(target, receiver, args) {
+        fsCounts.realpathNative = (fsCounts.realpathNative ?? 0) + 1;
+        return Reflect.apply(target, receiver, args);
+      },
+    });
+    restoreFs.push(() => {
+      fs.realpathSync.native = realpath;
+    });
+    syncBuiltinESMExports();
+  }
+  const loadBefore = loadavg();
   const beforeCpu = process.cpuUsage();
   const beforeThreadCpu = process.threadCpuUsage();
   marker("diagnostics-start");
   const startedAt = performance.now();
-  for (let index = 0; index < operations; index++) {
-    const began = performance.now();
-    batch();
-    latency[index] = performance.now() - began;
-    await delay(Math.max(0, startedAt + (index + 1) * intervalMs - performance.now()));
+  try {
+    for (let index = 0; index < operations; index++) {
+      const began = performance.now();
+      await batch();
+      latency[index] = performance.now() - began;
+      await delay(Math.max(0, startedAt + (index + 1) * intervalMs - performance.now()));
+    }
+  } finally {
+    for (const restore of restoreFs.toReversed()) {
+      restore();
+    }
+    syncBuiltinESMExports();
   }
   const durationMs = performance.now() - startedAt;
   const cpu = process.cpuUsage(beforeCpu);
@@ -216,9 +286,33 @@ try {
   const mainThreadCpuMs = (threadCpu.user + threadCpu.system) / 1000;
   latency.sort();
   const result = {
-    scope: "retained Gateway ownership assertion; no serving Gateway or workspace operations",
-    mode: values.allocations ? "sampled-allocation" : traced ? "traced-promotion" : "untraced-cost",
+    scope: values["sandbox-capture"]
+      ? "sandbox custody capture followed by retained assertions; no serving Gateway or workspace effects"
+      : "retained Gateway ownership assertion; no serving Gateway or workspace operations",
+    mode: values["fs-counts"]
+      ? "filesystem-counts"
+      : values.allocations
+        ? "sampled-allocation"
+        : traced
+          ? "traced-promotion"
+          : "untraced-cost",
+    filesystem: values["fs-counts"]
+      ? {
+          scope: "main-thread JavaScript fs calls; native libc and worker calls are excluded",
+          counts: fsCounts,
+          perAssertion: Object.fromEntries(
+            Object.entries(fsCounts).map(([method, count]) => [method, count / assertionCount]),
+          ),
+          perMeasuredMinute: Object.fromEntries(
+            Object.entries(fsCounts).map(([method, count]) => [
+              method,
+              (count * 60_000) / durationMs,
+            ]),
+          ),
+        }
+      : undefined,
     revision: values.revision,
+    hostLoad: { before: loadBefore, after: loadavg() },
     fixture,
     ownerSources: [...ownerSources.values()].map(({ file, sha256 }) => ({
       file,

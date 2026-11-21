@@ -11,6 +11,8 @@ import {
   signStatement,
   type PublishSnapshotRequest,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { memoryStore, nowSeconds, TEST_K_SRV } from "./openclaw-id.test-support.js";
 import { PUBLICATION_REFRESH_MS } from "./publication-retry.js";
@@ -27,13 +29,18 @@ vi.mock("./tunnel-runtime.js", () => ({
   }),
 }));
 // mock-isolation: the native tunnel runtime and Discovery mailbox loop stay out of these service tests.
-vi.mock("./mailbox-reader.js", () => ({ startMailboxReader: () => ({ stop() {} }) }));
+vi.mock("./mailbox-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./mailbox-reader.js")>()),
+  startMailboxReader: () => ({ stop() {} }),
+}));
 
+let enabled = true;
 let stateDir: string;
 let service: OpenClawIdService;
 let authority: ReturnType<typeof createOpenClawIdAuthority>;
 
 beforeEach(() => {
+  enabled = true;
   vi.useFakeTimers();
   stateDir = mkdtempSync(path.join(tmpdir(), "ocid-publication-refresh-"));
   // Fixed external Discovery answers; signing, authority and publication are real.
@@ -62,7 +69,7 @@ beforeEach(() => {
 function startService(): OpenClawIdService {
   return createOpenClawIdService({
     getConfig: () => ({
-      enabled: true,
+      enabled,
       loaderDomain: "claws.test",
       discoveryUrl: "https://discovery.test",
       relayUrl: "https://relay.test/",
@@ -144,6 +151,152 @@ async function expectArmed() {
 }
 
 describe("service publication refresh scheduling", () => {
+  it.each(["startup", "toggle"])("publishes role labels after enabling from %s", async (mode) => {
+    if (mode === "toggle") {
+      await commitLink();
+    }
+    enabled = false;
+    await service.reconcileRuntimePolicy();
+    enabled = true;
+    if (mode === "startup") {
+      await commitLink();
+    } else {
+      await service.reconcileRuntimePolicy();
+    }
+    const snapshots = () =>
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) =>
+          (typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url
+          ).endsWith("/snapshot"),
+        ).length;
+    const before = snapshots();
+    invalidateOperatorRolePolicy("changed-member", { roleOnly: true });
+    await vi.waitFor(() => expect(snapshots()).toBeGreaterThan(before));
+  });
+
+  it("retries a pending profile label after a same-second snapshot refusal", async () => {
+    await commitLink();
+    const discovery = vi.mocked(fetch).getMockImplementation()!;
+    let snapshots = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (new Request(input, init).url.endsWith("/snapshot") && ++snapshots === 1) {
+        return Response.json(
+          { error: { code: "stale_snapshot", message: "issued_at must be newer" } },
+          { status: 409 },
+        );
+      }
+      return discovery(input, init);
+    });
+    invalidateOperatorRolePolicy("changed-member", { roleOnly: true });
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication).toMatchObject({
+        state: "failed",
+        code: "stale_snapshot",
+        retryable: true,
+        retryAt: expect.any(Number),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication).toMatchObject({ state: "published" }),
+    );
+    expect(snapshots).toBe(2);
+    expect(authority.current()?.discovery.publish_pending).toBe(false);
+  });
+
+  it("invalidates People after a publication refusal settles", async () => {
+    await commitLink();
+    const entered = createDeferred();
+    const response = createDeferred<Response>();
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/snapshot")) {
+        entered.resolve();
+        return response.promise;
+      }
+      return answer(input, init);
+    });
+    const changed = vi.fn();
+    const stop = service.onPeopleChanged(changed);
+    const publishing = service.publish();
+    await entered.promise;
+    changed.mockClear();
+    response.resolve(
+      Response.json(
+        { error: { code: "binding_superseded", message: "newer binding" } },
+        { status: 409 },
+      ),
+    );
+    await expect(publishing).resolves.toMatchObject({
+      state: "failed",
+      code: "binding_superseded",
+    });
+    expect(changed).toHaveBeenCalled();
+    stop();
+  });
+
+  it("keeps a code given to publish for its retries after a transient failure", async () => {
+    await commitLink();
+    await authority.recordDiscovery({
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+    });
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    const codes: unknown[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/v1/claws") && init?.method === "POST") {
+        codes.push(JSON.parse(new TextDecoder().decode(init.body as Uint8Array)).code);
+        if (codes.length === 1) {
+          return Response.json({ error: { code: "unavailable", message: "x" } }, { status: 503 });
+        }
+      }
+      return await answer(input, init);
+    });
+    expect(await service.publish("FRESH-CODE")).toMatchObject({ state: "failed", retryable: true });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication?.state).toBe("published"),
+    );
+    expect(codes).toEqual(["FRESH-CODE", "FRESH-CODE"]);
+  });
+
+  it("keeps a code given to publish when the registration lookup fails transiently", async () => {
+    await commitLink();
+    await authority.recordDiscovery({
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+    });
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    const codes: unknown[] = [];
+    let lookups = 0;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/registration") && ++lookups === 1) {
+        return Response.json({ error: { code: "unavailable", message: "x" } }, { status: 503 });
+      }
+      if (url.endsWith("/v1/claws") && init?.method === "POST") {
+        codes.push(JSON.parse(new TextDecoder().decode(init.body as Uint8Array)).code);
+      }
+      return await answer(input, init);
+    });
+    expect(await service.publish("FRESH-CODE")).toMatchObject({ state: "failed", retryable: true });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication?.state).toBe("published"),
+    );
+    expect(lookups).toBeGreaterThan(1);
+    expect(codes).toEqual(["FRESH-CODE"]);
+  });
+
   it("arms after a successful fresh commitLink", async () => {
     await commitLink();
     await expectArmed();

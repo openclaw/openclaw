@@ -229,6 +229,24 @@ export async function runClassifiedGitStep<T>(
   return classified;
 }
 
+/** Git config exits 1 without output for an unset key: a complete answer, not a failed read. */
+export function runGitConfigReadStep(options: RunStepOptions) {
+  return runClassifiedGitStep(options, (result) => {
+    if (
+      result.exitCode === 1 &&
+      (!result.termination || result.termination === "exit") &&
+      !result.killed &&
+      !result.outputLimitExceeded &&
+      !result.stdoutTail?.trim() &&
+      !result.stderrTail?.trim()
+    ) {
+      result.exitCode = 0;
+      delete result.failureFacts;
+    }
+    return result;
+  });
+}
+
 // A successful Git status command does not imply a clean checkout.
 export function runGitCleanCheckStep(options: RunStepOptions) {
   return runClassifiedGitStep(options, (result) => {

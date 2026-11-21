@@ -50,11 +50,11 @@ describe("Muse process pool", () => {
         const same = await pool.acquire(workspace, apiKey, false);
         same.release();
         expect(same.runtime).toBe(managed.runtime);
-        const spawns = (await readFile(log, "utf8"))
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-          .filter((request) => request.event === "spawn");
+        const lines = (await readFile(log, "utf8")).trim().split("\n");
+        const requests = lines.map((line) => JSON.parse(line));
+        const initialize = requests.find((request) => request.method === "initialize");
+        expect(initialize.params.capabilities).toEqual({ userInputDialogs: false });
+        const spawns = requests.filter((request) => request.event === "spawn");
         expect(spawns).toHaveLength(3);
         expect(spawns[0].credentialBackend).toBeUndefined();
         expect(spawns[2]).toMatchObject({
@@ -63,7 +63,6 @@ describe("Muse process pool", () => {
         });
       } finally {
         await pool.dispose();
-        vi.unstubAllEnvs();
       }
     },
   );

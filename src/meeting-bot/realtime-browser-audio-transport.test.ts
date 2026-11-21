@@ -1,5 +1,10 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
@@ -19,6 +24,9 @@ async function setup(received = vi.fn(), fatal = vi.fn()) {
     nativeTransport,
     hasConfiguredInputCommand: false,
     callBrowser: async ({ body: requestBody }) => {
+      if (getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Browser requester is no longer active");
+      }
       const body = requestBody as { fn: string };
       const { action, captureId } = JSON.parse(body.fn) as { action: string; captureId: string };
       if (action === "pull") {
@@ -41,6 +49,7 @@ async function setup(received = vi.fn(), fatal = vi.fn()) {
   await setImmediate();
   return {
     resolvePull: (result: Record<string, unknown>) => pulls.shift()!.resolve(result),
+    pendingPulls: () => pulls.length,
     nativeTransport,
     nativeInput: (audio: Buffer) => startInput.mock.calls.at(-1)?.[0](audio),
     transport,
@@ -82,4 +91,24 @@ it("discards a pull after stop and rejects an expired browser capture", async ()
   expect(received).not.toHaveBeenCalled();
   expect(next.nativeTransport.stop).toHaveBeenCalledOnce();
   await next.transport.stop();
+});
+
+it("keeps pulling after the joining request has responded", async () => {
+  vi.useRealTimers(); // Fake timers drop the async context the pull timer inherits.
+  let responded = false;
+  const join = {
+    isWebchatConnect: () => false,
+    signal: new AbortController().signal,
+    hasCurrentClientAuthority: () => !responded,
+  };
+  const owner = createOwnedTestInstance("meeting-owner");
+  const fixture = await withPluginRuntimeGatewayRequestScope(join, () => owner.run(() => setup()));
+  await vi.waitFor(() => expect(fixture.pendingPulls()).toBe(1));
+  responded = true;
+  fixture.resolvePull({ isolated: true });
+  await vi.waitFor(() => expect(fixture.pendingPulls()).toBe(1));
+  expect(fixture.fatal).not.toHaveBeenCalled();
+  const stopping = fixture.transport.stop();
+  fixture.resolvePull({ isolated: true });
+  await stopping;
 });

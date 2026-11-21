@@ -264,14 +264,14 @@ describe("publish model catalog", () => {
     const params = await publishedPricingParams(bundle, "deepinfra");
     for (const model of ["free", "standalone-free"]) {
       expect(bundle.pricing?.[`deepinfra/${model}`]).toEqual({ input: 0, output: 0 });
-      expect(resolveModelCostConfig({ ...params, model })).toEqual({
+      expect(await resolveModelCostConfig({ ...params, model })).toEqual({
         input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
       });
     }
-    expect(resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
+    expect(await resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
   });
 
   it("rejects DeepInfra object response before mutating the previous bundle", async () => {
@@ -856,15 +856,14 @@ describe("publish model catalog", () => {
   });
 
   it("parses supported CLI arguments and rejects missing output", () => {
-    expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toEqual({
+    expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toMatchObject({
       dryRun: true,
       pricing: false,
       out: "ignored.json",
     });
-    expect(parsePublishModelCatalogArgs(["--pricing", "--dry-run"])).toEqual({
-      dryRun: true,
-      pricing: true,
-    });
+    expect(
+      parsePublishModelCatalogArgs(["--pricing", "--dry-run", "--previous-v3", "v3.json"]),
+    ).toMatchObject({ dryRun: true, pricing: true, previous: { v3: "v3.json" } });
     expect(() => parsePublishModelCatalogArgs([])).toThrow("provide --out");
   });
 
@@ -1160,7 +1159,7 @@ describe("publish model catalog", () => {
           `${source} pricing unavailable for ${provider}/priced-fixture`,
         );
         expect(
-          resolveModelCostConfig({
+          await resolveModelCostConfig({
             ...(await publishedPricingParams(bundle, provider)),
             model: "priced-fixture",
           }),

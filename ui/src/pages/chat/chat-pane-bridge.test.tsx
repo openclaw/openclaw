@@ -50,6 +50,68 @@ function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
 }
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
+it.each([false, true])(
+  "holds DOM completion until the yielded pane mounts or retires (retire: %s)",
+  async (retire) => {
+    const bootComposer = document.createElement("textarea");
+    bootComposer.id = "openclaw-boot-composer";
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(bootComposer);
+    adoptBootComposer(true);
+    const yielding = createDeferred();
+    vi.stubGlobal("chrome", {});
+    vi.stubGlobal("scheduler", { yield: () => yielding.promise });
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    onTestFinished(() => {
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
+      yielding.resolve();
+      hidden.mockRestore();
+      vi.unstubAllGlobals();
+    });
+    const { pane, container } = mountedFixture("yielded-pane").render({
+      active: true,
+      presented: true,
+    });
+    await vi.dynamicImportSettled();
+    flush();
+    let completed = false;
+    const completion = pane.updateComplete.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    flush();
+    expect(pane.querySelector(".chat-pane__header")).toBeNull();
+    expect(pane.querySelector(".lazy-view-state--route")).not.toBeNull();
+    expect(completed).toBe(false);
+
+    if (retire) {
+      container.remove();
+      await completion;
+    }
+    yielding.resolve();
+    await completion;
+    await Promise.resolve();
+    flush();
+    expect(completed).toBe(true);
+    expect(pane.querySelectorAll(".chat-pane__header")).toHaveLength(retire ? 0 : 1);
+  },
+);
+
+it("mounts route handoffs immediately without a retained boot composer", async () => {
+  const yieldTask = vi.fn(() => Promise.resolve());
+  vi.stubGlobal("chrome", {});
+  vi.stubGlobal("scheduler", { yield: yieldTask });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const { pane } = mountedFixture("immediate-pane").render({ active: true, presented: true });
+  await waitForSolid(() => expect(pane.querySelector(".chat-pane__header")).not.toBeNull());
+  await pane.updateComplete;
+  expect(yieldTask).not.toHaveBeenCalled();
+});
+
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
   const { pane } = mountedFixture("bridge-draft").render({ active: true, presented: true });
   const textarea = await waitForSolid(() =>
@@ -164,10 +226,24 @@ it("opens provider findings through the mounted pane's first rendered frame", as
   await waitForSolid(() => expect(dialog()?.textContent).toContain(review.explanation));
 });
 
-it.each(["ready", "unavailable"] as const)(
+it.each([
+  "ready",
+  "holding",
+  "fallback",
+  "unavailable",
+  "unavailable-holding",
+  "unavailable-fallback",
+] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const yielding = createDeferred();
+    const yieldTask = vi.fn(() => yielding.promise);
+    vi.stubGlobal("scheduler", { yield: yieldTask });
+    onTestFinished(() => {
+      yielding.resolve();
+      vi.unstubAllGlobals();
+    });
     const bootComposer = document.createElement("textarea");
     bootComposer.id = "openclaw-boot-composer";
     bootComposer.value = "Keep the pending draft";
@@ -180,6 +256,7 @@ it.each(["ready", "unavailable"] as const)(
     onTestFinished(() => {
       retireBootComposer();
       document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
     });
     const fixture = mountedFixture("snapshot-admission");
     const gateway = fixture.context.gateway;
@@ -205,6 +282,14 @@ it.each(["ready", "unavailable"] as const)(
       vi.useRealTimers();
     });
     const prepared = prewarmChatSnapshot(key);
+    const warmFrame = outcome.endsWith("holding")
+      ? "holding"
+      : outcome.endsWith("fallback")
+        ? "fallback"
+        : undefined;
+    if (warmFrame) {
+      document.documentElement.setAttribute("data-openclaw-warm-frame", warmFrame);
+    }
     const view = fixture.render({
       active: true,
       ownsRouteComposer: true,
@@ -227,7 +312,8 @@ it.each(["ready", "unavailable"] as const)(
     expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
     expect(view.pane.querySelector("textarea")).toBe(bootComposer);
     expect(bootComposer.value).toBe("Keep the pending draft");
-    if (outcome === "ready") {
+    inactive.container.remove();
+    if (!outcome.startsWith("unavailable")) {
       read.resolve({
         projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: 1,
@@ -254,10 +340,32 @@ it.each(["ready", "unavailable"] as const)(
       );
       expect(view.pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
       expect(view.pane.querySelector(".agent-chat__input")).toBeNull();
+      expect(view.pane.querySelector('[data-cached-session="true"]')).not.toBeNull();
+      if (outcome === "holding") {
+        // The existing held-warm split is inside the mounted pane, not before it.
+        expect(yieldTask).toHaveBeenCalledOnce();
+        expect(view.pane.textContent).not.toContain("Stored conversation");
+        expect(view.pane.querySelector(".chat-conversation-loading")).toBeNull();
+        yielding.resolve();
+        await yielding.promise;
+        flush();
+      } else {
+        expect(yieldTask).not.toHaveBeenCalled();
+      }
       expect(view.pane.textContent).toContain("Stored conversation");
     } else {
       await vi.advanceTimersByTimeAsync(1);
       flush();
+      if (warmFrame) {
+        expect(yieldTask).not.toHaveBeenCalled();
+      } else {
+        expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+        expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+        expect(yieldTask).toHaveBeenCalledOnce();
+        yielding.resolve();
+        await yielding.promise;
+        flush();
+      }
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);

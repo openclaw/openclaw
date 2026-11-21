@@ -31,6 +31,7 @@ import {
 } from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   ADMIN_SCOPE,
   READ_SCOPE,
@@ -51,11 +52,13 @@ import type {
   OperatorToolGatewayAuthority,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
+import { resolveSystemScopeCeiling } from "./server-plugin-in-process-system-ceiling.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
   projectPluginRuntimeClientExecution,
 } from "./server-plugin-runtime-client.js";
+import { createSessionContinuationLifetime } from "./session-continuation-lifetime.js";
 import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
@@ -186,11 +189,10 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         }
       : { syntheticScopeMode: "exact" as const }),
   });
-  return captureGatewayOperatorRunAuthority({
+  return captureGatewayOperatorContinuation({
     client: resolved.operatorSourceClient,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
-    independentContinuation: true,
   }).then((captured) => {
     try {
       captured?.authority.assertCurrent();
@@ -217,7 +219,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         captured?.authority.signal,
         gatewayOwner && getGatewayContextLifetime(gatewayOwner).signal,
       ].filter((signal): signal is AbortSignal => Boolean(signal));
-      const lifetime = new AbortController();
+      const lifetime = createSessionContinuationLifetime(target, gatewayOwner);
       const release = () => {
         if (lifetime.signal.aborted) {
           return;
@@ -242,7 +244,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         } else {
           resolved.assertSourceCurrent();
         }
-        lifetime.signal.throwIfAborted();
       };
       const runInScope = <T>(run: () => T): T => {
         assertCurrent();
@@ -362,7 +363,6 @@ export function resolveInProcessGatewayDispatch(
     : resolveSessionRuntimeAuthority({
         method,
         runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-        context,
       });
   const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =
@@ -475,11 +475,7 @@ export function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  // Built-in requests retain the explicit ceiling of a positively scoped System caller.
-  const scopedSystemScopes =
-    options?.syntheticScopeMode !== undefined && scopedActor?.kind === "system"
-      ? (scope?.client?.connect.scopes ?? [])
-      : undefined;
+  const scopedSystemScopes = resolveSystemScopeCeiling(method, options, scope?.client, caller);
   const selectedScopes =
     selection && operatorRunAuthority && caller?.operatorAuthority
       ? intersectOperatorScopes(operatorRunAuthority.scopes, caller.operatorAuthority.scopes)

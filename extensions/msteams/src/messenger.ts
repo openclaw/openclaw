@@ -1,5 +1,5 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -35,7 +35,6 @@ import {
 } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -117,11 +116,7 @@ export function renderReplyPayloadsToMessages(
     }
 
     if (reply.text) {
-      const chunks = getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
-        reply.text,
-        chunkLimit,
-        chunkMode,
-      );
+      const chunks = chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
       for (const chunk of chunks) {
         const text = chunk.trim();
         if (text) {

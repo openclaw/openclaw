@@ -48,6 +48,7 @@ export function createSessionRowRecents(owner: {
         id,
         key: row.key,
         agentId: row.agentId,
+        storePath: row.storeTarget.storePath,
         row: removed ? undefined : selectionRow(row),
       });
     },

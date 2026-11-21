@@ -8,6 +8,7 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginGeneration from "../plugins/plugin-generation-artifact.js";
 import * as pluginPreparation from "../plugins/plugin-generation-worker.js";
 import * as pluginSourceReferences from "../plugins/plugin-source-references.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -62,6 +63,7 @@ describe("gateway web fetch discovery", () => {
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       const pluginId = "legacy-fetch-fixture";
       const pluginDir = path.join(tempHome, pluginId);
+      const pluginEntry = path.join(pluginDir, "index.cjs");
       const registeredPath = path.join(tempHome, "fetch-provider-registered.txt");
       await fs.mkdir(pluginDir, { recursive: true });
       await fs.writeFile(
@@ -75,7 +77,7 @@ describe("gateway web fetch discovery", () => {
         }),
       );
       await fs.writeFile(
-        path.join(pluginDir, "index.cjs"),
+        pluginEntry,
         `module.exports = {
   id: ${JSON.stringify(pluginId)},
   register(api) {
@@ -146,7 +148,7 @@ describe("gateway web fetch discovery", () => {
         const registeredBefore = await fs.readFile(registeredPath, "utf8").catch(() => "");
 
         // Observe the real loader without replacing its discovery or registration.
-        // Source walking belongs in async preparation, not the Gateway event loop.
+        const syncCapture = vi.spyOn(pluginGeneration, "capturePluginGenerationArtifact");
         const sourceVisit = vi.spyOn(pluginSourceReferences, "visitPluginSourceReferences");
         const prepare = vi.spyOn(pluginPreparation, "preparePluginGenerationArtifact");
         const invoke = async (pathname: string) => {
@@ -179,19 +181,26 @@ describe("gateway web fetch discovery", () => {
         // Distinct URLs avoid web_fetch's response-level in-flight/cache sharing.
         await Promise.all([invoke("cold-first"), invoke("cold-second")]);
         const registeredAfter = await fs.readFile(registeredPath, "utf8").catch(() => "");
+        const sourceVisits = sourceVisit.mock.calls.map(([source]) => source);
         const observation = JSON.stringify({
           registrationsBefore: registeredBefore.trim().split("\n").filter(Boolean).length,
           registrationsAfter: registeredAfter.trim().split("\n").filter(Boolean).length,
-          sourceVisits: sourceVisit.mock.calls.map(([source]) => source),
+          sourceVisits,
+          syncCaptures: syncCapture.mock.calls.map(([root]) => root),
           preparations: prepare.mock.calls.map(([params]) => params.rootDir),
         });
         expect(registeredAfter, observation).toBe(`${registeredBefore}registered\n`);
-        expect(sourceVisit, observation).not.toHaveBeenCalled();
+        expect(syncCapture, observation).not.toHaveBeenCalled();
+        // Bun may inspect the prepared CJS entry once when binding it for execution.
+        expect(sourceVisits, observation).toEqual(
+          process.versions.bun && sourceVisits.length ? [pluginEntry] : [],
+        );
         expect(prepare, observation).toHaveBeenCalledTimes(1);
         expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ rootDir: pluginDir }));
         await invoke("warm-third");
         expect(await fs.readFile(registeredPath, "utf8")).toBe(registeredAfter);
-        expect(sourceVisit).not.toHaveBeenCalled();
+        expect(syncCapture).not.toHaveBeenCalled();
+        expect(sourceVisit).toHaveBeenCalledTimes(sourceVisits.length);
         expect(prepare).toHaveBeenCalledTimes(1);
       } finally {
         const cleanup = (async () => {

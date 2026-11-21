@@ -15,6 +15,12 @@ Native SQLite failures include their error codes. Stop the Gateway, preserve the
 database and its SQLite sidecars, resolve the reported cause, then rerun
 `openclaw doctor --fix` against the same state and configuration.
 
+Historical transcript repair scans compressed events without retaining the whole
+scan in the JavaScript heap. Repairs commit bounded batches and advance the
+existing resume cursor only after a session finishes. An interrupted repair can
+be rerun against the same state. This repair adds no schema change and needs no
+larger Node heap.
+
 ## Legacy data and PostgreSQL
 
 Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port
@@ -32,6 +38,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
+    Doctor also repairs retained ISO-8601 `endedAt` strings, including June 2026 timestamps. It backs up the database, converts valid timestamps with an explicit UTC or numeric offset to epoch milliseconds, updates indexed session timing, and reports only the repaired count in a warning. Session entries and unrelated fields are preserved; repeating the repair makes no further changes. Invalid dates, timestamps without a timezone, and values requiring sub-millisecond precision remain available for offline repair or restoration with the existing guidance.
+
     Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. The July Doctor importer could still leave `provider` and `lastProvider` aliases on session rows. Session reads refuse those rows with a migration-required error until `openclaw doctor --fix` runs; Doctor backs up the affected SQLite databases, then rewrites the aliases into the current `delivery` state and its query projections together. Rows that still need the retired `room` → `groupChannel` conversion are refused without changing the original store: preserve the state, install OpenClaw `2026.9.5`, run `openclaw doctor --fix`, then upgrade again. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
 
     Relative `session.store` paths resolve against the active state directory. Older versions resolved them against the Gateway's working directory, which could create a second store under `~/agents/` in a systemd installation. Doctor backs up the affected stores and shared state, copies sessions and retained history into the state-relative store, and retires the old registrations after verification. The original database and its backup remain available for recovery. Completed repairs do not replay that retained source or restore conversations deleted later.
@@ -72,6 +80,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     When a stale receipt references missing originals, Doctor reads each migration manifest once per synchronous source-verification phase, reusing the archive inventory across transcripts. Later phases verify again so changed manifests and archives cannot inherit earlier verification.
 
     Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. When no plugin migration is deferred and no verified legacy session source is retained, the post-session plugin repair runs its detectors once and skips the completion certification pass. `openclaw update status` and Doctor report deferred plugin repairs; Gateway startup consumes canonical state without reading those pending records.
+
+    If Doctor cannot load a plugin's migration contract during an update, it reports the plugin and the load error, leaves its migration inputs in place, and continues unrelated repairs. Once the contract loads again, `openclaw update repair` or `openclaw doctor --fix` can finish the migration. If the loaded contract disagrees with the manifest's migration actions, their order, or their authority, Doctor refuses the inconsistent plan.
 
     Before archiving retained originals, Doctor rechecks pending plugin migrations against the current publication transaction. If those obligations changed during repair, the originals remain protected and Doctor reports the conflict for a later repair.
 

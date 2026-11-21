@@ -12,21 +12,18 @@ import {
 } from "./agent-stream-response.js";
 import { ToolArgumentValidationError } from "./errors.js";
 import {
-  appendToolLoopWarning,
   copyInternalToolResultState,
   getInternalToolResultContentSource,
-  type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
+import { appendToolRepeatNote, type ToolRepeatVerdict } from "./tool-repeat-guard.js";
 import type {
-  AfterToolOutcomeContext,
   AgentContext,
   AgentLoopConfig,
   AgentTool,
   AgentToolCall,
   AgentToolResult,
-  ToolLoopWarning,
-  ToolLoopIntervention,
+  ToolPreExecutionErrorKind,
   ToolResultContentSource,
 } from "./types.js";
 
@@ -36,8 +33,7 @@ type ToolOutcomeContext = {
   config: Pick<AgentLoopConfig, "afterToolCall" | "afterToolOutcome">;
   isLocalError?: AgentCoreStreamRuntimeDeps["isLocalError"];
   signal: AbortSignal | undefined;
-  warnings?: ToolLoopWarning[];
-  lifecycle?: Pick<InternalToolBatchLifecycle, "observeOutcome">;
+  repeatNotes?: readonly ToolRepeatVerdict[];
 };
 
 export type ResolvedToolCallOutcome =
@@ -60,19 +56,31 @@ export function hidesToolCallFromChannelProgress(
 }
 
 export type FinalizedToolCallOutcome = {
-  intervention?: ToolLoopIntervention;
-  loopOutcome?: Pick<
-    AfterToolOutcomeContext,
-    "toolCall" | "args" | "result" | "isError" | "errorKind"
-  >;
   toolCall: AgentToolCall;
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
-  errorKind?: "argument-validation";
+  errorKind?: ToolPreExecutionErrorKind;
   hideFromChannelProgress?: boolean;
   resultContentSource?: ToolResultContentSource;
 };
+
+function applyToolResultUpdate(
+  result: AgentToolResult<unknown>,
+  update: Partial<AgentToolResult<unknown>>,
+): AgentToolResult<unknown> {
+  // Classification-only hooks must retain tool-owned outcome identity.
+  return update.content === undefined &&
+    update.details === undefined &&
+    update.terminate === undefined
+    ? result
+    : copyInternalToolResultState(result, {
+        ...result,
+        content: update.content ?? result.content,
+        details: update.details ?? result.details,
+        terminate: update.terminate ?? result.terminate,
+      });
+}
 
 export async function finalizeExecutedToolCall(
   batch: ToolOutcomeContext,
@@ -97,12 +105,7 @@ export async function finalizeExecutedToolCall(
         batch.signal,
       );
       if (afterResult) {
-        result = copyInternalToolResultState(result, {
-          ...result,
-          content: afterResult.content ?? result.content,
-          details: afterResult.details ?? result.details,
-          terminate: afterResult.terminate ?? result.terminate,
-        });
+        result = applyToolResultUpdate(result, afterResult);
         isError = afterResult.isError ?? isError;
       }
     } catch (error) {
@@ -121,7 +124,6 @@ export async function finalizeExecutedToolCall(
       result,
       isError,
       executionStarted: executed.executionStarted,
-      ...(executed.intervention ? { intervention: executed.intervention } : {}),
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       ...(executed.executionStarted && !executed.callerCancelled
         ? resolveToolResultContentSource(prepared.tool, executed.result)
@@ -173,12 +175,7 @@ export async function finalizeToolCallOutcome(
       if (afterResult) {
         outcome = {
           ...finalized,
-          result: copyInternalToolResultState(finalized.result, {
-            ...finalized.result,
-            content: afterResult.content ?? finalized.result.content,
-            details: afterResult.details ?? finalized.result.details,
-            terminate: afterResult.terminate ?? finalized.result.terminate,
-          }),
+          result: applyToolResultUpdate(finalized.result, afterResult),
           isError: afterResult.isError ?? finalized.isError,
         };
       }
@@ -199,35 +196,31 @@ export async function finalizeToolCallOutcome(
       };
     }
   }
-  if (batch.lifecycle?.observeOutcome) {
-    outcome.loopOutcome = {
-      toolCall: outcome.toolCall,
-      args,
-      result: outcome.result,
-      isError: outcome.isError,
-      ...(outcome.errorKind ? { errorKind: outcome.errorKind } : {}),
-    };
-  }
-  const warning = batch.warnings?.find((entry) => entry.toolCallId === outcome.toolCall.id);
-  return warning ? { ...outcome, result: appendToolLoopWarning(outcome.result, warning) } : outcome;
+  const note = batch.repeatNotes?.find((entry) => entry.toolCallId === outcome.toolCall.id);
+  return note ? { ...outcome, result: appendToolRepeatNote(outcome.result, note) } : outcome;
 }
 
 export type ImmediateToolCallOutcome = {
   kind: "immediate";
   result: AgentToolResult<unknown>;
   isError: boolean;
-  errorKind?: "argument-validation";
+  errorKind?: ToolPreExecutionErrorKind;
 };
 
-export function immediateToolCallError(message: string): ImmediateToolCallOutcome {
-  return { kind: "immediate", result: createErrorToolResult(message), isError: true };
+export function immediateToolCallError(
+  message: string,
+  errorKind?: ToolPreExecutionErrorKind,
+): ImmediateToolCallOutcome {
+  return {
+    kind: "immediate",
+    result: createErrorToolResult(message),
+    isError: true,
+    ...(errorKind ? { errorKind } : {}),
+  };
 }
 
 export function immediateToolArgumentValidationError(error: unknown): ImmediateToolCallOutcome {
-  return {
-    ...immediateToolCallError(coerceErrorMessage(error)),
-    errorKind: "argument-validation",
-  };
+  return immediateToolCallError(coerceErrorMessage(error), "argument-validation");
 }
 
 /** Classify only preparation rejections, not generic or execution failures. */
@@ -267,9 +260,6 @@ export function createErrorToolResult(
   };
 }
 
-export const TOOL_LOOP_BLOCKED_MESSAGE =
-  "This tool was not executed because tool-loop recovery blocked further execution. Reassess the task before choosing the next action.";
-
 const STEERING_TOOL_SKIP_MESSAGE = "Skipped to process an incoming message.";
 const TOOL_ADMISSION_FAILURE_MESSAGE = "Tool execution was blocked before launch.";
 const TOOL_ADMISSION_FAILURE_DETAILS = {
@@ -283,7 +273,6 @@ export async function completeUnstartedToolCall(
   options: {
     args?: unknown;
     reason?: "admission" | "steering";
-    intervention?: ToolLoopIntervention;
     startEmitted?: boolean;
     hideFromChannelProgress?: boolean;
   } = {},
@@ -297,20 +286,16 @@ export async function completeUnstartedToolCall(
     {
       toolCall,
       result: createErrorToolResult(
-        options.intervention
-          ? TOOL_LOOP_BLOCKED_MESSAGE
-          : options.reason === "admission"
-            ? TOOL_ADMISSION_FAILURE_MESSAGE
-            : options.reason === "steering"
-              ? STEERING_TOOL_SKIP_MESSAGE
-              : "Operation aborted",
-        options.intervention
-          ? { status: "blocked", deniedReason: "tool-loop", intervention: options.intervention }
-          : options.reason === "admission"
-            ? TOOL_ADMISSION_FAILURE_DETAILS
-            : options.reason === "steering"
-              ? { status: "skipped", deniedReason: "steering" }
-              : undefined,
+        options.reason === "admission"
+          ? TOOL_ADMISSION_FAILURE_MESSAGE
+          : options.reason === "steering"
+            ? STEERING_TOOL_SKIP_MESSAGE
+            : "Operation aborted",
+        options.reason === "admission"
+          ? TOOL_ADMISSION_FAILURE_DETAILS
+          : options.reason === "steering"
+            ? { status: "skipped", deniedReason: "steering" }
+            : undefined,
       ),
       isError: true,
       executionStarted: false,

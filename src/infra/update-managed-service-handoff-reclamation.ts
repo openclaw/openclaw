@@ -71,7 +71,7 @@ export function createManagedHandoffReclaimability({
     }
     const action = lease.action;
     if (managedCommandCustody(lease)) {
-      return !managedCommandUnsettled(lease) && !hasUnsettledChildren(lease, db);
+      return !managedCommandUnsettled(lease, processState) && !hasUnsettledChildren(lease, db);
     }
     if (action.kind === "triage" && action.lifetime.kind === "foreground") {
       const boot = bootIdentity();
@@ -143,9 +143,8 @@ export function observeManagedHandoffReclamation(
     deps.readCommandChildren(roots, db).toSorted((a, b) => a.key.localeCompare(b.key));
   const commands = readCommands();
   const commandSettled = (lease: ManagedHandoffLease) =>
-    managedCommandCustody(lease) === "bound" &&
     deps.processState(lease.helper) === "dead" &&
-    !managedCommandUnsettled(lease);
+    !managedCommandUnsettled(lease, deps.processState);
   const dead =
     observed.every(({ lease }) => deps.reclaimable(lease, db)) && commands.every(commandSettled);
   // The caller runs this only after revalidating the exact original observation

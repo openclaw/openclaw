@@ -163,7 +163,6 @@ describe("typed in-process agent continuation authorization", () => {
                 client: principal,
                 context,
                 runId: request.idempotencyKey,
-                spawnedBy: fixture.target.sessionKey,
               });
               child.authority?.assertCurrent();
               io.emitAcceptance([
@@ -400,6 +399,10 @@ describe("typed in-process agent continuation authorization", () => {
             expect(principal.authenticatedUserProfile?.profileId).toBe(
               owner.authenticatedUserProfile!.profileId,
             );
+            if (request.idempotencyKey !== "target-followup" && boundary === "device revoked") {
+              // This mock observes dispatch; real returned-turn admission is covered by ACP custody.
+              expect(principal.internal?.operatorRunAuthority?.reauthorize).toThrow();
+            }
             io.emitAcceptance([
               true,
               { runId: request.idempotencyKey, status: "accepted" },
@@ -488,7 +491,7 @@ describe("typed in-process agent continuation authorization", () => {
           targetFinished.resolve();
           await replyFlow;
           expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(false);
-          if (boundary !== "disconnected") {
+          if (boundary === "gateway replaced") {
             expect(dispatchErrors.length).toBeGreaterThan(0);
             expect(startTurn).not.toHaveBeenCalled();
             return;

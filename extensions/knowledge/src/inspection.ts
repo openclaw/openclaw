@@ -54,7 +54,9 @@ const compactMetadata = (m: Envelope): CompactMetadata => {
     "attribution",
     "assertion_origin",
     "claim_kind",
+    "subject_hint",
     "aliases",
+    "tags",
     "fields",
     "updated_at",
     "supersedes",
@@ -126,25 +128,33 @@ function boundRecord(result: RecordOutput, input: RecordInput, compact = false):
     }
   }
   // Full metadata repeats every evidence descriptor; paged evidence remains available.
-  // Compact domain fields are a preview; full metadata keeps them for edits that replace fields.
   const metadata = result.record?.metadata;
   if (metadata?.evidence !== undefined && size() > RECORD_RESPONSE_BYTES) {
     delete metadata.evidence;
     (result.omitted ??= []).push("metadata.evidence");
   }
-  if (compact && metadata?.fields !== undefined && size() > RECORD_RESPONSE_BYTES) {
-    delete metadata.fields;
-    (result.omitted ??= []).push("metadata.fields");
-  }
+  // The body pages and domain fields do not, so the body shrinks first. Compact fields
+  // too large to fit beside any body text are omitted; edits then preserve them by
+  // leaving fields out.
   const r = result.record,
     key = result.view === "raw" ? "raw" : "body";
-  if (r && typeof r[key] === "string" && size() > RECORD_RESPONSE_BYTES) {
-    const original = r[key]!;
+  const original = r && typeof r[key] === "string" ? r[key] : undefined;
+  const originalNext = result.content.nextOffset;
+  // Each attempt starts from the whole window; false when not one character fits.
+  const fit = () => {
+    if (original === undefined) {
+      return size() <= RECORD_RESPONSE_BYTES;
+    }
+    r![key] = original;
+    result.content.nextOffset = originalNext;
+    if (size() <= RECORD_RESPONSE_BYTES) {
+      return true;
+    }
     let low = 0,
       high = original.length;
     while (low < high) {
       const mid = Math.ceil((low + high) / 2);
-      r[key] = original.slice(0, mid);
+      r![key] = original.slice(0, mid);
       result.content.nextOffset = next(result.content.offset, mid, result.content.totalChars);
       if (size() <= RECORD_RESPONSE_BYTES) {
         low = mid;
@@ -155,13 +165,20 @@ function boundRecord(result: RecordOutput, input: RecordInput, compact = false):
     if (splitsPair(original, low)) {
       low--;
     }
-    r[key] = original.slice(0, low);
+    r![key] = original.slice(0, low);
     result.content.nextOffset = next(result.content.offset, low, result.content.totalChars);
-    if (!low && original.length) {
-      throw new Error(
-        "Record details exceed response budget. Use view=raw, metadataView=none and no evidence/references for paged original text.",
-      );
-    }
+    return low > 0 && size() <= RECORD_RESPONSE_BYTES;
+  };
+  let fits = fit();
+  if (!fits && compact && metadata?.fields !== undefined) {
+    delete metadata.fields;
+    (result.omitted ??= []).push("metadata.fields");
+    fits = fit();
+  }
+  if (!fits && original) {
+    throw new Error(
+      "Record details exceed response budget. Use view=raw, metadataView=none and no evidence/references for paged original text.",
+    );
   }
   if (size() > RECORD_RESPONSE_BYTES) {
     throw new Error(

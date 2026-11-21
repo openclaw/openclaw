@@ -117,6 +117,30 @@ describe("update run ledger compaction", () => {
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
   });
 
+  it.each([
+    { name: "byte", count: 40, detail: "diagnostic ".repeat(100) },
+    { name: "step", count: 140, detail: "diagnostic" },
+  ])("keeps warning rows ahead of plain steps across the $name bound", ({ count, detail }) => {
+    const options = isolatedOptions();
+    const run = ledger.createUpdateRun({ trigger: "chat" }, options);
+    const write = (step: string) =>
+      ledger.recordUpdateRunStep(run.runId, { step, status: "completed", detail: step }, options);
+    write("warning:finalize:plugins:skipped");
+    write("warning:update-channel-note");
+    for (let index = 0; index < count; index++) {
+      ledger.recordUpdateRunStep(
+        run.runId,
+        { step: `plugin-check-${index}`, status: "completed", detail },
+        options,
+      );
+    }
+    ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    const report = renderUpdateRunReport(
+      toPublicUpdateRun(ledger.getUpdateRun(run.runId, options)!),
+    );
+    expect(report.headline).toContain("2 warnings need attention");
+  });
+
   it("reads and compacts pre-timing rows without adding timing steps", () => {
     const options = isolatedOptions();
     const runId = "00000000-0000-4000-8000-000000000098";

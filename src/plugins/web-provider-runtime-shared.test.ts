@@ -231,26 +231,32 @@ describe("web-provider-runtime-shared", () => {
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
-  it("caches setup web provider plugin loads by default", () => {
-    const loadedRegistry = { source: "setup" };
-    const mapRegistryProviders = vi.fn(() => ["provider"]);
-    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+  it.each(["sync", "async"] as const)(
+    "preserves cached setup load options during %s web provider discovery",
+    async (mode) => {
+      const resolve = mode === "async" ? resolvePluginWebProvidersAsync : resolvePluginWebProviders;
+      const load = mode === "async" ? mocks.loadOpenClawPluginsAsync : mocks.loadOpenClawPlugins;
+      const installRecords = { brave: { source: "npm" as const, spec: "brave@1" } };
+      const pendingStateMigrations = [
+        { pluginId: "brave", reason: "upgrade", command: "openclaw doctor --fix" },
+      ];
+      load.mockReturnValue(createEmptyPluginRegistry());
 
-    const providers = resolvePluginWebProviders(
-      {
-        config: {},
-        mode: "setup",
-      },
-      resolution({
-        mapRegistryProviders,
-        resolveBundledPublicArtifactProviders: () => null,
-      }),
-    );
+      const providers = await resolve(
+        { config: {}, mode: "setup", installRecords, pendingStateMigrations },
+        resolution({ mapRegistryProviders: () => ["provider"] }),
+      );
 
-    expect(providers).toEqual(["provider"]);
-    expect(mockArg(mocks.loadOpenClawPlugins).cache).toBe(true);
-    expect(mockArg(mocks.loadOpenClawPlugins).onlyPluginIds).toEqual(["brave"]);
-  });
+      expect(providers).toEqual(["provider"]);
+      expect(mocks.buildPluginRuntimeLoadOptions).toHaveBeenCalledWith(
+        expect.objectContaining({ installRecords }),
+        expect.objectContaining({ pendingStateMigrations }),
+      );
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({ cache: true, onlyPluginIds: ["brave"], pendingStateMigrations }),
+      );
+    },
+  );
 
   it("uses bundled runtime artifacts before loading a plugin registry", () => {
     const resolveBundledRuntimeArtifactProviders = vi.fn(() => ["provider"]);

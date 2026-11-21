@@ -5,7 +5,7 @@ import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runt
 import {
   resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   type TelegramMediaKind,
 } from "./bot/body-helpers.js";
 import {
@@ -14,6 +14,7 @@ import {
   normalizeForwardedContext,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import {
   isTelegramMessageCacheSourceMessage,
   parseTelegramResolvedMedia,
@@ -63,7 +64,9 @@ export function isGroupMessage(msg: Message): boolean {
 
 export function resolveReplyMessage(msg: Message) {
   if (msg.reply_to_message) {
-    return msg.reply_to_message;
+    // Telegram links each plain forum-topic message to the topic's service
+    // message. That link is not a reply and carries nothing to quote.
+    return isTelegramForumServiceMessage(msg.reply_to_message) ? undefined : msg.reply_to_message;
   }
   const externalReply = msg.external_reply;
   return externalReply?.chat && externalReply.chat.id === msg.chat?.id ? externalReply : undefined;
@@ -105,7 +108,7 @@ export function normalizeMessageNode(
     body = preserveWhitespace ? text : text.trim();
   } else {
     const nonText = resolveTelegramNonTextBody(msg);
-    body = nonText ? nonText.text : resolveTelegramRichMessageBody(msg);
+    body = nonText ? nonText.text : resolveTelegramRichMessagePlaceholder(msg);
   }
   const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding);
   const threadId =

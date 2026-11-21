@@ -133,6 +133,7 @@ export function createPostReadyMaintenanceScheduleParams(
     delayMs: 1,
     isClosing: () => false,
     waitForPostReadyWork: async () => {},
+    scheduleSessionFactsBackfill: vi.fn(),
     startupMaintenance: {
       startupSessionDatabases: [],
       pluginRuntime: { registry: createEmptyPluginRegistry() },

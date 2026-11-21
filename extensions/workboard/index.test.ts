@@ -26,7 +26,7 @@ describe("Workboard plugin registration", () => {
       id: "workboard",
       label: "Workboard",
       placement: "route:workboard",
-      icon: "kanban",
+      icon: "workboard",
       group: "control",
       requiredScopes: ["operator.read"],
     });

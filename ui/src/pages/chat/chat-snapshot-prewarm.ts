@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { finishBootFrame } from "../../app/boot-composer.ts";
 import { loadChatDetailsDesktopComposition } from "./components/chat-details-desktop-loader.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
@@ -15,6 +16,7 @@ export type PrewarmedSnapshot = {
   cancelled: boolean;
   promise: Promise<unknown>;
   ready?: Promise<void>;
+  detailsReady?: Promise<void>;
   prepared?: {
     promise: PreparedSnapshotRead;
     snapshot?: Awaited<PreparedSnapshotRead>;
@@ -39,6 +41,7 @@ export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
 
 export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   if (pending && (cacheKey === undefined || pending.cacheKey === cacheKey)) {
+    finishBootFrame();
     pending.cancelled = true;
     pending = undefined;
   }
@@ -75,7 +78,10 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         const docking = asOptionalRecord(details?.docking);
         // Only the viewport identity is known before the pane supplies its other layout facts.
         if (docking?.wide === true && matchesDockingViewport(docking.layout)) {
-          void loadChatDetailsDesktopComposition().catch(() => undefined);
+          entry.detailsReady = loadChatDetailsDesktopComposition().then(
+            () => undefined,
+            () => undefined,
+          );
         }
         return record;
       })
@@ -89,10 +95,13 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         import("./session-snapshot-store.ts"),
         loadChatHistoryStateValidator(),
       ]);
-      if (pending === entry) {
-        await readPrewarmedChatSnapshot(cacheKey);
+      if (pending !== entry || (await readPrewarmedChatSnapshot(cacheKey))) {
+        return;
       }
     } catch {}
+    if (pending === entry) {
+      finishBootFrame();
+    }
   })();
   return entry.ready;
 }

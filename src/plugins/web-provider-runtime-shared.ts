@@ -33,6 +33,8 @@ export type ResolvePluginWebProvidersParams = {
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
+  installRecords?: PluginLoadOptions["installRecords"];
+  pendingStateMigrations?: PluginLoadOptions["pendingStateMigrations"];
 };
 
 export type ResolveRuntimeWebProvidersParams = Omit<ResolvePluginWebProvidersParams, "mode">;
@@ -171,6 +173,7 @@ function* resolvePluginWebProviderSteps<TEntry>(
             workspaceDir,
             env,
             logger: pluginRuntimeLoaderLogger,
+            installRecords: params.installRecords,
             ...(params.manifestRecords
               ? { manifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
               : {}),
@@ -179,6 +182,7 @@ function* resolvePluginWebProviderSteps<TEntry>(
             onlyPluginIds: pluginIds,
             cache: true,
             activate: false,
+            pendingStateMigrations: params.pendingStateMigrations,
           },
         ),
       );
@@ -231,6 +235,7 @@ function* resolvePluginWebProviderSteps<TEntry>(
       workspaceDir,
       env,
       logger: pluginRuntimeLoaderLogger,
+      installRecords: params.installRecords,
       manifestRegistry: params.manifestRecords
         ? { plugins: [...params.manifestRecords], diagnostics: [] }
         : undefined,
@@ -238,6 +243,7 @@ function* resolvePluginWebProviderSteps<TEntry>(
     {
       cache: true,
       activate: false,
+      pendingStateMigrations: params.pendingStateMigrations,
       ...(hasExplicitPluginIdScope(candidatePluginIds)
         ? { onlyPluginIds: candidatePluginIds }
         : {}),
@@ -325,7 +331,7 @@ function* resolvePluginWebProviderSteps<TEntry>(
         plugins: [...inspectedManifests],
         diagnostics: current.loadContext.manifestRegistry?.diagnostics ?? [],
       },
-      installRecords: current.loadContext.installRecords,
+      installRecords: current.loadContext.installRecords ?? params.installRecords,
       preferBuiltPluginArtifacts: current.loadContext.preferBuiltPluginArtifacts,
       expectedSourceDigests: current.loadContext.expectedSourceDigests,
     };

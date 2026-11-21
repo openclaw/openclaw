@@ -396,13 +396,11 @@ suite.define(() => {
         ".sidebar-identity-card[data-connection-status=reconnecting]",
       );
       await retainedStatus.waitFor({ state: "visible" });
-      expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
+      expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting");
       await expect
         .poll(async () => (await composer.boundingBox())!.x - (await flagRight()))
         .toBeGreaterThanOrEqual(0);
-      const identityTooltip = page
-        .getByRole("tooltip")
-        .filter({ hasText: "Identity and app menu for Owner:" });
+      const statusTooltip = page.getByRole("tooltip").filter({ hasText: /^Reconnecting$/ });
       const recovery = flag.locator(".gateway-status");
       await recovery.waitFor({ state: "visible" });
       expect(await retainedStatus.getAttribute("title")).toBe("");
@@ -412,8 +410,8 @@ suite.define(() => {
       await retainedStatus.hover();
       await recovery.waitFor({ state: "visible" });
       await page.clock.runFor(200);
-      expect(await identityTooltip.count()).toBe(0);
-      expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
+      expect(await statusTooltip.count()).toBe(0);
+      expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting");
       expect(
         await recovery.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
@@ -441,10 +439,10 @@ suite.define(() => {
       await retainedStatus.hover();
       await page.clock.runFor(200);
       await flag.waitFor({ state: "hidden" });
-      await identityTooltip.waitFor({ state: "visible" });
+      await statusTooltip.waitFor({ state: "visible" });
       await retainedStatus.focus();
       expect(await flag.isVisible()).toBe(false);
-      expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
+      expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting");
       await closeChatDetails(page);
       await page.setViewportSize({ width: 900, height: 900 });
       await page.mouse.move(600, 400);
@@ -454,7 +452,7 @@ suite.define(() => {
       await retainedStatus.hover();
       await page.clock.runFor(200);
       expect(await flag.isVisible()).toBe(false);
-      await identityTooltip.waitFor({ state: "visible" });
+      await statusTooltip.waitFor({ state: "visible" });
     });
   });
 
@@ -500,11 +498,11 @@ suite.define(() => {
         const footer = page.locator(".sidebar-footer-bar");
         const connectionStatus = page.locator(".sidebar-shell__connection .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
-        await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
+        await connectionStatus.getByText("Reconnecting · 2 queued", { exact: true }).waitFor();
         expect(await connectionStatus.getByRole("button").count()).toBe(0);
         expect(await connectionStatus.count()).toBe(1);
         expect(await connectionStatus.locator(".gateway-status__label").textContent()).toBe(
-          "Reconnecting… · 2 queued",
+          "Reconnecting · 2 queued",
         );
         expect(await content.boundingBox()).toEqual(connectedContentBounds);
         expect((await connectionStatus.boundingBox())!.height).toBe(28);
@@ -515,12 +513,12 @@ suite.define(() => {
           true,
         );
         expect(await footer.locator(".gateway-status").count()).toBe(0);
-        expect(await identityStatus.getAttribute("aria-label")).toContain("Reconnecting…");
+        expect(await identityStatus.getAttribute("aria-label")).toContain("Reconnecting");
         expect(await identityStatus.textContent()).toContain("Alex");
         expect(await identityStatus.locator("[role=status]").count()).toBe(0);
         const announcement = page.locator(".shell > .sr-only[role=status]");
         expect(await announcement.count()).toBe(1);
-        expect(await announcement.textContent()).toBe("Reconnecting… · 2 queued");
+        expect(await announcement.textContent()).toBe("Reconnecting · 2 queued");
         expect(await connectionStatus.getAttribute("role")).toBeNull();
         expect(await footer.textContent()).not.toContain("in outbox");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -542,9 +540,9 @@ suite.define(() => {
           }),
         ).toEqual({ inert: true, focused: false });
         expect(await page.locator(".sidebar-connection-flag").isVisible()).toBe(false);
-        expect(await mobileStatus.textContent()).toBe("Reconnecting…");
+        expect(await mobileStatus.textContent()).toBe("Reconnecting");
         expect(await page.locator(".chat-queue__item").count()).toBe(2);
-        expect(await announcement.textContent()).toBe("Reconnecting… · 2 queued");
+        expect(await announcement.textContent()).toBe("Reconnecting · 2 queued");
         // The shell owns the single live announcement, including queued messages.
         expect(await mobileStatus.getAttribute("role")).toBeNull();
         expect(await mobileStatus.getAttribute("aria-live")).toBeNull();

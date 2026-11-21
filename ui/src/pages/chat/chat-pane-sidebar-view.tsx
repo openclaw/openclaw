@@ -192,6 +192,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         <Loading fallback={<RegionPlaceholder />}>
           <ChatSidebarRegion
             ref={regionRefs}
+            visualPresentation={props.visualPresentation}
             elements={elements}
             panelIdPrefix={props.panelIdPrefix}
             mobileHost={props.mobileHost}

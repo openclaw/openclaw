@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { PluginCredentialInspection } from "../../../../packages/gateway-protocol/src/schema/plugin-credentials.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
+import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { domProbe } from "../../test-helpers/dom-probe.ts";
 import { nextFrame } from "../../test-helpers/modal-dialog.ts";
@@ -64,6 +65,7 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     baseHash: "revision",
     gateway,
     canInspect: true,
+    configState: createInitialConfigState(),
     getPresentationLifetime: () => presentationLifetime.promise,
     onCommit: vi.fn().mockResolvedValue(true),
     onDiscard: vi.fn().mockResolvedValue(true),
@@ -154,6 +156,24 @@ async function open(editor: HTMLElement, text = "Edit reference") {
   await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
   return { dialog, trigger };
 }
+function identifierInput(editor: Element) {
+  return editor.querySelector<HTMLInputElement>('input[aria-label="Identifier"]')!;
+}
+async function customProviderInput(editor: Element) {
+  editor.querySelector<HTMLButtonElement>('button[aria-label^="Provider:"]')!.click();
+  let option: HTMLElement | undefined;
+  await vi.waitFor(() => {
+    option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (node) => node.textContent?.trim() === "Enter another provider…",
+    );
+    expect(option).toBeDefined();
+  });
+  option!.click();
+  await vi.waitFor(() =>
+    expect(editor.querySelector('input[aria-label="Custom provider alias"]')).not.toBeNull(),
+  );
+  return editor.querySelector<HTMLInputElement>('input[aria-label="Custom provider alias"]')!;
+}
 function editInput(element: HTMLInputElement, value: string) {
   element.value = value;
   element.dispatchEvent(new Event("input", { bubbles: true }));
@@ -163,7 +183,7 @@ it("preserves literal and reference drafts through same-client reconnects", asyn
   const { editor, context, update, input } = await mount();
   editInput(input, "synthetic-unsaved-key");
   await open(editor, "Use a secret reference");
-  const referenceInput = dialogInputs(editor)[1]!;
+  const referenceInput = identifierInput(editor);
   editInput(referenceInput, "DRAFT_KEY");
   const gateway = context.gateway;
   const connectedGateway = { ...gateway };
@@ -215,12 +235,11 @@ it("keeps a successor reference busy when a retired save completes", async () =>
   await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(2));
   await vi.waitFor(() => expect(editor.textContent).not.toContain("Loading"));
   await open(editor);
-  const id = dialogInputs(editor)[1]!;
+  const id = identifierInput(editor);
   editInput(id, "SUCCESSOR_KEY");
   flush();
   click("Save");
   expect(context.onCommit).toHaveBeenCalledTimes(2);
-
   retired.resolve(true);
   await retired.promise;
   await nextFrame();
@@ -278,10 +297,11 @@ it("retries a failed inspection without remounting the credential input", async 
 it("retries inspection after a saved credential without retaining the command error", async () => {
   const { editor, context, scope, input } = await mount();
   scope.client.request.mockRejectedValueOnce(new Error("Saved key inspection unavailable"));
+  editInput(input, "synthetic-saved-ke");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
   editInput(input, "synthetic-saved-key");
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await vi.waitFor(() => expect(editor.textContent).toContain("Saved key inspection unavailable"));
-
   button(editor, "Retry").click();
   await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(3));
   await vi.waitFor(() => expect(editor.querySelector('[role="alert"]')).toBeNull());
@@ -374,22 +394,25 @@ it.each(["env", "file"] as const)("edits %s references; Cancel never patches", a
   const { trigger } = await open(editor);
   expect(trigger.getAttribute("aria-describedby")).toBe("credential-help");
   expect(editor.querySelector<HTMLSelectElement>("select")!.value).toBe(source);
-  const inputs = dialogInputs(editor);
-  expect([...inputs].map((input) => input.value)).toEqual(["original", id]);
-  editInput(inputs[0]!, "changed");
+  expect(editor.querySelector('button[aria-label^="Provider:"]')?.textContent).toContain(
+    "original",
+  );
+  expect(identifierInput(editor).value).toBe(id);
+  editInput(await customProviderInput(editor), "changed");
   click("Cancel");
   expect(context.onCommit).not.toHaveBeenCalled();
   expect(document.activeElement).toBe(trigger);
   await open(editor);
-  const next = dialogInputs(editor);
-  expect(next[0]!.value).toBe("original");
-  editInput(next[0]!, "changed");
+  expect(editor.querySelector('button[aria-label^="Provider:"]')?.textContent).toContain(
+    "original",
+  );
+  editInput(await customProviderInput(editor), "changed");
   const changedSource = source === "env" ? "file" : "env";
   const changedId = changedSource === "file" ? "/changed/key" : "CHANGED_KEY";
   const select = editor.querySelector<HTMLSelectElement>("select")!;
   select.value = changedSource;
   select.dispatchEvent(new Event("change", { bubbles: true }));
-  editInput(next[1]!, changedId);
+  editInput(identifierInput(editor), changedId);
   flush();
   click("Save");
   await committed({ source: changedSource, provider: "changed", id: changedId });
@@ -401,7 +424,7 @@ it("retains the reference draft and Cancel until a failed write's retry succeeds
   );
   vi.mocked(context.onCommit).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
   await open(editor);
-  const id = dialogInputs(editor)[1]!;
+  const id = identifierInput(editor);
   editInput(id, "CHANGED_KEY");
   flush();
   click("Save");
@@ -427,7 +450,7 @@ it("clears a rejected discard while retrying without losing the reference draft"
     .mockRejectedValueOnce(new Error("Discard unavailable"))
     .mockReturnValueOnce(retried.promise);
   await open(editor);
-  const id = dialogInputs(editor)[1]!;
+  const id = identifierInput(editor);
   editInput(id, "CHANGED_KEY");
   await vi.waitFor(() => expect(button(editor, "Save").disabled).toBe(false));
   button(editor, "Save").click();
@@ -438,7 +461,7 @@ it("clears a rejected discard while retrying without losing the reference draft"
   button(editor, "Cancel").click();
   await vi.waitFor(() => expect(button(editor, "Cancel").disabled).toBe(true));
   await vi.waitFor(() => expect(editor.querySelector('[role="alert"]')).toBeNull());
-  expect(dialogInputs(editor)[1]).toBe(id);
+  expect(identifierInput(editor)).toBe(id);
   expect(id.value).toBe("CHANGED_KEY");
   expect(modal(editor)).not.toBeNull();
   retried.resolve(true);
@@ -462,7 +485,7 @@ it("keeps controls within a mobile viewport and rejects invalid environment IDs"
   expect(rect.left).toBeGreaterThanOrEqual(0);
   expect(rect.right).toBeLessThanOrEqual(width);
   expect(rect.bottom).toBeLessThanOrEqual(844);
-  const input = dialogInputs(editor)[1]!;
+  const input = identifierInput(editor);
   editInput(input, "invalid lower-case env id");
   flush();
   expect(button(editor, "Save").disabled).toBe(true);
@@ -496,5 +519,64 @@ it("lets an administrator inspect a read-only reference without changing it", as
   await open(editor);
   expect(button(editor, "Save").disabled).toBe(true);
   expect([...dialogInputs(editor)].every((input) => input.disabled)).toBe(true);
+  expect(editor.querySelector<HTMLButtonElement>('button[aria-label^="Provider:"]')?.disabled).toBe(
+    true,
+  );
   expect(context.onCommit).not.toHaveBeenCalled();
+});
+
+it("offers configured providers for the chosen source and preserves an unresolved saved alias", async () => {
+  const { editor, context, update, committed } = await mount(
+    reference("file", "/service/key", "retired", true),
+    1174,
+  );
+  await update({
+    configState: {
+      ...createInitialConfigState(),
+      configForm: {
+        secrets: {
+          defaults: { env: "environment", file: "team", exec: "vault" },
+          providers: {
+            shell: { source: "env" },
+            team: { source: "file" },
+            "team-backup": { source: "file" },
+            vault: { source: "exec" },
+          },
+        },
+      },
+    },
+  });
+  await open(editor);
+  const picker = editor.querySelector<HTMLButtonElement>('button[aria-label^="Provider:"]');
+  expect(picker).not.toBeNull();
+  expect(picker?.textContent).toContain("retired");
+  picker!.click();
+  await vi.waitFor(() =>
+    expect(document.querySelector('[role="option"][data-value="team-backup"]')).not.toBeNull(),
+  );
+  expect(document.querySelector('[role="option"][data-value="vault"]')).toBeNull();
+  document.querySelector<HTMLElement>('[role="option"][data-value="team-backup"]')!.click();
+  flush();
+  expect(context.onCommit).not.toHaveBeenCalled();
+  button(editor, "Save").click();
+  await committed({ source: "file", provider: "team-backup", id: "/service/key" });
+});
+
+it("uses the configured environment default only for new references", async () => {
+  const { editor, context, update, committed } = await mount({ kind: "missing" });
+  await update({
+    configState: {
+      ...createInitialConfigState(),
+      configForm: { secrets: { defaults: { env: "shell-env" } } },
+    },
+  });
+  await open(editor, "Use a secret reference");
+  expect(editor.querySelector('button[aria-label^="Provider:"]')?.textContent).toContain(
+    "shell-env",
+  );
+  editInput(identifierInput(editor), "SEARCH_API_KEY");
+  flush();
+  button(editor, "Save").click();
+  await committed({ source: "env", provider: "shell-env", id: "SEARCH_API_KEY" });
+  expect(context.onCommit).toHaveBeenCalledOnce();
 });

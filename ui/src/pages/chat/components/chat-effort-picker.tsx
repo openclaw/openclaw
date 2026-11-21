@@ -90,7 +90,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
       ...(props.fastMode.nextValue === ""
         ? []
         : [{ value: "on" as const, label: t("chat.modelControls.fast") }]),
-      ...(props.fastMode.ultrafastSupported !== undefined || ultrafast
+      ...(props.fastMode.ultrafastSupported === true || ultrafast
         ? [
             {
               value: "ultrafast" as const,

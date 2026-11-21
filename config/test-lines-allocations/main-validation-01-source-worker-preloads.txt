@@ -1,2 +1,0 @@
-9
-# Preserve focused source-worker-preloads regression coverage against main 071ea8338d93.

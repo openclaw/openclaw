@@ -675,6 +675,25 @@ index d405dea2b5c03f70ef94a82d5e4e10c104164154..01e6099aabf7fb6e53249327d53d0622
  		on: (cb) => processOn("message", cb),
  		off: (cb) => processOff("message", cb),
  		teardown: () => {
+diff --git a/dist/chunks/init.PvxYpuCm.js b/dist/chunks/init.PvxYpuCm.js
+index 3b34604d09a334495d55cc25ad5bb137137a36bf..e47ed0751af94439b7939032911e830acd362ae6 100644
+--- a/dist/chunks/init.PvxYpuCm.js
++++ b/dist/chunks/init.PvxYpuCm.js
+@@ -214,6 +214,14 @@ function createImportMetaEnvProxy() {
+ 			if (booleanKeys.includes(key)) return !!process.env[key];
+ 			return process.env[key];
+ 		},
++		deleteProperty(_, key) {
++			if (typeof key !== "string") return true;
++			return delete process.env[key];
++		},
++		has(_, key) {
++			if (typeof key !== "string") return false;
++			return key in process.env;
++		},
+ 		set(_, key, value) {
+ 			if (typeof key !== "string") return true;
+ 			if (booleanKeys.includes(key)) process.env[key] = value ? "1" : "";
 diff --git a/dist/chunks/plugin.d.C8mmycim.d.ts b/dist/chunks/plugin.d.C8mmycim.d.ts
 index b8af1e7401b5b418cd49ab017d9bc3fdbe590ae3..09cdb33f80bd1596bf4081b8855f0448b08ff938 100644
 --- a/dist/chunks/plugin.d.C8mmycim.d.ts
@@ -762,6 +781,25 @@ index 5c235b31744aebca14b9a79dd0836fa0faa9740f..703abcdac3d6196667a6c69509ca5bfd
  	};
  }
  // throttle based on summary reporter's DURATION_UPDATE_INTERVAL_MS
+diff --git a/dist/module-evaluator.js b/dist/module-evaluator.js
+index 9553a810dea6bd70ccf2af95ea485fced78abe32..4997a3c7be07e14474e3f3b7c8f1a61afaef86d7 100644
+--- a/dist/module-evaluator.js
++++ b/dist/module-evaluator.js
+@@ -298,6 +298,14 @@ function createImportMetaEnvProxy() {
+ 			if (booleanKeys.includes(key)) return !!process.env[key];
+ 			return process.env[key];
+ 		},
++		deleteProperty(_, key) {
++			if (typeof key !== "string") return true;
++			return delete process.env[key];
++		},
++		has(_, key) {
++			if (typeof key !== "string") return false;
++			return key in process.env;
++		},
+ 		set(_, key, value) {
+ 			if (typeof key !== "string") return true;
+ 			if (booleanKeys.includes(key)) process.env[key] = value ? "1" : "";
 diff --git a/dist/node.d.ts b/dist/node.d.ts
 index fce7738ae75bb25bdf007f95074c964e62186def..07e0682338342763adedcc34c713dd38bd61c7a5 100644
 --- a/dist/node.d.ts

@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import { JSDOM } from "jsdom";
+import { marked } from "marked";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -129,35 +131,29 @@ it.each([
   },
 );
 
-it.each([
-  {
-    rich: false,
-    output: [
-      "# Docs search: plugin \\[allowlist\\]\n\n- [Plugin \\[allowlist\\]](https://docs.openclaw.ai/plugins/allowlist) - How to \\(configure\\).",
-    ],
-  },
-  {
-    rich: true,
-    output: [
-      "Docs search: plugin [allowlist]",
-      "- Plugin [allowlist] (docs.openclaw.ai/plugins/allowlisthttps://docs.openclaw.ai/plugins/allowlist)",
-      "  How to (configure).",
-    ],
-  },
-])("renders search results with rich=$rich", async ({ rich, output }) => {
+it.each([false, true])("renders literal search text with rich=%s", async (rich) => {
+  const literal = "Use <options> &copy; **bold** `PATH` [a]";
   vi.mocked(isRich).mockReturnValue(rich);
-  respond([
-    {
-      title: "Plugin [allowlist]",
-      link: "https://docs.openclaw.ai/plugins/allowlist",
-      snippet: "How to (configure).",
-    },
-  ]);
-  await search(["plugin", "[allowlist]"]);
-
+  respond([{ title: literal, link: "https://docs.openclaw.ai/cli/docs", snippet: literal }]);
+  await search([literal]);
   expect(runtime.error).not.toHaveBeenCalled();
   expect(runtime.exit).not.toHaveBeenCalled();
-  expect(runtime.log.mock.calls).toEqual(output.map((line) => [line]));
+  if (rich) {
+    expect(runtime.log.mock.calls).toEqual([
+      [`Docs search: ${literal}`],
+      [`- ${literal} (docs.openclaw.ai/cli/docshttps://docs.openclaw.ai/cli/docs)`],
+      [`  ${literal}`],
+    ]);
+    return;
+  }
+  const document = new JSDOM(await marked.parse(String(runtime.log.mock.calls[0]?.[0]))).window
+    .document;
+  expect([
+    document.querySelector("h1")?.textContent,
+    document.querySelector("a")?.textContent,
+    document.querySelector("li")?.textContent,
+  ]).toEqual([`Docs search: ${literal}`, literal, `${literal} - ${literal}`]);
+  expect(document.querySelector("a")?.href).toBe("https://docs.openclaw.ai/cli/docs");
 });
 
 it("rejects oversized docs search responses", async () => {

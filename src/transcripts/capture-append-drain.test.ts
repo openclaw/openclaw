@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TranscriptStartError } from "./capture-startup.js";
 import { isTranscriptSessionStarting, startTranscripts } from "./capture.js";
-import type { TranscriptSessionDescriptor, TranscriptStartRequest } from "./provider-types.js";
+import type { TranscriptStartRequest } from "./provider-types.js";
 import {
   transcriptStatusRoom as room,
   useTranscriptStatusFixture,
 } from "./status.producer.test-harness.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 const fixture = useTranscriptStatusFixture();
 type Fixture = ReturnType<typeof fixture>;
