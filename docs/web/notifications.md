@@ -102,6 +102,8 @@ Only browsers bound to your profile can receive them. With **Private** detail
 **Detailed**, you see the sender's sanitized title and body on one line. When
 named operator roles apply to the sender, only you or an operator with
 `operator.admin` can send to your profile.
+Clicking one opens an ordinary Control UI page; it never opens an approval,
+question, or device-pairing page.
 
 ### Use more than one Gateway on one phone
 

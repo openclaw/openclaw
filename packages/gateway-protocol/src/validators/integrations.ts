@@ -41,7 +41,8 @@ function webPushSendDiagnostics(data: unknown) {
   for (const error of errors) {
     if (error.keyword === "pattern" && error.instancePath === "/path") {
       error.message =
-        "must be a relative Control UI path without query, fragment, empty or dot segments";
+        "must be a relative Control UI path without query, fragment, empty or dot segments, " +
+        "or approval, question, or pairing routes";
     }
   }
   return errors;
