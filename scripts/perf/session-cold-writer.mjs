@@ -4,6 +4,10 @@
  * Default fixture: 50,000 events / 220,291,661 raw UTF-8 bytes, qualified navigation and full FTS.
  * Run against a fresh copy: --state-dir <copy> [--source-root <baseline-checkout>] [--sweep].
  * --sweep selects the candidate's deferred cleanup; baseline has no sweep operation.
+ * --snapshot-only stops after preparation and reports snapshots, exact archive metadata and RSS.
+ * --snapshot-profile adds stage timings via an in-memory source transform (no production edits).
+ * JSON timing includes envelope assembly; row reads include SQLite payload decompression.
+ * Publish timing includes write/fsync/link/directory sync and its internal hash readback.
  * --profile records native SQL and zstd costs separately from uninstrumented timings.
  * --flow uses actual maintenance and concurrent transcript appends, with the companion observer preloaded:
  * NODE_OPTIONS=--import=./scripts/perf/session-cold-writer-observer.mjs node --import ./scripts/tsx.mjs \
@@ -37,6 +41,8 @@ const { values } = parseArgs({
     prepare: { type: "boolean" },
     sweep: { type: "boolean" },
     profile: { type: "boolean" },
+    "snapshot-only": { type: "boolean" },
+    "snapshot-profile": { type: "boolean" },
     flow: { type: "boolean" },
     "restore-flow": { type: "boolean" },
     appends: { type: "string", default: "200" },
@@ -52,6 +58,9 @@ process.env.OPENCLAW_HOME = path.join(root, "home");
 process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
 process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
 const load = (relative) => import(pathToFileURL(path.join(source, relative)).href);
+const snapshotProfile = values["snapshot-profile"]
+  ? (await import("./session-cold-snapshot-profile.mjs")).installSnapshotProfile()
+  : undefined;
 const agent = await load("src/state/openclaw-agent-db.ts");
 const state = await load("src/state/openclaw-state-db.ts");
 const entry = await load("src/config/sessions/session-accessor.sqlite-entry.ts");
@@ -279,7 +288,14 @@ async function measureOwners() {
     }
   }
   const host = environment();
+  const clock = Date.now;
   try {
+    // Make archive timestamps comparable too; hold timings use performance.now().
+    if (values["snapshot-only"]) {
+      Date.now = () => 1_800_000_000_000;
+    }
+    const rssBefore = process.memoryUsage().rss;
+    const peakRssBefore = process.resourceUsage().maxRSS * 1024;
     const start = performance.now();
     const prepared = await prepareSessionColdBatchInWorker({
       databaseOptions: options,
@@ -293,6 +309,28 @@ async function measureOwners() {
     assert.equal(prepared.prepared.length, fixture.sessions);
     const preparationMs = performance.now() - start;
     const snapshots = transactions.splice(0);
+    if (values["snapshot-only"]) {
+      console.log(
+        JSON.stringify({
+          fixture,
+          environment: host,
+          source,
+          preparationMs,
+          snapshots,
+          profile: snapshotProfile?.result(),
+          rssBefore,
+          rssAfter: process.memoryUsage().rss,
+          peakRssBefore,
+          peakRssAfter: process.resourceUsage().maxRSS * 1024,
+          prepared: prepared.prepared.map(({ archive, chunks, envelopeBytes }) => ({
+            archive,
+            chunks,
+            envelopeBytes,
+          })),
+        }),
+      );
+      return;
+    }
     const flipStart = performance.now();
     const result = owner.mutateSessionColdTranscriptInWorker(
       {
@@ -415,6 +453,7 @@ async function measureOwners() {
       }),
     );
   } finally {
+    Date.now = clock;
     for (const restore of undo.toReversed()) {
       restore();
     }
