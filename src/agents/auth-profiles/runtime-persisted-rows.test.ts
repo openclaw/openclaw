@@ -3,6 +3,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
@@ -212,8 +216,19 @@ it.each(["agent", "shared-state"] as const)(
     expect(await resolve()).toBe(afterRollback);
     expect(read).toHaveBeenCalledTimes(2);
 
+    const sessionToken = () =>
+      readSqliteDatabaseScopedWriteToken(database, [
+        sqliteSessionIdWriteScope("unrelated-history"),
+      ]);
+    const beforeState = sessionToken();
+    expect(beforeState).toEqual(expect.any(String));
     const updatedState = { lastGood: { example: "example:key" } };
     transact(() => writeAuthProfileJsonCell(database, "state", kind, updatedState));
+    if (kind === "agent") {
+      expect(sessionToken()).toBe(beforeState);
+    } else {
+      expect(sessionToken()).not.toBe(beforeState);
+    }
     if (kind === "shared-state") {
       const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
@@ -228,15 +243,25 @@ it.each(["agent", "shared-state"] as const)(
     }
     expect((await resolve()).state).toEqual({ status: "readable", raw: updatedState });
     expect(read).toHaveBeenCalledTimes(3);
-    transact(() => {
-      deleteAuthProfileJsonCell(database, "state", kind);
-      deleteAuthProfileJsonCell(database, "store", kind);
-    });
+    const beforeDelete = sessionToken();
+    expect(beforeDelete).toEqual(expect.any(String));
+    transact(() => deleteAuthProfileJsonCell(database, "state", kind));
+    if (kind === "agent") {
+      expect(sessionToken()).toBe(beforeDelete);
+    } else {
+      expect(sessionToken()).not.toBe(beforeDelete);
+    }
+    expect((await resolve()).state).toEqual({ status: "missing", reason: "row" });
+    expect(read).toHaveBeenCalledTimes(4);
+    const beforeCredentialDelete = sessionToken();
+    expect(beforeCredentialDelete).toEqual(expect.any(String));
+    transact(() => deleteAuthProfileJsonCell(database, "store", kind));
+    expect(sessionToken()).not.toBe(beforeCredentialDelete);
     expect(await resolve()).toMatchObject({
       store: { status: "missing", reason: "row" },
       state: { status: "missing", reason: "row" },
     });
-    expect(read).toHaveBeenCalledTimes(4);
+    expect(read).toHaveBeenCalledTimes(5);
   },
 );
 
