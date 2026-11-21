@@ -23,6 +23,9 @@ const suite = createControlUiE2eSuite({
 
 const expectUploadSurface = process.env.OPENCLAW_TERMINAL_UPLOAD_EXPECT_PRESENT !== "0";
 
+// Trusted OS-level paste shortcut: the browser builds the ClipboardEvent itself.
+const nativePasteShortcut = process.platform === "darwin" ? "Meta+V" : "Control+V";
+
 suite.define(() => {
   it.skipIf(!expectUploadSurface)(
     "pastes native catalog upload paths without treating the CLI title as a shell",
@@ -260,7 +263,12 @@ suite.define(() => {
     "stages a pasted clipboard image in the chat terminal composer and submits only on Send",
     async () => {
       await suite.withPage(
-        { serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+        {
+          locale: "en-US",
+          permissions: ["clipboard-read", "clipboard-write"],
+          serviceWorkers: "block",
+          viewport: { width: 1440, height: 900 },
+        },
         async ({ page }) => {
           const sessionKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
           const gateway = await installMockGateway(page, {
@@ -286,45 +294,70 @@ suite.define(() => {
           const composer = embedded.locator("form.tp-composer input");
           await composer.waitFor({ state: "visible" });
 
-          // A text-only paste stays on the native input path: no upload, no preventDefault.
-          const textPastePrevented = await composer.evaluate((input) => {
-            const paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
-            Object.defineProperty(paste, "clipboardData", {
-              value: {
-                items: [{ type: "text/plain", getAsFile: () => null }],
-                getData: () => "echo hi",
-              },
+          // Encode a real PNG in the browser so the paste carries genuine image bytes.
+          const pngBase64 = await page.evaluate(async () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 24;
+            canvas.height = 16;
+            const context = canvas.getContext("2d")!;
+            context.fillStyle = "#c82828";
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            const blob = await new Promise<Blob>((resolve) => {
+              canvas.toBlob((encoded) => resolve(encoded!), "image/png");
             });
-            input.dispatchEvent(paste);
-            return paste.defaultPrevented;
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            let binary = "";
+            for (const byte of bytes) {
+              binary += String.fromCharCode(byte);
+            }
+            return btoa(binary);
           });
-          expect(textPastePrevented).toBe(false);
+          const copyPngToClipboard = async () => {
+            await page.evaluate(async (image) => {
+              const bytes = Uint8Array.from(atob(image), (char) => char.charCodeAt(0));
+              await navigator.clipboard.write([
+                new ClipboardItem({ "image/png": new Blob([bytes], { type: "image/png" }) }),
+              ]);
+            }, pngBase64);
+          };
+
+          // A text-only clipboard paste stays on the native input path: the draft receives
+          // the text and the upload owner admits nothing.
+          await page.evaluate(async () => {
+            await navigator.clipboard.write([
+              new ClipboardItem({ "text/plain": new Blob(["echo hi"], { type: "text/plain" }) }),
+            ]);
+          });
+          await composer.click();
+          await page.keyboard.press(nativePasteShortcut);
+          await expect.poll(() => composer.inputValue()).toBe("echo hi");
           expect(await gateway.getRequests("terminal.upload")).toHaveLength(0);
 
           await composer.fill("cat");
 
-          // A real clipboard paste carrying a PNG image file through the shipped
-          // composer input: the upload owner admits it instead of the input.
-          await composer.evaluate((input) => {
-            const transfer = new DataTransfer();
-            transfer.items.add(
-              new File([new Uint8Array([1, 2, 3])], "pasted.png", { type: "image/png" }),
-            );
-            const paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
-            Object.defineProperty(paste, "clipboardData", { value: transfer });
-            input.dispatchEvent(paste);
-          });
+          // A trusted native paste of that real PNG, delivered by the browser to the
+          // shipped composer input: the upload owner admits it instead of the input.
+          await copyPngToClipboard();
+          await composer.click();
+          await page.keyboard.press(nativePasteShortcut);
 
           await expectRequestCount(gateway, "terminal.upload", 1, 10_000);
-          const pastedUpload = (await gateway.getRequests("terminal.upload"))[0]?.params;
-          expect(pastedUpload).toMatchObject({
-            name: "pasted.png",
-            contentBase64: "AQID",
-          });
+          const pastedUpload = (await gateway.getRequests("terminal.upload"))[0]?.params as {
+            name: string;
+            contentBase64: string;
+          };
+          // Chromium re-encodes clipboard images, so assert the delivered PNG container
+          // and geometry rather than byte equality with the copied file.
+          const stagedBytes = Buffer.from(pastedUpload.contentBase64, "base64");
+          expect(stagedBytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+          expect(stagedBytes.readUInt32BE(16)).toBe(24);
+          expect(stagedBytes.readUInt32BE(20)).toBe(16);
+          expect(pastedUpload.name).toMatch(/\.png$/i);
           const chip = embedded.locator(".tp-attachment");
           await chip.waitFor({ state: "visible" });
-          await expect.poll(() => chip.textContent()).toContain("pasted.png");
+          await expect.poll(() => chip.textContent()).toContain(pastedUpload.name);
           // The attachment is editable before submission: the composer draft survives.
+          expect(await composer.inputValue()).toBe("cat");
           expect((await gateway.getRequests("terminal.input")).length).toBe(0);
 
           await embedded.locator(".tp-composer__submit").click();
