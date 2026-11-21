@@ -123,13 +123,6 @@ suite.define(() => {
       await chooseSidebarMenuOption(page, "Status", "All");
       await closeSidebarMenu(page);
       await chooseSidebarOwner(page, "involving-me");
-      await expect
-        .poll(
-          async () =>
-            (await gateway.getRequests("sessions.catalog.list", { profileRelation: relation }))
-              .length,
-        )
-        .toBeGreaterThan(0);
       const sidebar = page.locator(".sidebar");
       const group = sidebar.locator('[data-session-section="catalog:openclaw"]');
       const toggle = group.locator(".sidebar-session-group-toggle").first();

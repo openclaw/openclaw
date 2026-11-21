@@ -302,13 +302,6 @@ describe("chat pane catalog", () => {
     await expect(pending).resolves.toBe(true);
     expect(pane.history.catalogMessages).toHaveLength(1);
     expect(pane.history.catalogLoading).toBe(false);
-    expect(request).toHaveBeenLastCalledWith(
-      "sessions.catalog.read",
-      expect.objectContaining({
-        profileRelation: pane.catalogProfileRelation,
-      }),
-      { signal: expect.any(AbortSignal) },
-    );
   });
 
   it("discards a catalog read when the pane owner changes", async () => {

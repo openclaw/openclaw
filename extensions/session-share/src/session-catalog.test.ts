@@ -671,7 +671,17 @@ describe("optional source-link command", () => {
       ? { relationship: "owned" as const, target: { type: "github-account" as const, id: "101" } }
       : undefined;
     f.list.mockResolvedValue({
-      nodes: [{ ...linkedNode, commands: [...linkedNode.commands, command] }],
+      nodes: [
+        {
+          ...linkedNode,
+          commands: [
+            ...linkedNode.commands,
+            "openclaw.sessions.list-for-profile.v1",
+            "openclaw.sessions.read-for-profile.v1",
+            command,
+          ],
+        },
+      ],
     });
     f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
     expect((await f.host({ profileRelation }))?.sessions).toEqual([
