@@ -374,6 +374,16 @@ export function createTerminalPanelUpload(host: {
       }
       uploadFiles(Array.from(event.dataTransfer?.files ?? []));
     },
+    handlePaste(event: ClipboardEvent): void {
+      // Clipboard images join the same staging owner as selected and dropped files.
+      // Text-only pastes carry no files and keep the input's own paste behavior.
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (files.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      uploadFiles(files);
+    },
     insertCompleted(this: void): void {
       const batch = activeBatch;
       if (batch?.state === "failed" && batch.paths.length > 0) {
