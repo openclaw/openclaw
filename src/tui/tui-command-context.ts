@@ -34,7 +34,7 @@ export type CommandHandlerContext = {
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: () => void;
   reopenQuestion?: () => void | Promise<void>;
-  runAuthFlow?: (params: { provider?: string }) => Promise<{
+  runAuthFlow?: (params: { provider?: string }) => Promise<void | {
     exitCode: number | null;
     signal: NodeJS.Signals | null;
     commandArgv: string;

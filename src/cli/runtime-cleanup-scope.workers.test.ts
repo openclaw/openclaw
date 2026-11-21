@@ -2,6 +2,10 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  capturePreparedModelRuntimeLifetime,
+  PreparedModelRuntimeClosedError,
+} from "../agents/prepared-model-runtime.lifecycle.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -36,10 +40,12 @@ it("joins shared-state workers after executable cleanup while preserving borrowe
   const read = () =>
     executeExistingOpenClawStateRead(options, { type: "tui.lastSession.read", stateKey });
 
+  const assertModelsCurrent = capturePreparedModelRuntimeLifetime();
   await withCliCommandCleanup(false, async () => {});
   expect(database.db.isOpen).toBe(true);
   await withCliProcessScope(() => withCliCommandCleanup(true, async () => {}));
   expect(database.db.isOpen).toBe(true);
+  assertModelsCurrent();
 
   const workers: Worker[] = [];
   const captureWorker = (worker: Worker) => workers.push(worker);
@@ -56,6 +62,7 @@ it("joins shared-state workers after executable cleanup while preserving borrowe
           expect(workers.some((worker) => worker.threadId !== -1)).toBe(true);
           cleanup?.pluginResources?.adopt({
             async release() {
+              assertModelsCurrent();
               disposalRead = await read();
             },
           });
@@ -69,6 +76,7 @@ it("joins shared-state workers after executable cleanup while preserving borrowe
       ok: true,
       row: { value_json: '"retained for disposal"' },
     });
+    expect(assertModelsCurrent).toThrow(PreparedModelRuntimeClosedError);
     expect.soft(database.db.isOpen).toBe(false);
     expect(workers.length).toBeGreaterThan(0);
     expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
