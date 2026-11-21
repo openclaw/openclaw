@@ -1,8 +1,9 @@
 /**
- * Measure one real package-boundary compiler request after preparing its declarations.
+ * Measure the real package-boundary worker after preparing its declarations.
  * Run: node --import ./scripts/tsx.mjs scripts/perf/extension-boundary-compile-measure.mts
- * REV_OR_FILE_URL CONFIG [--count] [--manifest]. Alternate sources in fresh processes; use external GNU time
- * for total CPU and peak RSS. Instrumented counts are separate from timing evidence.
+ * REV_OR_SNAPSHOT_DIRECTORY_URL CONFIG [--count] [--manifest]. Snapshots contain the
+ * worker and emitter at their repository-relative paths. Alternate sources in fresh
+ * processes; use external GNU time for CPU and peak RSS. Count runs are separate.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -10,7 +11,8 @@ import fs from "node:fs";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { availableParallelism, loadavg, totalmem } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { DeclarationLookup } from "../lib/native-declaration-filesystem.mts";
 import { resolveRepoRoot } from "../lib/repo-root.mjs";
 
 const root = resolveRepoRoot(import.meta.url);
@@ -19,25 +21,28 @@ const config = process.argv[3];
 if (!revision || !config) {
   throw new Error("Expected a revision and prepared package-boundary config");
 }
-const owner = "scripts/lib/native-declaration-emitter.mts";
-const ownerUrl = pathToFileURL(path.join(root, owner)).href;
-const source = revision.startsWith("file:")
-  ? fs.readFileSync(new URL(revision), "utf8")
-  : execFileSync("git", ["show", `${revision}:${owner}`], {
-      cwd: root,
-      encoding: "utf8",
-    });
+const sources = new Map(
+  ["scripts/lib/native-declaration-emitter.mts", "scripts/compile-extension-boundary.mts"].map(
+    (owner) => [
+      pathToFileURL(path.join(root, owner)).href,
+      revision.startsWith("file:")
+        ? fs.readFileSync(path.join(fileURLToPath(revision), owner), "utf8")
+        : execFileSync("git", ["show", `${revision}:${owner}`], { cwd: root, encoding: "utf8" }),
+    ],
+  ),
+);
 const hook = registerHooks({
   load(url, context, nextLoad) {
-    return url === ownerUrl
+    const source = sources.get(url);
+    return source !== undefined
       ? { format: "module-typescript", shortCircuit: true, source }
       : nextLoad(url, context);
   },
 });
+fs.mkdirSync(path.join(root, ".artifacts"), { recursive: true });
+const scratch = fs.mkdtempSync(path.join(root, ".artifacts/boundary-measure-"));
+const inputReceipt = path.join(scratch, "inputs.json");
 try {
-  const { compileNativeProject } = await import("../lib/native-declaration-emitter.mts");
-  const { createDeclarationInputBoundary } = await import("../lib/local-check-runtime.mts");
-  const boundary = createDeclarationInputBoundary(root);
   const counts = { exists: 0, nativeRealpath: 0 };
   const instrumented = process.argv.includes("--count");
   if (instrumented) {
@@ -55,23 +60,25 @@ try {
     });
     syncBuiltinESMExports();
   }
-  const started = performance.now();
-  const result = await compileNativeProject({
-    cwd: root,
-    compilerRoot: root,
+  process.chdir(root);
+  process.argv[2] = JSON.stringify({
     configFile: path.resolve(root, config),
-    assertInput: (file) => boundary.assert(file),
-    diagnostics: "all",
+    inputReceipt,
     emit: false,
   });
+  const started = performance.now();
+  await import("../compile-extension-boundary.mts");
   const elapsedMs = performance.now() - started;
-  const inputs = result.inputs.map((file) => path.relative(root, file));
+  const result: { inputs: string[]; lookups: DeclarationLookup[] } = JSON.parse(
+    fs.readFileSync(inputReceipt, "utf8"),
+  );
+  const inputs = result.inputs;
   const digest = (lookups: typeof result.lookups) =>
     createHash("sha256")
       .update(JSON.stringify(inputs))
       .update(JSON.stringify(lookups))
       .digest("hex");
-  const consumed = new Set(result.inputs);
+  const consumed = new Set(inputs.map((file) => path.resolve(root, file)));
   // Native resolution may repeat a positive existence probe for an already-read file.
   // Keep every other lookup, including negatives and positive probes outside the inputs.
   const semanticLookups = result.lookups.filter((lookup) => {
@@ -92,7 +99,7 @@ try {
       counts: instrumented ? counts : undefined,
       inputs: result.inputs.length,
       lookups: result.lookups.length,
-      outputs: result.outputFiles.size,
+      outputs: 0,
       digest: digest(result.lookups),
       semanticDigest: digest(semanticLookups),
       manifest: process.argv.includes("--manifest")
@@ -103,4 +110,5 @@ try {
   );
 } finally {
   hook.deregister();
+  fs.rmSync(scratch, { recursive: true, force: true });
 }
