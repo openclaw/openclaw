@@ -1,4 +1,4 @@
-import { isUnboundProjectSession } from "../config/sessions/session-worktree-intent.js";
+import { isUnboundProjectSession } from "../config/sessions/session-project-eligibility.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionProjectRequester } from "../gateway/session-project-move-policy.js";

@@ -45,7 +45,11 @@ export class ChatPaneNativeSessionActions {
       !row.deviceFolder &&
       !row.execNode &&
       !row.repositoryWorkspaceId &&
-      canCallGatewayMethod(context.gateway.snapshot, "projects.moveSession", "operator.write") &&
+      canCallGatewayMethod(
+        context.gateway.snapshot,
+        "projects.moveSession",
+        "operator.sessions.write",
+      ) &&
       hasMoveProjects(projectsForGateway(context.gateway)).read(),
     );
     return this.memo.read(

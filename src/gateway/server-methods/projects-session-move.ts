@@ -7,7 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxContext } from "../../agents/sandbox/context.js";
-import { isUnboundProjectSession } from "../../config/sessions/session-worktree-intent.js";
+import { isUnboundProjectSession } from "../../config/sessions/session-project-eligibility.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import type { GatewaySessionAccessAuthority } from "../session-access-authority.js";

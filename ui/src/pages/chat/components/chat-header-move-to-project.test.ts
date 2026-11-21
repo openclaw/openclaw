@@ -21,7 +21,7 @@ import {
 } from "./chat-pane-header.test-support.ts";
 import "./chat-header-session-menu.ts";
 
-function renderMenu(request: GatewayRequestHandler) {
+function renderMenu(request: GatewayRequestHandler, scope = "operator.write") {
   const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture({
       request: (method, params) =>
@@ -31,11 +31,10 @@ function renderMenu(request: GatewayRequestHandler) {
   state.settings = {} as ChatPageHost["settings"];
   pane.applyGatewaySnapshot({
     ...pane.context.gateway.snapshot,
-    hello: gatewayHelloForMethods([
-      ...SESSION_MUTATION_TEST_METHODS,
-      "projects.list",
-      "projects.moveSession",
-    ]),
+    hello: gatewayHelloForMethods(
+      [...SESSION_MUTATION_TEST_METHODS, "projects.list", "projects.moveSession"],
+      [scope],
+    ),
   });
   const container = document.body.appendChild(document.createElement("div"));
   const header = pane.renderPaneHeader(
@@ -69,7 +68,7 @@ it("omits Move when the catalog contains only the agent workspace", async () => 
   expect(menu.querySelector('button[data-value="quick:move-to-project"]')).toBeNull();
 });
 
-it("moves into the existing project selected in the dropdown with its detected checkout", async () => {
+it.each(["operator.write", "operator.sessions.write"])("moves with %s", async (scope) => {
   installDialogPolyfill();
   const request = vi.fn<GatewayRequestHandler>(async (method) => {
     if (method === "projects.list") {
@@ -82,7 +81,7 @@ it("moves into the existing project selected in the dropdown with its detected c
     }
     return method === "projects.moveSession" ? { status: "pending", projectId: "project-2" } : {};
   });
-  const menu = renderMenu(request);
+  const menu = renderMenu(request, scope);
   await selectNativeMenu(menu, "quick:move-to-project");
 
   const picker = await waitForSolid(() =>
