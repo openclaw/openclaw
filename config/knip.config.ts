@@ -1224,6 +1224,9 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // Direct release-checkout and global-package boundary tests consume these helpers;
+    // the full-tree scan still audits their exports against those consumers.
+    "src/cli/update-cli/update-command-git.ts": ["exports"],
     // These in-module helpers are direct seams in compaction-floor.test.ts and
     // package-release-retention.test.ts. The full-tree scan verifies those consumers.
     "packages/agent-core/src/harness/compaction/compaction-floor.ts": ["exports"],
