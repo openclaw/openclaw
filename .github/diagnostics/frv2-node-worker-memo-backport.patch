@@ -1,0 +1,361 @@
+diff --git a/src/gateway/worker-environments/workspace-actual-manifest.test.ts b/src/gateway/worker-environments/workspace-actual-manifest.test.ts
+index 06ab0b2fed7c..0da9429b288c 100644
+--- a/src/gateway/worker-environments/workspace-actual-manifest.test.ts
++++ b/src/gateway/worker-environments/workspace-actual-manifest.test.ts
+@@ -404,6 +404,7 @@ it("preserves bottom-up directory membership and canonical output across input o
+ });
+ 
+ it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {
++  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+   const root = await fs.realpath(tempDirs.make("workspace-inventory-byte-budget-"));
+   const memo = new Map<string, string>();
+   const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+@@ -426,7 +427,88 @@ it("reserves aggregate inventory bytes even when every file hits the hash memo",
+   expect(metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
+ });
+ 
++it("opens only changed file content while retaining fresh edits, modes, and deletions", async () => {
++  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
++  const root = await fs.realpath(tempDirs.make("workspace-inventory-memo-opens-"));
++  const files = ["unchanged.txt", "changed.txt", "deleted.txt"];
++  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "first")));
++  const memo = new Map<string, string>();
++  const capture = () =>
++    withWorkspaceHashMemo(memo, () => readActualWorkspaceManifestImpl({ root, baseCommit: null }));
++  const first = await capture();
++  const changed = path.join(root, files[1]!);
++  const before = await fs.stat(changed);
++  await fs.writeFile(changed, "edited");
++  await fs.chmod(changed, 0o755);
++  await fs.utimes(changed, before.atime, before.mtime);
++  await fs.unlink(path.join(root, files[2]!));
++  const opened = vi.spyOn(fs, "open");
++  const next = await capture();
++  expect(next.manifestRef).not.toBe(first.manifestRef);
++  expect(next.manifest.entries).toEqual([
++    {
++      path: "changed.txt",
++      type: "file",
++      mode: 0o755,
++      size: 6,
++      sha256: createHash("sha256").update("edited").digest("hex"),
++    },
++    {
++      path: "unchanged.txt",
++      type: "file",
++      mode: 0o644,
++      size: 5,
++      sha256: createHash("sha256").update("first").digest("hex"),
++    },
++  ]);
++  expect(opened.mock.calls.some(([file]) => file === path.join(root, files[0]!))).toBe(false);
++  expect(opened.mock.calls.some(([file]) => file === changed)).toBe(true);
++});
++
++it("rejects memo-hit included files behind a replaced parent directory", async () => {
++  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
++  const root = await fs.realpath(tempDirs.make("workspace-memo-parent-"));
++  const outside = await fs.realpath(tempDirs.make("workspace-memo-outside-"));
++  const parent = path.join(root, "parent");
++  await fs.mkdir(parent);
++  await fs.writeFile(path.join(parent, "value.txt"), "inside");
++  const memo = new Map<string, string>();
++  const capture = () =>
++    withWorkspaceHashMemo(memo, () =>
++      readActualWorkspaceManifestImpl({
++        root,
++        baseCommit: null,
++        includePaths: new Set(["parent/value.txt"]),
++      }),
++    );
++  await capture();
++  await fs.rename(parent, path.join(outside, "parent"));
++  await fs.symlink(path.join(outside, "parent"), parent, "junction");
++  await expect(capture()).rejects.toThrow("Gateway workspace file changed while it was being read");
++});
++
++it("rehashes recent files instead of retaining a reusable identity", async () => {
++  const root = await fs.realpath(tempDirs.make("workspace-memo-recent-"));
++  const target = path.join(root, "recent.txt");
++  await fs.writeFile(target, "fresh");
++  const stats = await fs.stat(target, { bigint: true });
++  vi.spyOn(Date, "now").mockReturnValue(Number(stats.ctimeNs / 1_000_000n));
++  const memo = new Map<string, string>();
++  const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
++  const capture = () =>
++    withWorkspaceHashMemo(
++      memo,
++      () => readActualWorkspaceManifestImpl({ root, baseCommit: null }),
++      metrics,
++    );
++  const first = await capture();
++  expect(await capture()).toEqual(first);
++  expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
++  expect(memo.size).toBe(0);
++});
++
+ it("bounds active fallback scratch across inventories and skips reads on memo hits", async () => {
++  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+   const roots = await Promise.all(
+     [0, 1].map(() => fs.realpath(tempDirs.make("workspace-inventory-scratch-"))),
+diff --git a/src/gateway/worker-environments/workspace-actual-manifest.ts b/src/gateway/worker-environments/workspace-actual-manifest.ts
+index 2d8d50f91b1b..a83d84cdf822 100644
+--- a/src/gateway/worker-environments/workspace-actual-manifest.ts
++++ b/src/gateway/worker-environments/workspace-actual-manifest.ts
+@@ -1,5 +1,5 @@
+ import { createHash } from "node:crypto";
+-import { constants, type Stats } from "node:fs";
++import { constants, type BigIntStats } from "node:fs";
+ import fs from "node:fs/promises";
+ import path from "node:path";
+ import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+@@ -13,7 +13,11 @@ import {
+ import { hasNodeErrorCode } from "../../infra/path-guards.js";
+ import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
+ import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+-import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
++import {
++  activeWorkspaceHashContext,
++  workspaceCtimeIsReusable,
++  workspaceStatIdentity,
++} from "./workspace-hash-memo.js";
+ import {
+   MAX_WORKSPACE_INVENTORY_ENTRIES,
+   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+@@ -95,6 +99,7 @@ async function readWorkspaceFile(
+   params: WorkspaceFileRead & { contents: boolean },
+ ): Promise<WorkspaceFileSnapshot | WorkspaceFileContents> {
+   const { expectedPath, maxBytes, root, signal } = params;
++  const startedAtMs = Date.now();
+   signal?.throwIfAborted();
+   const handle = await fs.open(
+     expectedPath,
+@@ -116,7 +121,8 @@ async function readWorkspaceFile(
+       return { type: "unsupported" };
+     }
+     const identity = workspaceStatIdentity(owner, before);
+-    let sha256 = params.contents ? undefined : hashMemo?.get(identity);
++    const reusable = workspaceCtimeIsReusable(before.ctimeNs, startedAtMs);
++    let sha256 = params.contents || !reusable ? undefined : hashMemo?.get(identity);
+     let size = Number(before.size);
+     if (sha256) {
+       if (metrics) {
+@@ -160,7 +166,9 @@ async function readWorkspaceFile(
+     if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
+       throw new Error("Gateway workspace file changed while it was being read");
+     }
+-    hashMemo?.set(identity, sha256);
++    if (reusable) {
++      hashMemo?.set(identity, sha256);
++    }
+     const snapshot = {
+       type: "file" as const,
+       mode: gitFileMode(Number(after.mode & 0o777n)),
+@@ -182,6 +190,7 @@ export async function readActualWorkspaceManifestImpl(params: {
+   includePaths?: ReadonlySet<string>;
+   signal?: AbortSignal;
+ }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
++  const startedAtMs = Date.now();
+   params.signal?.throwIfAborted();
+   let root: string;
+   let isStagedInput: ReturnType<typeof createStagedInputPathMatcher>;
+@@ -238,6 +247,7 @@ export async function readActualWorkspaceManifestImpl(params: {
+     }
+   };
+   const filePaths: string[] = [];
++  const hashContext = activeWorkspaceHashContext();
+   const runScans = async (
+     start: number,
+     end: number,
+@@ -287,7 +297,11 @@ export async function readActualWorkspaceManifestImpl(params: {
+     }
+     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
+   };
+-  const addLeaf = async (relative: string, absolute: string, stats: Stats): Promise<boolean> => {
++  const addLeaf = async (
++    relative: string,
++    absolute: string,
++    stats: BigIntStats,
++  ): Promise<boolean> => {
+     if (stats.isSymbolicLink()) {
+       const target = await fs.readlink(absolute);
+       if (!isPortableRootContainedSymlink(root, relative, target)) {
+@@ -295,7 +309,31 @@ export async function readActualWorkspaceManifestImpl(params: {
+       }
+       addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
+     } else if (stats.isFile()) {
+-      filePaths.push(relative);
++      const sha256 = workspaceCtimeIsReusable(stats.ctimeNs, startedAtMs)
++        ? hashContext?.memo.get(workspaceStatIdentity(hashContext.owner, stats))
++        : undefined;
++      if (sha256) {
++        // Included paths can cross a replaced parent directory even when the
++        // leaf inode still matches a prior content hash.
++        if ((await fs.realpath(absolute)) !== absolute) {
++          throw new Error("Gateway workspace file changed while it was being read");
++        }
++        addEntry(
++          {
++            path: relative,
++            type: "file",
++            mode: gitFileMode(Number(stats.mode & 0o777n)),
++            size: Number(stats.size),
++            sha256,
++          },
++          Number(stats.size),
++        );
++        if (hashContext?.metrics) {
++          hashContext.metrics.memoHitCount += 1;
++        }
++      } else {
++        filePaths.push(relative);
++      }
+     } else {
+       return false;
+     }
+@@ -311,7 +349,7 @@ export async function readActualWorkspaceManifestImpl(params: {
+     }
+     checkTraversal(relative);
+     const absolute = localPath(root, relative);
+-    const stats = await fs.lstat(absolute).catch((error: unknown) => {
++    const stats = await fs.lstat(absolute, { bigint: true }).catch((error: unknown) => {
+       if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
+         return undefined;
+       }
+@@ -365,7 +403,7 @@ export async function readActualWorkspaceManifestImpl(params: {
+         continue;
+       }
+       const absolute = localPath(root, relative);
+-      const stats = await fs.lstat(absolute);
++      const stats = await fs.lstat(absolute, { bigint: true });
+       if (stats.isDirectory() && !stats.isSymbolicLink()) {
+         const child = await walk(relative);
+         if (child.included || params.preserveDirectories?.has(relative)) {
+diff --git a/src/gateway/worker-environments/workspace-hash-memo.test.ts b/src/gateway/worker-environments/workspace-hash-memo.test.ts
+index 3b98a18e96b9..e84bc40cd1ac 100644
+--- a/src/gateway/worker-environments/workspace-hash-memo.test.ts
++++ b/src/gateway/worker-environments/workspace-hash-memo.test.ts
+@@ -14,8 +14,10 @@ import {
+   serializeRemoteWorkspaceHashMemo,
+   withWorkspaceHashMemo,
+   withWorkerWorkspaceHashMemo,
++  workspaceCtimeIsReusable,
+   type WorkspaceHashMemo,
+ } from "./workspace-hash-memo.js";
++import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
+ import { captureWorkspaceManifest, preflightWorkspaceApply } from "./workspace-manifest-worker.js";
+ import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+ 
+@@ -29,6 +31,8 @@ if (typeof REMOTE_WORKSPACE_MANIFEST_JS !== "string") {
+   throw new Error("Source workspace sync module did not export its manifest script");
+ }
+ 
++useAgedWorkspaceHashClock();
++
+ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+ afterEach(() => vi.restoreAllMocks());
+ 
+@@ -41,6 +45,20 @@ function hashMetrics() {
+ }
+ 
+ describe("workspace hash memo", () => {
++  it.each([
++    [-1n, 10_000, false],
++    [0n, 10_000, true],
++    [7_999_999_999n, 10_000, true],
++    [8_000_000_000n, 10_000, false],
++    [9_000_000_000n, 10_000, false],
++    [11_000_000_000n, 10_000, false],
++  ] as const)(
++    "keeps ctime %s eligibility bounded at capture %s",
++    (ctimeNs, startedAtMs, reusable) => {
++      expect(workspaceCtimeIsReusable(ctimeNs, startedAtMs)).toBe(reusable);
++    },
++  );
++
+   it("reuses content hashes only within one reconcile stat identity", async () => {
+     const root = await fs.realpath(tempDirs.make("openclaw-workspace-hash-memo-"));
+     const target = path.join(root, "same-size.txt");
+diff --git a/src/gateway/worker-environments/workspace-hash-memo.ts b/src/gateway/worker-environments/workspace-hash-memo.ts
+index 3d702a6e57e4..0308bec077df 100644
+--- a/src/gateway/worker-environments/workspace-hash-memo.ts
++++ b/src/gateway/worker-environments/workspace-hash-memo.ts
+@@ -166,6 +166,11 @@ export function takeWorkspaceHashMemo(
+ // One source for host and standalone worker execution; transformed closures cannot
+ // be serialized because their compiler-owned helpers stay in the parent module.
+ export const WORKSPACE_HASH_MEMO_JS = String.raw`
++const WORKSPACE_CTIME_SAFETY_MARGIN_MS = 2000;
++function workspaceCtimeIsReusable(ctimeNs, startedAtMs) {
++  // Recent files cost another hash; a backwards clock keeps them outside the reuse window.
++  return ctimeNs >= 0n && ctimeNs < BigInt(startedAtMs - WORKSPACE_CTIME_SAFETY_MARGIN_MS) * 1000000n;
++}
+ function workspaceStatIdentity(owner, stats) {
+   return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
+ }
+@@ -192,9 +197,11 @@ function selectWorkerWorkspaceHashMemoEntries(memo, maxEntries, maxBytes) {
+ }`;
+ 
+ const {
++  workspaceCtimeIsReusable,
+   workspaceStatIdentity,
+   selectWorkerWorkspaceHashMemoEntries,
+ }: {
++  workspaceCtimeIsReusable: (ctimeNs: bigint, startedAtMs: number) => boolean;
+   workspaceStatIdentity: (
+     owner: "gateway" | "worker",
+     stats: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint },
+@@ -205,10 +212,10 @@ const {
+     maxBytes: number,
+   ) => Array<[string, string]>;
+ } = compileFunction(
+-  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
++  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceCtimeIsReusable, workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
+ )();
+ 
+-export { workspaceStatIdentity };
++export { workspaceCtimeIsReusable, workspaceStatIdentity };
+ 
+ export function serializeRemoteWorkspaceHashMemo(
+   memo: WorkspaceHashMemo,
+diff --git a/src/gateway/worker-environments/workspace-manifest-worker.test.ts b/src/gateway/worker-environments/workspace-manifest-worker.test.ts
+index 6f2f15fedb8c..70276f625a2b 100644
+--- a/src/gateway/worker-environments/workspace-manifest-worker.test.ts
++++ b/src/gateway/worker-environments/workspace-manifest-worker.test.ts
+@@ -11,6 +11,7 @@ import {
+ import { runCommandWithTimeout } from "../../process/exec.js";
+ import { createDeferredCore } from "../../shared/deferred.js";
+ import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
++import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
+ import {
+   captureWorkspaceManifest,
+   captureWorkspaceSnapshot,
+@@ -21,6 +22,7 @@ import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.tes
+ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+ const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manifestWorker);
+ const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
++useAgedWorkspaceHashClock();
+ afterEach(() => vi.restoreAllMocks());
+ 
+ it("settles private Git-input staging before a cancelled tree read returns", async () => {
+diff --git a/src/gateway/worker-environments/workspace-hash-memo.test-support.ts b/src/gateway/worker-environments/workspace-hash-memo.test-support.ts
+new file mode 100644
+index 000000000000..b9ac83ffff66
+--- /dev/null
++++ b/src/gateway/worker-environments/workspace-hash-memo.test-support.ts
+@@ -0,0 +1,15 @@
++import { beforeEach, onTestFinished, vi } from "vitest";
++import * as runtimeWorker from "../../infra/runtime-worker-url.js";
++
++const workerExecArgv = runtimeWorker.resolveRuntimeWorkerThreadExecArgv;
++
++export function useAgedWorkspaceHashClock(): void {
++  beforeEach(() => {
++    // Keep real worker I/O while making fixture ctimes old enough for memo reuse.
++    const clock = `data:text/javascript,Date.now=()=>${Date.now() + 60_000};`;
++    const spy = vi
++      .spyOn(runtimeWorker, "resolveRuntimeWorkerThreadExecArgv")
++      .mockImplementation((...args) => [...workerExecArgv(...args), "--import", clock]);
++    onTestFinished(() => spy.mockRestore());
++  });
++}
