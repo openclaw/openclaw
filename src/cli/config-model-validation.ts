@@ -13,7 +13,7 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER, resolveNativeOwnedRuntimeModel } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
@@ -347,6 +347,8 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     Promise.all([
       import("../agents/embedded-agent-runner/model.js"),
       import("../agents/prepared-model-runtime.js"),
+      import("../agents/harness/policy.js"),
+      import("../agents/harness/support.js"),
     ]);
   let modelModules: ReturnType<typeof loadModelModules> | undefined;
 
@@ -363,7 +365,8 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
       ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config);
     const agentDir = resolveAgentDir(config, targetAgentId);
     const workspaceDir = resolveAgentWorkspaceDir(config, targetAgentId);
-    const [modelRuntime, preparedRuntime] = await (modelModules ??= loadModelModules());
+    const [modelRuntime, preparedRuntime, harnessPolicy, harnessSupport] = await (modelModules ??=
+      loadModelModules());
     await loadPinnedRuntimeConfigAsync(async () => ({ config }));
 
     // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
@@ -390,6 +393,24 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
       return `Unknown model: ${ref.value}`;
     }
     const { provider, model } = resolvedRef;
+    // Harness-listed rows carry no host transport, so host resolution cannot materialize them.
+    // Accept one only when the runtime that would run this ref listed it, as the turn path does.
+    const policyScope = { provider, modelId: model, config, agentId: targetAgentId };
+    const { runtime } = harnessPolicy.resolveAgentHarnessPolicy(policyScope);
+    const runtimeId =
+      runtime === "auto"
+        ? lease.run(() => harnessSupport.resolveAutoAgentHarnessId(policyScope))
+        : runtime;
+    if (
+      resolveNativeOwnedRuntimeModel({
+        catalog: lease.snapshot.modelCatalog,
+        provider,
+        modelId: model,
+        runtimeId,
+      })
+    ) {
+      return undefined;
+    }
     const stores = lease.snapshot.createStores();
     const resolution = await lease.run(() =>
       modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
