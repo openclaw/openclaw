@@ -1,6 +1,7 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexAppIdentityKey } from "./app-identity.js";
 import {
+  resolveCodexPluginThreadAppCacheKey,
   serializeCodexAppInventoryError,
   type CodexAppInventoryCache,
   type CodexAppInventorySnapshot,
@@ -34,19 +35,15 @@ export type CodexPluginThreadAppAdmissionConfig = {
   layers: readonly JsonObject[];
 };
 
-export function resolveCodexPluginThreadAppCacheKey(params: {
-  appCacheKey: string;
-  threadId?: string;
-}): string {
-  return params.threadId
-    ? `${params.appCacheKey}:thread:${encodeURIComponent(params.threadId)}`
-    : params.appCacheKey;
-}
-
 export async function refreshCodexPluginAppInventory(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean; reason?: string; targetAppIds?: readonly string[] } = {},
+  options: {
+    forceRefetch?: boolean;
+    reuseRecentForcedRefresh?: boolean;
+    reason?: string;
+    targetAppIds?: readonly string[];
+  } = {},
 ): Promise<CodexAppInventorySnapshot | undefined> {
   if (!params.appCacheKey) {
     return undefined;
@@ -58,6 +55,7 @@ export async function refreshCodexPluginAppInventory(
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
+      reuseRecentForcedRefresh: options.reuseRecentForcedRefresh,
       targetAppIds: options.targetAppIds,
     });
   } catch (error) {
