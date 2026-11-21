@@ -3,7 +3,9 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import {
+  readPreLaunchTaskPids,
   readScheduledTaskDefinition,
+  type PreLaunchTaskPids,
   restoreScheduledTaskDefinition,
   resumeScheduledTaskAutoStartAfterUpdate,
   setScheduledTaskXmlEnabled,
@@ -13,6 +15,7 @@ import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js
 import { resolveTaskName } from "./schtasks-layout.js";
 import {
   shouldManageGatewayListenerPort,
+  terminateGatewayProcessTree,
   terminateScheduledTaskGatewayListeners,
   terminateScheduledTaskNodeHost,
 } from "./schtasks-process.js";
@@ -22,6 +25,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { omitNativeScheduledTaskEnabled } from "./service-policy-xml.js";
 import {
   matchesServiceFilePublication,
   publishServiceFile,
@@ -92,14 +96,19 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   let changed = false;
   let unsettled = false;
   let stoppedProcess = false;
-  // Disabling is our only allowed registration change during settlement.
+  // Disabling is our only allowed registration change during settlement. Task Scheduler exports
+  // it by inserting Enabled=false in schema order, so also accept that one native field.
   const withoutEnabled = (xml: string | null) =>
     xml === null ? null : setScheduledTaskXmlEnabled(xml, false);
   const assertReceipt = async (disabled = false) => {
     const current = unsettled ? null : await readXml();
+    const native = disabled && current !== null ? omitNativeScheduledTaskEnabled(current) : null;
     if (
       unsettled ||
-      (disabled ? withoutEnabled(current) !== withoutEnabled(receipt) : current !== receipt)
+      (disabled
+        ? withoutEnabled(current) !== withoutEnabled(receipt) &&
+          (native === null || withoutEnabled(native) !== withoutEnabled(receipt))
+        : current !== receipt)
     ) {
       throw new Error(`Scheduled Task ${taskName} registration ownership could not be verified.`);
     }
@@ -126,11 +135,14 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
     /**
      * `beforeRestart` runs only once registration ownership is verified and the replacement task
      * is stopped and its processes settled, before any file, definition or launch is restored.
+     * `preLaunch` is the task-process inventory captured before the attempted run; its processes
+     * predate this install, so recovery never settles them as its replacement.
      */
     restore: async (
       files: ScheduledTaskFileRecovery,
       activated: boolean,
       beforeRestart?: () => Promise<void>,
+      preLaunch?: PreLaunchTaskPids,
     ) => {
       await files.assertPublished();
       await assertReceipt();
@@ -148,7 +160,22 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
         ) {
           throw new Error(`Scheduled Task ${taskName} may still be queued or running.`);
         }
-        if (activated) {
+        if (activated && preLaunch) {
+          // Settle only processes that appeared with the attempted run; Gateways observed before it
+          // belong to the operator. An incomplete inventory attributes nothing, so recovery then
+          // refuses instead of terminating a process that may predate the run.
+          const preserved = preLaunch.complete ? preLaunch.pids : new Set<number>();
+          const replacements = async () => {
+            const current = await readPreLaunchTaskPids(env, scriptPath, { executionOnly: true });
+            return current.complete ? [...current.pids].filter((pid) => !preserved.has(pid)) : null;
+          };
+          for (const pid of preLaunch.complete ? ((await replacements()) ?? []) : []) {
+            await terminateGatewayProcessTree(pid);
+          }
+          if ((await replacements())?.length !== 0) {
+            throw new Error(`Scheduled Task ${taskName} replacement process did not settle.`);
+          }
+        } else if (activated) {
           const runtime = await resolveFallbackRuntime(env, undefined, "control");
           if (runtime.status === "running") {
             if (shouldManageGatewayListenerPort(env)) {

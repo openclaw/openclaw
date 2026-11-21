@@ -14,9 +14,11 @@ import {
   restartRegisteredScheduledTask,
   runScheduledTaskOrThrow,
   stopRegisteredScheduledTask,
+  type PreLaunchTaskPids,
   type ScheduledTaskActivation,
 } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { terminateFallbackRuntime } from "./schtasks-fallback-process.js";
 import {
   backupScheduledTaskDefinition,
   publishScheduledTaskFiles,
@@ -43,7 +45,6 @@ import {
 import {
   resolveScheduledTaskCommandPort,
   shouldManageGatewayListenerPort,
-  terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
@@ -192,6 +193,10 @@ export async function installScheduledTask(
   let recovery: ScheduledTaskFileRecovery | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let activationAttempted = false;
+  let preLaunch: PreLaunchTaskPids | undefined;
+  const recordPreLaunch = (observed: PreLaunchTaskPids) => {
+    preLaunch = observed;
+  };
   const install = async () => {
     const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
     const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
@@ -304,6 +309,9 @@ export async function installScheduledTask(
     const { stdout, definitionTransaction } = args;
     const { scriptPath, taskLaunchPath, taskDescription: description } = staged;
     const registration = restoreTask;
+    // The captured Startup Gateway still owns the port, so a Scheduler run now leaves it in
+    // control and exits. The takeover below runs the task after terminating that Gateway.
+    const takeoverOwnsActivation = startupRuntime?.status === "running";
     const activation = await (async (): Promise<ScheduledTaskActivation | "startup-fallback"> => {
       const taskDescription = description ?? "OpenClaw Gateway";
       const taskName = resolveTaskName(activationEnv);
@@ -318,12 +326,16 @@ export async function installScheduledTask(
       ) {
         assertGatewayServiceUpdateCurrent();
         activationAttempted = true;
-        const passwordTaskActivation = await runScheduledTaskOrThrow({
-          taskName,
-          env: activationEnv,
-          scriptPath,
-          allowFallback: false,
-        });
+        const passwordTaskActivation = takeoverOwnsActivation
+          ? "scheduled-task"
+          : await runScheduledTaskOrThrow({
+              taskName,
+              env: activationEnv,
+              scriptPath,
+              allowFallback: false,
+              acceptProcessLaunchEvidence: startupRuntime !== null,
+              onPreLaunch: recordPreLaunch,
+            });
         writeFormattedLines(stdout, [
           { label: "Updated task script", value: scriptPath },
           {
@@ -441,13 +453,17 @@ export async function installScheduledTask(
       await definitionTransaction?.beforeWrite();
       assertGatewayServiceUpdateCurrent();
       activationAttempted = true;
-      const taskActivation = await runScheduledTaskOrThrow({
-        taskName,
-        env: activationEnv,
-        scriptPath,
-        assertCurrent: definitionTransaction?.assertCurrent,
-        allowFallback: definitionTransaction ? false : undefined,
-      });
+      const taskActivation = takeoverOwnsActivation
+        ? "scheduled-task"
+        : await runScheduledTaskOrThrow({
+            taskName,
+            env: activationEnv,
+            scriptPath,
+            assertCurrent: definitionTransaction?.assertCurrent,
+            allowFallback: definitionTransaction ? false : undefined,
+            acceptProcessLaunchEvidence: startupRuntime !== null,
+            onPreLaunch: recordPreLaunch,
+          });
       // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
       writeFormattedLines(stdout, [
         {
@@ -480,7 +496,7 @@ export async function installScheduledTask(
         : startupRuntime;
     if (takeoverRuntime?.status === "running" && takeoverRuntime.pid) {
       // The old launcher can still own the listener; terminate it and prove the replacement.
-      await terminateGatewayProcessTree(takeoverRuntime.pid);
+      await terminateFallbackRuntime(fallbackEnv, takeoverRuntime.pid, undefined, installedCommand);
       let scheduledTaskRunAccepted = false;
       try {
         // Re-reading ownership now would inspect the replacement command, not the captured fallback.
@@ -520,11 +536,16 @@ export async function installScheduledTask(
       return false;
     }
     let hookFailure: { error: unknown } | undefined;
-    const restored = await restoreTask.restore(recovery, activationAttempted, async () => {
-      await args.beforeRecovery?.().catch((error: unknown) => {
-        hookFailure = { error };
-      });
-    });
+    const restored = await restoreTask.restore(
+      recovery,
+      activationAttempted,
+      async () => {
+        await args.beforeRecovery?.().catch((error: unknown) => {
+          hookFailure = { error };
+        });
+      },
+      preLaunch,
+    );
     if (hookFailure) {
       throw hookFailure.error;
     }

@@ -41,13 +41,14 @@ export function matchesInstalledProgramArguments(
   );
 }
 
-export function findInstalledProcessPid(
+export function findInstalledProcessPids(
   entries: WindowsProcessSnapshotEntry[],
-  port: number,
+  port: number | null,
   installedArguments: string[],
   matchesProcess: (argv: string[]) => boolean,
   comparableArguments: (argv: string[]) => string[] = (argv) => argv,
-): number | null {
+): number[] {
+  const pids: number[] = [];
   for (const entry of entries) {
     const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
     if (!commandLine) {
@@ -57,17 +58,35 @@ export function findInstalledProcessPid(
     if (
       !argv ||
       !matchesProcess(argv) ||
-      parseTcpPortFromArgs(argv) !== port ||
+      (port !== null && parseTcpPortFromArgs(argv) !== port) ||
       !matchesInstalledProgramArguments(comparableArguments(argv), installedArguments)
     ) {
       continue;
     }
     const pid = getSnapshotProcessId(entry);
     if (pid) {
-      return pid;
+      pids.push(pid);
     }
   }
-  return null;
+  return pids;
+}
+
+export function findInstalledProcessPid(
+  entries: WindowsProcessSnapshotEntry[],
+  port: number | null,
+  installedArguments: string[],
+  matchesProcess: (argv: string[]) => boolean,
+  comparableArguments: (argv: string[]) => string[] = (argv) => argv,
+): number | null {
+  return (
+    findInstalledProcessPids(
+      entries,
+      port,
+      installedArguments,
+      matchesProcess,
+      comparableArguments,
+    )[0] ?? null
+  );
 }
 
 export function matchesInstalledGatewayChildArguments(

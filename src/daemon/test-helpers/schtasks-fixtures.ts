@@ -76,6 +76,14 @@ export function resolveStartupFixturePath(env: Record<string, string>, extension
   );
 }
 
+export async function writeNodeScript(env: Record<string, string>, port = "18789") {
+  return writeScript(resolveTaskScriptPath(env), [
+    `set "OPENCLAW_SERVICE_KIND=node"`,
+    `set "OPENCLAW_GATEWAY_PORT=${port}"`,
+    `"C:\\bin\\openclaw.cmd" node run --host 127.0.0.1 --port ${port}`,
+  ]);
+}
+
 const spawnSyncDefaults = {
   pid: 0,
   output: [null, "", ""],
@@ -86,6 +94,15 @@ const spawnSyncDefaults = {
 } satisfies SpawnSyncReturns<string>;
 export type SpawnSyncResult = typeof spawnSyncDefaults;
 
+export function isProcessSnapshotQuery(args: readonly string[] | undefined): boolean {
+  const markers = [
+    "Get-CimInstance Win32_Process",
+    "Select-Object ProcessId,CommandLine",
+    "ConvertTo-Json",
+  ];
+  return args?.some((arg) => markers.every((marker) => arg.includes(marker))) ?? false;
+}
+
 export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
   return { ...spawnSyncDefaults, output: [...spawnSyncDefaults.output], ...overrides };
 }
@@ -95,4 +112,85 @@ export function createSpawnChild(unref: () => void, error?: Error): ChildProcess
   child.unref = unref;
   queueMicrotask(() => child.emit(error ? "error" : "spawn", error));
   return child;
+}
+
+export type TaskProbeResult = { status: number; stdout: string; stderr?: string };
+export type TaskSnapshot = { state: number; lastRunTime: string; lastRunResult: number };
+export type NativeResponse = (typeof schtasksResponses)[number] | TaskSnapshot;
+
+export function notYetRunTaskSnapshot(lastRunTime = "1999-11-30T00:00:00.0000000Z"): TaskSnapshot {
+  return { state: 3, lastRunTime, lastRunResult: 267011 };
+}
+
+export function cleanExitTaskSnapshot(lastRunTime = "2026-05-02T14:41:39.0000000Z"): TaskSnapshot {
+  return { state: 3, lastRunTime, lastRunResult: 0 };
+}
+
+export function runningTaskSnapshot(): TaskSnapshot {
+  return { state: 4, lastRunTime: "2026-04-15T23:42:31.0000000Z", lastRunResult: 267009 };
+}
+
+/** Native registration/process facts remain stable across repeated inspection reads. */
+export function createSchtasksNativeFixture(getEnv: () => Record<string, string>) {
+  const launcherPath = "C:\\fixture\\gateway.cmd";
+  const queuedProbes: string[] = [];
+  let currentProbe = JSON.stringify(notYetRunTaskSnapshot());
+  const advance = () => {
+    if (schtasksCalls.some(([action]) => action === "/Run")) {
+      currentProbe = queuedProbes.shift() ?? currentProbe;
+    }
+  };
+  return {
+    advance,
+    queue: (...responses: NativeResponse[]) => {
+      for (const response of responses) {
+        if ("state" in response) {
+          const probe = JSON.stringify(response);
+          if (schtasksResponses.length === 0) {
+            currentProbe = probe;
+          } else {
+            queuedProbes.push(probe);
+          }
+        } else {
+          schtasksResponses.push(response);
+        }
+      }
+    },
+    probe: (): TaskProbeResult => {
+      if (schtasksRegistration.response?.code !== 0) {
+        return { status: 1, stdout: "-2147024894" };
+      }
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          ...JSON.parse(currentProbe),
+          enabled: !schtasksRegistration.response.stdout.includes("<Enabled>false</Enabled>"),
+          taskPath: getEnv().OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway",
+          actions: [{ type: 0, path: launcherPath, arguments: "", workingDirectory: "" }],
+        }),
+      };
+    },
+    reset: () => {
+      schtasksRegistration.response = {
+        code: 0,
+        stdout: `<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>${launcherPath}</Command></Exec></Actions></Task>`,
+        stderr: "",
+      };
+      currentProbe = JSON.stringify(notYetRunTaskSnapshot());
+      queuedProbes.length = 0;
+      schtasksRegistration.onCommand = (argv, response) => {
+        if (response.code === 0 && argv[0] === "/Run") {
+          advance();
+        }
+        if (response.code === 0 && argv[0] === "/End") {
+          currentProbe = JSON.stringify(cleanExitTaskSnapshot());
+        }
+      };
+      // Keep native absolute-path admission while storing launcher bytes in the host temp directory.
+      const readFile = fs.readFile.bind(fs);
+      vi.spyOn(fs, "readFile").mockImplementation((pathname, options) =>
+        readFile(pathname === launcherPath ? resolveTaskScriptPath(getEnv()) : pathname, options),
+      );
+    },
+  };
 }

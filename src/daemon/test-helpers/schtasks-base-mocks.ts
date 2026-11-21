@@ -35,10 +35,8 @@ vi.mock("../schtasks-exec.js", () => {
       } else if (argv[0] === "/Change" && argv.includes("/DISABLE")) {
         schtasksRegistration.response = {
           ...registration,
-          stdout: registration.stdout.replace(
-            "<Enabled>true</Enabled>",
-            "<Enabled>false</Enabled>",
-          ),
+          // Disabling changes the task's Settings, never the Enabled flags of its triggers.
+          stdout: registration.stdout.replace(/(<Settings>[\s\S]*?<Enabled>)true/u, "$1false"),
         };
       }
     }

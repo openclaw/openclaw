@@ -285,7 +285,10 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     },
   );
 
-  test("restart falls back promptly after a definitive stop rejection", async ({ env, stdout }) => {
+  test("restart verifies Scheduler takeover after a definitive stop rejection", async ({
+    env,
+    stdout,
+  }) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const ended = killedOwner;
     readGatewayOwnerLease.mockImplementation(() => (ended() ? undefined : GATEWAY_OWNER));
@@ -310,7 +313,8 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     await restartScheduledTask({ env, stdout });
 
     expect(ended()).toBe(true);
-    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(15_000);
+    expect(Date.now() - started).toBeLessThanOrEqual(30_000);
     expect(taskAction("/Run")).toBe(true);
   });
 
@@ -760,7 +764,8 @@ describe("Scheduled Task settlement", () => {
       expect(error).toMatchObject(noRun ? { cause: fact } : { taskSettlement: fact });
       expect(String(error)).toContain(noRun ? "stop unverified" : "restart unverified");
       expect(failedProbes).toBeGreaterThan(1);
-      expect(timeState.now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+      // Restart then spends the 15s post-/Run activation window before refusing.
+      expect(timeState.now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS + (noRun ? 0 : 15_000));
       expect(stdout.read()?.toString() ?? "").not.toContain("Restarted Scheduled Task");
       expect(taskAction("/Run")).toBe(!noRun);
       if (!noRun) {

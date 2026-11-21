@@ -22,6 +22,7 @@ import {
 import { resolveTaskLauncherScriptPath, resolveTaskScriptPath } from "./schtasks-layout.js";
 import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
+import { omitNativeScheduledTaskEnabled } from "./service-policy-xml.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   matchesServiceFilePublication,
@@ -55,6 +56,16 @@ const backupPath = (file: string, id: string) => `${file}.reconcile-${id}.bak`;
 const taskBytes = (xml: string) =>
   Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, "utf16le")]);
 const taskPolicy = (xml: string) => sha256Hex(setScheduledTaskXmlEnabled(xml, false));
+
+function matchesTaskPolicy(xml: string, expected: string): boolean {
+  if (taskPolicy(xml) === expected) {
+    return true;
+  }
+  // Keep persisted receipt hashes compatible with Task Scheduler's native Enabled rewrite.
+  const omitted = omitNativeScheduledTaskEnabled(xml);
+  return omitted !== null && taskPolicy(omitted) === expected;
+}
+
 const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
   `${receipt.files[0]!.sourcePath}.reconcile-${receipt.id}.receipt.bak`;
 
@@ -203,9 +214,10 @@ function mutationHooks(
       guard.after = current;
     }
     if (receipt.task) {
-      const current = taskPolicy(await readScheduledTaskDefinition(params.env));
+      const current = await readScheduledTaskDefinition(params.env);
+      const matchesReceiptPolicy = matchesTaskPolicy(current, receipt.task.afterPolicySha256);
       if (settlePrepared && receipt.task.preparedXml) {
-        const previous = current === receipt.task.afterPolicySha256;
+        const previous = matchesReceiptPolicy;
         receipt.task.recoveredPolicy = previous ? "previous" : "prepared";
         if (previous) {
           delete receipt.task.preparedXml;
@@ -215,7 +227,7 @@ function mutationHooks(
         }
         return beforeWrite(false);
       }
-      if (current !== receipt.task.afterPolicySha256) {
+      if (!matchesReceiptPolicy) {
         throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
       }
     }
