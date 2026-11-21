@@ -10,7 +10,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import {
@@ -21,6 +20,7 @@ import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
+  withSpawnTestModel,
 } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
@@ -339,7 +339,7 @@ describe("visible session placement and authority", () => {
         throw new Error("registration unavailable");
       }
     });
-    const config: OpenClawConfig = {
+    const config = withSpawnTestModel({
       session: { store: storePath },
       agents: {
         ...(success
@@ -348,7 +348,7 @@ describe("visible session placement and authority", () => {
         entries: { main: {} },
       },
       cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
-    };
+    });
     setRuntimeConfigSnapshot(config);
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -467,10 +467,10 @@ describe("visible session placement and authority", () => {
         ? { key, sessionId: "device-child", placement }
         : { runId: "device-run", status: "accepted" };
     });
-    const config: OpenClawConfig = {
+    const config = withSpawnTestModel({
       session: { store: storePath },
       agents: { entries: { main: {} } },
-    };
+    });
     setRuntimeConfigSnapshot(config);
     const tool = createSessionsSpawnTool({
       config,

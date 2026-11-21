@@ -280,8 +280,8 @@ export function resolveSessionNativeRuntimeRestriction(params: {
   >[0]["preparedSessionCapabilityEntry"];
   persistedEntry: SessionEntry | undefined;
   harness: AgentHarness;
-  provider: string;
-  modelId: string;
+  provider?: string;
+  modelId?: string;
   callerCanConsent: boolean;
 }): ErrorShape | undefined {
   const { harness } = params;

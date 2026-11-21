@@ -14,7 +14,7 @@ import { normalizeModelSelection, resolveConfiguredModelRef } from "./model-sele
 
 /** Shown wherever a model must run but the agent has none configured. */
 export const NO_MODEL_CONFIGURED_MESSAGE =
-  "No model is configured. Choose one in Settings → Models, or run `openclaw models set <provider/model>`.";
+  "No model is configured. Choose one in Settings → Models, send `/model <provider/model>` in chat, or run `openclaw models set <provider/model>`.";
 
 /** The agent's configured primary model; undefined when no model is configured. */
 export function resolveDefaultModelForAgent(

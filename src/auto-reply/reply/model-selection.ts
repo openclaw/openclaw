@@ -73,7 +73,8 @@ type ThinkingDefaultSelection = {
 
 type ModelSelectionState = {
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model; only inference needs one. */
+  model: string | undefined;
   requestedRouteResolution: ModelFallbackRouteResolution;
   modelPolicy: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -155,7 +156,8 @@ export async function createModelSelectionState(params: {
   primaryProvider?: string;
   primaryModel?: string;
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model; only inference needs one. */
+  model: string | undefined;
   hasModelDirective: boolean;
   skipStoredModelOverride?: boolean;
   /** One-shot scheduled model selection never changes the stored session preference. */
@@ -321,7 +323,7 @@ export async function createModelSelectionState(params: {
     );
   }
 
-  if (params.hasResolvedTurnModelOverride) {
+  if (params.hasResolvedTurnModelOverride && model) {
     // Scheduled payload choices are explicit, so re-admission must reject revoked models.
     const selection = { provider, model };
     if (!visibilityPolicy.allows(selection)) {
@@ -474,9 +476,10 @@ export async function createModelSelectionState(params: {
     }
   }
 
+  // With no model selected, policy has nothing to admit; commands still run and inference refuses.
   const skipResolveSelection =
     params.hasModelDirective || modelSelectionLocked || usesStoredAutomaticSelection;
-  if (!skipResolveSelection) {
+  if (!skipResolveSelection && model) {
     const allowedInitialSelection = visibilityPolicy.resolveSelection({
       provider,
       model,
@@ -491,7 +494,7 @@ export async function createModelSelectionState(params: {
     ({ provider, model } = allowedInitialSelection);
   }
   let operatorModelOverride = false;
-  if (!params.hasModelDirective) {
+  if (!params.hasModelDirective && model) {
     const selection = modelSelectionLocked
       ? { provider, model }
       : resolveOperatorModelDefault({
@@ -613,10 +616,14 @@ export async function createModelSelectionState(params: {
         }),
     };
   };
+  const currentSelection = model ? { provider, model } : undefined;
   const thinkingCatalogs = new Map<string, ModelCatalog>();
   const resolveThinkingCatalog = async (
-    selection: ThinkingDefaultSelection = { provider, model },
+    selection: ThinkingDefaultSelection | undefined = currentSelection,
   ) => {
+    if (!selection) {
+      return undefined;
+    }
     const { agentRuntime } = resolveThinkingSelection(selection);
     const key = JSON.stringify([selection.provider, selection.model, agentRuntime]);
     let catalog = thinkingCatalogs.get(key);
@@ -641,8 +648,11 @@ export async function createModelSelectionState(params: {
 
   const defaultThinkingLevels = new Map<string, ThinkLevel>();
   const resolveDefaultThinkingLevel = async (
-    selection: ThinkingDefaultSelection = { provider, model },
-  ) => {
+    selection: ThinkingDefaultSelection | undefined = currentSelection,
+  ): Promise<ThinkLevel> => {
+    if (!selection) {
+      return "off";
+    }
     const thinkingSelection = resolveThinkingSelection(selection);
     const cacheKey = JSON.stringify([
       selection.provider,
@@ -665,26 +675,23 @@ export async function createModelSelectionState(params: {
   };
 
   const hasConfiguredThinkingDefault =
-    resolveConfiguredThinkingDefault({
-      cfg,
-      agentId: params.agentId,
-      provider,
-      model,
-    }) !== undefined;
+    currentSelection !== undefined &&
+    resolveConfiguredThinkingDefault({ cfg, agentId: params.agentId, ...currentSelection }) !==
+      undefined;
 
   const resolveDefaultReasoningLevel = async (
-    selection: ThinkingDefaultSelection = { provider, model },
+    selection: ThinkingDefaultSelection | undefined = currentSelection,
   ): Promise<"on" | "off"> =>
-    resolveReasoningDefault({
-      provider: selection.provider,
-      model: selection.model,
-      catalog: await resolveThinkingCatalog(selection),
-    });
-  const selectedCatalogEntry = findSelectedCatalogEntry({
-    catalog: visibilityPolicy.catalog,
-    provider,
-    model,
-  });
+    selection
+      ? resolveReasoningDefault({
+          provider: selection.provider,
+          model: selection.model,
+          catalog: await resolveThinkingCatalog(selection),
+        })
+      : "off";
+  const selectedCatalogEntry =
+    currentSelection &&
+    findSelectedCatalogEntry({ catalog: visibilityPolicy.catalog, ...currentSelection });
   return {
     provider,
     model,

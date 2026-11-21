@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   status: vi.fn(),
   subagent: vi.fn(),
 }));
+// mock-isolation: selection inputs are scripted per case; real catalog owners would load plugins.
 vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   DEFAULT_PROVIDER: "anthropic",
   loadResolvedPublishedModelCatalogOwner: mocks.loadOwner,

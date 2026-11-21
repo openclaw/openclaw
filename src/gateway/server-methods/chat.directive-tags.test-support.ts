@@ -104,7 +104,7 @@ export function createExpectedAcpUserTurn(params: {
     idempotencyKey: params.idempotencyKey,
     __openclaw: {
       chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      modelSelection: {},
+      modelSelection: { provider: "openai", model: "gpt-6-astra" },
       requesterOrigin: {
         sessionKey: "agent:main:main",
         messageProvider: "webchat",
@@ -261,8 +261,16 @@ export function readChatDirectiveConfig(
   state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey" | "storePath">,
 ): OpenClawConfig {
   const session = state.config.session as OpenClawConfig["session"];
-  return inheritLegacyDefaultAgentId(state.config, {
-    ...state.config,
+  const agents = state.config.agents as OpenClawConfig["agents"];
+  // Chat runs need a configured model; fixtures that name none get the test default.
+  const withModel = agents?.defaults?.model
+    ? state.config
+    : {
+        ...state.config,
+        agents: { ...agents, defaults: { ...agents?.defaults, model: "openai/gpt-6-astra" } },
+      };
+  return inheritLegacyDefaultAgentId(withModel, {
+    ...withModel,
     session: {
       ...session,
       mainKey: state.mainSessionKey,

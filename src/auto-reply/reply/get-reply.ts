@@ -57,7 +57,7 @@ import {
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import { pickUnconfiguredTurnModel, resolveActiveMediaModel } from "./get-reply-turn-model.js";
+import { resolveActiveMediaModel } from "./get-reply-turn-model.js";
 import {
   prepareInternalGetReplyOptions,
   withExtractedFileImages,
@@ -670,14 +670,6 @@ async function resolveReplyFromConfig(
       provider = resolvedChannelModelOverride.ref.provider;
       model = resolvedChannelModelOverride.ref.model;
     }
-    // Nothing configured or selected a model: only a `/model` pick in this message can run.
-    const selected = model
-      ? { provider, model }
-      : pickUnconfiguredTurnModel(cfg, agentId, triggerBodyNormalized, defaultProvider, aliasIndex);
-    if (!selected) {
-      return rejectSessionPreparation(new Error(NO_MODEL_CONFIGURED_MESSAGE));
-    }
-    ({ provider, model } = selected);
 
     const conversation =
       resolvedOpts?.replyConversation ??
@@ -700,13 +692,12 @@ async function resolveReplyFromConfig(
         resetTriggered,
         commandAuthorized,
         defaultProvider,
-        // With no configured default, the model picked by this message is the turn's default.
-        defaultModel: defaultModel ?? selected.model,
+        defaultModel,
         primaryProvider,
         primaryModel,
         aliasIndex,
         provider,
-        model: selected.model,
+        model,
         hasResolvedTurnModelOverride,
         typing,
         opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
@@ -814,6 +805,10 @@ async function resolveReplyFromConfig(
     const queueModeOverride = inlineActionResult.queueModeOverride;
     const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
     abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+    // Commands and directives ran above without a model; an agent turn is the first step that needs one.
+    if (!model) {
+      return rejectSessionPreparation(new Error(NO_MODEL_CONFIGURED_MESSAGE));
+    }
     const runAutoFallbackPrimaryProbe =
       directives.hasModelDirective ||
       (autoFallbackPrimaryProbe &&
@@ -857,7 +852,7 @@ async function resolveReplyFromConfig(
         }
         throw error;
       }
-      if (runModelState.operatorModelOverride) {
+      if (runModelState.operatorModelOverride && runModelState.model) {
         runProvider = runModelState.provider;
         runModel = runModelState.model;
       }

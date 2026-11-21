@@ -8,6 +8,7 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveAgentHarnessOperatorPolicyError } from "../../agents/operator-access-program.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
@@ -39,6 +40,7 @@ import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.j
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
+import { hasSessionDirectives } from "./directive-handling.parse.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   acknowledgeIgnoredSessionDirective,
@@ -185,6 +187,13 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
+  if (!resolvedModel) {
+    // Session directives are settings of the model's turns; there is no model to apply them to.
+    // A bare /status has nothing to apply and renders the missing model itself.
+    return hasSessionDirectives(directives)
+      ? rejectModelTransaction(NO_MODEL_CONFIGURED_MESSAGE)
+      : undefined;
+  }
   const preparedModel = modelSelection
     ? await prepareModelSelectionRuntime({
         cfg: params.cfg,

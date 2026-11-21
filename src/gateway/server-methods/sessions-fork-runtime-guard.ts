@@ -154,11 +154,8 @@ export async function prepareUpstreamForkCurrentGuard(params: {
         "required"
         ? "required"
         : undefined;
+    // The fork harness is fixed; a source without a model still obeys sandbox requirements.
     const sourceModel = resolveSessionModelRef(currentConfig, sourceEntry, source.agentId);
-    if (!sourceModel) {
-      // No configured model: no native runtime to restrict; the child's first send reports it.
-      return;
-    }
     const policyHarness =
       currentForkHarness.harness.executionEnvironment === "host-only"
         ? currentForkHarness.harness
@@ -171,8 +168,8 @@ export async function prepareUpstreamForkCurrentGuard(params: {
       entry: currentSandbox === "required" ? { sandbox: "required" } : {},
       persistedEntry: undefined,
       harness: policyHarness,
-      provider: sourceModel.provider,
-      modelId: sourceModel.model,
+      provider: sourceModel?.provider,
+      modelId: sourceModel?.model,
       callerCanConsent: false,
     });
     if (restriction) {

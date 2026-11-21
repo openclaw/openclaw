@@ -116,6 +116,7 @@ async function createHostedCreation(
     agents: {
       defaults: {
         workspace: state.workspaceDir,
+        model: { primary: "test-provider/scope-model" },
         subagents: { allowAgents: ["main", "reviewer"] },
       },
       entries: { main: {}, reviewer: {} },

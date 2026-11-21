@@ -214,6 +214,23 @@ it.each<
   }
 });
 
+it("runs commands without a model and refuses only the agent turn", async () => {
+  const { model: _model, ...defaults } = createReplyAgentDefaults(state.workspaceDir);
+  cfg = { ...cfg, agents: { defaults } };
+  await persistConfig();
+  const setup = expect.stringContaining("No model is configured");
+  for (const [body, expected] of [
+    ["/help", /\/model/u],
+    ["/status", /Model: not configured/u],
+    ["/new", /New session started/u],
+  ] as const) {
+    const { texts } = await send("owner", body);
+    expect(texts, body).toEqual([expect.stringMatching(expected)]);
+  }
+  expect((await send("owner", "hello there", false)).texts).toEqual([setup]);
+  expect(runEmbeddedAgent).not.toHaveBeenCalled();
+});
+
 it.each([false, true])(
   "restores an authorized archived native source before /new (send denied=%s)",
   async (sendDenied) => {
