@@ -266,6 +266,30 @@ describe("sessions-list-tool", () => {
     },
   );
 
+  it.each([
+    ["true", true],
+    [" TRUE ", true],
+    ["false", false],
+    [false, false],
+    [undefined, false],
+    [null, false],
+  ] as const)("reads archived=%j as the archive selector %j (#199566)", async (input, archived) => {
+    mocks.gatewayCall.mockResolvedValue({ path: "/tmp/sessions.json", sessions: [] });
+
+    await createTool().execute("call-archived", { archived: input });
+
+    expect(mocks.gatewayCall).toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ archived }) }),
+    );
+  });
+
+  it.each(["yes", "ALL", 1])("rejects an unsupported archived=%j", async (archived) => {
+    await expect(createTool().execute("call-archived", { archived })).rejects.toThrow(
+      'archived must be true, false, or "all"',
+    );
+    expect(mocks.gatewayCall).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])("preserves fixed-store owner attribution (owned=%s)", async (owned) => {
     const store = owned ? "/tmp/shared-sessions.sqlite" : "/tmp/ownerless-shared.sqlite";
     mocks.gatewayCall.mockResolvedValueOnce({
