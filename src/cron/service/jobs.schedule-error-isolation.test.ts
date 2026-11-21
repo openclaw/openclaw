@@ -80,6 +80,6 @@ it("auto-disables job after 3 consecutive schedule errors", async () => {
     expect.objectContaining({ contextKey: "cron:bad-job:auto-disabled" }),
   );
   const notification = vi.mocked(state.deps.enqueueSessionEvent!).mock.calls[0]?.[0];
-  expect(notification).toContain("Check automation history for details.");
+  expect(notification).toContain("was turned off after 3 consecutive schedule errors.");
   expect(notification).not.toContain("invalid configuration format");
 });

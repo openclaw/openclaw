@@ -38,9 +38,7 @@ export function resolveCronOwnerTransferRecoveryError(
 
 /** A management transfer is not permission to lend the previous person's credentials. */
 export function retireTransferredCronAuthority(job: CronStoredJob): void {
-  job.enabled = false;
   job.ownerTransferPending = true;
-  delete job.state.nextRunAtMs;
   delete job.operatorSource;
   delete job.inferenceBinding;
   delete job.runtimeAuthority;

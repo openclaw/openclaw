@@ -41,7 +41,7 @@ function expectDisabled(job: CronJob | undefined, consecutiveErrors: number) {
     enabled: false,
     state: {
       consecutiveErrors,
-      autoDisabled: { reason: "consecutive-failures", consecutiveErrors },
+      autoDisabled: { reason: "failed", consecutiveErrors },
     },
   });
 }
@@ -361,7 +361,7 @@ describe("CronService failure repair", () => {
           expectNotifications(f, repairs, alerts, notices);
           if (notices) {
             expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
-              expect.stringContaining("auto-disabled"),
+              expect.stringContaining("was turned off"),
               expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
             );
           }
@@ -375,7 +375,7 @@ describe("CronService failure repair", () => {
               to: "19098680",
               mode: "announce",
               payload: expect.objectContaining({
-                text: expect.stringContaining('Automation "continue PR work" was auto-disabled'),
+                text: expect.stringContaining('Automation "continue PR work" was turned off'),
               }),
             }),
           );

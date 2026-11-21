@@ -59,7 +59,11 @@ function JobError(props: { job?: CronJob; option: CiAutomationOption }) {
   return (
     <Show when={props.job?.state.autoDisabled || props.job?.state.lastError || blocker()}>
       <div class="chat-ci__automation-job-error" role="status">
-        <Show when={props.job?.state.autoDisabled}>
+        <Show
+          when={
+            props.job?.state.autoDisabled?.consecutiveErrors ? props.job.state.autoDisabled : false
+          }
+        >
           {(disabled) => (
             <div>
               {t(

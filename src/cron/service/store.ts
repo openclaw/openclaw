@@ -493,8 +493,8 @@ export async function prepareCronJobMutation(
   // Operators may pause an existing blocked job without changing what it runs.
   const disablesOnly =
     mutation.kind === "update" &&
-    mutation.patch.enabled === false &&
-    Object.keys(mutation.patch).length === 1;
+    (mutation.options.autoDisable !== undefined || mutation.patch.enabled === false) &&
+    Object.keys(mutation.patch).length === (mutation.options.autoDisable ? 0 : 1);
   if (plan.job && !disablesOnly) {
     assertCronHostExecutionAllowed(state, plan.job);
   }

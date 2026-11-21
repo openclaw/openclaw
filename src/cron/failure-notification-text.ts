@@ -42,6 +42,7 @@ const SCRIPT_FAILURE_COPY = {
   snapshot_limit_exceeded: "exceeded its state limit",
   internal_error: "failed internally",
   tool_budget_exceeded: "exceeded its tool budget",
+  source_unavailable: "lost the operator authority that created it",
 } satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
 /** Renders only classified reasons or closed producer-authored failure facts. */

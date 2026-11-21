@@ -1,5 +1,6 @@
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import type { CronAutoDisableRequest } from "../service/auto-disable.js";
 import type { CronAddOptions } from "../service/job-options.types.js";
 import type { CronNotificationIntent } from "../service/notification-intents.js";
 import type { CronJobCreate, CronJobPatch, CronStoredJob, CronStoreFile } from "../types.js";
@@ -28,6 +29,7 @@ type CronJobMutationOptions = Pick<
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
+  autoDisable?: CronAutoDisableRequest;
 };
 
 export type CronJobMutation =

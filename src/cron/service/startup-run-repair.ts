@@ -6,6 +6,7 @@ import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 import {
   applyJobResult,
@@ -69,7 +70,7 @@ export function markInterruptedStartupRun(params: {
 
   // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
   if (job.schedule.kind === "at" && replacementAtMs === undefined) {
-    job.enabled = false;
+    autoDisableCronJob(job, { reason: "completed" });
   }
 
   return {

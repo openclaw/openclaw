@@ -385,7 +385,7 @@ describe("cron batch outcome finalization", () => {
           mode: "webhook",
           to: "https://alerts.example.com/hook",
         });
-        expect(text).toContain('Automation "Recurring report" was auto-disabled');
+        expect(text).toContain('Automation "Recurring report" was turned off');
         expect(text).toContain(`Last error: ${error}`);
         expect(enqueueSessionEvent).not.toHaveBeenCalled();
       } else {

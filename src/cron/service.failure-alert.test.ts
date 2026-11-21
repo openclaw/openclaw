@@ -399,7 +399,7 @@ describe("CronService failure alerts", () => {
           expect(alert.text).toContain("Send `/login openai`");
           if (oneShot) {
             expect(cron.getJob(job.id)?.enabled).toBe(false);
-            expect(alert.text).toContain("was auto-disabled");
+            expect(alert.text).toContain("was turned off");
           }
           const signIn = {
             label: "Sign in",
@@ -445,7 +445,7 @@ describe("CronService failure alerts", () => {
 
           await runJob(job, 1);
           expect(alertCallArg(sendCronFailureAlert).text).toBe(
-            `Automation "closed detail alert" failed\n${expected}`,
+            `Automation "closed detail alert" failed\n${expected}\nNext attempt: 2026-01-01T00:01:00.000Z`,
           );
         },
         {

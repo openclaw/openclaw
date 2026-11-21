@@ -16,6 +16,7 @@ import type {
   CronRunStatus,
   CronTriggerEvalOutcome,
 } from "../types.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
@@ -88,8 +89,7 @@ export function applyTriggerRunResult(
     if (job.schedule.kind === "stream") {
       job.state.streamSourceIdentity = createCronSourceIdentity();
     }
-    job.enabled = false;
-    job.state.nextRunAtMs = undefined;
+    autoDisableCronJob(job, { reason: "completed" });
   }
 }
 
@@ -152,7 +152,10 @@ export function resolveTransientCronRetryDecision(params: {
       reason: "aborted",
     };
   }
-  if (params.errorClassification?.kind === "permanent") {
+  if (
+    params.errorClassification?.kind === "permanent" ||
+    params.errorClassification?.kind === "source-unavailable"
+  ) {
     return {
       retryable: false,
       consecutiveErrors: params.consecutiveErrors ?? 0,

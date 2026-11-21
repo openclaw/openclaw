@@ -11,6 +11,7 @@ import { resolveCronContinuationSessionKey } from "../session-target.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import { assertExecutionPolicy } from "./jobs-validation.js";
@@ -185,7 +186,7 @@ export async function launchCronRun(
   const manual = options.source === "manual" || options.source === "event";
   const admittedJob = structuredClone(continuationSession ? current : entry.job);
   if (options.onExit) {
-    admittedJob.enabled = false;
+    autoDisableCronJob(admittedJob, { reason: "completed" });
   }
   const executionJob = structuredClone(admittedJob);
   executionJob.payload = options.event

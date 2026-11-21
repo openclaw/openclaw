@@ -25,6 +25,7 @@ import {
   readDefaultProactiveJobReceiptInDatabase,
 } from "../proactive-job-receipt.kernel.js";
 import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "../service/admission-deferred.js";
+import { autoDisableCronJob } from "../service/auto-disable.js";
 import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJob, CronStoredJob } from "../types.js";
@@ -329,10 +330,9 @@ function requestCronRunsInDatabase(
     }
     const previousEnabled = job.enabled ?? true;
     if (request.mode === "on-exit") {
-      job.enabled = false;
+      autoDisableCronJob(job, { reason: "completed" });
       job.updatedAtMs = input.nowMs;
       job.state.scheduleActivatedAtMs = input.nowMs;
-      delete job.state.nextRunAtMs;
       delete job.state.startupCatchupAtMs;
       delete job.state.pacedNextRunAtMs;
       delete job.state.forcePreservedNextRunAtMs;

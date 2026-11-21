@@ -195,6 +195,8 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
+  /** A refused operator source or retired plugin: the job stops on the first attempt. */
+  | { kind: "source-unavailable" }
   | { kind: "session-conflict" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
@@ -397,7 +399,8 @@ export type CronTriggerFailureCode =
   | "snapshot_limit_exceeded"
   | "internal_error"
   | "plugin_reload_failed"
-  | "tool_budget_exceeded";
+  | "tool_budget_exceeded"
+  | "source_unavailable";
 
 /** Result union returned by the cron trigger-script evaluator. */
 export type CronTriggerEvaluationResult =

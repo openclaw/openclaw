@@ -142,7 +142,7 @@ export function bindCronStreamUpdate({
       },
       opts,
     );
-    if (patch.enabled === false) {
+    if (patch.enabled === false || opts?.autoDisable) {
       cancelDisabledExitWatcher(result, precondition);
     }
     await settleCronStreamStopAfterCommit({
@@ -193,4 +193,17 @@ export function bindCronStreamRemoval({
       throw error;
     }
   };
+}
+
+/** Turns a watched job off for an exit that arrived while the Gateway drains. */
+export async function consumeDrainedExit(
+  cron: CronService,
+  jobId: string,
+  precondition: Parameters<CronService["updateWithPrecondition"]>[2],
+  commitGuard: () => void,
+): Promise<void> {
+  await cron.updateWithPrecondition(jobId, {}, precondition, {
+    commitGuard,
+    autoDisable: { reason: "completed" },
+  });
 }

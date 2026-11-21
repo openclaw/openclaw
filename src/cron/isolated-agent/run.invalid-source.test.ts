@@ -83,7 +83,7 @@ describe("undecodable scheduled authority", () => {
         error: expect.stringMatching(
           /operator authority that created this automation was refused.*Restart recovery operator source/,
         ),
-        errorClassification: { kind: "permanent" },
+        errorClassification: { kind: "source-unavailable" },
         executionStarted: false,
         admissionDisposition: "rejected",
       });
@@ -210,6 +210,7 @@ describe("undecodable scheduled authority", () => {
         ),
       );
       const enqueueSystemEvent = vi.fn();
+      const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
       const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
         async () => {},
       );
@@ -221,6 +222,7 @@ describe("undecodable scheduled authority", () => {
         defaultAgentId: "main",
         log: logger,
         enqueueSystemEvent,
+        enqueueSessionEvent,
         sendCronFailureAlert,
         runIsolatedAgentJob,
       });
@@ -239,7 +241,9 @@ describe("undecodable scheduled authority", () => {
         } else {
           expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
         }
-        expect(cron.getJob(job.id)?.state.autoDisabled).toBeUndefined();
+        expect(cron.getJob(job.id)?.state.autoDisabled?.reason).toBe(
+          scenario?.transientError ? undefined : "source-unavailable",
+        );
         const result = await runIsolatedAgentJob.mock.results[0]?.value.catch(
           (error: unknown) => error,
         );
@@ -259,7 +263,7 @@ describe("undecodable scheduled authority", () => {
             error: expect.stringContaining(
               "operator authority that created this automation was refused",
             ),
-            errorClassification: { kind: "permanent" },
+            errorClassification: { kind: "source-unavailable" },
             executionStarted: false,
             admissionDisposition: "rejected",
           });
@@ -273,16 +277,27 @@ describe("undecodable scheduled authority", () => {
             error: expect.stringContaining(scenario?.refusal ?? "Restart recovery operator source"),
           });
         }
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-        expect(sendCronFailureAlert).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "telegram",
-            to: "fixture-recipient",
-            payload: {
-              text: 'Automation "Test Job" failed\nCheck automation history for details.',
-            },
-          }),
-        );
+        if (scenario?.transientError) {
+          // A transient failure stays scheduled and its alert names the next attempt.
+          expect(sendCronFailureAlert).toHaveBeenCalledWith(
+            expect.objectContaining({
+              channel: "telegram",
+              to: "fixture-recipient",
+              payload: {
+                text: expect.stringMatching(
+                  /^Automation "Test Job" failed\nCheck automation history for details\.\nNext attempt: /,
+                ),
+              },
+            }),
+          );
+        } else {
+          // A refused source stops on its first attempt with one notice instead of an alert.
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
+          expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(`openclaw automations enable ${job.id}`),
+            expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
+          );
+        }
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(h.resolveCronSessionMock).not.toHaveBeenCalled();
         expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();

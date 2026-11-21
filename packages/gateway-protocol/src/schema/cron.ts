@@ -416,9 +416,14 @@ const CronDeliveryTraceSchema = closedObject({
 });
 
 const CronAutoDisabledSchema = closedObject({
-  reason: stringLiteralUnion(["consecutive-failures", "schedule-errors"]),
+  reason: stringLiteralUnion([
+    "consecutive-failures",
+    "schedule-errors",
+    "source-unavailable",
+    "failed",
+  ]),
   atMs: CronDateTimestampMsSchema,
-  consecutiveErrors: Type.Integer({ minimum: 1 }),
+  consecutiveErrors: Type.Integer({ minimum: 0 }),
 });
 
 const CronJobRuntimeFeedbackProperties = {

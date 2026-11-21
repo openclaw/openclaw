@@ -15,6 +15,9 @@ function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorCl
   if (code === "aborted") {
     return { kind: "aborted" };
   }
+  if (code === "source_unavailable") {
+    return { kind: "source-unavailable" };
+  }
   return { kind: "permanent" };
 }
 

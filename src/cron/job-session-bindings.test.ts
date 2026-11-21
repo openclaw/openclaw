@@ -106,6 +106,7 @@ function fakeUpdateWithPrecondition(currentJobs: () => CronJob[]) {
       id: string,
       _patch: unknown,
       precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
+      _options?: unknown,
     ) => {
       const current = currentJobs().find((candidate) => candidate.id === id);
       if (!current) {
@@ -147,7 +148,10 @@ test("disables only enabled jobs bound to the archived session", async () => {
   ];
   const update = fakeUpdateWithPrecondition(() => jobs);
   expect(await disable(jobs, update)).toEqual(["bound", "created-here"]);
-  expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
+  expect(update.mock.calls[0]?.[0]).toBe("bound");
+  expect(update.mock.calls[0]?.[3]).toMatchObject({
+    autoDisable: { reason: "source-unavailable", unavailableSessionKey: "agent:main:cron:bound" },
+  });
 });
 
 test("leaves ownerless jobs unchanged when no canonical default is configured", async () => {

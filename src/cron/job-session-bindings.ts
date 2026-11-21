@@ -148,7 +148,8 @@ export async function disableCronJobsBoundToSessions(params: {
   };
   const failures: unknown[] = [];
   for (const job of jobs) {
-    if (matchingSessionKeys(job).length === 0) {
+    const [parentSessionKey] = matchingSessionKeys(job);
+    if (!parentSessionKey) {
       continue;
     }
     try {
@@ -156,11 +157,18 @@ export async function disableCronJobsBoundToSessions(params: {
       // list snapshot must not be disabled, and one failing/removed job must
       // not abort the remaining bound jobs.
       let lockedMatches: string[] = [];
-      await params.cron.updateWithPrecondition(job.id, { enabled: false }, (currentJob) => {
+      const precondition = (currentJob: CronJob) => {
         lockedMatches = matchingSessionKeys(currentJob);
         if (lockedMatches.length === 0) {
           throw new CronJobBindingStaleError();
         }
+      };
+      await params.cron.updateWithPrecondition(job.id, {}, precondition, {
+        autoDisable: {
+          reason: "source-unavailable",
+          cause: `Its conversation \`${parentSessionKey}\` was archived.`,
+          unavailableSessionKey: parentSessionKey,
+        },
       });
       for (const sessionKey of lockedMatches) {
         disabledBySession.get(sessionKey)?.push(job.id);

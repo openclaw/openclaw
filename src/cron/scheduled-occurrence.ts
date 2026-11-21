@@ -4,7 +4,6 @@
  * creates occurrences; this module stays free of runtime dependencies so cron
  * core can import it.
  */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -80,23 +79,14 @@ export function unadmittedScheduledOccurrence(error: string): ScheduledOccurrenc
   return { mint: () => failedScheduledExecution(error), release() {} };
 }
 
-/** The single notice a paused job sends; names the parent and the repair. */
-export function buildScheduledParentPauseNotice(params: {
-  job: { id: string; name?: string };
-  pause: CronParentUnavailable;
-}): string {
-  const name = truncateUtf16Safe(
-    (params.job.name || params.job.id).replace(/\s+/g, " ").trim(),
-    120,
-  );
-  const { pause } = params;
+/** Why a paused job did not run; names the parent conversation. */
+export function describeScheduledParentPause(pause: CronParentUnavailable): string {
   const cause =
     pause.reason === "worktree-missing"
       ? `its worktree \`${pause.worktreePath ?? "unknown"}\` no longer exists`
       : `it was ${pause.reason}`;
   return [
-    `⚠️ Automation "${name}" is paused because the conversation that created it, \`${pause.parentSessionKey}\`, is unavailable: ${cause}.`,
+    `The conversation that created it, \`${pause.parentSessionKey}\`, is unavailable: ${cause}.`,
     "Its runs used that conversation's access, and no other access is used in its place.",
-    `Restore the conversation and run \`openclaw automations enable ${params.job.id}\`, or recreate the automation from another conversation.`,
-  ].join("\n");
+  ].join(" ");
 }

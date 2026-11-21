@@ -43,6 +43,7 @@ import type {
   CronStoredJob,
   CronStoreFile,
 } from "../types.js";
+import type { CronAutoDisableRequest } from "./auto-disable.js";
 import type { CronAddOptions } from "./job-options.types.js";
 import type { CronJobsSortBy, CronSortDir } from "./list-page-types.js";
 import type {
@@ -681,6 +682,7 @@ export type CronUpdateOptions = Pick<
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
+  autoDisable?: CronAutoDisableRequest;
 };
 
 export type CronCommitGuardOptions = {

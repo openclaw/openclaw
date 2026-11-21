@@ -1,5 +1,5 @@
 import {
-  buildScheduledParentPauseNotice,
+  describeScheduledParentPause,
   type ScheduledOccurrence,
   unadmittedScheduledOccurrence,
 } from "../scheduled-occurrence.js";
@@ -36,7 +36,7 @@ export function resolvePausedOccurrence(
   }
   return {
     status: "skipped",
-    error: buildScheduledParentPauseNotice({ job, pause: occurrence.pause }),
+    error: describeScheduledParentPause(occurrence.pause),
     parentUnavailable: occurrence.pause,
     executionStarted: false,
     delivered: false,

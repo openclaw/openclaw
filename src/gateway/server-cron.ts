@@ -62,6 +62,7 @@ import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   bindCronStreamRemoval,
   bindCronStreamUpdate,
+  consumeDrainedExit,
   drainGatewayCron,
   withObservedCronStreamState,
 } from "./server-cron-drain.js";
@@ -641,9 +642,7 @@ export function buildGatewayCronService(params: {
         controls.onTerminalWriteStarted();
         try {
           // Consume an already-owned exit during drain without admitting a new payload.
-          await cron.updateWithPrecondition(job.id, { enabled: false }, completionToken, {
-            commitGuard: controls.commitGuard,
-          });
+          await consumeDrainedExit(cron, job.id, completionToken, controls.commitGuard);
           controls.onReserved();
           controls.commitGuard();
           throw new Error(

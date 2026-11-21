@@ -71,6 +71,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { CronOperatorSourceError } from "./operator-source-error.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import {
   resolveCronScheduledToolPolicy,
@@ -666,7 +667,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           ? "timeout"
           : error instanceof CodeModeHeadlessAbortError
             ? "aborted"
-            : prAutoFixFailureCode(params, error),
+            : error instanceof CronOperatorSourceError
+              ? "source_unavailable"
+              : prAutoFixFailureCode(params, error),
       );
     } finally {
       try {

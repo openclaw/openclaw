@@ -78,7 +78,7 @@ describe("resolveTransientCronRetryDecision", () => {
           : notice?.kind === "auto-disabled"
             ? notice.text
             : undefined;
-      expect(text).toContain("auto-disabled");
+      expect(text).toContain("was turned off");
       expect(text).toContain("invalid automation target");
     },
   );

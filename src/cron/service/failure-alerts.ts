@@ -31,7 +31,7 @@ import type {
   CronRunErrorClassification,
   CronStoredJob,
 } from "../types.js";
-import { buildCronAutoDisableNotice } from "./auto-disable.js";
+import { buildCronAutoDisableNotice, queueCronAutoDisableNotification } from "./auto-disable.js";
 import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import {
@@ -263,6 +263,7 @@ export function resolveFailureAlert(
 }
 
 type FailureAlertIncident = NonNullable<CronJob["state"]["failureAlertIncident"]>;
+type CronAutoDisabled = NonNullable<CronJob["state"]["autoDisabled"]>;
 /** One notification-worthy failure: its dedupe signature and recovery scope. */
 type FailureAlertSignal = Required<FailureAlertIncident>;
 
@@ -275,19 +276,14 @@ function buildFailureAlertPayload(params: {
   route: ResolvedFailureAlert;
   status: "error" | "skipped";
   localProviderUnavailable?: boolean;
-  /** The failure auto-disabled the job: lead with the safety notice and recovery command. */
-  autoDisabled?: boolean;
+  /** The failure turned the job off: lead with that notice and its recovery command. */
+  autoDisabled?: CronAutoDisabled;
 }) {
   const safeJobName = params.job.name || params.job.id;
   const errorReason = params.status === "error" ? params.errorReason : undefined;
   let text: string;
   if (params.autoDisabled) {
-    const notice = buildCronAutoDisableNotice({
-      job: params.job,
-      reason: "consecutive-failures",
-      consecutiveErrors: params.consecutiveErrors,
-      failureNotificationDetail: params.failureNotificationDetail,
-    });
+    const notice = buildCronAutoDisableNotice(params.job, params.autoDisabled, params);
     text =
       params.route.mode === "webhook"
         ? `${notice}\nLast error: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`
@@ -311,7 +307,10 @@ function buildFailureAlertPayload(params: {
                 ? "OpenClaw will check again on a later scheduled run."
                 : "After restoring the provider, use Run Now or reschedule this automation.",
             ]
-          : cronFailureDetailLines(errorReason, params.failureNotificationDetail);
+          : [
+              ...cronFailureDetailLines(errorReason, params.failureNotificationDetail),
+              ...nextAttemptLines(params.job),
+            ];
     text = [
       params.consecutiveErrors > 1
         ? `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times in a row`
@@ -333,6 +332,14 @@ function buildFailureAlertPayload(params: {
   };
 
   return payload;
+}
+
+/** Every failure notice says what happens next from the recorded schedule. */
+function nextAttemptLines(job: CronJob): string[] {
+  const nextRunAtMs = job.state.nextRunAtMs;
+  return isJobEnabled(job) && nextRunAtMs !== undefined
+    ? [`Next attempt: ${new Date(nextRunAtMs).toISOString()}`]
+    : [];
 }
 
 function startFailureNotification(job: CronJob): void {
@@ -433,8 +440,7 @@ function maybeEmitFailureAlert(
     failureNotificationDetail?: CronFailureNotificationDetail;
     runAtMs: number;
     consecutiveCount: number;
-    terminalOneShot?: boolean;
-    terminalRecurring?: boolean;
+    autoDisabled?: CronAutoDisabled;
     deferredNotifications: DeferredCronNotifications;
   },
 ): "unavailable" | "suppressed" | "queued" {
@@ -449,10 +455,8 @@ function maybeEmitFailureAlert(
     return "suppressed";
   }
   recordUnresolvedFailure(params.job, params.failureNotificationDetail);
-  const terminalOneShot = params.terminalOneShot === true;
-  const terminalRecurring = params.terminalRecurring === true;
-  // A terminal failure disabled the job: its notice ignores the threshold and cooldown.
-  const terminal = terminalOneShot || terminalRecurring;
+  // A failure that turned the job off is news: its notice ignores the threshold and cooldown.
+  const terminal = params.autoDisabled !== undefined;
   const alertConfig = params.alertConfig;
   if (!alertConfig) {
     return "unavailable";
@@ -485,7 +489,7 @@ function maybeEmitFailureAlert(
       route: alertConfig,
       status: params.status,
       localProviderUnavailable,
-      autoDisabled: terminal,
+      autoDisabled: params.autoDisabled,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,
@@ -507,12 +511,12 @@ function maybeEmitFailureAlert(
   // fail the same way the job did and leave the route silent.
   if (
     !hasJobFailureDestination &&
-    !terminalRecurring &&
-    (terminalOneShot || alertConfig.mode === "announce") &&
+    params.autoDisabled?.reason !== "consecutive-failures" &&
+    (terminal || alertConfig.mode === "announce") &&
     params.status === "error" &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
     hasFailureRepairOwner(params.job) &&
-    (terminalOneShot || isJobEnabled(params.job))
+    (terminal || isJobEnabled(params.job))
   ) {
     // If the owner turn cannot start, the user still gets the plain alert.
     params.deferredNotifications.push({
@@ -524,7 +528,7 @@ function maybeEmitFailureAlert(
         consecutiveErrors: params.consecutiveCount,
         error: params.error,
         errorReason: params.errorReason,
-        terminal: terminalOneShot,
+        nextAttempt: nextAttemptLines(params.job)[0],
       }),
     });
     return "queued";
@@ -561,32 +565,31 @@ export function finalizeCronFailureNotifications(
       startedAt: number;
     };
     completionStatus: CronCompletionStatus;
-    /** The recurring job was auto-disabled by this failure; the route carries its safety notice. */
-    terminalRecurring?: boolean;
-    terminalOneShot?: boolean;
+    autoDisabled?: CronAutoDisabled;
     /** A quick re-run for a provider outage is scheduled; alert/repair wait for its outcome. */
     pendingTransientRetry?: boolean;
     replay?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
-): ReturnType<typeof maybeEmitFailureAlert> | undefined {
+): void {
   if (params.result.status === "ok" && params.completionStatus === "succeeded") {
     resolveFailureIncident(params.job);
-    return undefined;
+    return;
   }
   if (params.result.errorClassification?.kind === "aborted") {
-    return undefined;
+    return;
   }
   recordUnresolvedFailure(params.job, params.result.failureNotificationDetail);
   // Replay repairs incident state but never requests a historical notification.
   if (params.replay) {
-    return undefined;
+    return;
   }
   if (
     (params.result.status === "error" || params.result.status === "skipped") &&
     !params.pendingTransientRetry
   ) {
-    return maybeEmitFailureAlert(state, {
+    const { autoDisabled } = params;
+    const outcome = maybeEmitFailureAlert(state, {
       job: params.job,
       alertConfig: params.alertConfig,
       status: params.result.status,
@@ -598,10 +601,18 @@ export function finalizeCronFailureNotifications(
         (params.result.status === "skipped"
           ? params.job.state.consecutiveSkipped
           : params.job.state.consecutiveErrors) ?? 0,
-      terminalOneShot: params.terminalOneShot,
-      terminalRecurring: params.terminalRecurring,
+      autoDisabled,
       deferredNotifications: params.deferredNotifications,
     });
+    // The owner agent gets the stop notice when no route carries it.
+    if (autoDisabled && outcome !== "queued") {
+      queueCronAutoDisableNotification(
+        params.job,
+        autoDisabled,
+        params.deferredNotifications,
+        params.result,
+      );
+    }
   } else if (
     params.result.status === "ok" &&
     params.completionStatus === "failed" &&
@@ -621,7 +632,7 @@ export function finalizeCronFailureNotifications(
         }),
       )
     ) {
-      return undefined;
+      return;
     }
     const job = cronNotificationJob(params.job);
     const route = params.alertConfig;
@@ -642,5 +653,4 @@ export function finalizeCronFailureNotifications(
       route,
     });
   }
-  return undefined;
 }
