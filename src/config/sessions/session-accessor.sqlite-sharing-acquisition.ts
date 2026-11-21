@@ -211,6 +211,12 @@ export function publishRetainedSessionGeneration(
   }
 }
 
+export class SessionSharingAcquisitionSupersededError extends Error {
+  constructor() {
+    super("Session sharing acquisition is no longer current");
+  }
+}
+
 /** Reconcile one worker snapshot with commit postimages, without adopting another lifecycle. */
 export function reconcileSessionSharingAcquisition(
   acquisition: SessionSharingAcquisition,
@@ -222,7 +228,7 @@ export function reconcileSessionSharingAcquisition(
     (acquisition.entry !== undefined &&
       acquisition.entry.lifecycleRevision !== snapshot.entry?.lifecycleRevision)
   ) {
-    throw new Error("Session sharing acquisition is no longer current");
+    throw new SessionSharingAcquisitionSupersededError();
   }
   const membership = new Set(acquisition.membershipPostimage ?? snapshot.membership);
   for (const [identityId, present] of acquisition.membership) {
