@@ -27,6 +27,7 @@ export type IncompleteTurnAttempt = Pick<
   | "inputAlreadyDelivered"
   | "preparedTerminalReply"
   | "textToolCallAttempt"
+  | "textToolCallRecovery"
   | "clientToolCalls"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
