@@ -13,7 +13,6 @@ import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
@@ -22,10 +21,7 @@ import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
-import {
-  renderChatAbortActionSolid,
-  renderChatPrimaryActionsSolid as ChatPrimaryActions,
-} from "./chat-composer-controls.tsx";
+import { renderChatPrimaryActionsSolid as ChatPrimaryActions } from "./chat-composer-controls.tsx";
 import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
@@ -47,6 +43,9 @@ import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
+const DisabledBanner = lazy(() => import("./chat-composer-disabled-banner.tsx"), {
+  export: "ChatComposerDisabledBanner",
+});
 const SlashMenu = lazy(() => import("./chat-composer-slash-menu.tsx"), { export: "SlashMenu" });
 const SkillMenu = lazy(() => import("./chat-composer-skill-menu.tsx"), { export: "SkillMenu" });
 const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx"), {
@@ -128,80 +127,13 @@ export function renderChatComposerView(
   const disabledBanner = (
     <Show when={props.disabledBanner?.presentation !== "hidden" ? props.disabledBanner : undefined}>
       {(banner) => (
-        <div
-          class={[
-            "agent-chat__disabled-banner",
-            {
-              "agent-chat__disabled-banner--replacement": banner().kind === "composer-replacement",
-              "agent-chat__disabled-banner--compact": banner().presentation === "compact",
-            },
-            "callout",
-            banner().tone === "neutral" ? "agent-chat__disabled-banner--neutral" : "info",
-            "callout--action",
-          ]}
-          role="status"
-        >
-          {banner().icon ? (
-            <span
-              class={[
-                "agent-chat__disabled-banner-icon",
-                `agent-chat__disabled-banner-icon--${banner().icon}`,
-              ]}
-              aria-hidden="true"
-            >
-              <Icon
-                name={
-                  ({ archive: "archive", eye: "eye", warning: "alertTriangle" } as const)[
-                    banner().icon!
-                  ]
-                }
-              />
-            </span>
-          ) : undefined}
-          <div class="callout__content">
-            {banner().title ? (
-              <div class="agent-chat__disabled-banner-title">{banner().title}</div>
-            ) : undefined}
-            <div class="agent-chat__disabled-banner-detail">{banner().text}</div>
-          </div>
-          <Show when={banner().onAction}>
-            {(onAction) => (
-              <button
-                type="button"
-                class={["btn btn--sm", banner().actionStyle]}
-                disabled={
-                  !banner().actionPending && (Boolean(banner().disabledReason) || banner().busy)
-                }
-                aria-disabled={banner().actionPending ? "true" : undefined}
-                data-authority-pending={banner().actionPending ? "" : undefined}
-                aria-busy={banner().busy ? "true" : "false"}
-                title={banner().disabledReason ?? undefined}
-                onClick={() => {
-                  if (!banner().actionPending && !banner().disabledReason && !banner().busy) {
-                    onAction()();
-                  }
-                }}
-              >
-                {banner().busy ? (
-                  <>
-                    <span class="btn__spinner" aria-hidden="true" />
-                    {banner().busyLabel ?? banner().actionLabel}
-                  </>
-                ) : (
-                  banner().actionLabel
-                )}
-              </button>
-            )}
-          </Show>
-          <Show when={banner().stop}>
-            {(stop) => <PaneSubagentStop onAbort={stop().onAbort} notice />}
-          </Show>
-          {banner().kind === "composer-replacement" &&
-          banner().presentation !== "compact" &&
-          context().showAbortableUi
-            ? renderChatAbortActionSolid(context().runControlsProps)
-            : undefined}
-        </div>
+        <ChatLazyBoundary>
+          <DisabledBanner
+            banner={banner()}
+            showAbortableUi={context().showAbortableUi}
+            runControls={context().runControlsProps}
+          />
+        </ChatLazyBoundary>
       )}
     </Show>
   );
