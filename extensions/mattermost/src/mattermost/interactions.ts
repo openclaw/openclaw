@@ -311,6 +311,7 @@ export function createMattermostInteractionHandler(params: {
     userName: string;
     actionId: string;
     actionName: string;
+    callbackData?: unknown;
     postId: string;
     post: MattermostPost;
   }) => Promise<void>;
@@ -530,6 +531,7 @@ export function createMattermostInteractionHandler(params: {
           userName,
           actionId,
           actionName: clickedButtonName,
+          callbackData: contextWithoutToken.callback_data,
           postId: payload.post_id,
           post: originalPost,
         });

@@ -3,6 +3,7 @@ import type { Context } from "grammy";
 import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   formatModelsAvailableHeaderAsync,
@@ -139,18 +140,19 @@ export function createTelegramCallbackRouter({
       const hasReservedModelPrefix = data.startsWith("mdl1~");
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
+      // Agent-authored values stay data even when slash-prefixed; commands use action.type "command".
+      // Agent buttons already delivered by v2026.11.5 continue as their marked value.
       const hasReservedAgentPrefix = hasTelegramAgentCallbackPrefix(data);
-      const agentCallbackData = parseTelegramAgentCallbackData(callback.data?.trimStart());
-      const hasReservedTypedPrefix = hasReservedOpaquePrefix || hasReservedAgentPrefix;
+      const legacyAgentCallbackData = parseTelegramAgentCallbackData(data);
+      const agentCallbackData = legacyAgentCallbackData ?? data;
+      const agentCallbackText = agentControlText(agentCallbackData);
+      const hasReservedTypedPrefix =
+        hasReservedOpaquePrefix || hasReservedAgentPrefix || agentCallbackText !== undefined;
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
-      // Typed values stay data even when slash-prefixed; commands use action.type "command".
       const callbackCommandText =
         nativeCallbackCommand ??
-        (agentCallbackData
-          ? `callback_data: ${agentCallbackData}`
-          : opaqueCallbackData
-            ? ""
-            : genericCallbackText);
+        agentCallbackText ??
+        (opaqueCallbackData ? "" : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
       const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
@@ -311,7 +313,7 @@ export function createTelegramCallbackRouter({
         await approvalRuntime.handleMalformedReserved();
         return;
       }
-      if (hasReservedAgentPrefix && !agentCallbackData) {
+      if (hasReservedAgentPrefix && legacyAgentCallbackData === null) {
         await terminalizeUnavailableCallback();
         return;
       }
@@ -325,7 +327,7 @@ export function createTelegramCallbackRouter({
           ctx,
           callbackMessage,
           data,
-          pluginCallbackData: opaqueCallbackData ?? agentCallbackData ?? data,
+          pluginCallbackData: opaqueCallbackData ?? agentCallbackData,
           callbackConversationId,
           callbackThreadId,
           senderId,
