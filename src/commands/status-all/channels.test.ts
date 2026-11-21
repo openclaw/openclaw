@@ -286,6 +286,23 @@ describe("buildChannelsTable", () => {
 });
 
 describe("channel table credential summaries", () => {
+  it("keeps generic mixed-token accounts OK without configuration metadata", async () => {
+    mocks.plugins.mockReturnValue([
+      {
+        ...plugin("mattermost", "primary", "Mattermost"),
+        config: { listAccountIds: () => ["primary", "secondary"] },
+      },
+    ]);
+    mocks.inspect.mockResolvedValueOnce(
+      inspection({ token: "configured-token" }, { accountId: "primary" }),
+    );
+    mocks.inspect.mockResolvedValueOnce(inspection({ token: "" }, { accountId: "secondary" }));
+    expect((await buildChannelsTable({})).rows[0]).toMatchObject({
+      state: "ok",
+      detail: expect.stringContaining("accounts 1/2"),
+    });
+  });
+
   it("does not require appToken for bot-token-only channels", async () => {
     expect(
       await summarize(
