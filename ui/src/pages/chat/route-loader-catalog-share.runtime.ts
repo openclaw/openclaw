@@ -211,7 +211,7 @@ async function resolveBoundCatalogConversation(
   };
 }
 
-export async function resolveCatalogContinuation(
+async function resolveCatalogContinuation(
   context: ApplicationContext,
   key: CatalogSessionKey,
   agentId: string,
