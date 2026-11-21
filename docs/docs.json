@@ -2255,6 +2255,7 @@
                       "providers/deepseek",
                       "providers/featherless",
                       "providers/fireworks",
+                      "providers/flexai",
                       "providers/github-copilot",
                       "providers/gmi",
                       "providers/google",
