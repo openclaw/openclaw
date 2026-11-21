@@ -21,8 +21,14 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
-import { isAcknowledgedAbandonedUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
+  UPDATE_RUN_REPAIRED_STEP,
+  type UpdateRunRecord,
+} from "./update-run-record.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -180,6 +186,18 @@ function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${sliceUtf16Safe(text, 0, limit - 1)}…`;
 }
 
+export function formatRepairedUpdateRun(run: UpdateRunRecord): string {
+  const version = run.target.version ?? run.after.version;
+  const phase = run.steps.find((step) => PHASES.has(step.step) && step.status === "failed");
+  const failure = selectUpdateFailureReportSteps(
+    run.steps.filter((step) => step.status === "failed" && !PHASES.has(step.step)),
+  )[0];
+  return bounded(
+    `Update ${run.runId}${version ? ` to ${version}` : ""} failed${phase ? ` at ${phase.step}` : ""}: ${run.reason ?? "unknown reason"}.${failure?.detail ? ` ${failure.step}: ${failure.detail}` : ""}`,
+    UPDATE_RUN_TEXT_LIMIT,
+  );
+}
+
 function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undefined {
   const sha = identity.sha?.slice(0, 8);
   return identity.version ? `${identity.version}${sha ? ` (${sha})` : ""}` : sha;
@@ -244,6 +262,7 @@ export function renderUpdateRunReport(
     markdownLimit?: number;
   } = {},
 ): UpdateRunReport {
+  const repairRun = isUpdateRepairRun(run);
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const currentHealth: UpdateRunReportHealth | undefined =
     opts.currentHealth ??
@@ -305,9 +324,11 @@ export function renderUpdateRunReport(
         warnings.length > 0
           ? `; ${warnings.length} warning${warnings.length === 1 ? " needs" : "s need"} attention`
           : "";
-      headline = after
-        ? `✅ OpenClaw updated to ${after}${before ? ` (from ${before})` : ""}${attention}.`
-        : `✅ OpenClaw updated${attention}.`;
+      headline = repairRun
+        ? `✅ OpenClaw repair completed${after ? ` for ${after}` : ""}${attention}.`
+        : after
+          ? `✅ OpenClaw updated to ${after}${before ? ` (from ${before})` : ""}${attention}.`
+          : `✅ OpenClaw updated${attention}.`;
       break;
     }
     case "failed":
@@ -319,7 +340,7 @@ export function renderUpdateRunReport(
             ? `⚠️ ${refusalLine}`
             : runtimeCheckFailed
               ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-              : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
+              : `⚠️ OpenClaw ${run.reason === "repair-failed" || repairRun ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -560,15 +581,18 @@ export function renderUpdateRunReport(
   if (run.status !== "succeeded" && run.origin.cause) {
     lines.unshift(`Cause: ${run.origin.cause}`);
   }
+  const repairedDetail = run.steps.find((step) => step.step === UPDATE_RUN_REPAIRED_STEP)?.detail;
+  const repaired = repairedDetail ? [`Repaired update: ${repairedDetail}`] : [];
+  const repairedLead = repaired.map((line) => bounded(line, 300));
   const next = hints.at(-1);
   if (refusalLine) {
     // The terminal shows only the instruction; the saved report keeps every detail.
     const details = ["Details:", `Reason code: ${reason}`, ...lines, ...hints].join("\n");
     const steps = refusalBlock?.slice(1) ?? [];
-    const lead = bounded([headline, ...steps].join("\n"), 1100);
+    const lead = bounded([headline, ...repairedLead, ...steps].join("\n"), 1100);
     return {
       headline,
-      lines: steps,
+      lines: [...repaired, ...steps],
       markdown: `${lead}\n\n${bounded(details, markdownLimit - lead.length - 2)}`,
     };
   }
@@ -581,13 +605,14 @@ export function renderUpdateRunReport(
       ...lines,
       ...hints.filter((line) => line !== next),
     ];
-    const lead = [headline, ...(next ? [bounded(next, 1100)] : []), ""].join("\n");
+    const lead = [headline, ...repairedLead, ...(next ? [bounded(next, 1100)] : []), ""].join("\n");
     return {
       headline,
-      lines: [...(next ? [next, ""] : []), ...details],
+      lines: [...repaired, ...(next ? [next, ""] : []), ...details],
       markdown: `${lead}\n${bounded(details.join("\n"), markdownLimit - lead.length - 1)}`,
     };
   }
+  lines.unshift(...repaired);
   lines.push(...hints);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");
   const suffix = next ? `\n${bounded(next, 1100)}` : "";

@@ -17,11 +17,11 @@ import {
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Model, UserMessage } from "../../../llm/types.js";
+import type { UserTurnInput } from "../../../sessions/user-turn-input.types.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
-  type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
 import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";

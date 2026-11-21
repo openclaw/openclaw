@@ -861,9 +861,11 @@ describe("CLI message authority integration", () => {
         release();
         expectDenied(
           await pending,
-          retire === "abort"
-            ? /abort|cancel|no longer active/i
-            : /no longer active|permission revoked/i,
+          retire === "source"
+            ? /message turn has ended/i
+            : retire === "abort"
+              ? /abort|cancel|no longer active/i
+              : /no longer active|permission revoked/i,
         );
         expect(acceptedChannelEdits).toBe(0);
         expect(requests.every((entry) => entry.method === "GET")).toBe(true);
@@ -989,7 +991,7 @@ describe("CLI message authority integration", () => {
 
         const result = await pending;
         if (revoke === "source") {
-          expectDenied(result, /authority is no longer active/);
+          expectDenied(result, /message turn has ended/i);
         } else {
           expectSuccess(result);
         }

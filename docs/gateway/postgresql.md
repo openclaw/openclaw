@@ -184,9 +184,16 @@ local SQLite. Daemon runtime pins remain in `control/services.sqlite` so service
 recovery does not require PostgreSQL. Device-local caches and file artifacts
 remain local; this includes Logbook frame images and cold transcript blobs.
 Incognito storage remains memory-only. The `memory-lancedb` plugin uses its own
-LanceDB store and is not switched by `database.engine`.
+LanceDB store and is not switched by `database.engine`. The
+[Knowledge](/plugins/knowledge#where-knowledge-keeps-data) memory provider uses
+local SQLite and vault files even when all five families use PostgreSQL. Its
+default layout keeps `registry.sqlite`, per-store `state.sqlite`, and `vault/`
+under `knowledge/` in the Gateway state directory.
 
 Client credentials live in the fixed-local `client/credentials.sqlite` store.
+When those credentials are ready, the macOS app can prepare its local runtime
+pins without resolving the PostgreSQL connection secret. Credential recovery
+that needs the shared state store still requires a resolvable connection.
 Exec approvals go through the shared-state owner and require PostgreSQL to be
 reachable when that family uses PostgreSQL; they fail closed if it is unavailable.
 These ownership changes are complete, but the macOS app claim remains pending
@@ -541,8 +548,10 @@ state directory for each Gateway. Each database may use the default
 Alternatively, independent installations can share a database with distinct
 prefixes such as `installation_a` and `installation_b`. Prefixes contain 1–27
 lowercase letters, digits, or underscores, beginning with a letter or underscore.
-New schemas have the shape `<prefix>_<store>_<uuid-prefix>`. Existing anchors keep
-their recorded namespace when the configured prefix changes.
+New schemas have the shape `<prefix>_<store>_<uuid-prefix>`. PostgreSQL reserves
+schema names starting with `pg_`, so OpenClaw rejects the prefix `pg` and prefixes
+starting with `pg_`. Existing anchors keep their recorded namespace when the
+configured prefix changes.
 
 A prefix is a naming convention, not an access-control boundary. Use separate
 roles and appropriate schema permissions if sharing a database. Extensions in
@@ -711,8 +720,9 @@ ported agent through the selected memory plugin. Agents rebuild concurrently, up
 to four at a time, bounded by the host's CPU count and free memory; hosts with
 two or fewer CPUs or under 2 GiB of free memory rebuild one agent at a time.
 Unchanged cached chunks reuse their embeddings. Per-agent results appear in the
-command output and `--json`. The rebuild stays offline, so start the Gateway
-after the command finishes.
+command output and `--json`. When memory search is disabled for an agent, the
+port reports `disabled` for that agent without a retry warning. The rebuild
+stays offline, so start the Gateway after the command finishes.
 
 A rebuild failure warns without failing the completed port and includes
 `openclaw memory index --agent <id>` to retry while the Gateway remains stopped.
@@ -770,7 +780,7 @@ With the Gateway running, each PostgreSQL store is exported from its own
 not captured at one shared instant. Sequence allocation facts are read inside
 that snapshot, so a restored store never reissues a captured row ID.
 
-The archive combines local files and SQLite images with each actual PostgreSQL
+The archive combines local files and SQLite images with each captured PostgreSQL
 store's matched **format-2 envelope**: original anchor, portable SQLite export image, and manifest
 containing identity, schema versions, active fragments, allocation facts, sizes,
 and hashes. The DSN is not in that envelope. The surrounding archive contains
@@ -786,6 +796,16 @@ exports; see [Git backup redaction](/cli/backup#versioned-git-backups)
 for the credential scopes and restore requirements. Keep Logbook images, cold
 transcript blobs, workspaces, config includes, and local state with the database
 backup. Neither a server dump alone nor a copied anchor covers the installation.
+
+Copy the Knowledge registry, store databases, and vaults together while the
+Gateway is stopped. Include the paths of any stores adopted in place. The
+archive copies included unmanaged SQLite files as ordinary files. See
+[plugin backup resources](/plugins/manifest/surfaces#backupresources-reference)
+for snapshot coverage.
+
+Built-in PostgreSQL port, backup, and restore cover the five supported store
+families. Arrange backup and recovery for private plugin PostgreSQL stores
+through the plugin owner.
 
 ### Restore all PostgreSQL stores
 
@@ -869,7 +889,9 @@ procedure; there is no automatic discard or migration.
 
 ### Disaster recovery from Git
 
-Prepare explicit Git recovery points while offline, alongside the full archive:
+Prepare explicit Git recovery points alongside the full archive. Capture works
+while the Gateway runs, including scheduled Git backups; each store uses its own
+read-only snapshot, as with archive capture. Restore still requires offline custody:
 
 ```bash
 openclaw backup git init --repository ~/Backups/openclaw-git
@@ -1055,6 +1077,15 @@ These are not per-operation config options.
 A timeout is a failure to investigate, not permission to delete recovery state.
 Inspect server load, locks, network, and storage, and retry only
 after resolving the reported cause.
+
+Runtime connections enable TCP keepalive with a 10-second initial delay. Each
+bridge request carries its deadline, and the I/O service closes that request's
+connection 20 seconds before the deadline (100 seconds for runtime requests).
+A lost response then fails only that connection instead of resetting the healthy
+connections on its I/O service. Connection setup and idle validation queries have
+a separate 10-second client timeout, leaving time to reconnect before sending
+caller SQL. A lost write or commit reply still has an unknown outcome and is never
+replayed.
 
 OpenClaw inherits the operator's `synchronous_commit` and other durability
 settings. PostgreSQL's default `on` makes acknowledged commits durable across
@@ -1279,6 +1310,11 @@ transparent replay of every operation. The shared-state worker retires its faile
 connection so a subsequent operation can reopen the store once PostgreSQL is
 available. The interrupted operation is not replayed. Recover server connectivity
 and inspect the operation's recorded result before repeating an external effect.
+State-lease heartbeats can reopen a failed connection and retry once. These
+reads and conditional renewals have no external effects; renewal still requires
+the same current owner and an unexpired row. If reconnection or the retry fails,
+the heartbeat reports lease loss as before.
+
 If another store remains unavailable, restart the Gateway through its service owner.
 
 The 120-second bridge deadline also has an unknown outcome and resets the whole
@@ -1301,7 +1337,13 @@ import: the agent 36 exact-path indexes support indexed lookup even before
 ## Roll back to SQLite
 
 Use the current compatible binary, keep the PostgreSQL secret available, and
-stop all writers. Run a **new reverse port**:
+stop all writers. [Installation ownership](/reference/database-engines#gateway-ownership-in-postgresql)
+requires every configurable family to use PostgreSQL. If you enabled it, set
+`database.postgres.ownership` to `state-directory` or remove the setting before
+porting any family to SQLite. If an earlier port is interrupted,
+[roll it back](#recover-an-interrupted-port) before editing the config.
+
+Run a **new reverse port**:
 
 ```bash
 openclaw database port --to sqlite --dry-run

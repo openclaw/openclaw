@@ -473,7 +473,8 @@ Approving a request grants exactly the role named in its invite.
 From an approved owner browser, choose **Change role** on a member, select a defined
 role, and save. The browser signs the membership change with its owner device key, and the Gateway
 assigns that role to the linked profile. The member's connections and active work
-are cut off; reconnects use the new profile limits. Members whose
+are cut off; reconnects use the new profile limits. A raised role reaches browsers
+that were already approved without a new device approval. Members whose
 role was deleted are marked **Blocked** with the missing role's name; choose another
 role to restore access. Members who can load the Access plugin see their own role,
 not other people's access or owner controls. The plugin currently requires
@@ -586,6 +587,11 @@ Control UI reaches the Gateway:
 The browser keeps the account and its ID token until the token expires or you sign
 out. Signing in only proves which OpenClaw ID account the browser holds; on its own
 it grants nothing.
+
+In the Mac app, local sign-in opens an app-owned login window and returns to the
+original Control UI. The app keeps its own account; signing in in Safari or Chrome
+does not automatically sign the app in. The Gateway still verifies and redeems
+the authorization code.
 
 ### Link OpenClaw ID to your profile
 

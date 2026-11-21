@@ -1,10 +1,7 @@
 import type { createTranscriptCaptureAppends } from "./capture-appends.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceLocator,
-  TranscriptSourceProvider,
-} from "./provider-types.js";
+import type { TranscriptSourceProvider } from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./types.js";
 
 type TranscriptCaptureSummary = {
   summary: TranscriptsSummary;

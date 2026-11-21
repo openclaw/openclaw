@@ -34,6 +34,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/ui-e2e-worker-affinity-measure.mts",
   "scripts/perf/isolated-completion-registry-measure.ts!",
   "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
@@ -505,6 +506,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Standalone Linux workload compares pinned boundary-reference initialization.
+  "scripts/perf/boundary-reference-measure.mts!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -1616,6 +1619,7 @@ const config = {
         // knowledge-source-ingest/SKILL.md has agents run these bundled scripts by path.
         "skills/knowledge-source-ingest/scripts/chat-transcript.mjs!",
         "skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/slack-read-normalize.mjs!",
         "skills/knowledge-source-ingest/scripts/source-manifest.mjs!",
         // skill-packaging.test.ts runs this skill-reference generator with --check.
         "scripts/sync-skill-references.mjs",

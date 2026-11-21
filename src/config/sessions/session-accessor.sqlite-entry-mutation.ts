@@ -11,7 +11,6 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import { assertSessionEntryPatchCliHistory } from "./session-entry-patch-guard.js";
 import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -57,7 +56,7 @@ export function applySessionEntryPatchInDatabase(
     options: Pick<
       SessionEntryPatchOptions,
       "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
-    > & { workerGuard?: Pick<SessionEntryPatchGuard, "cliHistory" | "conversation"> };
+    > & { workerGuard?: Pick<SessionEntryPatchGuard, "conversation"> };
   },
 ): SessionEntryPatchMutation {
   // Canonical validation belongs to the current connection, not the captured rows.
@@ -86,11 +85,6 @@ export function writeSessionEntryPatchInDatabase(
       conversation,
     );
   }
-  assertSessionEntryPatchCliHistory(
-    database,
-    params.sessionKey,
-    params.options.workerGuard?.cliHistory,
-  );
   if (!params.next) {
     return { applied: false, entry: structuredClone(params.writeBase) };
   }

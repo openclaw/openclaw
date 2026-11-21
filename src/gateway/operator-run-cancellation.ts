@@ -1,7 +1,5 @@
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
-import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { captureSessionControllerSourceSettlement } from "../sessions/session-controller.mailbox.js";
 import {
   getRpcSourceIdentity,
@@ -14,9 +12,7 @@ import {
 import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
-import { bindGatewayDeviceRevocation, retainGatewayDeviceRevocation } from "./device-revocation.js";
-import { onOpenClawIdTunnelPrincipalsChanged } from "./openclaw-id/tunnel-principal.js";
-import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
+import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
@@ -36,67 +32,12 @@ type OperatorRunCancellationContext = Pick<
   keyof Parameters<typeof createChatAbortOps>[0] | "logGateway" | "trackExecution"
 >;
 
-/** Own policy cancellation for a retained producer without revoking its admitted request. */
+/** Admit a retained producer once; later policy changes apply to its next start. */
 export function retainGatewayOperatorRunAuthority(
   captured: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>,
 ) {
-  let { authority, release: releaseSource } = captured;
-  if (authority.reauthorize) {
-    // Long-lived turns own immediate policy cancellation; an individual admitted request
-    // may finish. Each queued, recovered or child turn acquires this lifetime separately.
-    const source = authority;
-    const revoked = new AbortController();
-    const recheck = () => {
-      try {
-        source.reauthorize?.();
-      } catch (error) {
-        if (!isOperatorAuthorityUnavailable(error)) {
-          revoked.abort(error);
-        }
-      }
-    };
-    const subscriptions = [
-      onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "assignment" && change.profileId === source.profileId) {
-          recheck();
-        }
-      }),
-    ];
-    if (source.openclawIdPrincipal?.kind !== "member") {
-      subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheck));
-    }
-    let references = 1;
-    const releaseHold = (release: (() => void) | undefined) => {
-      let released = false;
-      return () => {
-        if (!released) {
-          released = true;
-          if (--references === 0) {
-            subscriptions.forEach((unsubscribe) => unsubscribe());
-          }
-          release?.();
-        }
-      };
-    };
-    const retained = createAdmittedRunOperatorAuthority({
-      ...source,
-      signal: AbortSignal.any([revoked.signal, ...(source.signal ? [source.signal] : [])]),
-      get modelPolicy() {
-        return source.modelPolicy;
-      },
-      retain: () => {
-        retained.assertCurrent();
-        const release = source.retain?.();
-        references += 1;
-        return releaseHold(release);
-      },
-    });
-    bindGatewayDeviceRevocation(retained.assertCurrent, source.assertCurrent);
-    authority = retained;
-    releaseSource = releaseHold(releaseSource);
-  }
+  const { authority, release: releaseSource } = captured;
   try {
-    // Capture can yield; admit against current policy after installing this producer's listener.
     authority.reauthorize?.();
     return { authority, release: releaseSource };
   } catch (error) {
@@ -118,7 +59,7 @@ export async function retainGatewayOperatorRun(
 ) {
   const captured = params.systemTurn
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
+    : // The requester's turn ending or chat edit does not revoke accepted work.
       await captureGatewayOperatorContinuation(params);
   const retained = captured && retainGatewayOperatorRunAuthority(captured);
   const releaseSource =

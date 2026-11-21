@@ -15,8 +15,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { onAgentRuntimeEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,

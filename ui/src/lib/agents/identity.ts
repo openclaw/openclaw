@@ -6,6 +6,7 @@ import type { AgentIdentityResult } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
+import { isConversationConfigChange } from "../config-change.ts";
 import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
 type AgentIdentityGatewaySnapshot = Pick<
@@ -167,7 +168,7 @@ export function createAgentIdentityCapability(
       }
       return;
     }
-    if (event.event !== "config.changed") {
+    if (!isConversationConfigChange(event)) {
       return;
     }
     invalidateAgentIdentityCache(cachedClient);

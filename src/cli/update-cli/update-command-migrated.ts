@@ -63,9 +63,9 @@ import {
  * candidate Doctor or boot may have written it. Before any candidate opened state, an
  * unreadable store still holds the previous version's state; that read is a warning.
  *
- * A Git release switches only the release link: the previous Gateway keeps serving and
- * writing, no Doctor runs, and the Gateway that starts from the release migrates at boot.
- * Its inspection reads the live stores directly, as the pre-activation baseline does.
+ * A Git release can switch the link while the previous Gateway is serving. The
+ * updater runs no pre-restart Doctor for that path and inspects live stores as it
+ * did for the pre-activation baseline.
  */
 export async function inspectActivatedUpdateState(
   params: Pick<
@@ -168,9 +168,7 @@ export async function inspectActivatedUpdateState(
       result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk;
     if (params.candidateOpenedState === false && result.root && !recordedRisk) {
       // No candidate has opened live state, so an unreadable store is no evidence of change.
-      result.steps.push(
-        inconclusiveInspectionStep(result.root, error, gitRelease, result.status === "ok"),
-      );
+      result.steps.push(inconclusiveInspectionStep(result.root, error, result.status === "ok"));
       return undefined;
     }
     result.status = "error";
@@ -194,15 +192,10 @@ export async function inspectActivatedUpdateState(
 function inconclusiveInspectionStep(
   cwd: string,
   cause: unknown,
-  gitRelease: boolean,
   continues: boolean,
 ): UpdateStepResult {
   const state = "No data was changed because no new-version process had opened the state.";
-  const outcome = !continues
-    ? ""
-    : gitRelease
-      ? " The update continues; the new release migrates state when it starts."
-      : " The update continues.";
+  const outcome = continues ? " The update continues." : "";
   return {
     name: "state-schema-verification",
     command: "openclaw update",
