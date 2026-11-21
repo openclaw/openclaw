@@ -3,6 +3,7 @@ package ai.openclaw.app
 import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.core.content.IntentCompat
 import java.util.Locale
 
@@ -39,6 +40,7 @@ data class ShareLaunchRequest(
   val text: String?,
   val attachments: List<SharedAttachment>,
   val droppedAttachmentCount: Int,
+  val unsupportedAttachmentCount: Int = 0,
 )
 
 enum class SharedAttachmentKind {
@@ -66,9 +68,6 @@ internal val SHARED_ATTACHMENT_MIME_ALLOWLIST =
     "text/csv",
     "text/markdown",
   )
-
-internal val SHARED_AUDIO_DOCUMENT_MIME_TYPES =
-  SHARED_ATTACHMENT_MIME_ALLOWLIST.filterNot { it == "image/*" || it == "video/*" }.toTypedArray()
 
 /**
  * Parses app-owned navigation actions that should open a specific home tab.
@@ -101,6 +100,7 @@ fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
 fun parseShareLaunchIntent(
   intent: Intent?,
   resolveMimeType: (Uri) -> String?,
+  resolveDisplayName: (Uri) -> String? = { null },
 ): ShareLaunchRequest? {
   val action = intent?.action ?: return null
   if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return null
@@ -134,19 +134,31 @@ fun parseShareLaunchIntent(
       .filter { uri -> uri.scheme.equals(ContentResolver.SCHEME_CONTENT, ignoreCase = true) }
       .distinct()
   val fallbackMimeType =
-    normalizeSharedAttachmentMimeType(intent.type)
+    sharedAttachmentMimeTypeForAdmission(intent.type)
       ?.takeIf { sharedAttachmentKindForMimeType(it) != null }
   val resolved = mutableListOf<SharedAttachment>()
+  var unsupportedAttachmentCount = 0
   for (uri in validUris) {
-    if (resolved.size >= MAX_SHARED_ATTACHMENT_COUNT) break
+    // Once the cap is full, further files are limit omissions, not type rejections.
+    if (resolved.size >= MAX_SHARED_ATTACHMENT_COUNT) continue
     val providerMimeType =
       try {
         normalizeSharedAttachmentMimeType(resolveMimeType(uri))
       } catch (_: Exception) {
         null
       }
-    val mimeType = providerMimeType ?: fallbackMimeType
-    val kind = sharedAttachmentKindForMimeType(mimeType) ?: continue
+    val displayName =
+      try {
+        resolveDisplayName(uri)?.trim()?.takeIf { it.isNotEmpty() }
+      } catch (_: Exception) {
+        null
+      }
+    val mimeType = sharedAttachmentMimeTypeForAdmission(providerMimeType ?: fallbackMimeType, displayName)
+    val kind =
+      sharedAttachmentKindForMimeType(mimeType) ?: run {
+        unsupportedAttachmentCount += 1
+        continue
+      }
     resolved += SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType))
   }
   if (text == null && validUris.isEmpty()) return null
@@ -154,11 +166,15 @@ fun parseShareLaunchIntent(
     text = text,
     attachments = resolved,
     droppedAttachmentCount = validUris.size - resolved.size,
+    unsupportedAttachmentCount = unsupportedAttachmentCount,
   )
 }
 
+/** A picked or shared file is outside the curated allowlist from #110941. */
+internal class UnsupportedSharedAttachmentException : IllegalStateException("unsupported attachment")
+
 internal fun sharedAttachmentKindForMimeType(mimeType: String?): SharedAttachmentKind? {
-  val normalized = normalizeSharedAttachmentMimeType(mimeType) ?: return null
+  val normalized = canonicalSharedAttachmentMimeType(mimeType) ?: return null
   // Image pickers may supply image/*; other media must name a concrete type.
   if (normalized.endsWith("/*") && !normalized.startsWith("image/")) return null
   return when {
@@ -170,11 +186,71 @@ internal fun sharedAttachmentKindForMimeType(mimeType: String?): SharedAttachmen
   }
 }
 
+/**
+ * Maps provider MIME aliases onto the allowlisted type, and uses a display-name
+ * extension only when the provider says nothing more specific than octet-stream.
+ * Extensions cannot admit a type that is not already on the allowlist.
+ */
+internal fun sharedAttachmentMimeTypeForAdmission(
+  rawMimeType: String?,
+  displayName: String? = null,
+): String? {
+  val canonical = canonicalSharedAttachmentMimeType(rawMimeType)
+  if (canonical != null && canonical != "application/octet-stream") return canonical
+  return allowlistedDocumentMimeTypeForDisplayName(displayName) ?: canonical
+}
+
+internal fun canonicalSharedAttachmentMimeType(mimeType: String?): String? {
+  val normalized = normalizeSharedAttachmentMimeType(mimeType) ?: return null
+  return when (normalized) {
+    "text/comma-separated-values", "text/x-csv" -> "text/csv"
+    "text/x-markdown" -> "text/markdown"
+    else -> normalized
+  }
+}
+
+internal fun allowlistedDocumentMimeTypeForDisplayName(displayName: String?): String? {
+  val trimmed = displayName?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+  val extension =
+    trimmed
+      .substringAfterLast('.', "")
+      .lowercase(Locale.US)
+      .takeIf { it.isNotEmpty() && !trimmed.equals(it, ignoreCase = true) }
+      ?: return null
+  return ALLOWLISTED_DOCUMENT_EXTENSIONS[extension]
+}
+
+internal fun sharedAttachmentDisplayName(
+  resolver: ContentResolver,
+  uri: Uri,
+): String? =
+  try {
+    resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+      if (!cursor.moveToFirst()) return@use null
+      val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+      if (index < 0 || cursor.isNull(index)) return@use null
+      cursor.getString(index)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+  } catch (_: Exception) {
+    null
+  }
+
 internal fun normalizeSharedAttachmentMimeType(mimeType: String?): String? =
   mimeType
     ?.substringBefore(';')
     ?.trim()
     ?.lowercase(Locale.US)
     ?.takeIf { it.isNotEmpty() }
+
+private val ALLOWLISTED_DOCUMENT_EXTENSIONS =
+  mapOf(
+    "pdf" to "application/pdf",
+    "csv" to "text/csv",
+    "md" to "text/markdown",
+    "markdown" to "text/markdown",
+    "docx" to "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx" to "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  )
 
 private const val MAX_SHARED_ATTACHMENT_COUNT = 8
