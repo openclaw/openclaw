@@ -524,13 +524,7 @@ describe.each([PUBLICATION_READ_SCOPE, PUBLICATION_STEER_SCOPE])(
         expect(connected.ok).toBe(true);
         // rpcReq republishes fixture config; send raw frames to keep the runtime switch under test.
         const request = (id: string) => {
-          const response = onceMessage<{
-            type: string;
-            id: string;
-            ok: boolean;
-            payload?: unknown;
-            error?: { code: string };
-          }>(ws, (frame) => frame.type === "res" && frame.id === id);
+          const response = onceMessage(ws, (frame) => frame.type === "res" && frame.id === id);
           ws.send(JSON.stringify({ type: "req", id, method: READ, params: {} }));
           return response;
         };
