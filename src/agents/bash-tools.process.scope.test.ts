@@ -226,6 +226,9 @@ test.skipIf(process.platform === "win32")(
           /security=deny/,
         );
       } else {
+        await expect(
+          tool("exec").execute("outside-cwd", { command: "pwd -P", workdir: state.workspaceDir }),
+        ).rejects.toThrow(/participation root/);
         await tool("write").execute("inside", { path: "created.txt", content: "created" });
         await expect(fs.readFile(path.join(root, "created.txt"), "utf8")).resolves.toBe("created");
         await expect(

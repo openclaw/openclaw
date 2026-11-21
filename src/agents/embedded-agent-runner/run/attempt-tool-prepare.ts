@@ -36,6 +36,7 @@ import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { getPreparedModelRuntimePolicyConfigReader } from "../../prepared-model-runtime-auth.js";
 import { participationToolAllowlist } from "../../participation-ceiling.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
+import { prepareRunSessionPermissionPolicy } from "../../session-permission-policy.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
   resolveSessionPermissionExecMode,
@@ -542,7 +543,15 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         ]);
         attempt.permissionMode = mode ?? undefined;
         attempt.execOverrides = { ...baseExecOverrides };
-        const permission = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
+        const permission = await prepareRunSessionPermissionPolicy({
+          root: params.setup.sessionPermissionRoot,
+          mode: attempt.permissionMode,
+          participationCeiling: attempt.participationCeiling,
+          config: attempt.config,
+          agentId: params.setup.sessionAgentId,
+          sandboxAvailable: params.setup.sandbox?.enabled === true,
+          execOverrides: attempt.execOverrides,
+        });
         const nextTools = await constructTools(permission, toolAbortSignal);
         toolsRaw.splice(0, toolsRaw.length, ...nextTools);
       },

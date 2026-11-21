@@ -1,5 +1,8 @@
-import { vi } from "vitest";
+import { realpath } from "node:fs/promises";
+import { join } from "node:path";
+import { expect, it, vi } from "vitest";
 import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { expectRecordFields } from "./compact.hooks.assertions.test-support.js";
 
 function createMockToolDefinitions(tools: unknown[] = []) {
   return tools.map((tool) => {
@@ -52,4 +55,76 @@ export function mockCompactHooksSkills(
     >(async () => ({ prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] })),
     resolveSkillsPrompt,
   }));
+}
+
+export function registerCompactionPermissionTests({
+  compactDirect,
+  fixture,
+  workspaceDir,
+  sessionId,
+  toolOptions,
+}: {
+  compactDirect: (overrides: Record<string, unknown>) => Promise<unknown>;
+  fixture: { makeTempDir: (prefix: string) => string };
+  workspaceDir: () => string;
+  sessionId: () => string;
+  toolOptions: () => unknown;
+}) {
+  it.each([
+    { execMode: "deny", permissionMode: "read-only", expectedExecMode: "deny", rootless: false },
+    { execMode: "allowlist", permissionMode: "guarded", expectedExecMode: "ask", rootless: false },
+    { execMode: "full", permissionMode: "full", expectedExecMode: "full", rootless: false },
+    { execMode: undefined, permissionMode: "workspace", expectedExecMode: "auto", rootless: true },
+  ] as const)(
+    "uses the final $permissionMode permission policy for compaction tools",
+    async ({ execMode, permissionMode, expectedExecMode, rootless }) => {
+      const directory = rootless
+        ? fixture.makeTempDir("openclaw-rootless-compaction-permission-")
+        : join(workspaceDir(), "workspace");
+      const root = rootless ? await realpath(directory) : directory;
+      await compactDirect({
+        workspaceDir: directory,
+        requireWorkspaceOnly: rootless || undefined,
+        permissionMode: rootless ? "workspace" : "full",
+        sessionRoot: rootless ? undefined : root,
+        execOverrides: execMode ? { mode: execMode } : undefined,
+        sessionEntry: {
+          sessionId: sessionId(),
+          permissionMode: rootless ? "workspace" : "full",
+          sessionRoot: rootless ? undefined : root,
+        },
+      });
+
+      const options = expectRecordFields(toolOptions(), {
+        sessionPermissionPolicy: {
+          mode: permissionMode,
+          root,
+        },
+      });
+      expect(options.exec).toEqual(expect.objectContaining({ mode: expectedExecMode }));
+      if (rootless) {
+        expect(options.requireWorkspaceOnly).toBe(true);
+      }
+    },
+  );
+
+  it("keeps default-mode participant compaction tools at the clamped root", async () => {
+    const directory = fixture.makeTempDir("participant-compaction-");
+    const root = await realpath(directory);
+    await compactDirect({
+      workspaceDir: directory,
+      sessionRoot: root,
+      participationCeiling: {
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:invited",
+        permission: "workspace",
+      },
+      execOverrides: { mode: "full" },
+    });
+    expect(toolOptions()).toMatchObject({
+      sessionPermissionPolicy: { root, mode: "workspace" },
+      exec: { mode: "auto" },
+    });
+  });
 }

@@ -1,11 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals-core.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { projectAgentToolsExecPolicy } from "./agent-tools.execution-policy.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
+import { createCoreCodingTools } from "./core-coding-tools.js";
 import { buildEmbeddedAttemptToolRunContext } from "./embedded-agent-runner/run/attempt-tool-run-context.js";
 import {
   createEmbeddedRunPermissionChanges,
@@ -22,6 +27,7 @@ import {
   registerHeadlessToolSearchCatalog,
   resolveToolSearchConfig,
 } from "./tool-search.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 const ceiling: ParticipationCeiling = {
   kind: "send",
@@ -340,4 +346,59 @@ it.each([
     workspaceOnly: true,
     strictWorkspaceRoot: true,
   });
+});
+
+const skillDirs = useAutoCleanupTempDirTracker(afterEach);
+it("discovers and reads eligible installed skills without widening participant file roots", async () => {
+  const workspace = skillDirs.make("participant-skill-");
+  const root = path.join(workspace, "session");
+  const skillDir = path.join(workspace, "skills", "guide");
+  await fs.mkdir(root);
+  await fs.mkdir(skillDir, { recursive: true });
+  const location = path.join(skillDir, "SKILL.md");
+  await fs.writeFile(location, "# Guide\nUse the installed procedure.");
+  const skillTools = createInstalledSkillTools([
+    { name: "guide", description: "Workspace guide", location, source: { filePath: location } },
+  ]);
+  const tools = [
+    ...createCoreCodingTools({
+      codingRoot: root,
+      containmentRoot: root,
+      includeBaseCodingTools: true,
+      shellTools: "disabled",
+      workspaceOnly: true,
+      readOnly: true,
+      applyPatchEnabled: false,
+      applyPatchWorkspaceOnly: true,
+      execDefaults: {},
+      processDefaults: {},
+    }),
+    ...skillTools,
+  ];
+  finalizeAgentToolAvailability(tools);
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
+  const runtime = new ToolSearchRuntime(
+    { catalogRef, participationCeiling: ceiling },
+    resolveToolSearchConfig(),
+  );
+  expect(runtime.all().map((entry) => entry.name)).toContain("skills_read");
+  expect(await runtime.call("skills_search", { query: "guide" })).toMatchObject({
+    result: { details: { skills: [{ name: "guide" }] } },
+  });
+  expect(await runtime.call("skills_read", { name: "guide" })).toMatchObject({
+    result: { details: { content: "# Guide\nUse the installed procedure." } },
+  });
+  await expect(runtime.call("skills_read", { name: "not-installed" })).rejects.toThrow(
+    /not available/,
+  );
+  await expect(runtime.call("read", { path: location })).rejects.toThrow(/root/);
+  const narrowed = new ToolSearchRuntime(
+    { catalogRef, participationCeiling: { ...ceiling, tools: ["read"] } },
+    resolveToolSearchConfig(),
+  );
+  for (const name of ["skills_read", "skills_search"]) {
+    await expect(narrowed.describe(name)).rejects.toThrow();
+    await expect(narrowed.call(name, { name: "guide", query: "guide" })).rejects.toThrow();
+  }
 });

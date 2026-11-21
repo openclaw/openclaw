@@ -449,12 +449,19 @@ opt-in keep the existing sandbox requirement for all sessions.
 
 Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the participant
 tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
-`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`, `web_search`,
+`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`, `skills_search`, `skills_read`, `web_search`,
 `web_fetch`, `tool_search`, `tool_describe`, and `dispatch_action`. An empty list
 permits no tools. Only these session-contained names are accepted; the result
 still intersects the agent's tool policy and every tool's own authorization checks.
 Cross-session controls, messaging, and Gateway/configuration tools are not eligible. Retained inputs also discard names outside this supported surface. Listing a tool does not make an unavailable or
 agent-denied tool available.
+
+Participant skill tools read only installed skills eligible for that agent, including
+text companions bounded to each skill directory. `invitedTools` can remove these
+tools; enabling them does not expand the file tools' session root. Participant exec
+starts only in directories whose real paths are within that root, including for
+children. This constrains the starting directory, not command arguments or later
+filesystem access by the command; it is not an operating-system sandbox.
 
 Participant `sessions_spawn` calls create only hidden, same-agent, Gateway-local
 OpenClaw children. They cannot change the original root through `cwd`, projects,

@@ -53,6 +53,7 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   | "bootstrapWorkspaceDir"
   | "cwd"
   | "permissionMode"
+  | "participationCeiling"
   | "sessionRoot"
   | "agentDir"
   | "config"

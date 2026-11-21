@@ -358,6 +358,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
               host,
               workdir: params.workdir,
               defaultCwd: defaults?.cwd,
+              participationRoot: defaults?.participationRoot,
               nodeCwd: defaults?.nodeCwd,
               sandbox,
             });
@@ -455,6 +456,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           security,
           ask,
           bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
+          participationDenyMisses: defaults?.participationDenyMisses,
           autoReview,
           autoReviewer,
           signal,

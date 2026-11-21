@@ -13,6 +13,7 @@ import {
   type resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "./sandbox/runtime-status.js";
+import { prepareRunSessionPermissionPolicy } from "./session-permission-policy.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 import { recordRegistryWorktreeActivity } from "./worktrees/registry.js";
@@ -213,12 +214,15 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         const sessionPermissionRoot = projectedWorkspace
           ? sandbox.workspaceDir
           : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
-        const sessionPermissionPolicy = params.permissionMode
-          ? {
-              root: sessionPermissionRoot,
-              mode: params.permissionMode,
-            }
-          : undefined;
+        const sessionPermissionPolicy = await prepareRunSessionPermissionPolicy({
+          root: sessionPermissionRoot,
+          mode: params.permissionMode,
+          participationCeiling: params.participationCeiling,
+          config: params.config,
+          agentId: sessionAgentId,
+          sandboxAvailable: sandbox?.enabled === true,
+          execOverrides: params.execOverrides,
+        });
         if (sandbox?.enabled) {
           assertSandboxCwd(requestedCwd, resolvedWorkspace);
         }

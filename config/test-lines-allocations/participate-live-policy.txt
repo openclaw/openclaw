@@ -1,0 +1,14 @@
+359
+# Default-mode participant repair: independent native preparation, live reset,
+# compaction, and child/reopened/nested execution-policy boundaries must retain
+# the original root and exact security/ask floors. Host and backend cwd checks,
+# pre-review rejection, retained allowlist-denial, and installed-skill discovery
+# versus ordinary file-root/configured-tool denial each have distinct callers.
+# Consolidation reused the managed-worktree fixture and malformed-data table,
+# removed duplicate child/compaction assertions, saving 34 lines. The remaining
+# regressions include fail-first coverage; the existing child table also covers
+# manual approval versus automatic review after changed defaults and child reset.
+# Native child/grandchild/reset/revoke
+# proof reuses its existing scenario. No new test file or budget cap is added.
+# Permission cases are registered in an existing uncapped support module to
+# preserve grandfathered file-line limits without adding another test root.

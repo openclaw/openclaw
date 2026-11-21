@@ -1,9 +1,12 @@
 import { sessionCreatorProfileId } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { intersectExecPolicyCeilings, type ExecPolicyCeiling } from "../../../infra/exec-policy.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
-import type { ParticipationCeiling } from "../../participation-ceiling.js";
+import { participationPermission, type ParticipationCeiling } from "../../participation-ceiling.js";
+import { intersectSessionPermissionModes } from "../../session-permission-mode.js";
 import type { SpawnedToolContext } from "../../spawned-context.js";
+import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 
 /** Shared by the model-facing tool and native callers before reserving or creating anything. */
 export function resolveParticipationSpawnError(
@@ -77,9 +80,21 @@ export function captureParticipationSpawnCeiling(params: {
   requesterEntry: SessionEntry | undefined;
   expectedParentSessionId?: string;
   root: string;
+  execPolicy?: ExecPolicyCeiling;
+  permission?: PreparedSessionPermissionPolicy["mode"];
 }): ParticipationCeiling {
-  if (params.ceiling.source) {
-    return params.ceiling;
+  const ceiling = {
+    ...params.ceiling,
+    permission: intersectSessionPermissionModes(
+      participationPermission(params.ceiling),
+      params.permission ?? participationPermission(params.ceiling),
+    ),
+    ...(params.execPolicy && {
+      execPolicy: intersectExecPolicyCeilings(params.ceiling.execPolicy, params.execPolicy),
+    }),
+  };
+  if (ceiling.source) {
+    return ceiling;
   }
   const entry = params.requesterEntry;
   const creatorProfileId = sessionCreatorProfileId(entry?.createdActor);
@@ -92,7 +107,7 @@ export function captureParticipationSpawnCeiling(params: {
     throw new Error("Participating spawn requires the original session incarnation and creator.");
   }
   return {
-    ...params.ceiling,
+    ...ceiling,
     source: {
       agentId: params.requesterAgentId,
       sessionId: entry.sessionId,

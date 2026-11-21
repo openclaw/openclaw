@@ -49,6 +49,7 @@ export function admitCanonicalSessionEntry(value: Record<string, unknown>): Sess
   const ceiling = value.participationCeiling;
   if (ceiling !== undefined) {
     const nonemptyString = (field: unknown) => typeof field === "string" && field.trim().length > 0;
+    const execPolicy = isRecord(ceiling) ? ceiling.execPolicy : undefined;
     if (
       !isRecord(ceiling) ||
       ceiling.kind !== "send" ||
@@ -60,6 +61,11 @@ export function admitCanonicalSessionEntry(value: Record<string, unknown>): Sess
         !["read-only", "guarded", "workspace", "full"].some(
           (permission) => permission === ceiling.permission,
         )) ||
+      (execPolicy !== undefined &&
+        (!isRecord(execPolicy) ||
+          (execPolicy.denyMisses !== undefined && execPolicy.denyMisses !== true) ||
+          !["deny", "allowlist", "full"].some((security) => security === execPolicy.security) ||
+          !["off", "on-miss", "always"].some((ask) => ask === execPolicy.ask))) ||
       (ceiling.source !== undefined &&
         (!isRecord(ceiling.source) ||
           !nonemptyString(ceiling.source.agentId) ||

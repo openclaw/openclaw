@@ -474,9 +474,7 @@ it("queues participant completion as a capped new turn instead of steering an ac
     inheritedToolPolicySource: "participant",
     participationCeiling: ceiling,
   };
-  const { queueMessage, input } = steering(fixture, async () => ({
-    transcriptCommit: "committed",
-  }));
+  const { queueMessage, input } = steering(fixture, async () => {});
   fixture.dispatchDone.resolve(response([{ text: "Private participant result" }]));
   await deliverSubagentAnnouncement({
     ...fixture.params,

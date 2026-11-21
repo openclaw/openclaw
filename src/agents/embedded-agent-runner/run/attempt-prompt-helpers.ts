@@ -344,6 +344,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "inputProvenance"
   | "spawnedBy"
   | "trustedInternalHandoff"
+  | "participationCeiling"
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
@@ -419,6 +420,7 @@ export function buildAfterTurnRuntimeContext(params: {
         modelSelectionLocked: params.attempt.modelSelectionLocked,
         config: params.attempt.config,
         toolsAllow: params.attempt.toolsAllow,
+        participationCeiling: params.attempt.participationCeiling,
         skillsSnapshot: params.attempt.skillsSnapshot,
         senderId: params.attempt.senderId,
         provider: params.attempt.provider,

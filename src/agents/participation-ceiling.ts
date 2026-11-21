@@ -1,5 +1,6 @@
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { intersectExecPolicyCeilings, type ExecPolicyCeiling } from "../infra/exec-policy.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { intersectSessionPermissionModes } from "./session-permission-mode.js";
 
@@ -12,6 +13,8 @@ export type ParticipationCeiling = {
   readonly tools?: readonly string[];
   /** Effective permission captured at admission; missing stored values retain guarded authority. */
   readonly permission?: SessionPermissionMode;
+  /** Exact child execution floor when the permission label cannot represent it. */
+  readonly execPolicy?: ExecPolicyCeiling;
   /** Original invitation and file root; descendants never retarget this source. */
   readonly source?: {
     readonly agentId: string;
@@ -35,6 +38,8 @@ export const PARTICIPATION_TOOL_ALLOWLIST = Object.freeze([
   "exec",
   "process",
   "sessions_spawn",
+  "skills_search",
+  "skills_read",
   "web_search",
   "web_fetch",
   "tool_search",
@@ -80,6 +85,9 @@ export function intersectParticipationCeilings(
       participationPermission(retained),
       participationPermission(current),
     ),
+    ...((retained.execPolicy || current.execPolicy) && {
+      execPolicy: intersectExecPolicyCeilings(retained.execPolicy, current.execPolicy),
+    }),
     tools: participationToolAllowlist(retained).filter((name) =>
       participationToolAllowlist(current).includes(name),
     ),

@@ -323,6 +323,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     bootstrapWorkspaceDir: afterTurn ? undefined : params.bootstrapWorkspaceDir,
     cwd: profile === "recovery" ? undefined : (params.cwd ?? undefined),
     permissionMode: afterTurn ? undefined : params.permissionMode,
+    participationCeiling: params.participationCeiling,
     sessionRoot: afterTurn ? undefined : params.sessionRoot,
     requireWorkspaceOnly: afterTurn ? undefined : params.requireWorkspaceOnly,
     agentDir: params.agentDir,

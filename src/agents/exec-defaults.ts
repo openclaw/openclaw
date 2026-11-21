@@ -18,7 +18,7 @@ import {
   resolveExecModePolicy,
   resolveExecPolicyForMode,
 } from "../infra/exec-approvals.js";
-import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { intersectExecPolicyCeilings, applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-target.js";
 import { participationPermission, type ParticipationCeiling } from "./participation-ceiling.js";
@@ -133,6 +133,7 @@ export type ResolvedExecDefaults = {
   mode: ExecMode;
   security: ExecSecurity;
   ask: ExecAsk;
+  denyMisses?: true;
   node?: string;
   canRequestNode: boolean;
 };
@@ -175,7 +176,9 @@ export function prepareExecDefaults(
     sandboxAvailable,
     sandboxRequired,
   });
-  const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
+  // Sandboxes enforce isolation themselves; their implicit deny is not a participant file ceiling.
+  const defaultSecurity =
+    resolved.effectiveHost === "sandbox" && !params.participationCeiling ? "deny" : "full";
   const sessionPermissionPolicy = params.sessionEntry?.permissionMode
     ? resolveSessionPermissionExecPolicy(
         { mode: params.sessionEntry.permissionMode },
@@ -218,8 +221,12 @@ export function prepareExecDefaults(
           }),
         )
       : { ...modePolicy, security, ask };
-    security = capped.security ?? security;
-    ask = capped.ask ?? ask;
+    const exact = intersectExecPolicyCeilings(
+      { security: capped.security ?? security, ask: capped.ask ?? ask },
+      params.participationCeiling?.execPolicy,
+    )!;
+    security = exact.security;
+    ask = exact.ask;
     const cappedModePolicy = capped.mode ? resolveExecPolicyForMode(capped.mode) : undefined;
     const mode =
       capped.mode && cappedModePolicy?.security === security && cappedModePolicy.ask === ask
@@ -231,6 +238,7 @@ export function prepareExecDefaults(
       mode,
       security,
       ask,
+      ...(exact.denyMisses ? { denyMisses: true } : {}),
       node:
         params.execOverrides?.node ??
         params.sessionEntry?.execNode ??
