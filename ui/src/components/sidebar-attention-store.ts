@@ -455,7 +455,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
             while (refresh.requested && currentAuth()) {
               refresh.requested = false;
               const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
-              if (currentAuth() && status) {
+              // An unavailable catalog cannot establish that a dismissed warning has cleared.
+              if (currentAuth() && status && !status.unavailable) {
                 this.#modelAuthStatus = status;
                 this.#modelAuthAgentId = agentId;
                 this.#modelAuthRefreshAt = nextModelAuthStatusRefreshAt(status);

@@ -364,6 +364,34 @@ describe("sidebar attention source publication", () => {
     },
   );
 
+  it("keeps a saved account dismissal while its auth status is unavailable", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("localStorage", createStorageMock());
+    let status: ModelAuthStatusResult = {
+      ...emptyAuth(),
+      unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE", message: "Auth status is preparing" },
+    };
+    const request = inventoryRequest(
+      () => cronPage(),
+      () => status,
+    );
+    const harness = gateway(request, true);
+    const dismissal = { kind: "modelAuthExpired", signature: "agent:main\nopenai" } as const;
+    const key = resolveSidebarAttentionKey(harness.gateway);
+    dismissSidebarAttention(key, dismissal);
+    store = activate(harness);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(request, 1, ["models.authStatus"]);
+    expect(loadDismissals(key)).toEqual({ modelAuthExpired: [dismissal.signature] });
+
+    status = missingAuth(2);
+    harness.emitEvent("chat.metadata.changed", { agentId: "main", authChanged: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(request, 2, ["models.authStatus"]);
+    expect(store.entries).toEqual([]);
+  });
+
   it("retires old-account health before the eager facade publishes a storage refresh", async () => {
     const otherAccount = deferred<CompactCronPage>();
     const request = inventoryRequest(() =>
