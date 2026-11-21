@@ -20,7 +20,10 @@ import {
 } from "./server.chat-product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-import { resolveLocalWorkspaceOwner } from "./worker-environments/local-workspace-projection.js";
+import {
+  resolveLocalWorkspaceOwner,
+  withLocalWorkspaceProjection,
+} from "./worker-environments/local-workspace-projection.js";
 
 it("explains a removed active session worktree without a snapshot before preparing its sandbox", async () => {
   const state = await createProductState("chat-removed-worktree");
@@ -120,7 +123,7 @@ it("explains a removed active session worktree without a snapshot before prepari
   }
 });
 
-it.each(["snapshot", "fresh"])(
+it.each(["snapshot", "fresh", "protected-projection"])(
   "refuses chat.send until explicit workspace restore (%s)",
   { timeout: 90_000 },
   async (mode) => {
@@ -171,7 +174,7 @@ it.each(["snapshot", "fresh"])(
           ) {
             readyEvent.resolve();
           }
-          if (event.event === "chat" && payload.state === "error") {
+          if (event.event === "chat" && (payload.state === "error" || payload.state === "final")) {
             failed.resolve(String(payload.errorMessage));
           }
         },
@@ -192,24 +195,24 @@ it.each(["snapshot", "fresh"])(
       expect(await client.request("worktrees.remove", { id: created.worktree.id })).toMatchObject({
         removed: true,
       });
-      await expect(client.request("sessions.diff", { sessionKey })).rejects.toThrow(
-        "worktree was removed",
-      );
-      await expect(fs.access(saved)).rejects.toMatchObject({ code: "ENOENT" });
+      let uniqueFile: string | undefined;
+      if (mode === "protected-projection") {
+        await client.request("worktrees.restore", { id: created.worktree.id });
+        using owner = await resolveLocalWorkspaceOwner({ cfg: {}, agentId: "main", sessionKey });
+        if (!owner) {
+          throw new Error("Created workspace has no projection owner");
+        }
+        const projection = await withLocalWorkspaceProjection(owner, (view) => view.prepare());
+        uniqueFile = path.join(projection, "projection-only.txt");
+        await fs.writeFile(uniqueFile, "unique projection bytes\n");
+        expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
+          session: { worktreeState: "ready" },
+        });
+        await fs.rm(created.worktree.path, { recursive: true });
+      }
       if (mode === "fresh") {
         await updateRegistryWorktree(process.env, created.worktree.id, { snapshotRef: undefined });
       }
-      expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
-        session: { worktreeState: `removed-${mode}` },
-      });
-      expect(await client.request("sessions.list", { rowMode: "sidebar" })).toMatchObject({
-        sessions: expect.arrayContaining([
-          expect.objectContaining({
-            key: sessionKey,
-            worktreeState: `removed-${mode}`,
-          }),
-        ]),
-      });
       await client.request("chat.send", {
         sessionKey,
         message: "Do not restore silently.",
@@ -219,6 +222,27 @@ it.each(["snapshot", "fresh"])(
       expect(await failed.promise).toContain("This session's worktree was removed");
       expect(requests).toHaveLength(0);
       await expect(fs.access(saved)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await client.request("sessions.describe", { key: sessionKey })).toMatchObject({
+        session: { worktreeState: mode === "fresh" ? "removed-fresh" : "removed-snapshot" },
+      });
+      expect(await client.request("sessions.list", { rowMode: "sidebar" })).toMatchObject({
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            key: sessionKey,
+            worktreeState: mode === "fresh" ? "removed-fresh" : "removed-snapshot",
+          }),
+        ]),
+      });
+      await expect(client.request("sessions.diff", { sessionKey })).rejects.toThrow(
+        "worktree was removed",
+      );
+      if (uniqueFile) {
+        await expect(
+          client.request("worktrees.restore", { id: created.worktree.id }),
+        ).rejects.toThrow("local workspace projection");
+        expect(await fs.readFile(uniqueFile, "utf8")).toBe("unique projection bytes\n");
+        return;
+      }
       restoring = true;
       using materialize = vi.spyOn(checkout, "materializeManagedWorktree");
       await Promise.all([

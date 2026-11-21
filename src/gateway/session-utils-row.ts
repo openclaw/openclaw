@@ -11,8 +11,10 @@ import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/type
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import { sessionWorktreeAvailability } from "../agents/worktrees/session-lifecycle.js";
-import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import {
+  sessionWorktreeAvailability,
+  type SessionWorktreeObservation,
+} from "../agents/worktrees/session-lifecycle.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
@@ -106,7 +108,7 @@ export function readSessionRowInputs(params: {
   runtimeResolution?: SessionRuntimeResolution;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
-  preparedWorktree?: ManagedWorktreeRecord | null;
+  preparedWorktree?: SessionWorktreeObservation | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   preparedTitle?: Pick<

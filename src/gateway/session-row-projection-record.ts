@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import type { SessionWorktreeObservation } from "../agents/worktrees/session-lifecycle.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
@@ -49,7 +49,7 @@ type SharedFacts = {
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
-  worktree?: ManagedWorktreeRecord | null;
+  worktree?: SessionWorktreeObservation | null;
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & SharedFacts;

@@ -2,6 +2,7 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { worktreePathExists } from "./git.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
@@ -11,15 +12,21 @@ import type { ManagedWorktreeRecord } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
-/** Registry-owned availability is shared by session projections and turn admission. */
+export type SessionWorktreeObservation = {
+  record: ManagedWorktreeRecord | undefined;
+  missing?: true;
+};
+
+/** Lifecycle availability is shared by session projections and turn admission. */
 export function sessionWorktreeAvailability(
-  record: ManagedWorktreeRecord | null | undefined,
+  observation: SessionWorktreeObservation | null | undefined,
   sessionKey?: string,
 ): "ready" | "removed-snapshot" | "removed-fresh" | undefined {
+  const record = observation?.record;
   if (!record && sessionKey && captureAgentWorkspaceReadiness(sessionKey)?.isReady?.() === false) {
     return undefined;
   }
-  return record && record.removedAt === undefined
+  return record && record.removedAt === undefined && !observation?.missing
     ? "ready"
     : record?.snapshotRef
       ? "removed-snapshot"
@@ -40,12 +47,16 @@ export async function reconcileSessionWorktreeAvailability(
   record: ManagedWorktreeRecord | undefined,
   env: NodeJS.ProcessEnv,
   assertCurrent: () => void,
-) {
+): Promise<SessionWorktreeObservation> {
   if (record && record.removedAt === undefined && !(await worktreePathExists(record.path))) {
     assertCurrent();
-    return (await retireMissingRegistryWorktree(env, record, Date.now(), assertCurrent)).record;
+    // A protected projection keeps its registry row and unique bytes, but cannot supply a checkout.
+    return {
+      record: (await retireMissingRegistryWorktree(env, record, Date.now(), assertCurrent)).record,
+      missing: true,
+    };
   }
-  return record;
+  return { record };
 }
 
 /** Turns and passive Review refuse removed checkouts; only explicit restore provisions them. */
@@ -84,12 +95,17 @@ export async function resolveSessionWorktree(params: {
   ) {
     throw new Error("Session worktree owner changed");
   }
-  worktree = await reconcileSessionWorktreeAvailability(
+  const observation = await reconcileSessionWorktreeAvailability(
     worktree,
     context.environment,
     params.assertCurrent,
   );
-  if (!worktree || sessionWorktreeAvailability(worktree) !== "ready") {
+  worktree = observation.record;
+  if (!worktree || sessionWorktreeAvailability(observation) !== "ready") {
+    if (observation.missing && worktree?.removedAt === undefined) {
+      // Retirement could not publish a removal; refresh the existing conversation projection.
+      emitSessionLifecycleEvent({ sessionKey, reason: "workspace" });
+    }
     throw new SessionWorktreeUnavailableError(binding.id);
   }
   return { worktree, assertCurrent, context };

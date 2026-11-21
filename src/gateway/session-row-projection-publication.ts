@@ -382,7 +382,7 @@ export function subscribeSessionRowPublications({
             if (!row || row.storedEntry?.worktree?.id !== worktree.id) {
               continue;
             }
-            const previous = row.retainedDatabaseFacts?.worktree;
+            const previous = row.retainedDatabaseFacts?.worktree?.record;
             if (
               previous &&
               previous.removedAt === worktree.removedAt &&
@@ -392,7 +392,10 @@ export function subscribeSessionRowPublications({
             }
             records.invalidateDatabaseFacts(
               row,
-              row.retainedDatabaseFacts && { ...row.retainedDatabaseFacts, worktree },
+              row.retainedDatabaseFacts && {
+                ...row.retainedDatabaseFacts,
+                worktree: { record: worktree },
+              },
             );
             changed.add(row);
           }

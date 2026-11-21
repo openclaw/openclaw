@@ -188,14 +188,4 @@ describe("agent command worktree admission", () => {
       }
     });
   });
-
-  it("fails closed before workspace setup when the removed worktree has no snapshot", async () => {
-    await withTempHome(async (home) => {
-      const { id } = await createSessionWorktree(home, true);
-      await managedWorktrees.remove({ id, reason: "manual-delete", allowSnapshotLoss: true });
-      await updateRegistryWorktree(process.env, id, { snapshotRef: undefined });
-      await expect(prepareSession()).rejects.toThrow("This session's worktree was removed");
-      expect(ensureAgentWorkspace).not.toHaveBeenCalled();
-    });
-  });
 });

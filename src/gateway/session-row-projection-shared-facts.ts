@@ -104,12 +104,11 @@ export function prepareSessionRowSharedFacts({
       for (const [index, { prepared }] of sharedRows.entries()) {
         const sharedFacts = reply?.rows[index];
         if (prepared.worktree === undefined) {
-          prepared.worktree =
-            (await reconcileSessionWorktreeAvailability(
-              sharedFacts?.worktree ?? undefined,
-              env,
-              shared.admission.assertCurrent,
-            )) ?? null;
+          prepared.worktree = await reconcileSessionWorktreeAvailability(
+            sharedFacts?.worktree ?? undefined,
+            env,
+            shared.admission.assertCurrent,
+          );
         }
         if (prepared.acpMeta === undefined) {
           prepared.acpMeta = sharedFacts?.acp ? rowToAcpSessionMeta(sharedFacts.acp) : null;

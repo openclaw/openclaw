@@ -144,11 +144,11 @@ export async function withMemorySessionRows<T>(
           runtimeOwnership: runtime.value ?? null,
           runtimeOwnershipDependencies: runtime.dependencies,
           worktree: entry.worktree
-            ? ((await reconcileSessionWorktreeAvailability(
+            ? await reconcileSessionWorktreeAvailability(
                 await readRegistryWorktree(captureWorktreeRunEndContext(env), entry.worktree.id),
                 env,
                 assertCurrent,
-              )) ?? null)
+              )
             : null,
           repositoryWorkspace:
             workspaces.find((workspace) => workspace.workspaceId === entry.repositoryWorkspaceId) ??
