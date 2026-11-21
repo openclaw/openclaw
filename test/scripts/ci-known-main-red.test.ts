@@ -479,6 +479,9 @@ describe("known hourly main failures", () => {
 
   it.each([
     ["[test] inner parallelism 1", 1],
+    ["[test] preparing runtime runtime before Vitest workers", 1],
+    ["[test] preparing private-qa runtime before Vitest workers", 1],
+    ["[test] preparing unknown runtime before Vitest workers", 0],
     ["[test] inner parallelism unknown", 0],
     ["Error: worker failed", 0],
   ])("checks pre-invocation telemetry without hiding errors: %s", (telemetry, count) => {
@@ -487,6 +490,11 @@ describe("known hourly main failures", () => {
       `[shard:gateway] ${telemetry}\n[shard:gateway] begin`,
     );
     expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it("accepts the project display label emitted for nested Gateway projects", () => {
+    const log = report().replace("FAIL   gateway  ", "FAIL   gateway (gateway-server-parallel)  ");
+    expect(parseNodeFailureReport(log, true)).toEqual(parseNodeFailureReport(report(), true));
   });
 
   it.each(["", ":42", ":42:3"])(
