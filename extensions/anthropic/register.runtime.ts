@@ -624,18 +624,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
       (!isAnthropicMandatoryClaude5Model(modelId) ||
         normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
-    classifyFailoverReason: ({ code, errorType, errorMessage }) => {
-      // Funding refusals can arrive as HTTP 429 with a rate_limit_error wrapper.
-      if (
-        code?.trim().toLowerCase() === "credits_required" ||
-        /"error_code"\s*:\s*"credits_required"/i.test(errorMessage)
-      ) {
-        return "billing";
-      }
-      return (
-        classifyAnthropicFailoverDescriptor(errorType) ?? classifyAnthropicFailoverDescriptor(code)
-      );
-    },
+    // Funding refusals arrive as HTTP 429 rate_limit_error; only error.details.error_code tells them apart.
+    classifyFailoverReason: ({ code, errorType, errorMessage }) =>
+      /"error_code"\s*:\s*"credits_required"/.test(errorMessage)
+        ? "billing"
+        : (classifyAnthropicFailoverDescriptor(errorType) ??
+          classifyAnthropicFailoverDescriptor(code)),
     resolveThinkingProfile,
     wrapStreamFn: (ctx) => {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>

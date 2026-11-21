@@ -176,7 +176,6 @@ describe("anthropic provider replay hooks", () => {
           '429 {"error":{"type":"rate_limit_error","details":{"disabled_reason":"org_level_disabled","error_code":"credits_required","exhausted_included_allowance":false}}}',
       }),
     ).toBe("billing");
-    expect(classify({ status: 429, code: "credits_required" })).toBe("billing");
     for (const errorMessage of [
       "The response did not include credits_required",
       '{"error":{"details":{"error_code":"credits_required_extra"}}}',
