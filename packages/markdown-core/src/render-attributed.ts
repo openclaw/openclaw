@@ -2,6 +2,7 @@ import { applyConstructFallbacks } from "./construct-fallbacks.js";
 import type { FormatCapabilityProfile } from "./format-capabilities.js";
 import { isAutoLinkedMarkdownLink, type MarkdownAnnotationSpan } from "./ir-spans.js";
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle } from "./ir.js";
+import { collectBlockquoteLineStarts } from "./render.js";
 
 type AttributedRange<TStyle extends string> = {
   start: number;
@@ -19,6 +20,7 @@ export type AttributedRenderOptions<TStyle extends string> = {
     text: string,
     context: { origin: "authored" | "linkify" },
   ) => string;
+  blockquotePrefix?: string;
   trimEnd?: boolean;
 };
 
@@ -30,26 +32,34 @@ export function renderMarkdownWithAttributedRanges<TStyle extends string>(
 ): { text: string; ranges: AttributedRange<TStyle>[] } {
   const projected = profile ? applyConstructFallbacks(ir, profile) : ir;
   const text = projected.text;
-  const insertions: Array<{ pos: number; length: number }> = [];
-  let rendered = text;
+  const insertions: Array<{ pos: number; text: string }> = [];
   if (options.renderLink) {
-    rendered = "";
     let cursor = 0;
     for (const link of projected.links.toSorted((a, b) => a.start - b.start)) {
       if (link.start < cursor) {
         continue;
       }
-      rendered += text.slice(cursor, link.end);
       const origin = isAutoLinkedMarkdownLink(link) ? "linkify" : "authored";
       const suffix = options.renderLink(link, text, { origin });
-      rendered += suffix;
       if (suffix) {
-        insertions.push({ pos: link.end, length: suffix.length });
+        insertions.push({ pos: link.end, text: suffix });
       }
       cursor = link.end;
     }
-    rendered += text.slice(cursor);
   }
+  if (options.blockquotePrefix) {
+    for (const [pos, depth] of collectBlockquoteLineStarts(projected)) {
+      insertions.push({ pos, text: options.blockquotePrefix.repeat(depth) });
+    }
+    insertions.sort((a, b) => a.pos - b.pos);
+  }
+  let rendered = "";
+  let cursor = 0;
+  for (const insertion of insertions) {
+    rendered += text.slice(cursor, insertion.pos) + insertion.text;
+    cursor = insertion.pos;
+  }
+  rendered += text.slice(cursor);
   rendered = options.trimEnd ? rendered.trimEnd() : rendered;
 
   const ranges: AttributedRange<TStyle>[] = [];
@@ -68,13 +78,13 @@ export function renderMarkdownWithAttributedRanges<TStyle extends string>(
     let shift = 0;
     for (const insertion of insertions) {
       if (insertion.pos <= cursor) {
-        shift += insertion.length;
+        shift += insertion.text.length;
       } else if (insertion.pos >= span.end) {
         break;
       } else {
         appendRange(cursor + shift, insertion.pos + shift, style);
         cursor = insertion.pos;
-        shift += insertion.length;
+        shift += insertion.text.length;
       }
     }
     appendRange(cursor + shift, span.end + shift, style);

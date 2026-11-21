@@ -79,8 +79,7 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   };
   const rendered = renderMarkdownWithAttributedRanges(
     // Core owns link suffixes; Signal retains its established normalized-URL de-duplication.
-    {
-      ...ir,
+    Object.assign(ir, {
       links: ir.links.filter((link) => {
         const label = ir.text.slice(link.start, link.end);
         const href = link.href.trim();
@@ -92,10 +91,11 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
           normalize(decodeLinkHref(comparableHref), preserveSuffixCase) !== normalizedLabel
         );
       }),
-    },
+    }),
     {
       styleMap: SIGNAL_STYLE_MAP,
       annotationStyleMap: { assistant_transcript_role: "MONOSPACE" },
+      blockquotePrefix: "> ",
       trimEnd: true,
     },
     SIGNAL_FORMAT_PROFILE,
@@ -109,7 +109,6 @@ function markdownToSignalIR(markdown: string, options: SignalMarkdownOptions): M
     linkify: true,
     enableSpoilers: true,
     headingStyle: "rich",
-    blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
 }
