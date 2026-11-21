@@ -22,6 +22,7 @@ vi.mock("../../../logging/subsystem.js", () => ({ createSubsystemLogger: () => l
 const provider = vi.hoisted(() => ({
   tiers: [] as unknown[],
   rejectUltrafast: true,
+  responseTier: undefined as string | undefined,
 }));
 // Fake provider I/O; request assembly, recovery, parsing, and observations stay real.
 vi.mock("openai", () => {
@@ -45,7 +46,7 @@ vi.mock("openai", () => {
                     : {
                         id: "resp_fixture",
                         status: "completed",
-                        service_tier: request.service_tier,
+                        service_tier: provider.responseTier ?? request.service_tier,
                         usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
                       }),
                 },
@@ -63,6 +64,7 @@ beforeEach(() => {
   log.debug.mockClear();
   provider.tiers.length = 0;
   provider.rejectUltrafast = true;
+  provider.responseTier = undefined;
   registerAgentRunContext("run-fixture", {});
 });
 afterEach(() => {
@@ -137,16 +139,39 @@ async function providerTurn(
   runId = attribution.runId,
   options: Parameters<StreamFn>[2] = {},
   record: Parameters<typeof createOpenAIServiceTierObservationWrapper>[1] = () => true,
+  fastMode: true | "ultrafast" = "ultrafast",
 ) {
   // Worker inference recreates the wrapper for each model call in the same run.
   const stream = createOpenAIServiceTierObservationWrapper(
-    createOpenAIFastModeWrapper(createOpenAIResponsesTransportStreamFn(), "ultrafast"),
+    createOpenAIFastModeWrapper(createOpenAIResponsesTransportStreamFn(), fastMode),
     record,
     { ...attribution, runId },
   );
   const result = await stream(model, { messages: [] }, { apiKey: "synthetic-key", ...options });
   expect((await result.result()).stopReason).toBe("stop");
 }
+
+it("accepts a Fast response for priority but reports it as a downgrade for Ultrafast", async () => {
+  provider.rejectUltrafast = false;
+  provider.responseTier = "fast";
+  const record = vi.fn(() => true);
+  await providerTurn(attribution.runId, {}, record, true);
+  expect(provider.tiers).toEqual(["priority"]);
+  expect(record).not.toHaveBeenCalledWith(model, {
+    requestedTier: "priority",
+    responseTier: "fast",
+  });
+  for (const logger of [log.info, log.debug]) {
+    expect(logger).not.toHaveBeenCalledWith(
+      expect.stringContaining("OpenAI priority requested; served as fast"),
+      expect.anything(),
+    );
+  }
+
+  await providerTurn(attribution.runId, {}, record);
+  expect(provider.tiers).toEqual(["priority", "ultrafast"]);
+  expect(record).toHaveBeenLastCalledWith(model, observation("fast"));
+});
 
 it("bounds persistent rejections across 30 model calls and probes after 20 cooldown calls", async () => {
   const record = vi.fn(() => true);
