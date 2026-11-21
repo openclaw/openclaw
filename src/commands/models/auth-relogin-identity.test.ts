@@ -17,29 +17,16 @@ const matchesPersonalAccount = (incoming: AuthProfileCredential, existing: AuthP
   incoming.accountId === existing.accountId;
 
 describe("re-login identity boundaries", () => {
-  it.each([
-    [
-      { type: "api_key", provider: "fixture", key: "fixture-a" },
-      { type: "api_key", provider: "fixture", key: "fixture-b" },
-    ],
-    [
-      { type: "token", provider: "fixture", token: "fixture-a" },
-      { type: "token", provider: "fixture", token: "fixture-b" },
-    ],
-  ] satisfies [AuthProfileCredential, AuthProfileCredential][])(
-    "keeps a static credential name only when the literal credential matches (%j)",
-    (original, replacement) => {
-      expect(isAuthProfileReconnect(original, original, {})).toBe(true);
-      expect(isAuthProfileReconnect(replacement, original, {})).toBe(false);
-    },
-  );
-
-  it("does not infer account continuity from a secret reference alone", () => {
-    const referenced: AuthProfileCredential = {
-      type: "api_key",
-      provider: "fixture",
-      keyRef: { source: "env", provider: "default", id: "FIXTURE_KEY" },
-    };
+  it("requires literal credential continuity to keep a static account name", () => {
+    const base = { provider: "fixture" };
+    const key = { ...base, type: "api_key" as const, key: "fixture-a" };
+    const token = { ...base, type: "token" as const, token: "fixture-a" };
+    const keyRef = { source: "env" as const, provider: "default", id: "FIXTURE_KEY" };
+    const referenced = { ...base, type: "api_key" as const, keyRef };
+    expect(isAuthProfileReconnect(key, key, {})).toBe(true);
+    expect(isAuthProfileReconnect({ ...key, key: "fixture-b" }, key, {})).toBe(false);
+    expect(isAuthProfileReconnect(token, token, {})).toBe(true);
+    expect(isAuthProfileReconnect({ ...token, token: "fixture-b" }, token, {})).toBe(false);
     expect(isAuthProfileReconnect(referenced, referenced, {})).toBe(false);
   });
 
