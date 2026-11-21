@@ -149,6 +149,16 @@ describe("sandbox fs bridge anchored ops", () => {
     ).resolves.toBeNull();
   });
 
+  it("recognizes missing parent directories in dash containers as missing files", async () => {
+    mockStat(() => ({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from("openclaw-sandbox-fs: 2: cd: can't cd to /workspace/missing-dir\n"),
+      code: 2,
+    }));
+
+    await expect(bridge.stat({ filePath: "missing-dir/note.txt" })).resolves.toBeNull();
+  });
+
   it("keeps non-missing stat failures as errors", async () => {
     mockStat(() => ({
       stdout: Buffer.alloc(0),
