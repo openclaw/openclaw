@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
 import { appendPrAttribution, preparePrAttribution } from "../agents/pr-attribution.js";
 import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
@@ -6,12 +7,66 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { GitHubPublicationCreditChangedError } from "./github-publication-failure.js";
-import { appendGitHubPublicationMessage } from "./github-publication-git-transport.js";
+import {
+  appendGitHubPublicationMessage,
+  type createGitHubPublicationCommandRunner,
+} from "./github-publication-git-transport.js";
+
+type BranchHistory = {
+  cwd: string;
+  base: string;
+  head: string;
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"];
+};
+
+/**
+ * The oldest commit a branch adds to its base, as `gh pr create --fill-first` reads it,
+ * within the bounds a request's own title and body must meet.
+ * Best effort: a default title and body never fail a publication.
+ */
+async function readFirstBranchCommit({ cwd, base, head, run }: BranchHistory) {
+  // Merged-in history and earlier publication commits describe other work.
+  const commits = await run(
+    [
+      "git",
+      "rev-list",
+      "--reverse",
+      "--first-parent",
+      "--no-merges",
+      "--invert-grep",
+      "--grep=^OpenClaw-Publication: ",
+      `${base}..${head}`,
+    ],
+    { cwd },
+  );
+  const commit = commits.code === 0 ? commits.stdout.toString("utf8").split("\n", 1)[0] : "";
+  if (!commit) {
+    return undefined;
+  }
+  const shown = await run(
+    ["git", "show", "-s", "--no-show-signature", "--format=%s%x00%b%x00%(trailers)", commit],
+    { cwd },
+  );
+  if (shown.code !== 0) {
+    return undefined;
+  }
+  const [subject = "", message = "", trailerBlock = ""] = shown.stdout.toString("utf8").split("\0");
+  const body = message.trimEnd();
+  const trailers = trailerBlock.trimEnd();
+  return {
+    title: truncateUtf16Safe(subject.trim(), 256).trimEnd(),
+    // Credit and sign-off trailers belong to the commit; the pull request states its own credit.
+    description: truncateUtf16Safe(
+      trailers && body.endsWith(trailers) ? body.slice(0, -trailers.length) : body,
+      8 * 1024,
+    ).trim(),
+  };
+}
 
 export async function prepareGitHubPublicationContent(params: {
   row: Pick<
     GitHubPublicationExecutionRow,
-    "request_id" | "agent_id" | "session_id" | "session_key" | "branch" | "title"
+    "request_id" | "agent_id" | "session_id" | "session_key" | "branch" | "title" | "body"
   >;
   requesterProfileId?: string;
   storePath: string;
@@ -20,9 +75,17 @@ export async function prepareGitHubPublicationContent(params: {
   assertCurrent: () => void;
   // Reuse the retained publication owner; do not open another session read.
   readCurrentEntry: () => InternalSessionEntry | undefined;
-  description: string;
+  defaultDescription: string;
+  /** Local history of the published branch; a repository checkpoint has none to read. */
+  history?: BranchHistory;
+  /** An existing pull request keeps its title and body, so it needs no defaults. */
+  existingPullRequest?: string;
 }) {
   const { row } = params;
+  const firstCommit =
+    params.history && !params.existingPullRequest && !(row.title?.trim() && row.body?.trim())
+      ? await readFirstBranchCommit(params.history)
+      : undefined;
   const config = currentGitHubPublicationConfig();
   const initialEntry = params.readCurrentEntry();
   const initialShare = resolveSessionPublicShare(initialEntry);
@@ -32,7 +95,7 @@ export async function prepareGitHubPublicationContent(params: {
     agentId: row.agent_id,
     entry: initialEntry,
   });
-  const description = params.description
+  const description = (row.body?.trim() || firstCommit?.description || params.defaultDescription)
     .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
     .replace(
       /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
@@ -54,14 +117,17 @@ export async function prepareGitHubPublicationContent(params: {
     incognito: initialEntry?.incognito,
   });
   params.assertCurrent();
-  const title = row.title?.trim() || `Publish ${row.branch}`;
+  // The publication commit holds only what the branch's own commits left out, so without a
+  // requested title it names the branch. The pull request describes the branch's work.
+  const commitTitle = row.title?.trim() || `Publish ${row.branch}`;
+  const title = row.title?.trim() || firstCommit?.title || commitTitle;
   const trailers = prepared.attribution?.trailers ?? [];
   const credit = prepared.attribution?.logins.map((login) => `- @${login}`).join("\n");
   return {
     title,
     trailers,
     commitMessage: `${appendGitHubPublicationMessage(
-      credit ? `${title}\n\nWorked on by:\n${credit}` : title,
+      credit ? `${commitTitle}\n\nWorked on by:\n${credit}` : commitTitle,
       [...trailers, `OpenClaw-Publication: ${row.request_id}`],
     )}\n`,
     assertAction: () => {

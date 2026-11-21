@@ -301,7 +301,7 @@ describe("local checkout publication", () => {
       await source.git("add", "shared.txt");
     }
     await source.git("add", "artifact.txt");
-    await source.git("commit", "-m", "Implement the requested change");
+    await source.git("commit", "-m", "Implement the requested change\n\nWhy.\n\nReviewed-by: a");
     const linked = path.join(root, "linked-worktree");
     if (outcome === "linked project worktree") {
       await source.git("worktree", "add", "-q", "--detach", linked, "HEAD");
@@ -569,6 +569,12 @@ describe("local checkout publication", () => {
       true,
       { status: "published", url: expect.stringContaining("/pull/") },
     ]);
+    // No caller named a title or body: the PR describes the task's first commit, without its
+    // trailers, while the publication commit keeps naming its branch.
+    expect(f.publishedTitles[0]).toBe("Implement the requested change");
+    expect(f.publishedBodies[0]).toMatch(/^Why\.\n\n(?!Reviewed-by)/u);
+    const published = await readPublicationCommit(source.git, result[1].headCommit);
+    expect(published.message).toMatch(/^Publish openclaw\//u);
     const publicationTarget = { url: result[1].url, branch: result[1].branch };
     const parent = loadSessionEntryReadOnly(scope)!;
     expect(parent).toMatchObject({
