@@ -25,6 +25,12 @@ pub(crate) const CLIENT_SCOPES: [&str; 5] = [
     "operator.approvals",
     "operator.pairing",
 ];
+pub(crate) const BOOTSTRAP_FULL_SCOPES: [&str; 4] = [
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+];
 
 const IDENTITY_VERSION: u8 = 1;
 // A valid identity is well under 1 KiB; 64 KiB leaves ample JSON headroom while
@@ -69,11 +75,10 @@ pub(crate) struct GatewayDeviceIdentityStore {
     identity: GatewayDeviceIdentity,
 }
 
-// This credential boundary (gateway_device_identity.rs:65-98) intentionally excludes setup-code
-// and bootstrapToken redemption; those require a dedicated product UI and remain follow-up work.
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) enum GatewayAuth {
     DeviceToken(String),
+    BootstrapToken(String),
     SharedToken(String),
     SharedPassword(String),
     None,
@@ -82,9 +87,10 @@ pub(crate) enum GatewayAuth {
 impl Drop for GatewayAuth {
     fn drop(&mut self) {
         match self {
-            Self::DeviceToken(token) | Self::SharedToken(token) | Self::SharedPassword(token) => {
-                token.zeroize()
-            }
+            Self::DeviceToken(token)
+            | Self::BootstrapToken(token)
+            | Self::SharedToken(token)
+            | Self::SharedPassword(token) => token.zeroize(),
             Self::None => {}
         }
     }
@@ -93,7 +99,9 @@ impl Drop for GatewayAuth {
 impl GatewayAuth {
     pub(crate) fn signature_token(&self) -> Option<&str> {
         match self {
-            Self::DeviceToken(token) | Self::SharedToken(token) => Some(token),
+            Self::DeviceToken(token) | Self::BootstrapToken(token) | Self::SharedToken(token) => {
+                Some(token)
+            }
             Self::SharedPassword(_) | Self::None => None,
         }
     }
@@ -101,6 +109,7 @@ impl GatewayAuth {
     pub(crate) fn json(&self) -> Option<Value> {
         match self {
             Self::DeviceToken(token) => Some(json!({ "deviceToken": token })),
+            Self::BootstrapToken(token) => Some(json!({ "bootstrapToken": token })),
             Self::SharedToken(token) => Some(json!({ "token": token })),
             Self::SharedPassword(password) => Some(json!({ "password": password })),
             Self::None => None,
@@ -145,10 +154,21 @@ impl GatewayDeviceIdentityStore {
         shared_token: Option<&str>,
         shared_password: Option<&str>,
     ) -> GatewayAuth {
-        select_auth(
+        self.select_auth_with_bootstrap(gateway, None, shared_token, shared_password)
+    }
+
+    pub(crate) fn select_auth_with_bootstrap(
+        &self,
+        gateway: &str,
+        bootstrap_token: Option<&str>,
+        shared_token: Option<&str>,
+        shared_password: Option<&str>,
+    ) -> GatewayAuth {
+        select_auth_with_bootstrap(
             self.identity.device_token.as_deref(),
             self.identity.device_token_gateway.as_deref(),
             gateway,
+            bootstrap_token,
             shared_token,
             shared_password,
         )
@@ -192,15 +212,6 @@ impl GatewayDeviceIdentityStore {
 }
 
 impl GatewayDeviceIdentity {
-    pub(crate) fn signed_device(
-        &self,
-        auth: &GatewayAuth,
-        nonce: &str,
-        signed_at_ms: u64,
-    ) -> Result<Value, String> {
-        self.signed_device_with_scopes(auth, nonce, signed_at_ms, &CLIENT_SCOPES)
-    }
-
     pub(crate) fn signed_device_with_scopes(
         &self,
         auth: &GatewayAuth,
@@ -259,6 +270,7 @@ fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+#[cfg(test)]
 fn select_auth(
     device_token: Option<&str>,
     device_token_gateway: Option<&str>,
@@ -266,10 +278,31 @@ fn select_auth(
     shared_token: Option<&str>,
     shared_password: Option<&str>,
 ) -> GatewayAuth {
+    select_auth_with_bootstrap(
+        device_token,
+        device_token_gateway,
+        gateway,
+        None,
+        shared_token,
+        shared_password,
+    )
+}
+
+fn select_auth_with_bootstrap(
+    device_token: Option<&str>,
+    device_token_gateway: Option<&str>,
+    gateway: &str,
+    bootstrap_token: Option<&str>,
+    shared_token: Option<&str>,
+    shared_password: Option<&str>,
+) -> GatewayAuth {
     if device_token_gateway == Some(gateway) {
         if let Some(token) = non_empty_trimmed(device_token) {
             return GatewayAuth::DeviceToken(token.to_string());
         }
+    }
+    if let Some(token) = non_empty_trimmed(bootstrap_token) {
+        return GatewayAuth::BootstrapToken(token.to_string());
     }
     if let Some(password) = non_empty_trimmed(shared_password) {
         return GatewayAuth::SharedPassword(password.to_string());
@@ -804,6 +837,39 @@ mod tests {
             auth.json(),
             Some(json!({ "deviceToken": "test-device-token" }))
         );
+    }
+
+    #[test]
+    fn bootstrap_token_auth_uses_bootstrap_field_and_signature_token() {
+        let auth = GatewayAuth::BootstrapToken("test-bootstrap-token".to_string());
+
+        assert_eq!(auth.signature_token(), Some("test-bootstrap-token"));
+        assert_eq!(
+            auth.json(),
+            Some(json!({ "bootstrapToken": "test-bootstrap-token" }))
+        );
+        assert!(matches!(
+            &select_auth_with_bootstrap(
+                Some("device-token"),
+                Some("wss://gateway.example"),
+                "wss://gateway.example",
+                Some("fresh-bootstrap"),
+                Some("shared-token"),
+                None,
+            ),
+            GatewayAuth::DeviceToken(token) if token == "device-token"
+        ));
+        assert!(matches!(
+            &select_auth_with_bootstrap(
+                None,
+                None,
+                "wss://gateway.example",
+                Some("fresh-bootstrap"),
+                Some("shared-token"),
+                Some("shared-password"),
+            ),
+            GatewayAuth::BootstrapToken(token) if token == "fresh-bootstrap"
+        ));
     }
 
     #[test]
