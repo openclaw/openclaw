@@ -401,10 +401,11 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
 }
 
 func openClawVoiceNoteDurationLabel(_ durationSeconds: TimeInterval) -> String {
-    guard durationSeconds.isFinite else { return "0:00" }
-    let boundedDuration = min(
-        max(0, durationSeconds),
-        voiceNoteMaximumDurationSeconds)
-    let totalSeconds = Int(boundedDuration)
-    return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    guard durationSeconds.isFinite,
+          durationSeconds >= 0,
+          durationSeconds < Double(Int.max)
+    else { return "0:00" }
+    // The recording limit must not cap playback labels for longer attachments.
+    let totalSeconds = Int(durationSeconds)
+    return String(format: "%lld:%02lld", Int64(totalSeconds / 60), Int64(totalSeconds % 60))
 }
