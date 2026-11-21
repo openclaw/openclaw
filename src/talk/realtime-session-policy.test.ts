@@ -38,7 +38,7 @@ it("defaults agent-proxy sessions to owner consults and adaptive wake names", ()
   });
 });
 
-it.each([undefined, "always"] as const)(
+it.each([undefined, "substantive", "always"] as const)(
   "resolves native delegation policy: %s",
   (configuredConsultPolicy) => {
     const native = () =>
@@ -60,7 +60,7 @@ it.each([undefined, "always"] as const)(
     expect(native()).toMatchObject({
       handlesAgentConsult: true,
       toolPolicy: "safe-read-only",
-      consultPolicy: "auto",
+      consultPolicy: configuredConsultPolicy ?? "auto",
       wakeNamePolicy: "never",
       autoRespondToAudio: true,
     });

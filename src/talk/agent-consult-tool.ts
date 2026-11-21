@@ -19,6 +19,8 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES = [
 ] as const;
 export type RealtimeVoiceAgentConsultToolPolicy =
   (typeof REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES)[number];
+/** Configured guidance for when the realtime model hands a turn to the OpenClaw agent. */
+export type RealtimeVoiceConsultPolicy = "auto" | "substantive" | "always";
 export type RealtimeVoiceAgentConsultArgs = {
   question: string;
   context?: string;
@@ -127,12 +129,27 @@ export function resolveRealtimeVoiceAgentConsultToolsAllow(
   return [];
 }
 
+/**
+ * Builds the consult-policy prompt block. Models with native delegation
+ * (`handlesAgentConsult`) have no openclaw_agent_consult tool, so they get
+ * delegation wording; resolveRealtimeVoiceSessionPolicy rejects `always` there.
+ */
 export function buildRealtimeVoiceAgentConsultPolicyInstructions(config: {
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
-  consultPolicy?: "auto" | "substantive" | "always";
+  consultPolicy?: RealtimeVoiceConsultPolicy;
+  handlesAgentConsult?: boolean;
 }): string | undefined {
   if (config.toolPolicy === "none" || !config.consultPolicy || config.consultPolicy === "auto") {
     return undefined;
+  }
+  if (config.handlesAgentConsult === true) {
+    return [
+      "Delegation policy:",
+      "- Delegate every request that needs facts, memory, current information, tools, workspace state, or the user's own context, even if you think you know the answer.",
+      "- Answer directly only for greetings, acknowledgements, and brief latency checks.",
+      "- After delegating, do not answer the question yourself before the result arrives; one short backchannel is fine.",
+      "- When the result arrives, speak it once and do not repeat an answer you already gave.",
+    ].join("\n");
   }
   if (config.consultPolicy === "always") {
     return [
@@ -155,7 +172,8 @@ export function buildRealtimeVoiceSessionInstructions(params: {
   isAgentProxy: boolean;
   bootstrapContextInstructions?: string;
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
-  consultPolicy: "auto" | "always";
+  consultPolicy: RealtimeVoiceConsultPolicy;
+  handlesAgentConsult?: boolean;
 }): string {
   const instructions = [
     params.base,
@@ -179,6 +197,7 @@ export function buildRealtimeVoiceSessionInstructions(params: {
     buildRealtimeVoiceAgentConsultPolicyInstructions({
       toolPolicy: params.toolPolicy,
       consultPolicy: params.consultPolicy,
+      handlesAgentConsult: params.handlesAgentConsult,
     }),
   ];
   // Proxy prompts retain empty blocks as part of their stable session prefix.
