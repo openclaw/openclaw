@@ -423,6 +423,68 @@ test("retains reclamation Workers across alternating databases and retires all i
   expect(pressure.hasSubscribers).toBe(false);
 });
 
+test("bounds retained reclamation Workers across databases and keeps recently reused connections", async () => {
+  const fixtures = Array.from({ length: 6 }, () => createFixture(["first", "second", "third"]));
+  for (const fixture of fixtures) {
+    for (const scope of fixture.scopes) {
+      expect(appendTranscriptEventSync(scope, { type: "capacity-fixture" })).toMatchObject({
+        ok: true,
+        value: true,
+      });
+    }
+  }
+  let peakWorkers = 0;
+  const spawned = observeReclamationWorkers(() => {
+    peakWorkers = Math.max(peakWorkers, spawned.filter((worker) => worker.threadId !== -1).length);
+  });
+  for (const fixture of fixtures.slice(0, 4)) {
+    await expect(reclaim({ plan: fixture.plans[0]! })).resolves.toMatchObject(removedArtifact);
+  }
+  await reclaim({ plan: fixtures[0]!.plans[1]! });
+  expect(spawned).toHaveLength(4);
+  for (const fixture of fixtures.slice(4)) {
+    await expect(reclaim({ plan: fixture.plans[0]! })).resolves.toMatchObject(removedArtifact);
+    expect(spawned.filter((worker) => worker.threadId !== -1)).toHaveLength(4);
+  }
+  expect(spawned[0]!.threadId).not.toBe(-1);
+  expect(spawned[1]!.threadId).toBe(-1);
+  expect(spawned[2]!.threadId).toBe(-1);
+  expect(leasesFor(fixtures[1]!)).toHaveLength(1);
+  expect(leasesFor(fixtures[2]!)).toHaveLength(1);
+  await expect(reclaim({ plan: fixtures[0]!.plans[2]! })).resolves.toMatchObject(removedArtifact);
+  expect(spawned).toHaveLength(6);
+  await expect(reclaim({ plan: fixtures[1]!.plans[1]! })).resolves.toMatchObject(removedArtifact);
+  expect(spawned).toHaveLength(7);
+  expect(spawned.filter((worker) => worker.threadId !== -1)).toHaveLength(4);
+  expect(peakWorkers).toBe(4);
+});
+
+test("keeps a failed capacity retirement owned until retry before admitting another database", async () => {
+  const fixtures = Array.from({ length: 5 }, () => createFixture());
+  const spawned = observeReclamationWorkers();
+  let oldest: SqliteReclamationWorker | undefined;
+  observeWorker((worker, options) => {
+    if (options.path === fixtures[0]!.database.path) {
+      oldest = worker;
+    }
+  });
+  for (const fixture of fixtures.slice(0, 4)) {
+    await reclaim({ plan: fixture.plans[0]! });
+  }
+  const close = vi
+    .spyOn(oldest!, "close")
+    .mockRejectedValueOnce(new Error("capacity close failed"));
+  await expect(reclaim({ plan: fixtures[4]!.plans[0]! })).rejects.toThrow("capacity close failed");
+  expect(spawned).toHaveLength(4);
+  expect(leasesFor(fixtures[0]!)).toHaveLength(2);
+  expect(loadSessionEntryReadOnly(fixtures[4]!.scopes[0]!)).toMatchObject({ sessionId: "first" });
+  await expect(reclaim({ plan: fixtures[4]!.plans[0]! })).resolves.toMatchObject(removedArtifact);
+  expect(close).toHaveBeenCalledTimes(2);
+  expect(spawned[0]!.threadId).toBe(-1);
+  expect(leasesFor(fixtures[0]!)).toHaveLength(1);
+  expect(spawned.filter((worker) => worker.threadId !== -1)).toHaveLength(4);
+});
+
 test("joins explicit Worker retirement before opening a different agent store", async () => {
   const first = createFixture();
   const second = createFixture();
