@@ -5,6 +5,7 @@ import type {
   WorkboardLaunchState,
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
+import { canRequestWorkboardChanges } from "@openclaw/workboard-contract";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -27,6 +28,7 @@ import {
   workboardCardConsumesOwnerSlot,
   workboardCardSlotOwner,
 } from "./store-constants.js";
+import type { WorkboardReworkRequest } from "./store-inputs.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -45,6 +47,7 @@ type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
 
 type WorkboardDispatchStartOptions = {
   cardId?: string;
+  rework?: WorkboardReworkRequest;
   maxStarts?: number;
   model?: string;
   provider?: string;
@@ -136,10 +139,16 @@ async function runWorkboardDispatch(
   const now = params.options?.now ?? Date.now();
   const boardId = params.options?.boardId;
   const directCardId = params.options?.cardId;
+  const rework = params.options?.rework;
   const assertOwnerCurrent = params.options?.assertOwnerCurrent;
   const directCard = directCardId
-    ? await params.store.prepareStart(directCardId, now, assertOwnerCurrent)
+    ? rework
+      ? await params.store.get(directCardId)
+      : await params.store.prepareStart(directCardId, now, assertOwnerCurrent)
     : undefined;
+  if (rework && !directCard) {
+    throw new Error("Rework requires an existing Workboard card.");
+  }
   const dispatch = directCard
     ? { promoted: [], reclaimed: [], blocked: [], orchestrated: [], count: 0 }
     : await params.store.dispatch({ now, boardId, assertOwnerCurrent });
@@ -182,20 +191,29 @@ async function runWorkboardDispatch(
     const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
     for (const card of ordered) {
       const owner = ownerOverride || workboardCardSlotOwner(card, now);
+      const invalidRework = rework
+        ? card.updatedAt !== rework.expectedUpdatedAt
+          ? "Card changed. Review the latest values and retry."
+          : !canRequestWorkboardChanges(card)
+            ? "Only finished Workboard attempts can be reworked."
+            : undefined
+        : undefined;
       const rejection = card.metadata?.archivedAt
         ? "Card is archived; restore it before starting."
         : cardHasActiveClaim(card, now)
           ? `Card is already claimed by ${card.metadata?.claim?.ownerId ?? "another worker"}.`
           : mode === "scheduled" && card.status !== "ready"
             ? ""
-            : mode === "exact" &&
-                card.status !== "backlog" &&
-                card.status !== "todo" &&
-                card.status !== "ready"
-              ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
-              : !ownerHasRoom(owner, card)
-                ? `Owner ${owner} already has ${activeByOwner.get(owner)} active Workboard card(s); this board allows ${ownerSlotLimit(card)}. Complete or stop one before starting another card.`
-                : undefined;
+            : (invalidRework ??
+              (mode === "exact" &&
+              !rework &&
+              card.status !== "backlog" &&
+              card.status !== "todo" &&
+              card.status !== "ready"
+                ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
+                : !ownerHasRoom(owner, card)
+                  ? `Owner ${owner} already has ${activeByOwner.get(owner)} active Workboard card(s); this board allows ${ownerSlotLimit(card)}. Complete or stop one before starting another card.`
+                  : undefined));
       if (rejection !== undefined) {
         if (mode === "exact") {
           return {
@@ -366,10 +384,15 @@ async function runWorkboardDispatch(
             workspaceAccess: card.metadata?.automation?.workspaceAccess,
           },
           adoptWorkspaceAccess: persistWorkspaceAccess ? workspaceAccess : undefined,
+          ...(rework ? { rework: { ...rework, requestedSessionKey: sessionKey } } : {}),
           assertOwnerCurrent,
         },
       );
       claimValue = claimed.token;
+      const claimedLaunch = claimed.card.metadata?.automation?.launch;
+      if (rework && claimedLaunch?.phase === "prepared") {
+        preparedLaunch = claimedLaunch;
+      }
       // Racing card changes never reached a worker and must not consume the
       // provider-outage budget or starve a later healthy candidate.
       attemptedStarts += 1;
@@ -467,12 +490,14 @@ async function runWorkboardDispatch(
         );
         workspaceMutation = { before: workspaceBase, after: materializedCard };
       }
-      const prepared = await params.store.prepareExecutionLaunch(card.id, {
-        requestedSessionKey: sessionKey,
-        now,
-        scope: { ownerId, token: claimValue },
-        assertOwnerCurrent,
-      });
+      const prepared = preparedLaunch
+        ? { card: claimed.card, launch: preparedLaunch }
+        : await params.store.prepareExecutionLaunch(card.id, {
+            requestedSessionKey: sessionKey,
+            now,
+            scope: { ownerId, token: claimValue },
+            assertOwnerCurrent,
+          });
       const launched = prepared.card;
       preparedLaunch = prepared.launch;
       const runId = prepared.launch.provisionalRunId;
@@ -482,6 +507,7 @@ async function runWorkboardDispatch(
         ...(assertOwnerCurrent ? { assertCurrent: assertOwnerCurrent } : {}),
         message: [
           `Work on this OpenClaw Workboard card: ${claimed.card.title}`,
+          ...(rework ? ["", "## Requested changes for this attempt", rework.instructions] : []),
           "",
           "## Worker protocol",
           `Card id: ${claimed.card.id}`,
@@ -575,6 +601,7 @@ async function runWorkboardDispatch(
             expectedLaunch: preparedLaunch,
             reason,
             failedAt: Date.now(),
+            preserveSession: Boolean(rework),
           });
         } else {
           await params.store.block(

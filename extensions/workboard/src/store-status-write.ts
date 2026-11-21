@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   WorkboardCard,
   WorkboardExecution,
+  WorkboardLaunchState,
   WorkboardMetadata,
   WorkboardNotification,
   WorkboardStatus,
@@ -17,6 +18,31 @@ import {
 import { MAX_CARD_NOTIFICATIONS } from "./store-constants.js";
 import type { WorkboardCardPatch } from "./store-inputs.js";
 import { trimMetadataToBudget } from "./store-normalizers.js";
+
+export function buildPreparedWorkboardLaunch(
+  card: WorkboardCard,
+  requestedSessionKey: string,
+  now: number,
+) {
+  const provisionalRunId = `workboard:${card.id}:${card.updatedAt}`;
+  const ownedLaunch = {
+    phase: "prepared",
+    requestedSessionKey,
+    provisionalRunId,
+    preparedAt: card.updatedAt,
+  } satisfies WorkboardLaunchState;
+  const execution: WorkboardExecution = {
+    id: card.execution?.id ?? `${card.id}:agent-session`,
+    kind: "agent-session",
+    mode: "autonomous",
+    status: "running",
+    sessionKey: requestedSessionKey,
+    runId: provisionalRunId,
+    startedAt: now,
+    updatedAt: now,
+  };
+  return { sessionKey: requestedSessionKey, runId: provisionalRunId, execution, ownedLaunch };
+}
 
 export function finishRun(
   card: WorkboardCard,
