@@ -33,6 +33,7 @@ import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
+import { createAdmittedTurnReviewTranscript } from "../exec-auto-review-transcript.js";
 import { prepareAgentExecScratch } from "../exec-scratch.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
@@ -193,6 +194,7 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   const recorder = attempt.userTurnTranscriptRecorder;
   const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
+  const reviewTranscript = createAdmittedTurnReviewTranscript(recorder);
   const annotateCurrentUserTurn =
     attempt.userTurnTranscriptRecorder &&
     attempt.sessionTarget &&
@@ -414,7 +416,7 @@ export function createAgentHarnessHostCapabilities(params: {
         githubPublicationConfigurationAware: undefined,
         // One host owns selection and launch. A plugin's mutable config or exec
         // overrides cannot replace the identity captured before its handoff.
-        exec: { ...effectiveOptions.exec, preparedRunEnvironment },
+        exec: { ...effectiveOptions.exec, preparedRunEnvironment, reviewTranscript },
         runtimePluginToolGrant,
         toolPolicyScope,
         skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,

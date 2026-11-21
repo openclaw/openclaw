@@ -8,6 +8,7 @@ import type {
   ExecAutoReviewTranscriptEntry,
 } from "../infra/exec-auto-review.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
 const TRANSCRIPT_LIMITS = {
@@ -248,5 +249,20 @@ export function buildExecAutoReviewTranscript(params: {
     entries: retained,
     omittedEntries,
     truncated: omittedEntries > 0 || retained.some((entry) => entry.truncated === true),
+  };
+}
+
+/** Reviewer evidence for runs without live session messages: the run's admitted user turn only. */
+export function createAdmittedTurnReviewTranscript(
+  recorder: UserTurnTranscriptRecorder | undefined,
+): (() => ExecAutoReviewTranscript | undefined) | undefined {
+  if (!recorder) {
+    return undefined;
+  }
+  return () => {
+    const message = recorder.isBlocked() ? undefined : recorder.getPersistedMessage?.();
+    return message && !message.excludeFromContext
+      ? buildExecAutoReviewTranscript({ messages: [message] })
+      : undefined;
   };
 }
