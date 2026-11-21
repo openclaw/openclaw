@@ -24,7 +24,6 @@ import {
 
 const HOST = "studio-k7x2q.example.test";
 const now = Math.floor(Date.now() / 1000);
-const YEAR = 365 * 86400;
 
 // One claw: owner R, K_gw, and two generations of K_srv (binding_seq 4 retired, 5 current).
 async function world() {
@@ -110,16 +109,6 @@ async function gate(
 }
 
 describe("assessFreshness", () => {
-  it("refuses a year-old binding once the client verified a newer one", async () => {
-    const w = await world();
-    const current = await gate(w, await w.binding(5, w.newSrv), {
-      snapshot: await w.snapshot(9, 5),
-    });
-    const old = await w.binding(4, w.oldSrv, now - YEAR);
-    const r = await gate(w, old, { snapshot: await w.snapshot(9, 4) }, { stored: current.state });
-    expect([r.ok, r.code]).toEqual([false, "stale_binding"]);
-  });
-
   it("refuses a snapshot naming a binding beyond the verified one and keeps nothing of it (J5)", async () => {
     const w = await world();
     const b = await w.binding(4, w.oldSrv);

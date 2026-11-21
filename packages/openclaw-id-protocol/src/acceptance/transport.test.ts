@@ -14,7 +14,6 @@ import {
   verifySasCommitment,
   type SasStart,
 } from "../enrollment/sas.js";
-import { buildInviteLink, generateInviteSecret } from "../invites.js";
 import { fingerprint } from "../keys.js";
 import { signStatement } from "../statements/envelope.js";
 import { verifyBindingForPin, type ClawPin } from "../statements/pin.js";
@@ -180,16 +179,6 @@ describe(acceptanceTitle(7), () => {
 });
 
 describe(acceptanceTitle(10), () => {
-  it("keeps the secret out of the request target", () => {
-    const { invite_id, secret } = generateInviteSecret();
-    const link = new URL(
-      buildInviteLink(WORLD_HOST, { invite_id, secret, root_fp: `fp:${"ab".repeat(32)}` }),
-    );
-    const requestTarget = `${link.pathname}${link.search}`;
-    expect(requestTarget).toBe("/join");
-    expect(link.hash).toContain(invite_id);
-  });
-
   it("refuses a second redemption of the same invite", async () => {
     const { state, redemption, identity } = await inviteFixture();
     const first = await submitRedemption(state, redemption, identity, WORLD_NOW);

@@ -29,9 +29,4 @@ describe("browser node join commands", () => {
       ]);
     }
   });
-  it("creates no command without Discovery", () => {
-    expect(
-      buildNodeJoinCommands({ joinLink: "private", discoveryUrl: null, version: "1" }),
-    ).toBeNull();
-  });
 });

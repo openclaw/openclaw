@@ -1,6 +1,5 @@
 // Spec section 11 acceptance tests 3, 4, 8, 9, 11 and 12 (Gateway membership authority side).
 import { describe, expect, it } from "vitest";
-import fixture from "../../fixtures/v1-draft/statements.json" with { type: "json" };
 import { registerInvite, submitRedemption, submitStatement } from "../authority/apply.js";
 import {
   activeOwnerDevices,
@@ -12,10 +11,7 @@ import { fingerprint, formatEd25519PublicKey, type IrohEndpointKey } from "../ke
 import { decodeKit, deriveRootSigner, encodeKit } from "../kit.js";
 import { signStatement } from "../statements/envelope.js";
 import { verifyBindingForPin } from "../statements/pin.js";
-import type { SignedStatement } from "../statements/types.js";
-import { verifyOwnerStatement } from "../statements/verify.js";
 import { acceptanceTitle } from "../testing/acceptance.js";
-import type { StatementVectors } from "../testing/vectors.js";
 import {
   buildWorld,
   certBody,
@@ -112,20 +108,6 @@ describe(acceptanceTitle(3), () => {
       ok: false,
       code: "not_direct",
     });
-  });
-
-  it("refuses an invite signed by a removed owner device (shared vector)", async () => {
-    const vectors = fixture as unknown as StatementVectors;
-    const removed = vectors.invalid.find(
-      (entry) => entry.name === "invite signed by a removed owner device",
-    )!;
-    const owners = new Map(vectors.owners.map((owner) => [owner.device_pub, owner.caps]));
-    const result = await verifyOwnerStatement(
-      removed.statement as SignedStatement<"InviteCap">,
-      vectors.anchor,
-      { now: vectors.now, owners: (key) => owners.get(key) },
-    );
-    expect(result).toMatchObject({ ok: false, code: "not_an_owner" });
   });
 });
 

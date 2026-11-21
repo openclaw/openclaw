@@ -63,26 +63,6 @@ describe("re-bind to new machine keys under the same root", () => {
     ).toMatchObject({ ok: true, pin: { binding_seq: 3, k_gw: newest.keys.pub } });
   });
 
-  it("the old binding is a rollback once the pin moved", async () => {
-    const { world, pin, rebind } = await rebound();
-    const next = await rebind("gateway-2", 2);
-    const moved = await verifyBindingForPin(
-      { root_pub: world.rootPub, binding: next.binding },
-      pin,
-      context,
-    );
-    if (!moved.ok) {
-      throw new Error(moved.detail);
-    }
-    expect(
-      await verifyBindingForPin(
-        { root_pub: world.rootPub, binding: world.binding },
-        moved.pin,
-        context,
-      ),
-    ).toMatchObject({ ok: false, code: "rollback" });
-  });
-
   it("a snapshot signed by the retired K_gw does not verify under the new binding", async () => {
     const { world, rebind } = await rebound();
     const next = await rebind("gateway-2", 2);

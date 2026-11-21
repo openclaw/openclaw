@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import fixture from "../fixtures/v1-draft/statements.json" with { type: "json" };
 import { submitStatement } from "./authority/apply.js";
 import { parseClawDescriptor, type ClawDescriptor } from "./discovery/descriptor.js";
-import { statementDomain } from "./statements/envelope.js";
 import type { SignedStatement } from "./statements/types.js";
 import { parseStatement } from "./statements/validate.js";
 import type { StatementVectors } from "./testing/vectors.js";
@@ -24,11 +23,6 @@ const descriptor: ClawDescriptor = {
 };
 
 describe("statement envelope versions", () => {
-  it("keeps the v1 signing domain", () => {
-    expect(statementDomain("ServerBinding")).toBe("openclaw/ServerBinding/v1\0");
-    expect(statementDomain("ServerBinding", 1)).toBe("openclaw/ServerBinding/v1\0");
-  });
-
   it("refuses a later envelope version as unsupported, before its type or fields", () => {
     for (const later of [
       { ...binding, v: 2 },

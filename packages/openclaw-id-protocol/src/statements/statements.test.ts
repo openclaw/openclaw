@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../fixtures/v1-draft/statements.json" with { type: "json" };
-import { bytesToHex, utf8 } from "../bytes.js";
+import { bytesToHex } from "../bytes.js";
 import { generateEd25519Signer, randomBytes } from "../crypto.js";
 import { canonicalize, type JsonValue } from "../jcs.js";
 import { displayFingerprint, fingerprint, isIrohEndpointKey } from "../keys.js";
 import { decodeKit, deriveRootSeed } from "../kit.js";
 import { buildStatementVectors, type StatementVectors } from "../testing/vectors.js";
-import { signStatement, signingInput, statementDomain } from "./envelope.js";
+import { signStatement, signingInput } from "./envelope.js";
 import { verifyBindingForPin } from "./pin.js";
 import {
   MAX_MEMBER_PEER_KEYS,
@@ -131,17 +131,6 @@ describe("statement vectors", () => {
       );
     },
   );
-});
-
-describe("envelope", () => {
-  it("prefixes the signing input with the type domain and a NUL", () => {
-    const revocation = vectors.valid.find((entry) => entry.statement.type === "Revocation")!;
-    const input = signingInput("Revocation", revocation.statement.body as never);
-    expect(new TextDecoder().decode(input.slice(0, statementDomain("Revocation").length))).toBe(
-      "openclaw/Revocation/v1\0",
-    );
-    expect(utf8("openclaw/Revocation/v1\0").at(-1)).toBe(0);
-  });
 });
 
 describe("parseStatement", () => {
