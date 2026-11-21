@@ -401,6 +401,27 @@ it("builds context once and advances observer note deltas across asks", async ()
   expectHistory(secondHistory[0], "second note", "third note");
 });
 
+it("returns and restores every link in a long side answer", async () => {
+  const links = Array.from(
+    { length: 28 },
+    (_, i) => "https://github.com/example/project/pull/" + (100000 + i),
+  ).join("\n");
+  expect(links.length).toBeGreaterThan(1200);
+  const harness = createHarness({ run: async () => links });
+  await expectAnswer(harness.ask("All the links?"), links);
+  expectSaved(harness.service, "All the links?", links);
+});
+
+it("marks an oversized answer without keeping part of the next URL", async () => {
+  const first = "🦞".repeat(12_000);
+  const harness = createHarness({
+    run: async () => first + "\nhttps://example.test/" + "x".repeat(2000),
+  });
+  const { answer: shortened } = await harness.ask("All links?");
+  expect(shortened).toBe(first + "\n\nSide chat shortened this answer. Ask for a smaller section.");
+  expectSaved(harness.service, "All links?", shortened);
+});
+
 it("caps replay by exchange count and UTF-8 bytes", () => {
   const exchanges = Array.from({ length: 30 }, (_, index) => ({
     question: `${index}:${"🦞".repeat(400)}`,
