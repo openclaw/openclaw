@@ -127,6 +127,7 @@ export async function startOrResumeThread(
       restrictedToolSurfaceInheritedMcpServerNames,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
+      webSearchUninformedThreadConfigFingerprint,
     } = preflight;
     let retainBackgroundPredecessor = false;
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
@@ -482,10 +483,26 @@ export async function startOrResumeThread(
       params.nativeCodeModeEnabled === false &&
       binding?.webSearchThreadConfigFingerprint === undefined &&
       !persistentWebSearchRestriction;
+    // A binding created while the capability probe ran on a cold app-server
+    // carries the uninformed plan (support silence), not an operator policy
+    // choice. When the probe later resolves with a definitive verdict, adopt
+    // the informed fingerprint on the existing thread instead of replacing it:
+    // a replacement re-sends the full selected history. The stored fingerprint
+    // alone cannot prove that: an explicit search denial produces the same
+    // disabled shape, so settlement also requires the recorded request fact.
+    // Legacy bindings without it, and genuine policy edits (requested=false
+    // then re-enabled), still rotate below.
+    const coldWebSearchSupportSettled =
+      Boolean(binding?.threadId) &&
+      Boolean(webSearchBindingChanged) &&
+      binding?.webSearchRequested === true &&
+      binding?.webSearchThreadConfigFingerprint === webSearchUninformedThreadConfigFingerprint &&
+      webSearchThreadConfigFingerprint !== webSearchUninformedThreadConfigFingerprint;
     if (
       binding?.threadId &&
       webSearchBindingChanged &&
-      !deferLegacyWebSearchRotationToTransientNativeSurface
+      !deferLegacyWebSearchRotationToTransientNativeSurface &&
+      !coldWebSearchSupportSettled
     ) {
       assertReplacementAllowed("changing web-search configuration");
       if (!ringZeroActive && transientWebSearchRestriction) {

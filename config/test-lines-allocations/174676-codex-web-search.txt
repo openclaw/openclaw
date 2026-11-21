@@ -1,0 +1,4 @@
+63
+# Codex web-search thread lifecycle (issue #174676): cold capability verdicts adopt the informed
+# fingerprint instead of rotating, explicit search-policy edits still rotate, and the binding
+# records whether search was requested. Exact net test-line growth for this change.
