@@ -600,7 +600,10 @@ imports outside that retained generation continue using the active installation.
 The retained inventory preserves the running updater's Windows short-path
 spelling so its late imports keep their original module identity after package
 replacement. This requires the installed updater to contain the repair; a newer
-candidate cannot change an older updater that is already running.
+candidate cannot change an older updater that is already running. Targets also
+ship recorded compatibility entrypoints for published updaters, including
+`2026.11.6`, so their late imports can resolve after activation when an older
+retained-import map misses a Windows short-path identity.
 
 Source updates qualify the installed pnpm launcher outside the checkout so even
 its version probe cannot rewrite the checkout's lockfile. If another version is

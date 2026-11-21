@@ -40,33 +40,41 @@ export function runWithOpenClawStateLeaseWorker() { return "current lease owner"
   expect(legacy.runWithOpenClawStateLeaseWorker()).toBe("current lease owner");
 });
 
-it("bridges the published 2026.9.36 deferred-migration import after package replacement", async () => {
-  const release = previousReleaseInventory.releases.find(({ version }) => version === "2026.9.36");
-  const chunk = release?.chunks.find(
-    ({ path: file }) => file === "openclaw-state-worker-store-BZtiP8dt.mjs",
-  );
-  expect(
-    chunk,
-    "the shipped updater imports this old hash after activating its target",
-  ).toBeDefined();
-  if (!chunk) {
-    throw new Error("Missing published 2026.9.36 state-worker compatibility chunk");
-  }
-  expect(chunk.imports).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ owner: "src/infra/deferred-plugin-migrations.ts" }),
-    ]),
-  );
-  const root = createTempDir("update-compat-extended-stable-");
-  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-  writeUpdateCompatibilityBuildFixture(root);
-  writeUpdateCompatibilityChunks({
-    distDir: path.join(root, "dist"),
-    sourceDir: root,
-    inventory: previousReleaseInventory,
-  });
-  const legacy = await import(pathToFileURL(path.join(root, "dist", chunk.path)).href);
-  for (const { exported, origin } of chunk.exports) {
-    expect(legacy[exported]()).toBe(origin.symbol);
-  }
-});
+it.each([
+  [
+    "2026.9.36",
+    "openclaw-state-worker-store-BZtiP8dt.mjs",
+    "src/infra/deferred-plugin-migrations.ts",
+  ],
+  [
+    "2026.11.6",
+    "update-candidate-state-By8_Y4cM.mjs",
+    "src/cli/update-cli/update-command-database-receipts.ts",
+  ],
+])(
+  "bridges the published %s late import after package replacement",
+  async (version, file, owner) => {
+    const release = previousReleaseInventory.releases.find((entry) => entry.version === version);
+    const chunk = release?.chunks.find((entry) => entry.path === file);
+    expect(
+      chunk,
+      "the shipped updater imports this old hash after activating its target",
+    ).toBeDefined();
+    if (!chunk) {
+      throw new Error(`Missing published ${version} compatibility chunk ${file}`);
+    }
+    expect(chunk.imports).toEqual(expect.arrayContaining([expect.objectContaining({ owner })]));
+    const root = createTempDir("update-compat-extended-stable-");
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    writeUpdateCompatibilityBuildFixture(root);
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory: previousReleaseInventory,
+    });
+    const legacy = await import(pathToFileURL(path.join(root, "dist", chunk.path)).href);
+    for (const { exported, origin } of chunk.exports) {
+      expect(legacy[exported]()).toBe(origin.symbol);
+    }
+  },
+);
