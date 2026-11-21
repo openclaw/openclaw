@@ -153,6 +153,23 @@ describe("provider profiles", () => {
     ]);
   });
 
+  it("lets discovered reasoning supply efforts when the configured row omits reasoning (#203150)", () => {
+    mocks.profile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+    // No `reasoning` and no `configuredReasoning`: a materialized sparse row
+    // (see applyModelDefaults) must not read as an opt-out, so the runtime
+    // entry's discovered reasoning supplies the native efforts.
+    const params = thinkingModel({});
+    params.catalog.push({ provider: "demo-cli", id: "demo-model", reasoning: true });
+    expect(listThinkingLevels(params.provider, params.model, params.catalog, "demo-cli")).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
   it("preserves known-empty efforts while offering only host Ultra", () => {
     mocks.profile.mockReturnValue({ levels: [], defaultLevel: null });
     const params = {
