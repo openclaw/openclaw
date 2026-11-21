@@ -428,6 +428,7 @@ export async function sendProfileWebPush(
   const { category, agentId } = params;
   const tag = `openclaw-send-${params.tag ?? randomUUID()}`;
   const results = await withCurrentWebPushAuthority({ getRuntimeConfig }, (authority) => {
+    // A retried preparation sees a fresher snapshot; only its final pass counts.
     counts.skipped = 0;
     const recipientProfileId = authority.profile?.readCurrentIdentity(params.profileId)?.profileId;
     if (!recipientProfileId) {
