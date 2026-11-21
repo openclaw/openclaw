@@ -44,9 +44,7 @@ async function makeWorkspace(files: Record<string, string>) {
 const cacheRoots = [
   ...["_cacache", "_logs"].map((name) => `.npm/${name}`),
   ...["pip", "uv", "bun-transpiler", "vitest"].map((name) => `.cache/${name}`),
-  ".cache/openclaw/bun",
-  ".cache/ms-playwright",
-  ".cache/convex/binaries",
+  ...["openclaw/bun", "ms-playwright", "convex/binaries"].map((name) => `.cache/${name}`),
   ".pnpm-store",
   ".bun/install/cache",
   ...["registry", "git"].map((name) => `.cargo/${name}`),
@@ -62,6 +60,7 @@ const cacheRoots = [
 const generatedPaths = [
   ...cacheRoots.map((root) => `${root}/cache.bin`),
   ...["intermediates/x", "outputs/apk/x.apk", "outputs/bundle/x.aab"].map((p) => `m/build/${p}`),
+  ...["bin/Debug", "bin/Release", "obj/Debug", "obj/Release"].map((p) => `m/${p}/x`),
   ".artifacts/vitest-shard-timings.json",
 ];
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
@@ -81,6 +80,7 @@ const userFiles = {
   ".cargo/config.toml": "user configuration\n",
   ".gradle/gradle.properties": "user configuration\n",
   "m/build/reports/summary.txt": "user report\n",
+  "m/bin/tool.sh": "user script\n",
   ...Object.fromEntries(
     cacheRoots.flatMap((root) => [
       [`${root}-notes`, "user notes\n"],

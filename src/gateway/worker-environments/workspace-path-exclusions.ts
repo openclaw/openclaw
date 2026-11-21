@@ -11,7 +11,20 @@ const AGP_BUILD_OUTPUT_SEGMENTS = [
   "build/outputs/apk",
   "build/outputs/bundle",
 ] as const;
-export type LegacyDerivedEligibilitySubset = readonly ("agp" | "pnpm")[];
+const DOTNET_BUILD_OUTPUT_SEGMENTS = [
+  "bin/Debug",
+  "bin/Release",
+  "obj/Debug",
+  "obj/Release",
+] as const;
+export type LegacyDerivedEligibilitySubset = readonly ("agp" | "pnpm" | "dotnet")[];
+// Three independent families bound this repair-only search to 8 eligibility candidates.
+export const LEGACY_DERIVED_ELIGIBILITY_SUBSETS = (["pnpm", "agp", "dotnet"] as const)
+  .reduce<LegacyDerivedEligibilitySubset[]>(
+    (subsets, family) => subsets.concat(subsets.map((subset) => [...subset, family])),
+    [[]],
+  )
+  .toSorted((left, right) => left.length - right.length);
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "__pycache__",
   ".pytest_cache",
@@ -19,6 +32,7 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   ".ruff_cache",
   "node_modules",
   ...AGP_BUILD_OUTPUT_SEGMENTS,
+  ...DOTNET_BUILD_OUTPUT_SEGMENTS,
 ] as const;
 
 // These producers own exact checkout-relative roots, not every .cache or .artifacts path.
@@ -87,10 +101,12 @@ export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
 
 // Match a whole segment without splitting each inventory path. The negative
 // class ends at a slash or the actual end, unlike "$" before a final newline.
-function derivedWorkspaceSegmentPattern(includeLegacyAgp: boolean) {
+function derivedWorkspaceSegmentPattern(includeLegacyAgp: boolean, includeLegacyDotnet: boolean) {
   return `(?:^|/)(?:${[
     ...DERIVED_WORKSPACE_DIRECTORY_NAMES.filter(
-      (name) => !includeLegacyAgp || !AGP_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name),
+      (name) =>
+        (!includeLegacyAgp || !AGP_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name)) &&
+        (!includeLegacyDotnet || !DOTNET_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name)),
     ).map((name) => name.replaceAll(".", "\\.")),
     ...DERIVED_WORKSPACE_FILE_NAMES.map((name) => name.replaceAll(".", "\\.")),
     ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
@@ -138,8 +154,11 @@ function buildCacheInputPaths(paths = []) {
   return retained;
 }
 const RUNTIME_WORKSPACE_ROOT_PATHS = ${JSON.stringify(RUNTIME_WORKSPACE_ROOT_PATHS)};
-const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(${JSON.stringify(derivedWorkspaceSegmentPattern(false))});
-const LEGACY_DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(${JSON.stringify(derivedWorkspaceSegmentPattern(true))});
+const DERIVED_WORKSPACE_SEGMENT_RES = ${JSON.stringify(
+  [false, true].flatMap((agp) =>
+    [false, true].map((dotnet) => derivedWorkspaceSegmentPattern(agp, dotnet)),
+  ),
+)}.map((pattern) => new RegExp(pattern));
 function isRuntimeOwnedWorkspacePath(relativePath) {
   return relativePath === ".git" || relativePath.startsWith(".git/") ||
     relativePath.endsWith("/.git") || relativePath.includes("/.git/") ||
@@ -161,7 +180,9 @@ function isDerivedWorkspacePath(relativePath, retainedInput, excludeBuildCaches,
   )) {
     return true;
   }
-  return (legacyDerivedEligibilitySubset?.includes("agp") ? LEGACY_DERIVED_WORKSPACE_SEGMENT_RE : DERIVED_WORKSPACE_SEGMENT_RE).test(relativePath);
+  const legacySegments = (legacyDerivedEligibilitySubset?.includes("agp") ? 2 : 0) +
+    (legacyDerivedEligibilitySubset?.includes("dotnet") ? 1 : 0);
+  return DERIVED_WORKSPACE_SEGMENT_RES[legacySegments].test(relativePath);
 }
 function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();

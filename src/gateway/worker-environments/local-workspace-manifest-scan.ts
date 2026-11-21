@@ -55,9 +55,8 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   buildCacheInputPaths,
   isIgnoredWorkspaceBuildOutput,
+  LEGACY_DERIVED_ELIGIBILITY_SUBSETS,
 } from "./workspace-path-exclusions.js";
-
-const LEGACY_DERIVED_ELIGIBILITY_SUBSETS = [[], ["agp"], ["pnpm"], ["pnpm", "agp"]] as const;
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
 export function readLocalWorkspaceManifestRows(
