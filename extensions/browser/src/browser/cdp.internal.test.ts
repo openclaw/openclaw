@@ -51,6 +51,8 @@ it.each<[CaptureOptions, Record<string, unknown>, boolean]>([
   expect(socket).toHaveBeenCalledWith(wsUrl, expect.any(Function), {
     commandTimeoutMs: 12_345,
     lookup: undefined,
+    abortScope: "operation",
+    signal: undefined,
   });
   expect(messages.map(({ method }) => method)).toEqual([
     "Page.enable",
