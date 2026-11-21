@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor removes empty snapshot directories left by cancellation between
+private directory creation and native-token acquisition, after its inspection
+workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
+remain retained. The candidate must contain this repair; installed updaters need
+no schema or protocol change.
+
 Git release conversion leaves the serving link unchanged until candidate checks
 and service ownership revalidation finish. At activation, the legacy
 `git-install/lib/node_modules/openclaw` link follows `git-install/openclaw`, so
