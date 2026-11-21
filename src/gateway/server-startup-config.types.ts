@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PreparedSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 
 export type RuntimeSecretsActivationParams = {
@@ -16,6 +17,8 @@ export type RuntimeSecretsActivationParams = {
   deferStatePublication?: boolean;
   /** SecretRefs that must not retain last-known-good values during this reload. */
   forceColdRefKeys?: ReadonlySet<string>;
+  /** Validated candidate metadata snapshot for this reload/activation lifecycle. */
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */

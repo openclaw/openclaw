@@ -161,6 +161,7 @@ export type GatewayReloadHandlerParams = {
     }) => { retire: () => void; rollback: () => Promise<void> };
     commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
+    pluginMetadataSnapshot?: import("../plugins/current-plugin-metadata-snapshot.js").PluginMetadataSnapshot;
     isAborted?: () => boolean;
     checkpoint?: () => Promise<void>;
     assertInvokerOwned?: () => void;

@@ -18,6 +18,7 @@ import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js"
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewayRestartPolicy } from "../infra/restart.js";
+import type { PluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
 import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -88,6 +89,7 @@ export function createGatewayReloadHandlers(
     plan: GatewayReloadPlan,
     preparedConfig: OpenClawConfig,
     publication?: GatewayHotReloadPublication,
+    pluginMetadataSnapshot?: PluginMetadataSnapshot,
   ): Promise<GatewayHotReloadApplication> => {
     let nextConfig = preparedConfig;
     publication?.assertInvokerOwned?.();
@@ -487,6 +489,7 @@ export function createGatewayReloadHandlers(
           prepareConfigEffects,
           commitRuntime,
           env: candidateEnv,
+          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           isAborted: isPluginReloadAborted,
           checkpoint: publication?.checkpoint,
           assertInvokerOwned: publication?.assertInvokerOwned,
