@@ -19,8 +19,8 @@ import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const helperPath = ".github/actions/setup-node-env/seed-bun-from-image.mjs";
 const pins = {
-  "linux-x64": "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
-  "linux-x64-baseline": "e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76",
+  "linux-x64": "94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb",
+  "linux-x64-baseline": "dcb23a18a1c2fff12d57bcef696dbbb42eb67fde29f43816ecb595459a24c463",
 };
 type Variant = keyof typeof pins;
 type Step = { name: string; run?: string; if?: string };
@@ -64,7 +64,7 @@ fi`,
   echo fixture-npm
 else
   printf '%s\\n' "$*" >> "$FIXTURE_NPM_LOG"
-  [[ "$*" == "install -g bun@1.4.4" ]]
+  [[ "$*" == "install -g bun@1.4.5" ]]
   cp "$FIXTURE_FALLBACK" "$FIXTURE_NODE_BIN/bun"
 fi`,
   );
@@ -73,7 +73,7 @@ fi`,
   symlinkSync("bun", join(nodeBin, "bunx"));
   shell(join(root, "fallback-bun"), "echo npm-fallback-bun");
   const hashes = new Map<Variant, string>();
-  function archive(variant: Variant, version = "1.4.4", member = `bun-${variant}/bun`) {
+  function archive(variant: Variant, version = "1.4.5", member = `bun-${variant}/bun`) {
     // The consumer extracts authenticated bytes and assigns executable permissions.
     const bytes = makeStoredZip({
       [member]: `#!/bin/bash
@@ -86,7 +86,7 @@ else
 fi
 `,
     });
-    const path = join(image, `bun-v1.4.4-${variant}.zip`);
+    const path = join(image, `bun-v1.4.5-${variant}.zip`);
     writeFileSync(path, bytes);
     hashes.set(variant, createHash("sha256").update(bytes).digest("hex"));
     return path;
@@ -235,15 +235,15 @@ describe("Bun image archive consumer", () => {
     (kind) => {
       const f = fixture();
       const baseline: Variant = "linux-x64-baseline";
-      const archive = join(f.image, `bun-v1.4.4-${baseline}.zip`);
+      const archive = join(f.image, `bun-v1.4.5-${baseline}.zip`);
       if (kind === "layout") {
-        f.archive(baseline, "1.4.4", "unexpected/bun");
+        f.archive(baseline, "1.4.5", "unexpected/bun");
       } else if (kind === "directory" || kind === "symlink") {
         rmSync(archive);
         if (kind === "directory") {
           mkdirSync(archive);
         } else {
-          symlinkSync(join(f.image, "bun-v1.4.4-linux-x64.zip"), archive);
+          symlinkSync(join(f.image, "bun-v1.4.5-linux-x64.zip"), archive);
         }
       } else {
         writeFileSync(archive, "not an original Bun archive");
@@ -260,10 +260,10 @@ describe("Bun image archive consumer", () => {
 
   it("uses the unchanged pinned npm fallback only when the matching archive is missing", () => {
     const f = fixture();
-    rmSync(join(f.image, "bun-v1.4.4-linux-x64-baseline.zip"));
+    rmSync(join(f.image, "bun-v1.4.5-linux-x64-baseline.zip"));
     const { result } = f.runAction();
     expect(result.status, result.stderr).toBe(0);
-    expect(f.log(f.npmLog)).toBe("install -g bun@1.4.4");
+    expect(f.log(f.npmLog)).toBe("install -g bun@1.4.5");
     expect(result.stdout).toContain("npm-fallback-bun");
     expect(readdirSync(f.runnerTemp)).toEqual([]);
   });

@@ -438,7 +438,7 @@ runs:
           export PATH="$bun_bin:$PATH"
           echo "$bun_bin" >> "$GITHUB_PATH"
         else
-          npm install -g bun@1.4.4
+          npm install -g bun@1.4.5
         fi
 
     - name: Runtime versions
