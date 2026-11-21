@@ -513,6 +513,10 @@ it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
     provision();
     const cfg = resolveSandboxConfigForAgent();
     cfg.docker.workdir = tempDirs.make("sandbox-shell-workspace-");
+    mocks.execContainerRaw.mockImplementationOnce(async (_engine, args) => {
+      const resolved = spawnSync("/bin/sh", ["-c", args[5]], { encoding: "buffer" });
+      return { code: resolved.status, stdout: resolved.stdout, stderr: resolved.stderr };
+    });
     const backend = await createDockerSandboxBackend(
       backendParams({
         cfg,
@@ -541,6 +545,7 @@ it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
       expect(child.status).toBe(0);
       const [toolPath, temporary] = child.stdout.trim().split("\n");
       expect(path.dirname(temporary!)).toBe(path.join(cfg.docker.workdir, ".openclaw/tmp"));
+      expect(staged.OPENCLAW_AGENT_GIT_TARGET).toMatch(/^\//);
       expect(staged.TMP).toBe(path.dirname(temporary!));
       expect(staged.TEMP).toBe(path.dirname(temporary!));
       expect(toolPath).toBe(

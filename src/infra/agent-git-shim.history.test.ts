@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AGENT_GIT_SHIM } from "./agent-git-shim.js";
+import { AGENT_GIT_SHIM, RESOLVE_AGENT_GIT } from "./agent-git-shim.js";
 
 async function withHistoryFixture(
   run: (fixture: Awaited<ReturnType<typeof historyFixture>>) => Promise<void>,
@@ -20,6 +20,9 @@ async function historyFixture(
 ) {
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
+      encoding: "utf8",
+    }).stdout.trim(),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_ALLOW_PROTOCOL: "file",
@@ -262,7 +265,7 @@ exec "$OPENCLAW_FIXTURE_GIT" "$@"
       );
       const failed = await reader();
       const failure = await failed.invoke(["log", "-p", "--", file], undefined, {
-        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        OPENCLAW_AGENT_GIT_TARGET: path.join(bin, "git"),
         OPENCLAW_FIXTURE_GIT: path.join(git(root, ["--exec-path"]).trim(), "git"),
         OPENCLAW_FIXTURE_FETCH_LOG: fetchLog,
       });

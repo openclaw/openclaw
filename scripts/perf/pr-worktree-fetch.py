@@ -14,6 +14,7 @@ not cumulative allocation. No network or production data is used.
 Use --restore to start shallow, explicitly unshallow, and compare pathspec-file
 restore with a negotiated commit fetch followed by lazy blob-only restore.
 Use --baseline-shim and --candidate-shim with exported AGENT_GIT_SHIM scripts
+and OPENCLAW_AGENT_GIT_TARGET set to the prepared native Git path
 to measure agent `git show <missing-commit>:path` in linked worktrees of the
 unshallowed shared clone. This also measures repeated present-commit reads
 (per-call wall/CPU and per-batch peak RSS). --reuse-fixture <prior-result-directory>

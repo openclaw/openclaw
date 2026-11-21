@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { AGENT_GIT_SHIM } from "../../src/infra/agent-git-shim.ts";
+import { AGENT_GIT_SHIM, RESOLVE_AGENT_GIT } from "../../src/infra/agent-git-shim.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -70,6 +70,9 @@ if (values["aa-only"] && values["ab-only"]) {
 const root = mkdtempSync(path.join(values["scratch-parent"], "agent-git-probes-"));
 const env: NodeJS.ProcessEnv = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+  OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
+    encoding: "utf8",
+  }).stdout.trim(),
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: os.platform() === "win32" ? "NUL" : "/dev/null",
   GIT_TERMINAL_PROMPT: "0",

@@ -8,7 +8,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { prepareLocalWorkspaceCheckout } from "../gateway/worker-environments/local-workspace-checkout.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AGENT_GIT_SHIM } from "./agent-git-shim.js";
+import { AGENT_GIT_SHIM, RESOLVE_AGENT_GIT } from "./agent-git-shim.js";
 import {
   createSourceCliFixture,
   withSourceCliParent,
@@ -45,6 +45,9 @@ it.skipIf(process.platform === "win32")(
         ...Object.fromEntries(
           Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
         ),
+        OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
+          encoding: "utf8",
+        }).stdout.trim(),
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_AUTHOR_NAME: "Fixture",
@@ -242,6 +245,9 @@ it.skipIf(process.platform === "win32")(
         ...Object.fromEntries(
           Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
         ),
+        OPENCLAW_AGENT_GIT_TARGET: spawnSync("/bin/sh", ["-c", RESOLVE_AGENT_GIT], {
+          encoding: "utf8",
+        }).stdout.trim(),
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_AUTHOR_NAME: "Fixture",

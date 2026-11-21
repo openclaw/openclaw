@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -199,3 +200,46 @@ it("renders a Windows PATH launcher for the running CLI", () =>
       '@echo off\r\nsetlocal DisableDelayedExpansion\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
     );
   }));
+
+it.skipIf(process.platform === "win32")(
+  "binds native Git past forwarding shims and refuses nested wrapper invocations",
+  () =>
+    withTempDir("agent-git-recursion-", async (root) => {
+      const fixture = await createSourceCliFixture(root);
+      const stateDir = path.join(root, "state");
+      const userBin = path.join(root, "user-bin");
+      const aliasBin = path.join(root, "alias-bin");
+      const trace = path.join(root, "shim-trace");
+      await fs.mkdir(userBin);
+      await fs.mkdir(aliasBin);
+      // The fallback bounds this regression even on the vulnerable implementation.
+      await fs.writeFile(
+        path.join(userBin, "git"),
+        `#!/bin/sh
+printf x >> ${quoteCliArg(trace)}
+if [ -n "$FIXTURE_GIT_ACTIVE" ]; then exec /usr/bin/git "$@"; fi
+export FIXTURE_GIT_ACTIVE=1
+git "$@"
+`,
+        { mode: 0o755 },
+      );
+      await fs.symlink(path.join(userBin, "git"), path.join(aliasBin, "git"));
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, PATH: `${aliasBin}:${userBin}:/usr/bin:/bin` },
+        () => withSourceCliParent(fixture, prepareGatewayAgentCliShim),
+      );
+      const shim = path.join(stateDir, "tmp", "agent-git", "git");
+      const env = { ...process.env, PATH: `${path.dirname(shim)}:${userBin}:/usr/bin:/bin` };
+      const version = spawnSync(shim, ["--version"], { env, encoding: "utf8" });
+      expect(version.status, version.stderr).toBe(0);
+      expect(version.stdout).toMatch(/^git version /);
+      await expect(fs.stat(trace)).rejects.toMatchObject({ code: "ENOENT" });
+      const nested = spawnSync(
+        shim,
+        ["-c", `alias.reenter=!${quoteCliArg(shim)} --version`, "reenter"],
+        { env, encoding: "utf8" },
+      );
+      expect(nested.status, nested.stderr).toBe(98);
+      expect(nested.stderr).toContain("recursive agent Git wrapper invocation refused");
+    }),
+);

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { AGENT_GIT_SANDBOX_BIN } from "../../infra/agent-git-shim.js";
+import { AGENT_GIT_SANDBOX_BIN, RESOLVE_AGENT_GIT } from "../../infra/agent-git-shim.js";
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
@@ -165,6 +165,9 @@ async function createContainerSandboxBackend(
           },
         );
       };
+      const gitTarget = gitBinDir
+        ? (await run({ script: RESOLVE_AGENT_GIT }, assertCurrent)).stdout.toString().trim()
+        : undefined;
       const handle: SandboxBackendHandle = {
         id: boundEngine.id,
         runtimeId: containerName,
@@ -201,6 +204,9 @@ async function createContainerSandboxBackend(
           const prependPath = [gitBinDir, requestedPath].filter(Boolean).join(":");
           if (prependPath) {
             containerEnv.OPENCLAW_PREPEND_PATH = prependPath;
+          }
+          if (gitTarget !== undefined) {
+            containerEnv.OPENCLAW_AGENT_GIT_TARGET = gitTarget;
           }
           const envFile = await createContainerEnvFile(containerEnv);
           try {
@@ -390,7 +396,13 @@ async function createContainerSandboxBackend(
               cfg: { ...allocation.cfg, image: resolvedImageId },
               engine: boundEngine,
               name: input.name,
-              command: input.command,
+              command:
+                gitTarget === undefined
+                  ? input.command
+                  : {
+                      ...input.command,
+                      env: { ...input.command.env, OPENCLAW_AGENT_GIT_TARGET: gitTarget },
+                    },
               labels: input.labels,
               assertCurrent: assertAllocationCurrent,
             });
