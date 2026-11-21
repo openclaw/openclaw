@@ -86,6 +86,7 @@ export type SessionActorMemoryReportsWrites = {
       expected: SessionMessageRewriteSnapshot;
       message: unknown;
       returnUnchanged?: boolean;
+      assistantMetadataOnly?: boolean;
     };
     output: SessionMessageRewriteCommitted;
   };

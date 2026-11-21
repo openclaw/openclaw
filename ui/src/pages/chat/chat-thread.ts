@@ -29,11 +29,12 @@ import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-t
 import type { ChatItemsFacts } from "./chat-thread-facts.ts";
 import { sameChatItemsStructuralInput, sameEntries } from "./chat-thread-input-match.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
-import { sanitizeStreamText } from "./chat-thread-items.ts";
+import { sanitizeStreamText, savedCliStreamTexts } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
 import { carryMovedDisclosures } from "./chat-tool-activity-coalesce.ts";
 import { activityDisclosureCalls } from "./components/chat-activity-projection.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
+import { resolveAssistantTextTail } from "./stream-causal-boundary.ts";
 
 type CachedChatItems = {
   generation: number;
@@ -44,7 +45,7 @@ type CachedChatItems = {
     /** Before first text, the builder's seed occupies the indicator's insertion slot. */
     onset?: Extract<ChatItem, { kind: "stream" }>;
     identity: string;
-    prefix: string | null;
+    savedCliTexts: Array<string | null>;
     ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
   } | null;
   /** Facts of the history behind items. */
@@ -344,8 +345,15 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   ) {
     return false;
   }
+  const stream = sanitizeStreamText(input.stream ?? "");
   const text = stripOwnedCanvasShortcodes(
-    trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix),
+    resolveAssistantTextTail(
+      live.savedCliTexts,
+      trimAccumulatedStreamPrefix(
+        stream,
+        accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+      ),
+    ) ?? "",
     item.runId,
     live.ownedCanvas,
   );
@@ -474,6 +482,7 @@ export function buildCachedChatItems(
   const liveStreamIndex = onset
     ? items.findIndex((item) => item.kind === "reading-indicator" && item.key === onset.key)
     : findLiveStreamIndex(items);
+  const savedCliTexts = liveStreamIndex < 0 ? [] : savedCliStreamTexts(input.messages, input.runId);
   cached.liveStream =
     liveStreamIndex < 0
       ? null
@@ -481,7 +490,7 @@ export function buildCachedChatItems(
           index: liveStreamIndex,
           onset,
           identity: liveStreamIdentity(input),
-          prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+          savedCliTexts,
           ownedCanvas: collectOwnedCanvasPreviews(items),
         };
   return items;

@@ -2,6 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createSessionEventState } from "./chat-state.test-support.ts";
+import {
+  visibleAssistantStreamParts,
+  visibleCurrentAssistantStreamTail,
+} from "./stream-reconciliation.ts";
 
 function emitGatewayEvent(state: ChatPageHost, event: "session.message", payload: unknown) {
   handlePageGatewayEvent(state, { type: "event", event, payload });
@@ -184,4 +188,69 @@ it.each([
   expect(state.chatRunId).toBeNull();
   expect(state.chatStream).toBe("Unowned stream remains untouched.");
   expect(state.chatStreamStartedAt).toBe(100);
+});
+
+it("replaces indexed CLI narration on live persistence without losing its cumulative baseline", () => {
+  const { state } = createSessionEventState({
+    chatRunId: "current-run",
+    chatStream: "Narration. Continuing.",
+    chatStreamStartedAt: 100,
+    chatStreamSegments: [{ text: "Narration.", ts: 90, runId: "current-run" }],
+  });
+  const message = {
+    role: "assistant",
+    api: "cli",
+    content: [{ type: "text", text: "Narration." }],
+    __openclaw: {
+      id: "saved-narration",
+      seq: 2,
+      runId: "current-run",
+      idempotencyKey: "cli-assistant:current-run:seg:native:snapshot",
+    },
+  };
+  emitGatewayEvent(state, "session.message", {
+    sessionKey: state.sessionKey,
+    hasActiveRun: true,
+    messageId: "saved-narration",
+    messageSeq: 2,
+    message,
+  });
+  expect(state.chatMessages).toEqual([message]);
+  expect(
+    visibleAssistantStreamParts(state, { includeCurrent: false, isHiddenStreamText: () => false }),
+  ).toEqual([]);
+  expect(state.chatStreamSegments).toEqual([
+    { text: "Narration.", ts: 90, runId: "current-run", persisted: true },
+  ]);
+  expect(visibleCurrentAssistantStreamTail(state, () => false)).toBe("Continuing.");
+});
+
+it.each([
+  { text: "Narration.", runId: "sibling-run" },
+  { text: "Narration.", runId: "current-run", itemId: "independent-item" },
+  { text: "Narration. Continuing.", runId: "current-run" },
+  { text: "Unrelated.", runId: "current-run" },
+  { text: "   ", runId: "current-run" },
+])("keeps uncovered or independently owned CLI segments: %j", (segment) => {
+  const original = { ...segment, ts: 90 };
+  const { state } = createSessionEventState({
+    chatRunId: "current-run",
+    chatStreamSegments: [original],
+  });
+  emitGatewayEvent(state, "session.message", {
+    sessionKey: state.sessionKey,
+    hasActiveRun: true,
+    message: {
+      role: "assistant",
+      api: "cli",
+      content: [{ type: "text", text: "Narration." }],
+      __openclaw: {
+        id: "saved-narration",
+        seq: 2,
+        runId: "current-run",
+        idempotencyKey: "cli-assistant:current-run:seg:native:snapshot",
+      },
+    },
+  });
+  expect(state.chatStreamSegments).toEqual([original]);
 });

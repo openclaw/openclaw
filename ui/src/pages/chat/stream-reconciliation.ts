@@ -17,6 +17,7 @@ import {
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { savedCliStreamTexts } from "./chat-thread-items.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
   lastUserMessageIndex,
@@ -164,10 +165,7 @@ export function visibleAssistantStreamParts(
     }
   }
   if (opts.includeCurrent !== false && typeof state.chatStream === "string") {
-    const visible = visibleAssistantStreamText(
-      trimAccumulatedStreamPrefix(state.chatStream, previousText),
-      opts.isHiddenStreamText,
-    );
+    const visible = visibleCurrentAssistantStreamTail(state, opts.isHiddenStreamText, previousText);
     if (visible) {
       parts.push({
         text: visible,
@@ -184,14 +182,14 @@ export function visibleAssistantStreamParts(
 export function visibleCurrentAssistantStreamTail(
   state: StreamReconciliationState,
   isHiddenStreamText: StreamVisibility,
+  previousText = accumulatedStreamText(state.chatStreamSegments),
 ): string | null {
   if (typeof state.chatStream !== "string") {
     return null;
   }
-  const segments = state.chatStreamSegments;
-  const previousText = accumulatedStreamText(segments);
+  const current = trimAccumulatedStreamPrefix(state.chatStream, previousText);
   return visibleAssistantStreamText(
-    trimAccumulatedStreamPrefix(state.chatStream, previousText),
+    resolveAssistantTextTail(savedCliStreamTexts(state.chatMessages, state.chatRunId), current),
     isHiddenStreamText,
   );
 }

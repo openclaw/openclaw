@@ -13,6 +13,66 @@ export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
 });
 
+/** Own chunk framing and turn budgets together, including the unterminated final line. */
+export function createCliJsonlStreamInput(params: {
+  claudeStreamJson: boolean;
+  onLine: (line: string) => void;
+  hasError: () => boolean;
+  onError: (error: string) => void;
+}) {
+  const buffer = { pending: "" };
+  const limits = CLI_STREAM_JSON_OUTPUT_LIMITS;
+  let rawChars = 0;
+  let countedClaudeFrames = 0;
+  let rawLines = 0;
+  const reject = (kind: "raw" | "line" | "lines", limit: number) => {
+    params.onError(streamJsonOutputLimitErrorText(kind, limit));
+    buffer.pending = "";
+    return false;
+  };
+  return {
+    buffer,
+    get rawLines() {
+      return rawLines;
+    },
+    countLine() {
+      rawLines += 1;
+      return (
+        params.claudeStreamJson ||
+        rawLines <= limits.maxTurnLines ||
+        reject("lines", limits.maxTurnLines)
+      );
+    },
+    accountClaudeLine: (lineChars: number, countsFrame = false) => {
+      if (countsFrame && ++countedClaudeFrames > limits.maxTurnLines) {
+        return reject("lines", limits.maxTurnLines);
+      }
+      rawChars += lineChars + 1;
+      return rawChars <= limits.maxTurnRawChars || reject("raw", limits.maxTurnRawChars);
+    },
+    push: (chunk: string) => {
+      if (!chunk || params.hasError()) {
+        return;
+      }
+      if (!params.claudeStreamJson) {
+        rawChars += chunk.length;
+        if (rawChars > limits.maxTurnRawChars) {
+          reject("raw", limits.maxTurnRawChars);
+          return;
+        }
+      }
+      if (
+        !frameBoundedCliJsonlChunk(buffer, chunk, (line) => {
+          params.onLine(line);
+          return !params.hasError();
+        })
+      ) {
+        reject("line", limits.maxPendingLineChars);
+      }
+    },
+  };
+}
+
 // Claude Code attaches `api_message_id` to every stream event frame and the
 // `thinking_display` display setting to thinking frames. The parser reads
 // neither; both stay bounded, and `thinking_display` only on thinking deltas.
