@@ -196,11 +196,12 @@ export async function executePreparedReplyRun(
     },
     entry: preparedSessionState.sessionEntry,
   });
+  const ingressProvider = ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider;
   const messageProvider = resolveOriginMessageProvider({
     originatingChannel: replyRoute.channel,
     // Prefer Provider over Surface for fallback channel identity.
     // Surface can carry relayed metadata while Provider owns reply routing.
-    provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
+    provider: ingressProvider,
   });
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const freshChannelCronAuthorityTurn = isFreshChannelCronAuthorityTurn({
@@ -420,6 +421,12 @@ export async function executePreparedReplyRun(
       accountId: ctx.AccountId ?? sessionCtx.AccountId,
     });
   }
+  const replyThreadingOverride =
+    isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
+      ? { ...sessionCtx.ReplyThreading, implicitCurrentMessage: "deny" as const }
+      : undefined;
+
+  const groupRoundMessageId = groupTurn && groupTurn.round > 1 ? groupTurn.messageId : undefined;
   const followupRun = {
     createChannelCronAuthority,
     prompt: queuedBody,
@@ -427,7 +434,7 @@ export async function executePreparedReplyRun(
     sourceTurnId: resolveReplySourceTurnId({
       sourceTurnId,
       admissionRunId: sourceMessageId,
-      ingressProvider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
+      ingressProvider,
     }),
     personalBootstrapEligible,
     operatorAuthority: opts?.operatorAuthority,
@@ -465,10 +472,9 @@ export async function executePreparedReplyRun(
             : { kind: "drop" as const, reason: "source-unavailable" as const },
         }
       : {}),
-    messageId:
-      groupTurn && groupTurn.round > 1
-        ? groupTurn.messageId
-        : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid),
+    messageId: groupRoundMessageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    // The coordinator assigns its own message IDs for later rounds.
+    messageIdChannel: groupRoundMessageId ? null : (ingressProvider ?? null),
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
@@ -483,6 +489,7 @@ export async function executePreparedReplyRun(
     originatingAccountId: replyRoute.accountId,
     originatingThreadId: replyRoute.threadId ?? originatingThreadId,
     originatingReplyToId: promptSessionCtx.ReplyToId,
+    originatingReplyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
     originatingReplyToMode:
       promptSessionCtx.ReplyToMode ??
       resolveReplyToMode(cfg, replyPolicyChannel, replyRoute.accountId, replyRoute.chatType),
@@ -666,11 +673,6 @@ export async function executePreparedReplyRun(
     });
     bindSourceReplyDeliveryRuntime(followupRun.run, sourceReplyDeliveryRuntime);
   }
-  const replyThreadingOverride =
-    isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
-      ? { ...sessionCtx.ReplyThreading, implicitCurrentMessage: "deny" as const }
-      : undefined;
-
   const createdCronCreatorAuthorityCapability = authorityRunId
     ? createChannelCronAuthority?.(authorityRunId)
     : undefined;

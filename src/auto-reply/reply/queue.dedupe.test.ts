@@ -163,6 +163,35 @@ describe("followup queue deduplication", () => {
     expect(enqueue("second", { originatingThreadId: "42" })).toBe(false);
   });
 
+  it("keeps different implicit reply policies separate when collecting the same target", async () => {
+    const enqueue = routeEnqueuer(key, {
+      originatingChannel: "telegram",
+      originatingTo: "123",
+      originatingThreadId: "42",
+    });
+    for (const policy of ["allow", "deny"] as const) {
+      expect(
+        enqueue(policy, {
+          messageId: undefined,
+          originatingReplyThreading: { implicitCurrentMessage: policy },
+        }),
+      ).toBe(true);
+    }
+    const settlements = getExistingFollowupQueue(key)?.entries.map(
+      (entry) => entry.settlement.promise,
+    );
+    expect(settlements).toHaveLength(2);
+    const { calls, runFollowup } = createDrainRecorder();
+    scheduleFollowupDrain(key, runFollowup);
+    await Promise.all(settlements ?? []);
+    expect(
+      calls.map((run) => [run.prompt, run.originatingReplyThreading?.implicitCurrentMessage]),
+    ).toEqual([
+      ["allow", "allow"],
+      ["deny", "deny"],
+    ]);
+  });
+
   it("deduplicates redelivery after reply policy changes", async () => {
     const queueKey = `test-dedup-policy-change-${Date.now()}`;
     const { calls, done, runFollowup } = createDrainRecorder();

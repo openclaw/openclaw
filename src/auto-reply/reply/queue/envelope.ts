@@ -23,6 +23,7 @@ type OriginRoutingMetadata = Pick<
   | "originatingChatId"
   | "originatingReplyToId"
   | "originatingReplyToMode"
+  | "originatingReplyThreading"
   | "originatingChatType"
 >;
 
@@ -38,6 +39,7 @@ export function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutin
         item.originatingChatId ||
         item.originatingReplyToId ||
         item.originatingReplyToMode ||
+        item.originatingReplyThreading ||
         item.originatingChatType,
     );
   if (!source) {

@@ -93,6 +93,41 @@ describe("resolveFollowupDeliveryPayloads", () => {
     },
   );
 
+  it("uses the first reply slot only for a delivered payload that accepts a reply", () => {
+    const delivered = resolve(
+      [
+        { mediaUrl: "https://example.test/already-sent.png" },
+        { text: "flat", replyToId: "" },
+        { text: "also flat", replyToCurrent: false },
+        { text: "queued answer" },
+        { text: "later answer" },
+      ],
+      {
+        currentMessageId: "11",
+        originatingChannel: "telegram",
+        originatingReplyToMode: "first",
+        sentMediaUrls: ["https://example.test/already-sent.png"],
+      },
+    );
+    expect(delivered.map(({ text, replyToId }) => [text, replyToId])).toEqual([
+      ["flat", ""],
+      ["also flat", undefined],
+      ["queued answer", "11"],
+      ["later answer", undefined],
+    ]);
+  });
+
+  it("keeps implicit replies off while honoring explicit inline reply directives", () => {
+    const delivered = resolve(
+      [{ text: "plain" }, { text: "[[reply_to_current]] tagged", replyToId: "" }],
+      { currentMessageId: "11", originatingChannel: "telegram", originatingReplyToMode: "off" },
+    );
+    expect(delivered.map(({ text, replyToId }) => [text, replyToId])).toEqual([
+      ["plain", undefined],
+      ["tagged", "11"],
+    ]);
+  });
+
   it("delivers distinct replies when originating channel resolves the provider", () => {
     expect(
       resolve([{ text: "hello world!" }], {

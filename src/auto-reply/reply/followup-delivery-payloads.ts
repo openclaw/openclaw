@@ -1,9 +1,10 @@
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setReplyPayloadMetadata, isRenderablePayload } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { applyReplyTagsToPayload } from "./reply-payloads-base.js";
@@ -25,6 +26,8 @@ export function resolveFollowupDeliveryPayloads(params: {
   originatingReplyToMode?: ReplyToMode;
   originatingTo?: string;
   originatingThreadId?: string | number;
+  currentMessageId?: string;
+  originatingReplyThreading?: ReplyThreadingPolicy;
   reasoningPayloadsEnabled?: boolean;
   commentaryPayloadsEnabled?: boolean;
   sentMediaUrls?: string[];
@@ -60,10 +63,25 @@ export function resolveFollowupDeliveryPayloads(params: {
       : (normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? []),
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
-  return sanitizedPayloads.flatMap((payload) =>
-    filterMessagingToolReplyPayload({
+  // Channels with a transport resolver use the origin message at send time.
+  const currentMessageId = params.currentMessageId;
+  const implicitReplyToId =
+    currentMessageId &&
+    replyMessageProvider &&
+    !getChannelPlugin(replyMessageProvider)?.threading?.resolveReplyTransport
+      ? currentMessageId
+      : undefined;
+  return sanitizedPayloads.flatMap((payload) => {
+    const threaded = applyReplyTagsToPayload({
+      payload,
+      replyToMode,
+      implicitReplyToId,
+      replyThreading: params.originatingReplyThreading,
+      currentMessageId,
+    });
+    return filterMessagingToolReplyPayload({
       payload: applyReplyToMode.preview(
-        setReplyPayloadMetadata(applyReplyTagsToPayload({ payload }), {
+        setReplyPayloadMetadata(threaded, {
           replyDelivery,
           ...(replyDeliverySource ? { replyDeliverySource } : {}),
         }),
@@ -79,6 +97,6 @@ export function resolveFollowupDeliveryPayloads(params: {
       onDeliveredTerminalDuplicate: params.onDeliveredTerminalDuplicate,
     })
       .filter(isRenderablePayload)
-      .map(applyReplyToMode),
-  );
+      .map(applyReplyToMode);
+  });
 }
