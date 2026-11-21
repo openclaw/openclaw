@@ -75,4 +75,26 @@ describe("withBundledPluginEnablementCompat", () => {
       })?.plugins?.allow,
     ).toEqual(["openai", "deepseek"]);
   });
+
+  it("matches allowlist and entry ids by normalized plugin id", () => {
+    const config = { plugins: { allow: ["Google"] } } satisfies OpenClawConfig;
+
+    const result = withBundledPluginEnablementCompat({
+      config,
+      pluginIds: ["google-gemini-cli", "GOOGLE"],
+      activation: "selected",
+    });
+
+    expect(result?.plugins?.entries).toEqual({ google: { enabled: true } });
+  });
+
+  it("keeps an existing entry stored under an alias", () => {
+    const config = {
+      plugins: { allow: ["google"], entries: { "google-gemini-cli": { enabled: false } } },
+    } satisfies OpenClawConfig;
+
+    expect(
+      withBundledPluginEnablementCompat({ config, pluginIds: ["google"], activation: "selected" }),
+    ).toBe(config);
+  });
 });
