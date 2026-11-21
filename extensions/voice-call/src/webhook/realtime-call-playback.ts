@@ -25,6 +25,8 @@ export function createRealtimeCallPlayback(params: {
   adapter: StreamFrameAdapter;
   harness: RealtimeVoiceSessionHarness;
   initialGreetingInstructions?: string;
+  isReading?: () => boolean | undefined;
+  onPlaybackReset?: () => void;
   /** True when the host, not the bridge's ready trigger, decides when the opening is spoken. */
   hostOwnsOpening: boolean;
   holdOpeningMaxMs?: number;
@@ -56,7 +58,10 @@ export function createRealtimeCallPlayback(params: {
   const audioPacer = new RealtimeAudioPacer({
     // Every pacer reset discards queued marks, so their stored provider
     // acknowledgements can never fire and must be retired with them.
-    onPlaybackReset: () => pendingMarkAcks.clear(),
+    onPlaybackReset: () => {
+      pendingMarkAcks.clear();
+      params.onPlaybackReset?.();
+    },
     // Model audio can arrive long before the callee hears it; host speech and the
     // speech-idle timer follow what is actually played out on the call.
     onAudioSent: (audio) => {
@@ -156,6 +161,7 @@ export function createRealtimeCallPlayback(params: {
     isOpen: () => !params.isClosed() && ws.readyState === WebSocket.OPEN,
     isBlocked: () => outboundGreeting.isBlocked() && !hostSpeech.isActive(),
     isOpening: () => Boolean(initialGreetingInstructions) && !outboundGreeting.isBlocked(),
+    isOpeningPending: params.isReading,
     onAudibleOutput: outboundGreeting.claim,
     pendingMarkAcks,
     providerCallId: callSid,
