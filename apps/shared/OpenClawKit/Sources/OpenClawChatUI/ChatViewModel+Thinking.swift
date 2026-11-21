@@ -224,7 +224,7 @@ extension OpenClawChatViewModel {
         let profile = OpenClawChatThinkingProfile.resolve(
             session: session, defaults: self.sessionDefaults, model: modelChoice)
         let options = profile?.levels ?? []
-        if modelChoice?.reasoning == false ||
+        if Self.reasoningOptOutForcesOff(modelChoice, options: options) ||
             (!options.isEmpty && options.allSatisfy { $0.id == "off" })
         {
             return "off"
@@ -247,7 +247,8 @@ extension OpenClawChatViewModel {
         let profile = OpenClawChatThinkingProfile.resolve(
             session: currentSession, defaults: self.sessionDefaults, model: modelChoice)
         let options = profile?.levels ?? []
-        showsThinkingPicker = options.contains { $0.id != "off" } && modelChoice?.reasoning != false
+        showsThinkingPicker = options.contains { $0.id != "off" } &&
+            !Self.reasoningOptOutForcesOff(modelChoice, options: options)
         let target = currentModelPatchTarget()
         let preferredLevel = self.prefersExplicitThinkingLevel
             ? self.preferredThinkingLevel
@@ -269,6 +270,16 @@ extension OpenClawChatViewModel {
             self.thinkingLevel = current
         }
         thinkingLevelOptions = options
+    }
+
+    /// A catalog `reasoning: false` row gates thinking to Off only when the Gateway's
+    /// thinking levels include Off. Runtimes with mandatory thinking (Claude CLI) keep
+    /// the opt-out on the row but advertise no Off level, and reject an Off override.
+    private static func reasoningOptOutForcesOff(
+        _ modelChoice: OpenClawChatModelChoice?,
+        options: [OpenClawChatThinkingLevelOption]) -> Bool
+    {
+        modelChoice?.reasoning == false && (options.isEmpty || options.contains { $0.id == "off" })
     }
 
     private func thinkingLevelWithoutGatewayMetadata(
