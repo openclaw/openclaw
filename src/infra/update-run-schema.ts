@@ -251,8 +251,6 @@ const UpdateRunGitActivationSchema = z.object({
   previousBuildId: z.string().min(1).max(96).nullable(),
 });
 
-export type UpdateRunGitActivation = z.infer<typeof UpdateRunGitActivationSchema>;
-
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,

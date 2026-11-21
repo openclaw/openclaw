@@ -27,6 +27,17 @@ import type { DB } from "./openclaw-state-db.generated.js";
 // Read-only clients need schema admission without loading updater publication policy.
 export const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 export class PostgresSchemaAdmissionUnavailableError extends Error {}
+
+export function requireStatePostgresPhysicalFacts(database: EngineConnection) {
+  const facts = getPostgresPhysicalFacts(database);
+  if (!facts) {
+    throw new PostgresSchemaAdmissionUnavailableError(
+      "Missing PostgreSQL physical schema admission",
+    );
+  }
+  return facts;
+}
+
 type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
 export type StateSchemaContentVersionRowReader = (
   db: EngineConnection,
@@ -110,11 +121,7 @@ export function admitStateSchemaFacts(
   context: SqliteSchemaErrorContext = "runtime",
 ): void {
   if (isPostgresSqlConnection(database)) {
-    if (!getPostgresPhysicalFacts(database)) {
-      throw new PostgresSchemaAdmissionUnavailableError(
-        "Missing PostgreSQL physical schema admission",
-      );
-    }
+    requireStatePostgresPhysicalFacts(database);
     return;
   }
   try {

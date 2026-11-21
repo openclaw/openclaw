@@ -1,0 +1,392 @@
+/* ── Skill page: the plugin page's layout, with a skill's requirements, card and facts ── */
+.skill-page {
+  min-width: 0;
+}
+
+/* The page is as wide as its column, so a long name wraps beside the header action. */
+.skill-page .plugin-catalog-detail--rail,
+.skill-page.plugin-catalog-detail--rail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The way back holds its line while the page's code arrives. */
+.skill-page__crumb-reserve {
+  min-height: 1.4em;
+}
+
+/* Every mark sits on its tile; here the tile fills the page's icon box. */
+.plugin-catalog-detail--rail .plugin-catalog-detail__icon > .skill-page__tile.skill-tile {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  font-size: 38px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__icon > .skill-page__tile.skill-tile svg {
+  width: 26px;
+  height: 26px;
+}
+
+.skill-tile--profile {
+  border-radius: var(--radius-full);
+}
+
+.skill-page__byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.skill-page__byline strong {
+  color: var(--text-strong);
+  font-weight: 550;
+}
+
+.skill-page__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.skill-page__warning-title {
+  margin-block-end: var(--space-1);
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.skill-page__notice,
+.skill-page__error {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.skill-page__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.skill-page__error > [aria-hidden] {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.skill-page__error svg {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+.skill-page__absent {
+  min-height: 120px;
+}
+
+.skill-page__absent > p {
+  margin: 0;
+}
+
+.skill-page .plugin-catalog-detail__summary {
+  overflow-wrap: anywhere;
+}
+
+.skill-page__section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+/* While the card is read, its block holds the clamped card's height so nothing below moves. */
+.skill-page__card-pending {
+  display: grid;
+  align-content: start;
+  min-height: calc(var(--plugin-readme-clamp) + 64px);
+}
+
+/* Requirements: the page's standard rows; the right slot holds the state or the thing to do. */
+.skill-requirements {
+  display: grid;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  background: var(--plugin-detail-tone);
+}
+
+.skill-requirement {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  min-width: 0;
+}
+
+.skill-requirement__tile {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  background: var(--card);
+  color: var(--muted-strong);
+}
+
+.skill-requirement__tile svg {
+  width: 16px;
+  height: 16px;
+}
+
+.skill-requirement__text {
+  display: grid;
+  flex: 1 1 0;
+  gap: 1px;
+  min-width: 0;
+}
+
+.skill-requirement__title {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.skill-requirement__title--mono {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.skill-requirement__detail {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.skill-requirement__env {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.skill-requirement__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.skill-requirement__link:hover {
+  color: var(--text);
+}
+
+.skill-requirement__link:hover span {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.skill-requirement__link svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+
+.skill-requirement__link:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.skill-requirement__control {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  margin-inline-start: auto;
+}
+
+/* A long installer label from the Gateway wraps inside its button instead of leaving the row. */
+.skill-requirement__control > .btn {
+  max-width: 100%;
+  height: auto;
+  min-height: 36px;
+  margin: 0;
+  white-space: normal;
+}
+
+.skill-requirement__met {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--ok);
+}
+
+.skill-requirement__met svg {
+  width: 16px;
+  height: 16px;
+}
+
+.skill-requirement__key {
+  display: flex;
+  gap: 8px;
+  width: 320px;
+  min-width: 0;
+}
+
+.skill-requirement__key .settings-input {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 36px;
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  background: var(--card);
+}
+
+.skill-requirement__key .settings-input::placeholder {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.skill-requirement__key .btn {
+  flex: none;
+  height: 36px;
+  min-height: 36px;
+  margin: 0;
+}
+
+/* Facts: a label above each value, quieter than the reading column. */
+dl.skill-page__facts {
+  margin: 0;
+}
+
+.skill-page__fact-stack.skill-page__fact-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.skill-page__mono {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.skill-page__fact-stack > .skill-page__mono {
+  color: var(--muted);
+}
+
+/* Platform names show as the registry writes them. */
+.skill-page__facts .plugin-metadata__categories .chip {
+  text-transform: none;
+}
+
+.skill-page__fact-note {
+  display: block;
+  width: 100%;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.skill-page__fact-note:empty {
+  display: none;
+}
+
+/* Phone: a field that does not fit beside its row goes under the text; small links get a finger. */
+@container (max-width: 560px) {
+  /* One header row: the tile, the name beside it, and a single action at the right end. */
+  .skill-page .plugin-catalog-detail--rail .plugin-catalog-detail__hero {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .skill-page .plugin-catalog-detail--rail .plugin-catalog-detail__title-row h1 {
+    overflow-wrap: anywhere;
+  }
+
+  .skill-page .plugin-catalog-detail--rail .plugin-catalog-detail__actions {
+    flex: none;
+  }
+
+  .skill-page .plugin-catalog-detail--rail .plugin-catalog-detail__actions > .btn.skill-page__cta {
+    flex: none;
+    width: auto;
+  }
+
+  /* The owner line stays one line: the name whole, the handle cut short when it must. */
+  .skill-page .skill-page__byline {
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .skill-page .skill-page__byline > * {
+    flex: none;
+  }
+
+  /* The owner or source gives way first; a display name only when the line still does not fit. */
+  .skill-page .skill-page__byline > :is(span, strong):not(.settings-status) {
+    flex: 0 1000 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skill-page .skill-page__byline > strong:not(.settings-status) {
+    flex-shrink: 1;
+  }
+
+  .skill-requirements {
+    padding: 14px;
+  }
+
+  .skill-requirement {
+    gap: 10px 12px;
+  }
+
+  .skill-requirement--field > .skill-requirement__control {
+    flex: 1 1 calc(100% - 48px);
+    min-width: 0;
+    margin-inline-start: 48px;
+  }
+
+  .skill-requirement__key {
+    width: 100%;
+  }
+
+  /* Touch: small text links keep their look and gain a finger-sized area. */
+  .skill-page .plugins-settings-breadcrumb__parent {
+    margin-block: -8px;
+    padding-block: 8px;
+  }
+
+  .skill-requirement__link,
+  .skill-page .plugin-metadata__audit-link,
+  .skill-page .plugin-metadata__link {
+    margin-block: -7px;
+    padding-block: 7px;
+  }
+
+  .skill-page .plugin-catalog-detail__readme-toggle {
+    margin: 2px 0 -8px;
+    padding: 8px 14px 8px 0;
+  }
+}
+
+/* One column: the facts close the page in two columns, full width for anything long. */
+@container (max-width: 768px) {
+  .skill-page .plugin-metadata__facts--rail > .skill-page__fact--wide {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Version notes read as the other sections: the label alone opens them, without a rule. */
+.skill-page .clawhub-skill-detail__changelog {
+  padding-top: 0;
+  border-top: 0;
+}

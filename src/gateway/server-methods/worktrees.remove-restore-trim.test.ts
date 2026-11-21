@@ -52,9 +52,11 @@ describe("worktrees.remove/restore padded ids on live registry", () => {
         undefined,
         { code: "UNAVAILABLE", message: `Error: unknown active worktree: ${id}`, retryable: false },
       ]);
-      await expect(call("worktrees.restore", { id })).rejects.toThrow(
-        `worktree ${id} is not restorable`,
-      );
+      expect(await call("worktrees.restore", { id })).toMatchObject([
+        false,
+        undefined,
+        { code: "UNAVAILABLE", details: { restoreReason: "restore-failed" } },
+      ]);
     }
 
     await expect(

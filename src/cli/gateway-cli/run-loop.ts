@@ -991,12 +991,10 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         ["waitMs", restartIntent?.waitMs ?? "default"],
       ]);
     }
-    if (action === "stop") {
-      runAcceptedRequest(acceptedRequest);
-      return;
-    }
-    if (!server && restartResolver && startupFailedWithoutServerHandle) {
-      startupFailedWithoutServerHandle = false;
+    if (action === "stop" || (!server && restartResolver && startupFailedWithoutServerHandle)) {
+      if (action !== "stop") {
+        startupFailedWithoutServerHandle = false;
+      }
       runAcceptedRequest(acceptedRequest);
       return;
     }
@@ -1020,6 +1018,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     isRuntimeResetPending: () => runtimeResetPending,
     isShuttingDown: () => shuttingDown,
     getExternalRestartOwner: () => hostLifecycle?.capability.externalRestart,
+    publishExternalRestartReceipt: async () => lock?.publishExternalRestartReceipt?.(),
     getTerminalHostedStop: () =>
       terminalHostedStop === hostLifecycle ? terminalHostedStop : undefined,
     updateSuccessor,

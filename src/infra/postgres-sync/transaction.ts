@@ -1,5 +1,6 @@
+import { POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS } from "../database-engine/policy.js";
 import { assertSyncTransactionResult, sqlPublicationAnchor } from "../sql-connection.js";
-import type { PostgresSqlConnection } from "../sql-connection.js";
+import type { PostgresSqlConnection, PostgresTransactionOptions } from "../sql-connection.js";
 import {
   discardSqliteTransactionState,
   prepareSqliteTransactionCommit,
@@ -28,7 +29,7 @@ export function tryReservePostgresTransactionSync(db: PostgresSqlConnection): bo
 export function runPostgresTransactionSync<T>(
   db: PostgresSqlConnection,
   operation: () => T,
-  options?: { withCommit?: (commit: () => void) => void },
+  options?: PostgresTransactionOptions,
   readOnly = false,
   reserved = false,
 ): T {
@@ -51,9 +52,19 @@ export function runPostgresTransactionSync<T>(
       if (readOnly && !nested) {
         closeReadScope = beginPostgresReadSnapshotScope(db);
       }
+      const previousTimeout =
+        options?.maintenance && nested
+          ? String(db.prepare("SHOW statement_timeout").get()!.statement_timeout)
+          : undefined;
+      if (options?.maintenance) {
+        db.exec(`SET LOCAL statement_timeout = '${POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS}ms'`);
+      }
       const result = operation();
       assertSyncTransactionResult(result);
       if (nested) {
+        if (previousTimeout !== undefined) {
+          db.prepare("SELECT set_config('statement_timeout', ?, true)").get(previousTimeout);
+        }
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {
         const commit = () => {
