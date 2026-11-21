@@ -70,7 +70,10 @@ import type { SandboxContext } from "../../src/agents/sandbox/types.js";
  * Inject one 30-second completion delay after a background native clone and fsync,
  * modeling delayed storage completion without claiming kernel metadata pressure.
  * Foreground IO is unchanged. Seed A/B first; retain real Git, native btrfs, Podman and
- * startup owners. Compare two A/A controls and five serial A/B pairs per kind.
+ * startup owners. Prepare a separate untimed session before measurement so the source
+ * loader's compilation is not charged to the running Gateway's first send at a new tip.
+ * The measured session still has no projection. Compare two A/A controls and five
+ * serial A/B pairs per kind; report cold-source runs separately.
  * Acceptance: exact A HEAD/index/source/dependencies, zero inline builds, the send
  * completes during the storage delay, lower send latency without >20% total CPU or
  * allocation regression. refresh-overlap-total owns total resource accounting;
@@ -493,13 +496,16 @@ try {
       return { ...created, sessionKey };
     };
     const seed = await create("seed");
-    const seedContents = await fs.readFile(path.join(seed.path, "advance.txt"), "utf8");
+    const seedContents = startupRefresh
+      ? await fs.readFile(path.join(seed.path, "advance.txt"), "utf8")
+      : "";
     if (startupRefresh) {
       await prewarmLocalWorkspaceTemplates({
         getConfig: () => config,
         signal: new AbortController().signal,
       });
     }
+    const loaderWarmup = startupRefresh ? await create("loader-warmup") : undefined;
     assert(
       (await listTemplatesAsync(process.env)).some(
         (entry) => entry.status === "ready" && entry.backend === "btrfs",
@@ -654,6 +660,10 @@ try {
         return prepared.workspaceDir;
       });
     try {
+      if (loaderWarmup) {
+        await prepareSend(loaderWarmup);
+        await delay(10);
+      }
       await measure("idle", async () => {
         let observed = false;
         await prewarmLocalWorkspaceTemplates({
@@ -678,7 +688,15 @@ try {
           await import("../../src/gateway/session-worktree-preparation.js");
         const { resolveSessionStorePathCore } = await import("../../src/config/sessions/paths.js");
         await fs.writeFile(path.join(repo, "advance.txt"), "synthetic base C\n");
-        git("commit", "-am", "advance again");
+        git(
+          "-c",
+          "user.name=Synthetic",
+          "-c",
+          "user.email=synthetic@example.invalid",
+          "commit",
+          "-am",
+          "advance again",
+        );
         git("push", "origin", "main");
         // Model an already-observed advance, preserving the real fetch freshness window.
         await delay(31_000);
