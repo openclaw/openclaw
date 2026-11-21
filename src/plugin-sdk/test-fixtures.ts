@@ -32,6 +32,7 @@ export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { typedCases } from "../test-utils/typed-cases.js";
 export { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+export { reserveTestPortListener } from "../test-utils/port-claims.js";
 export { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 export {
   fixtureReceiptClientSource,

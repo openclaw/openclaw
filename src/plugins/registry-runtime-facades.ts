@@ -2,7 +2,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 /** One namespace projection belongs to its runtime source, not the invocation reading it. */
 function createRuntimeFacade<T extends { [K in keyof T]: (...args: never[]) => unknown }>(
-  invoke: <TResult>(run: () => TResult) => TResult,
+  invoke: <TResult>(run: () => TResult, method?: PropertyKey) => TResult,
   methods: readonly (keyof T)[],
 ) {
   let cached: { source: T; value: T } | undefined;
@@ -12,11 +12,16 @@ function createRuntimeFacade<T extends { [K in keyof T]: (...args: never[]) => u
     }
     const value = { ...source };
     for (const method of methods) {
+      // Optional SDK operations must stay absent on older/custom hosts.
+      if (source[method] === undefined) {
+        continue;
+      }
       Object.defineProperty(value, method, {
         configurable: true,
         enumerable: true,
         writable: true,
-        value: (...args: unknown[]) => invoke(() => Reflect.apply(source[method], source, args)),
+        value: (...args: unknown[]) =>
+          invoke(() => Reflect.apply(source[method], source, args), method),
       });
     }
     cached = { source, value };
@@ -24,7 +29,9 @@ function createRuntimeFacade<T extends { [K in keyof T]: (...args: never[]) => u
   };
 }
 
-export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () => T) => T) {
+export function createPluginRuntimeFacades(
+  invokeSelectedRuntime: <T>(run: () => T, method?: PropertyKey) => T,
+) {
   return {
     media: createRuntimeFacade<PluginRuntime["media"]>(invokeSelectedRuntime, ["loadWebMedia"]),
     imageGeneration: createRuntimeFacade<PluginRuntime["imageGeneration"]>(invokeSelectedRuntime, [
@@ -61,6 +68,7 @@ export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () =>
         "extractStructuredWithModel",
         "describeVideoFile",
         "transcribeAudioFile",
+        "transcribeAudioStream",
       ],
     ),
     modelAuth: createRuntimeFacade<PluginRuntime["modelAuth"]>(invokeSelectedRuntime, [
