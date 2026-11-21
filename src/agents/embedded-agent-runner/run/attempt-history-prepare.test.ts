@@ -487,3 +487,45 @@ it("keeps the history prefix beyond the old token-derived hydration cut", () => 
       .toolResultOverflow,
   ).toBe("omit");
 });
+it.each([
+  { toolResultBytes: 2048, omitted: false },
+  { toolResultBytes: 16 * 1024 * 1024, omitted: true },
+])(
+  "bounds settled finalization context without message timestamps (tool result bytes $toolResultBytes)",
+  async ({ toolResultBytes, omitted }) => {
+    const fixture = createFixture();
+    const call = createAssistantOutput(model);
+    call.content = [{ type: "toolCall", id: "call_1", name: "exec", arguments: { cmd: "ls" } }];
+    call.stopReason = "toolUse";
+    // Context engines may assemble summary rows without timestamps.
+    const settled = [
+      { role: "user", content: "Summary of earlier turns" } as AgentMessage,
+      { role: "user", content: "Recalled focus", timestamp: Number.NaN },
+      call,
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text" as const, text: "x".repeat(toolResultBytes) }],
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    Object.assign(fixture.input.attempt, {
+      operation: "settled-tool-finalization",
+      sessionPersistence: "detached",
+      settledTurnFinalizationMessages: settled,
+    });
+    await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+    const published = fixture.agent.state.messages;
+    expect(published.slice(0, 3)).toEqual(settled.slice(0, 3));
+    expect(published[3]).toMatchObject(
+      omitted
+        ? {
+            role: "toolResult",
+            content: [{ type: "text", text: expect.stringContaining("Tool result body omitted") }],
+          }
+        : settled[3]!,
+    );
+  },
+);
