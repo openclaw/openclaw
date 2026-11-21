@@ -38,6 +38,8 @@ it
     "preparing-announcing",
     "announcing-crash",
     "private-announcing",
+    "private-queued-announcing",
+    "spawned-private-announcing",
     "private-announcing-crash",
     "busy-requester",
     "retrying-requester",
@@ -49,13 +51,17 @@ it
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
     const preparingAnnounce = kind === "preparing-announcing";
-    const privateContinuation = kind.startsWith("private-announcing");
+    const queuedPrivateAnnounce = kind === "private-queued-announcing";
+    const unconsumedAnnounce = preparingAnnounce || queuedPrivateAnnounce;
+    const privateContinuation = kind.includes("private-");
+    const spawnedRequester = kind === "spawned-private-announcing";
     const busyRequester = kind === "busy-requester";
     const retryingRequester = kind === "retrying-requester";
-    const rootKey = "agent:main:dashboard:restart-hub";
+    let rootKey = "agent:main:dashboard:restart-hub";
     let childKey: string | undefined;
     let siblingKey: string | undefined;
     let leaf: { runId: string; childSessionKey: string } | undefined;
+    let spawnedRoot: { runId: string; childSessionKey: string } | undefined;
     let initialized: { runId: string; childSessionKey: string }[] = [];
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -91,6 +97,13 @@ it
             }
             const input = Array.isArray(body.input) ? body.input : [];
             const text = JSON.stringify(input);
+            const capturedCompletionInputs = input.filter((item) => {
+              const content = JSON.stringify(item);
+              return (
+                content.includes("[Internal task completion event]") &&
+                content.includes("CAPTURED_CUSTODY_RESULT")
+              );
+            });
             const tools = restartToolNames(body);
             const ordinal = ++sequence;
             const reply = (value: string) =>
@@ -126,7 +139,8 @@ it
                   !JSON.stringify(item).includes("OpenClaw runtime context:"),
               );
               if (
-                preparingAnnounce &&
+                unconsumedAnnounce &&
+                capturedCompletionInputs.length === 0 &&
                 JSON.stringify(latestUserInput).includes(
                   "The Gateway restarted while you were working.",
                 )
@@ -154,6 +168,10 @@ it
               if (typeof siblingReceipt?.runId === "string") {
                 capturedRunId ??= siblingReceipt.runId;
               }
+              if (queuedPrivateAnnounce && !restarted && text.includes("NESTED_CHILD_RECONCILED")) {
+                announcing = true;
+                return;
+              }
               if (
                 text.includes("CAPTURED_CUSTODY_RESULT") &&
                 (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
@@ -170,6 +188,9 @@ it
                   return;
                 }
                 completedReplies++;
+                if (spawnedRequester) {
+                  expect(capturedCompletionInputs).toHaveLength(1);
+                }
                 reply("HUB_RECEIVED_RESTART_COMPLETION");
               } else if (!childRunId) {
                 call("sessions_send", {
@@ -195,6 +216,26 @@ it
                 reply("HUB_WAITING_FOR_OWNED_RESULTS");
               } else {
                 call("sessions_yield", {});
+              }
+              return;
+            }
+            if (text.includes("CUSTODY_CREATE_REQUESTER")) {
+              spawnedRoot ??= input.flatMap((item) => {
+                const receipt =
+                  isRecord(item) && item.type === "function_call_output"
+                    ? findSubagentSpawnReceipt(item.output)
+                    : undefined;
+                return receipt ? [receipt] : [];
+              })[0];
+              if (spawnedRoot) {
+                reply("REQUESTER_READY");
+              } else {
+                call("sessions_spawn", {
+                  task: "INITIALIZE_CUSTODY_SESSION",
+                  context: "isolated",
+                  visible: true,
+                  expectsCompletionMessage: false,
+                });
               }
               return;
             }
@@ -383,6 +424,25 @@ it
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         await client.request("sessions.create", { key: rootKey, agentId: "main" });
+        if (spawnedRequester) {
+          const create = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: rootKey,
+            message: "CUSTODY_CREATE_REQUESTER",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          expect(
+            await client.request("agent.wait", { runId: create.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+          assert(spawnedRoot);
+          expect(
+            await client.request("agent.wait", { runId: spawnedRoot.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+          rootKey = spawnedRoot.childSessionKey;
+          expect(readRestartSession(instance.state.agentDir("main"), rootKey)).toMatchObject({
+            createdVia: "spawn",
+          });
+        }
         const setup = await client.request<{ runId: string }>("chat.send", {
           sessionKey: rootKey,
           message: "CUSTODY_SETUP_TASK",
@@ -441,7 +501,12 @@ it
           assert(finishChild);
           finishChild();
           await vi.waitFor(
-            () => expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } }),
+            () =>
+              expect(readRun(childRunId!)).toMatchObject({
+                delivery: queuedPrivateAnnounce
+                  ? { status: "pending", requesterDelivery: { state: "consumed" } }
+                  : { status: "delivered" },
+              }),
             { timeout: 15_000 },
           );
         }
@@ -497,8 +562,8 @@ it
                 delivery: {
                   status: "pending",
                   requesterDelivery: {
-                    state: preparingAnnounce ? "waiting" : "consumed",
-                    runId: expect.any(String),
+                    state: unconsumedAnnounce ? "waiting" : "consumed",
+                    ...(queuedPrivateAnnounce ? {} : { runId: expect.any(String) }),
                   },
                 },
               }),
@@ -544,14 +609,20 @@ it
                 : "pending",
           },
         });
-        if (preparingAnnounce) {
+        if (unconsumedAnnounce) {
           expect(readCapturedInputs()).toHaveLength(0);
           expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
         }
-        if (interruptAnnounce && !preparingAnnounce) {
+        if (interruptAnnounce && !unconsumedAnnounce) {
           expect(readRun(capturedRunId)).toMatchObject({
             delivery: { requesterDelivery: { state: "consumed" } },
           });
+        }
+        if (spawnedRequester) {
+          expect(readCapturedInputs()).toHaveLength(1);
+          expect(
+            readRestartSession(instance.state.agentDir("main"), rootKey)?.resumeAfterRestart,
+          ).toBeUndefined();
         }
         if (kind === "captured") {
           expect(readRun(childRunId)).toMatchObject({
@@ -593,12 +664,27 @@ it
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         phase = "completion delivery after restart";
+        if (spawnedRequester) {
+          // Spawned sessions resume through their root. A later turn must see the
+          // consumed private input from its transcript, without another delivery.
+          const followup = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: rootKey,
+            message: "Continue from the child result you already received.",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          expect(
+            await client.request("agent.wait", { runId: followup.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+        }
         await vi.waitFor(
           async () => {
+            expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+            expect(readCapturedInputs()).toHaveLength(1);
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
               sessionKey: rootKey,
             });
-            if (!retryingRequester) {
+            if (!retryingRequester && !queuedPrivateAnnounce) {
               expect(JSON.stringify(history.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
               expect(history.messages).not.toEqual(
                 expect.arrayContaining([
@@ -606,15 +692,13 @@ it
                 ]),
               );
             }
-            expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             if (busyRequester || retryingRequester) {
               expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             }
-            expect(readCapturedInputs()).toHaveLength(1);
             if (interruptAnnounce) {
               expect(completedReplies).toBe(1);
-              if (!preparingAnnounce) {
-                expect(rootReceivedRecovery).toBe(true);
+              if (!unconsumedAnnounce) {
+                expect(rootReceivedRecovery).toBe(!spawnedRequester);
               }
             }
           },
@@ -629,7 +713,7 @@ it
         const after = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        if (!retryingRequester) {
+        if (!retryingRequester && !queuedPrivateAnnounce) {
           expect(JSON.stringify(after.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
         }
         expect(readRun(capturedRunId)).toMatchObject({ delivery: { status: "delivered" } });

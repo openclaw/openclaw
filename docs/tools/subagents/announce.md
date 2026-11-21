@@ -100,6 +100,11 @@ If Gateway shutdown aborts the requester while a completed child's delivery is i
 flight, an unconsumed result remains pending for startup recovery. A result already
 committed to the requester keeps its receipt and is not delivered again. An
 unconfirmed channel send retains its ambiguous outcome.
+This includes private continuation turns. A consumed private result stays in the
+requester's saved model context even if shutdown aborts the turn before it replies.
+Eligible root requesters resume through normal restart recovery. Spawned requesters
+are not independently resumed; their next turn reads the saved result without
+another completion delivery.
 
 By default, delivery depends on requester depth:
 
