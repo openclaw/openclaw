@@ -466,9 +466,9 @@ describe("workboard tools", () => {
     ).rejects.toThrow(/claimed/);
 
     const claimed = await runTool(tools, "claim", { id: parent.id });
-    expect(claimed.card).toMatchObject({
-      status: "running",
-      metadata: { claim: { ownerId: "main", token: "[redacted]" } },
+    expect(claimed).toMatchObject({
+      token: expect.any(String),
+      card: { status: "running", claim: { ownerId: "main" } },
     });
     const read = await runTool(tools, "read", { id: parent.id });
     expect(read.workerContext).toContain("Parent");
@@ -492,7 +492,7 @@ describe("workboard tools", () => {
       status: "review",
     });
     expect(released.card).toMatchObject({ status: "review" });
-    expect((released.card as { metadata?: { claim?: unknown } }).metadata?.claim).toBeUndefined();
+    expect((released.card as { claim?: unknown }).claim).toBeUndefined();
     const token = (await runTool(tools, "claim", { id: parent.id })).token as string;
     const pendingProof = await runTool(tools, "proof", {
       id: parent.id,
@@ -508,8 +508,8 @@ describe("workboard tools", () => {
       createdCardIds: [child.id],
       proofId: pendingProof.proofId,
     });
-    expect(completed.card).toMatchObject({
-      status: "done",
+    expect(completed.card).toMatchObject({ status: "done" });
+    await expect(store.get(parent.id)).resolves.toMatchObject({
       metadata: { proof: [{ id: pendingProof.proofId, status: "passed" }] },
     });
 
@@ -540,11 +540,10 @@ describe("workboard tools", () => {
 
     const dispatch = await runTool(tools, "dispatch", {});
 
-    const promoted = dispatch.promoted as Array<{
-      metadata?: { claim?: { token?: string } };
-    }>;
-    expect(promoted).toEqual([expect.objectContaining({ id: card.id })]);
-    expect(promoted[0]?.metadata?.claim?.token).toBe("[redacted]");
+    expect(dispatch.promoted).toEqual([
+      expect.objectContaining({ id: card.id, claim: expect.objectContaining({ ownerId: "main" }) }),
+    ]);
+    expect(JSON.stringify(dispatch)).not.toContain("secret-token");
   });
 
   it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
@@ -666,12 +665,8 @@ describe("workboard tools", () => {
         contentBase64: Buffer.from("done").toString("base64"),
       }),
     );
-    expect(attached.card).toMatchObject({
-      metadata: { attachments: [expect.objectContaining({ fileName: "result.txt" })] },
-    });
-    const attachments = (attached.card as { metadata: { attachments: Array<{ id: string }> } })
-      .metadata.attachments;
-    const attachmentId = expectDefined(attachments[0], "workboard attachment").id;
+    const attachmentId = attached.attachmentId;
+    expect(attachmentId).toEqual(expect.any(String));
     const attachment = readPayload(
       await tools.get("workboard_attachment_read")?.execute("call-attachment-read", {
         id: attachmentId,
@@ -703,10 +698,7 @@ describe("workboard tools", () => {
         token: claim.token,
       });
       // Review is not terminal: the claim stays with its owner.
-      expect(claimed.card).toMatchObject({
-        status: "review",
-        metadata: { claim: { ownerId } },
-      });
+      expect(claimed.card).toMatchObject({ status: "review", claim: { ownerId } });
     }
     expect(await previousStore.list()).toEqual([]);
   });
@@ -761,8 +753,8 @@ describe("workboard tools", () => {
       createWorkboardTools({ store, context: { agentId: "alpha", runId: "new-run" } }),
     );
     const completed = await runTool(newRun, "complete", { id: card.id, summary: "NEW-62" });
-    expect(completed.card).toMatchObject({
-      status: "done",
+    expect(completed.card).toMatchObject({ status: "done" });
+    expect(await store.get(card.id)).toMatchObject({
       metadata: {
         automation: { summary: "NEW-62" },
         attempts: [
