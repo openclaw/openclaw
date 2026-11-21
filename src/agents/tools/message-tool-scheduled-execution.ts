@@ -1,4 +1,6 @@
+import { listMessageReceiptPlatformIds } from "../../channels/message/receipt.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import type { ChannelDeliveryOutcome } from "../../channels/turn/delivery-outcome.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { projectMessageActionPartialDelivery } from "../../infra/outbound/message-action-execution.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -40,6 +42,46 @@ export function projectScheduledMessageActionPartialResult(params: {
     handledBy: "plugin",
     payload: partialDelivery,
     dryRun: false,
+  };
+}
+
+function acceptedDeliveryIds(result: ChannelDeliveryOutcome): string[] {
+  // Channel transports report accepted ids either directly or only through the receipt.
+  const ids =
+    result.messageIds && result.messageIds.length > 0
+      ? result.messageIds
+      : result.receipt
+        ? listMessageReceiptPlatformIds(result.receipt)
+        : [];
+  return ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+/**
+ * Failure projection for callers without scheduled authority. The operation stays a
+ * failure, but the accepted message ids must survive it: native and MCP error responses
+ * read this tool result, and a caller that only sees the error text cannot tell a partial
+ * delivery from a total one and may resend what already landed.
+ */
+export function projectMessageActionPartialFailureResult(params: {
+  error: unknown;
+  action: ChannelMessageActionName;
+}): Record<string, unknown> | undefined {
+  const partialDelivery = projectMessageActionPartialDelivery(params.error);
+  if (!partialDelivery) {
+    return undefined;
+  }
+  const messageIds = acceptedDeliveryIds(partialDelivery.result);
+  return {
+    ok: false,
+    action: params.action,
+    deliveryStatus: "partial_failed",
+    sentBeforeError: true,
+    error: partialDelivery.error,
+    acceptedMessageIds: messageIds,
+    remainderUnconfirmed: true,
+    message: messageIds.length
+      ? `Delivered ${messageIds.length} message(s) before the send failed; the remaining content is unconfirmed. Do not resend the accepted message(s).`
+      : "The provider accepted some content before the send failed; the remaining content is unconfirmed. Do not resend accepted content.",
   };
 }
 
