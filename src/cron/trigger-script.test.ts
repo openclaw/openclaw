@@ -9,6 +9,9 @@ import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agent
 import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ensureGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { addTestHook } from "../plugins/hooks.test-fixtures.js";
+import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
@@ -117,7 +120,16 @@ it("cancels the real headless worker and bridge when its evaluation catalog clos
   const config: OpenClawConfig = {};
   let context: HeadlessParams["ctx"] | undefined;
   let aborts = 0;
-  const prepared = createPreparedRuntime(config);
+  const { instance, registry } = createOwnedInstance("cron-cancellation-policy");
+  addTestHook({
+    registry,
+    pluginId: instance.pluginId,
+    hookName: "before_tool_call",
+    handler: instance.wrap(vi.fn()),
+  });
+  resetGlobalHookRunner();
+  ensureGlobalHookRunner();
+  const prepared = { ...createPreparedRuntime(config), pluginRegistry: registry };
   const gate = {
     ...(await prepared.createTools())[0],
     ...makeTool("gate", async (_id, _args, signal) => {
@@ -143,9 +155,11 @@ it("cancels the real headless worker and bridge when its evaluation catalog clos
       throw new Error("Expected the real headless context");
     }
     expect(context.abortSignal?.aborted).toBe(false);
+    expect(instance.retentionSnapshot()).toMatchObject({ total: 1 });
     clearToolSearchCatalog(context);
     expect(aborts).toBe(1);
     await expect(evaluation).resolves.toMatchObject({ kind: "error", code: "aborted" });
+    expect(instance.retentionSnapshot()).toMatchObject({ total: 0 });
     expect(context.catalogRef?.onDispose).toBeUndefined();
     release.resolve();
     await expect(evaluate({ script: "return { fire: false };" })).resolves.toMatchObject({
@@ -156,6 +170,158 @@ it("cancels the real headless worker and bridge when its evaluation catalog clos
   } finally {
     release.resolve();
     await evaluation;
+    resetGlobalHookRunner();
+    await instance.dispose();
+  }
+});
+
+it("drains a paused two-call evaluation before replacing its hook generation (#201903)", async () => {
+  const firstCallStarted = createDeferred();
+  const releaseFirstCall = createDeferred();
+  const disposed = createDeferred();
+  const { instance, registry } = createOwnedInstance("cron-reload-policy");
+  const beforeToolCall = vi.fn(() => undefined);
+  addTestHook({
+    registry,
+    pluginId: instance.pluginId,
+    hookName: "before_tool_call",
+    handler: instance.wrap(beforeToolCall),
+  });
+  instance.lifecycle.onDispose(() => disposed.resolve());
+  let calls = 0;
+  const probe = makeTool("reload_probe", async () => {
+    if (++calls === 1) {
+      firstCallStarted.resolve();
+      await releaseFirstCall.promise;
+    }
+    return jsonResult({ call: calls });
+  });
+  const { evaluate } = createEvaluator(runCodeModeScriptHeadless, {
+    prepareRuntime: async ({ runtimeConfig }) => ({
+      ...createPreparedRuntime(runtimeConfig, [probe]),
+      pluginRegistry: registry,
+    }),
+  });
+  resetGlobalHookRunner();
+  ensureGlobalHookRunner();
+  const evaluation = evaluate({
+    script: "await reload_probe({}); await reload_probe({}); return { fire: true };",
+  });
+  const finishReplacement = instance.reserveReplacement();
+  let replacement: Promise<void> | undefined;
+  try {
+    await firstCallStarted.promise;
+    const retainedDuringPause = instance.retentionSnapshot();
+    replacement = (async () => {
+      await instance.waitForRetainedWork(new AbortController().signal, {
+        includeConsumers: true,
+        includeCalls: true,
+      });
+      instance.quiesce();
+      await instance.dispose();
+    })();
+    const replacementPhase = await Promise.race([
+      disposed.promise.then(() => "disposed" as const),
+      new Promise<"pending">((resolve) => {
+        setImmediate(() => resolve("pending"));
+      }),
+    ]);
+
+    releaseFirstCall.resolve();
+    await expect(evaluation).resolves.toMatchObject({ kind: "evaluated", fire: true });
+    expect(replacementPhase).toBe("pending");
+    expect(retainedDuringPause).toMatchObject({ total: 1 });
+    expect(beforeToolCall).toHaveBeenCalledTimes(2);
+    await replacement;
+  } finally {
+    releaseFirstCall.resolve();
+    finishReplacement();
+    resetGlobalHookRunner();
+    await Promise.allSettled([evaluation, ...(replacement ? [replacement] : [])]);
+    await instance.dispose();
+  }
+});
+
+it("shares retry preparation when a stale generation retires before resolution (#201903)", async () => {
+  const preparationStarted = createDeferred();
+  const finishPreparation = createDeferred();
+  const previous = createOwnedInstance("cron-preparation-policy");
+  const current = createOwnedInstance("cron-preparation-policy");
+  const previousHook = vi.fn(() => undefined);
+  const currentHook = vi.fn(() => undefined);
+  for (const [owner, handler] of [
+    [previous, previousHook],
+    [current, currentHook],
+  ] as const) {
+    addTestHook({
+      registry: owner.registry,
+      pluginId: owner.instance.pluginId,
+      hookName: "before_tool_call",
+      handler: owner.instance.wrap(handler),
+    });
+  }
+  const probe = makeTool("preparation_probe", async () => jsonResult(true));
+  const disposed: number[] = [];
+  const prepared = (
+    runtimeConfig: OpenClawConfig,
+    registry: typeof previous.registry,
+    generation: number,
+  ) => ({
+    ...createPreparedRuntime(runtimeConfig, [probe]),
+    pluginRegistry: registry,
+    [Symbol.dispose]: () => disposed.push(generation),
+  });
+  let preparations = 0;
+  let failPreparation = false;
+  const { evaluate, prepareRuntime } = createEvaluator(runCodeModeScriptHeadless, {
+    prepareRuntime: async ({ runtimeConfig }) => {
+      if (failPreparation) {
+        throw new Error("preparation stopped");
+      }
+      const generation = ++preparations;
+      if (generation === 1) {
+        preparationStarted.resolve();
+        await finishPreparation.promise;
+        return prepared(runtimeConfig, previous.registry, generation);
+      }
+      return prepared(runtimeConfig, current.registry, generation);
+    },
+  });
+  resetGlobalHookRunner();
+  ensureGlobalHookRunner();
+  const finishReplacement = previous.instance.reserveReplacement();
+  const input = { script: "await preparation_probe({}); return { fire: true };" };
+  const evaluation = evaluate(input);
+  let waiting: ReturnType<typeof evaluate> | undefined;
+  try {
+    await preparationStarted.promise;
+    waiting = evaluate(input);
+    await previous.instance.waitForRetainedWork(new AbortController().signal, {
+      includeConsumers: true,
+      includeCalls: true,
+    });
+    previous.instance.quiesce();
+    await previous.instance.dispose();
+    finishPreparation.resolve();
+
+    await expect(Promise.all([evaluation, waiting])).resolves.toMatchObject([
+      { kind: "evaluated", fire: true },
+      { kind: "evaluated", fire: true },
+    ]);
+    expect(previousHook).not.toHaveBeenCalled();
+    expect(currentHook).toHaveBeenCalledTimes(2);
+    expect(current.instance.retentionSnapshot()).toMatchObject({ total: 0 });
+
+    failPreparation = true;
+    await expect(evaluate({ toolsAllow: [] })).resolves.toMatchObject({ kind: "error" });
+    expect(disposed).toEqual([1, 2]);
+    expect(prepareRuntime).toHaveBeenCalledTimes(3);
+  } finally {
+    finishPreparation.resolve();
+    finishReplacement();
+    resetGlobalHookRunner();
+    await Promise.all([evaluation, ...(waiting ? [waiting] : [])]);
+    await Promise.all([previous.instance.dispose(), current.instance.dispose()]);
   }
 });
 
