@@ -45,6 +45,7 @@ expectTypeOf<NonNullable<TelemetryExporterEvent["reason"]>>().toEqualTypeOf<
   | "configured"
   | "emit_failed"
   | "handler_failed"
+  | "langfuse_config_incomplete"
   | "queue_full"
   | "shutdown_failed"
   | "start_failed"

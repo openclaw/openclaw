@@ -1,0 +1,12 @@
+[Unit]
+Description=Run LiteLLM health monitor every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+Unit=litellm-health-monitor.service
+
+[Install]
+WantedBy=timers.target

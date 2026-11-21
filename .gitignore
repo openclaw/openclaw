@@ -247,3 +247,8 @@ extensions/discord/assets/embedded-app-sdk.mjs
 
 # Live thinking-probe records are local evidence; PRs summarize them.
 extensions/*/probes/
+
+# local backups
+*.backup-*
+*.bak-*
+.env.bak-*

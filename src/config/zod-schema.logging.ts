@@ -39,6 +39,22 @@ export const DiagnosticsConfigSchema = z
         captureContent: z.boolean().optional(),
       })
       .optional(),
+    langfuse: z
+      .strictObject({
+        /** Enable Langfuse export through the existing OTEL pipeline. */
+        enabled: z.boolean().optional(),
+        /** Langfuse base URL, e.g. http://localhost:3000 or https://cloud.langfuse.com. */
+        host: z.string().optional(),
+        /** Langfuse public key used as Basic Auth username for OTLP ingestion. */
+        publicKey: z.string().optional(),
+        /** Langfuse secret key used as Basic Auth password for OTLP ingestion. */
+        secretKey: z.string().optional(),
+        /** Environment label attached to gateway wrapper spans. */
+        environment: z.string().optional(),
+        /** Opt-in raw prompt/output capture for Langfuse export. Defaults to off. */
+        capturePrompts: z.boolean().optional(),
+      })
+      .optional(),
     cacheTrace: z
       .strictObject({
         /** Write prompt-cache trace artifacts for debugging deterministic cache input. */

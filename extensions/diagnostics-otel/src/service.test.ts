@@ -323,6 +323,13 @@ function startedSpanOptions(name: string, index = 0) {
   return startedSpanCall(name, index)?.[1];
 }
 
+function lastHarnessSpanOptions() {
+  const calls = telemetryState.tracer.startSpan.mock.calls.filter(
+    ([spanName]) => spanName === "openclaw.harness.run",
+  );
+  return calls.at(-1)?.[1];
+}
+
 function startedSpanParentContexts(name: string) {
   return telemetryState.tracer.startSpan.mock.calls
     .filter((call) => call[0] === name)
@@ -3445,5 +3452,149 @@ describe("diagnostics-otel service", () => {
       parameters: { type: "object" },
     });
   });
+
+  describe("diagnostics-otel Langfuse export", () => {
+    test("configures Langfuse OTLP tracing with prompts disabled by default", async () => {
+      const service = createDiagnosticsOtelService();
+      const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+        traces: true,
+        langfuse: {
+          enabled: true,
+          host: "http://langfuse:3000",
+          publicKey: "pk-lf-test",
+          secretKey: "sk-lf-test",
+          environment: "local",
+        },
+      });
+
+      await service.start(ctx);
+
+      expect(exporters.traces.ctor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://langfuse:3000/api/public/otel/v1/traces",
+          headers: expect.objectContaining({
+            Authorization: expect.stringMatching(/^Basic /),
+            "x-langfuse-ingestion-version": "4",
+          }),
+        }),
+      );
+      expect(exporters.metrics.ctor).not.toHaveBeenCalled();
+      expect(exporters.logs.ctor).not.toHaveBeenCalled();
+
+      emitEvent("harness.run.completed", {
+        runId: "run-langfuse-1",
+        sessionId: "session-1",
+        provider: "openrouter",
+        model: "anthropic/claude-sonnet-4-6",
+        selectedRoute: "openrouter/anthropic/claude-sonnet-4-6",
+        runnerType: "embedded",
+        harnessId: "pi",
+        outcome: "completed",
+        durationMs: 75,
+        usage: { input: 10, output: 5, total: 15 },
+        costUsd: 0.25,
+      });
+      await flushDiagnosticEvents();
+
+      const harnessOptions = startedSpanOptions("openclaw.harness.run");
+      expect(harnessOptions?.attributes).toMatchObject({
+        "openclaw.wrapper": true,
+        "openclaw.status": "completed",
+        "openclaw.selected_route": "openrouter/anthropic/claude-sonnet-4-6",
+        "openclaw.runner_type": "embedded",
+        "openclaw.latency_ms": 75,
+        "openclaw.provider": "openrouter",
+        "openclaw.model": "anthropic/claude-sonnet-4-6",
+        "gen_ai.usage.input_tokens": 10,
+        "gen_ai.usage.output_tokens": 5,
+        "openclaw.cost_usd": 0.25,
+      });
+      // Prompt capture stays off unless it is explicitly enabled.
+      expectAbsent(harnessOptions?.attributes, "gen_ai.input.messages", "gen_ai.output.messages");
+
+      await service.stop?.(ctx);
+    });
+
+    test("keeps exporter failures best-effort when Langfuse OTEL startup fails", async () => {
+      traceProviderCtor.mockImplementationOnce(() => {
+        throw new Error("collector unavailable");
+      });
+      const service = createDiagnosticsOtelService();
+      const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+        traces: true,
+        langfuse: {
+          enabled: true,
+          host: "http://langfuse:3000",
+          publicKey: "pk-lf-test",
+          secretKey: "sk-lf-test",
+        },
+      });
+
+      await expect(service.start(ctx)).resolves.toBeUndefined();
+      expect(ctx.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("diagnostics-otel: Langfuse exporter unavailable"),
+      );
+    });
+
+    test("reports incomplete Langfuse configuration instead of exporting", async () => {
+      exporters.traces.ctor.mockClear();
+      exporters.metrics.ctor.mockClear();
+      exporters.logs.ctor.mockClear();
+      const { events, unsubscribe } = captureExporterEvents();
+      const service = createDiagnosticsOtelService();
+      const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+        traces: true,
+        langfuse: { enabled: true, host: "http://langfuse:3000" },
+      });
+
+      await service.start(ctx);
+
+      expect(exporters.traces.ctor).not.toHaveBeenCalled();
+      expect(ctx.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Langfuse export enabled but host/publicKey/secretKey are incomplete",
+        ),
+      );
+      expect(project(events, ["status", "reason"])).toEqual([
+        ["failure", "langfuse_config_incomplete"],
+      ]);
+      unsubscribe();
+    });
+
+    test("emits a gateway wrapper span for LiteLLM routes", async () => {
+      const service = createDiagnosticsOtelService();
+      const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+      await service.start(ctx);
+
+      emitEvent("harness.run.completed", {
+        runId: "run-litellm-1",
+        provider: "litellm",
+        model: "openclaw-auto",
+        selectedRoute: "litellm/openclaw-auto",
+        runnerType: "harness",
+        fallbackUsed: true,
+        harnessId: "litellm-plugin",
+        pluginId: "litellm-plugin",
+        outcome: "completed",
+        durationMs: 40,
+      });
+      await flushDiagnosticEvents();
+
+      const harnessOptions = lastHarnessSpanOptions();
+      expect(harnessOptions?.attributes).toMatchObject({
+        "openclaw.wrapper": true,
+        "openclaw.status": "completed",
+        "openclaw.selected_route": "litellm/openclaw-auto",
+        "openclaw.runner_type": "harness",
+        "openclaw.fallback_used": true,
+        "openclaw.latency_ms": 40,
+        "openclaw.provider": "litellm",
+        "openclaw.model": "openclaw-auto",
+      });
+
+      await service.stop?.(ctx);
+    });
+  });
 });
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

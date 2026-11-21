@@ -88,6 +88,57 @@ function assertAgentHarnessContextEngineSupport(
   });
 }
 
+function resolveGatewayRequestId(result: EmbeddedRunAttemptResult): string | undefined {
+  for (const candidate of [result.currentAttemptAssistant, result.lastAssistant]) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const record = candidate as unknown as Record<string, unknown>;
+    for (const key of ["requestId", "request_id", "responseId", "response_id"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveGatewayCostUsd(result: EmbeddedRunAttemptResult): number | undefined {
+  for (const candidate of [result.currentAttemptAssistant, result.lastAssistant]) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const rawCost = (candidate as { usage?: { cost?: { total?: unknown } } }).usage?.cost?.total;
+    if (typeof rawCost === "number" && Number.isFinite(rawCost) && rawCost >= 0) {
+      return rawCost;
+    }
+  }
+  return undefined;
+}
+
+/** Gateway-side attribution for the harness run: request id, token usage, cost. */
+function resolveGatewayResultMeta(result: EmbeddedRunAttemptResult) {
+  const requestId = resolveGatewayRequestId(result);
+  const costUsd = resolveGatewayCostUsd(result);
+  const usage = result.attemptUsage;
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(usage
+      ? {
+          usage: {
+            ...(typeof usage.input === "number" ? { input: usage.input } : {}),
+            ...(typeof usage.output === "number" ? { output: usage.output } : {}),
+            ...(typeof usage.cacheRead === "number" ? { cacheRead: usage.cacheRead } : {}),
+            ...(typeof usage.cacheWrite === "number" ? { cacheWrite: usage.cacheWrite } : {}),
+            ...(typeof usage.total === "number" ? { total: usage.total } : {}),
+          },
+        }
+      : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+  };
+}
+
 function agentHarnessDiagnosticBase(
   harness: AgentHarness,
   params: AgentHarnessAttemptParams,
@@ -101,6 +152,12 @@ function agentHarnessDiagnosticBase(
     ...(params.agentId ? { agentId: params.agentId } : {}),
     provider: params.provider,
     model: params.modelId,
+    ...(params.provider
+      ? {
+          selectedRoute: params.modelId ? `${params.provider}/${params.modelId}` : params.provider,
+        }
+      : {}),
+    runnerType: "harness",
     harnessId: harness.id,
     ...(harness.pluginId ? { pluginId: harness.pluginId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -255,6 +312,7 @@ function emitAgentHarnessRunCompleted(params: {
       ...agentHarnessDiagnosticBase(harness, attemptParams, trace ?? result.diagnosticTrace),
       durationMs: Date.now() - startedAt,
       outcome,
+      ...resolveGatewayResultMeta(result),
       ...(result.agentHarnessResultClassification
         ? { resultClassification: result.agentHarnessResultClassification }
         : {}),

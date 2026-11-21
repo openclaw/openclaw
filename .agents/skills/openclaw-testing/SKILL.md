@@ -44,6 +44,25 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
   [boundary guide](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary)
   and [test-audit](../test-audit/SKILL.md).
 
+### Report only evidenced results
+
+- Do not write `PASS`, `works`, `stable`, `clean`, or `not touched` unless that exact claim is backed by evidence from this task.
+- Every `PASS` must include nearby evidence: command, observed output or file path/log marker, and timestamp when available.
+- If Telegram smoke was not sent by the owner, report exactly `TELEGRAM_E2E: NOT_CONFIRMED`. Do not say Telegram works.
+- If only local curl/gateway was checked, report `LOCAL_GATEWAY_PASS` and `TELEGRAM_E2E_NOT_CONFIRMED`.
+- For changed files, report `git diff --name-only` and `git diff --stat` when available; otherwise list exact paths touched and say no git diff is available.
+- For `not touched` claims about Guardian, DNS, DB, Cloudflare, external ports, models, or similar systems, say `NOT_TOUCHED_BY_THIS_TASK_SCOPE, not independently audited` unless independently audited by commands.
+- Do not infer success from expectations, previous runs, or intended behavior. Unknown stays `UNKNOWN`.
+- Verdicts: `PASS` only when all requested checks ran and passed; `PARTIAL` when code/local checks passed but Telegram or user smoke is missing; `FAIL` when a requested check failed; `UNKNOWN` when there is no evidence.
+- Final reports for runtime/smoke work must include:
+  - `VERDICT`
+  - `CONFIRMED` with `command` and `output`
+  - `NOT CONFIRMED` with reason
+  - `CHANGED FILES`
+  - `SMOKE TESTS`
+  - `LOG CHECK`
+  - `LIMITATIONS`
+
 ## Select the proof
 
 - Select proof for touched contract; reuse valid proof (rerun for changed inputs or missing coverage); finish workflow's required gates within user/host limits; report unrun checks and gaps. Prove user-visible behavior through real flow when feasible; external APIs need live contract proof; isolated mock-Gateway harness = valid channel boundary proof. Docs-only: docs sanity and `git diff --check`.
