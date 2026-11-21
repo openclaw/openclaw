@@ -23,17 +23,21 @@ afterEach(() => vi.unstubAllGlobals());
 const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });
 const storedDismissals = () => JSON.parse(localStorage.getItem(ATTENTION_KEY) ?? "null");
 
-it("rearms changed affected sets", () => {
+it("rearms changed alerts but retains legacy failures until adoption", () => {
   localStorage.setItem(
     ATTENTION_KEY,
-    JSON.stringify({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] }),
+    JSON.stringify({
+      cronFailed: ["alpha"],
+      cronOverdue: ["previous@0"],
+      modelAuthExpired: ["openai"],
+    }),
   );
   expect(
     reconcileSidebarAttentionDismissals({
       key: ATTENTION_KEY,
       active: [chip("cronFailed", "beta"), chip("modelAuthExpired", "openai")],
     }),
-  ).toEqual({ modelAuthExpired: ["openai"] });
+  ).toEqual({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] });
 });
 
 it("preserves dismissals outside a partial agent inventory", () => {

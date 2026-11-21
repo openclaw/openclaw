@@ -759,4 +759,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.steerTarget", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
+  ["cron.acknowledgeFailure", "cron", "operator.read", "2026.11"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
