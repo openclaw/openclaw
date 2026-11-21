@@ -1,8 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { listAgentEntries, resolveAgentEntry } from "./agent-scope-config.js";
 
 const DEFAULT_ACK_REACTION = "👀";
 
@@ -13,6 +15,51 @@ export function resolveAgentIdentity(
 ): IdentityConfig | undefined {
   // Keep merged-config request normalization for raw Plugin SDK agent ids.
   return resolveAgentEntry(cfg, normalizeAgentId(agentId))?.identity;
+}
+
+/** Resolve the name shown for a configured agent: `name`, then `identity.name`. */
+export function resolveAgentEntryDisplayName(
+  entry: Pick<AgentConfig, "name" | "identity">,
+): string | undefined {
+  return normalizeOptionalString(entry.name) ?? normalizeOptionalString(entry.identity?.name);
+}
+
+/**
+ * Hint for an unknown agent id that matches exactly one target agent's name or identity
+ * name. Callers pass the ids the requester may target so the hint never names a hidden
+ * agent. Names stay display-only: callers still reject the call.
+ */
+export function describeAgentIdForName(
+  cfg: OpenClawConfig,
+  input: string,
+  isTarget: (agentId: string) => boolean,
+): string | undefined {
+  const wanted = input.trim().toLowerCase();
+  if (!wanted) {
+    return undefined;
+  }
+  // Names that cannot be ids normalize to the default id; compare only representable input.
+  const inputId = normalizeAgentIdStrict(input);
+  const matches = new Map<string, string>();
+  for (const entry of listAgentEntries(cfg)) {
+    const id = normalizeAgentId(entry.id);
+    if (inputId.ok && id === inputId.value) {
+      return undefined;
+    }
+    if (!isTarget(id)) {
+      continue;
+    }
+    for (const name of [entry.name, entry.identity?.name]) {
+      const trimmed = normalizeOptionalString(name);
+      if (trimmed?.toLowerCase() === wanted) {
+        matches.set(id, trimmed);
+      }
+    }
+  }
+  const [match] = matches;
+  return matches.size === 1 && match
+    ? `Did you mean agent id "${match[0]}" (${match[1]})?`
+    : undefined;
 }
 
 /** Resolve the acknowledgement reaction using account, channel, global, then identity fallback. */

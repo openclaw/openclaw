@@ -21,6 +21,36 @@ function admit(
 }
 
 describe("subagent target policy", () => {
+  it.each([
+    {
+      allowAgents: ["*"],
+      error:
+        'agentId "nova" is not in the configured agent registry (allowed: main, mark). Did you mean agent id "main" (Nova)?',
+    },
+    { allowAgents: undefined, error: "agentId is not allowed for sessions_spawn (allowed: mark)" },
+  ])(
+    "suggests only an allowed agent id for a display name ($allowAgents)",
+    ({ allowAgents, error }) => {
+      expect(
+        resolveRequesterSpawnTargetPolicy({
+          cfg: {
+            agents: {
+              ownership: "explicit",
+              entries: {
+                main: { identity: { name: "Nova" } },
+                mark: { subagents: { allowAgents } },
+              },
+            },
+          },
+          requesterAgentId: "mark",
+          targetAgentId: "nova",
+          requestedAgentId: "Nova",
+          configuredAgentIds: ["main", "mark"],
+        }),
+      ).toEqual({ ok: false, error });
+    },
+  );
+
   it("defaults to requester-only when no allowlist is configured", () => {
     expect(admit(undefined, "main")).toEqual({ ok: true });
     expect(admit(undefined, "other")).toEqual({

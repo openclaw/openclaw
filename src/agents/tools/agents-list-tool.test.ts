@@ -114,6 +114,24 @@ describe("agents_list tool", () => {
     await expectAgents([]);
   });
 
+  it("names agents by configured name, then identity name", async () => {
+    configureAgents(
+      { model: "openai/gpt-5.6-sol", subagents: { allowAgents: ["*"] } },
+      {
+        main: { identity: { name: "Nova" } },
+        codex: { name: "Codex", identity: { name: "Ignored" } },
+      },
+    );
+
+    const tool = createAgentsListTool({ agentSessionKey: "agent:main:main" });
+    expect((await tool.execute("call", {})).details).toMatchObject({
+      agents: [
+        { id: "main", name: "Nova" },
+        { id: "codex", name: "Codex" },
+      ],
+    });
+  });
+
   it("returns requester as the only target when no subagent allowlist is configured", async () => {
     configureAgents({ model: "openai/gpt-5.6-sol" }, { main: {}, codex: {} });
 

@@ -63,6 +63,7 @@ import {
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
 import {
+  formatUnknownAgentError,
   readSessionsSendMessage,
   readSessionsSendMode,
   readSessionsSendTarget,
@@ -100,6 +101,7 @@ export async function executeSessionsSend(
   if (mode === "resume" && !resumeCaller) {
     return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
   }
+  const context = resolveSessionToolContext(opts);
   const {
     cfg,
     mainKey,
@@ -109,7 +111,7 @@ export async function executeSessionsSend(
     restrictToSpawned,
     sessionVisibility,
     a2aPolicy,
-  } = resolveSessionToolContext(opts);
+  } = context;
   const readConfig = createRuntimeConfigReader(cfg);
   let requesterAgentId: string;
   try {
@@ -123,7 +125,8 @@ export async function executeSessionsSend(
   }
   const { readTarget: readSession, readRequester } = createSessionsSendSessionReaders(cfg);
 
-  const targetInput = readSessionsSendTarget(params);
+  const sendScope = { ...context, requesterAgentId };
+  const targetInput = readSessionsSendTarget(params, sendScope);
   if (!targetInput.ok) {
     return sendFailure("error", targetInput.error);
   }
@@ -139,10 +142,7 @@ export async function executeSessionsSend(
       mainKey,
     });
     if (!agentMainKey) {
-      return sendFailure(
-        "error",
-        `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
-      );
+      return sendFailure("error", formatUnknownAgentError(labelAgentIdInput, sendScope));
     }
     sessionKey = agentMainKey;
   }
