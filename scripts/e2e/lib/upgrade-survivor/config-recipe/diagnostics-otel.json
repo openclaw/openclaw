@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "endpoint": "http://127.0.0.1:4318",
+  "serviceName": "upgrade-survivor",
+  "traces": false,
+  "metrics": true,
+  "logs": false,
+  "flushIntervalMs": 15000
+}

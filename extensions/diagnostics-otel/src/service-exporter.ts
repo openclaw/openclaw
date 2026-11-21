@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
+import { diag } from "@opentelemetry/api";
+import { getNumberFromEnv, type ExportResult } from "@opentelemetry/core";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { collectErrorGraphCandidates, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
@@ -17,6 +19,73 @@ const SIGNAL_QUALIFIED_OTLP_PATH_PATTERN = /\/v1\/(traces|metrics|logs)$/iu;
 const OTEL_EXPORTER_OTLP_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CERTIFICATE";
 const OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE";
 const OTEL_EXPORTER_OTLP_CLIENT_KEY_ENV = "OTEL_EXPORTER_OTLP_CLIENT_KEY";
+const DEFAULT_OTLP_EXPORTER_TIMEOUT_MS = 10_000;
+const DEFAULT_OTLP_METRIC_SHUTDOWN_EXPORTER_TIMEOUT_MS = 1_500;
+
+function readPositiveOtlpTimeout(name: string): number | undefined {
+  const value = getNumberFromEnv(name);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  diag.warn(`Configuration: ${name} is invalid, expected number greater than 0 (actual: ${value})`);
+  return undefined;
+}
+
+export function resolveOtlpMetricExporterTimeouts(shutdownFallbackTimeoutMs?: number) {
+  const configuredTimeout =
+    readPositiveOtlpTimeout("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT") ??
+    readPositiveOtlpTimeout("OTEL_EXPORTER_OTLP_TIMEOUT");
+  return {
+    normal: configuredTimeout ?? DEFAULT_OTLP_EXPORTER_TIMEOUT_MS,
+    shutdown:
+      configuredTimeout ??
+      Math.min(
+        shutdownFallbackTimeoutMs ?? DEFAULT_OTLP_METRIC_SHUTDOWN_EXPORTER_TIMEOUT_MS,
+        DEFAULT_OTLP_EXPORTER_TIMEOUT_MS,
+      ),
+  };
+}
+
+type ShutdownAwareExporter = {
+  export(items: unknown, resultCallback: (result: ExportResult) => void): void;
+  shutdown(): Promise<void>;
+};
+
+/** Route shutdown flushes through the short-timeout client and retire both exporter instances. */
+export function createShutdownAwareOtlpExporter<TExporter extends ShutdownAwareExporter>(
+  normalExporter: TExporter,
+  shutdownExporter: TExporter,
+  useShutdownTimeout: () => boolean,
+): TExporter {
+  const exporters =
+    normalExporter === shutdownExporter ? [normalExporter] : [normalExporter, shutdownExporter];
+  return new Proxy(normalExporter, {
+    get(_target, property) {
+      if (property === "shutdown") {
+        return async () => {
+          const results = await Promise.allSettled(
+            exporters.map((exporter) => exporter.shutdown()),
+          );
+          const failures = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          );
+          if (failures.length === 1) {
+            throw failures[0];
+          }
+          if (failures.length > 1) {
+            throw new AggregateError(failures, "OTLP exporters failed to shut down");
+          }
+        };
+      }
+      const exporter = useShutdownTimeout() ? shutdownExporter : normalExporter;
+      const value = Reflect.get(exporter, property, exporter);
+      return typeof value === "function" ? value.bind(exporter) : value;
+    },
+  });
+}
 
 function appendOrReplaceSignalPath(value: string, path: string): string {
   const base = value.replace(/\/+$/u, "");

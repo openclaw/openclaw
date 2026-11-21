@@ -1131,9 +1131,6 @@ describe("diagnostics-otel service", () => {
     );
     expect(traceProviderCtor).toHaveBeenCalledOnce();
     expect(meterProviderCtor).toHaveBeenCalledOnce();
-    expect(exporters.traces.ctor).toHaveBeenCalledOnce();
-    expect(exporters.metrics.ctor).toHaveBeenCalledOnce();
-    expect(exporters.logs.ctor).toHaveBeenCalledOnce();
     expect(registerOwnedSdkRuntimeMock).toHaveBeenCalledOnce();
 
     await service.stop?.(ctx);
@@ -1291,8 +1288,6 @@ describe("diagnostics-otel service", () => {
   test("ignores blank OTLP protocol env overrides", async () => {
     process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "   ";
     const { ctx } = await startServiceFixture(["traces", "metrics"], omitConfiguredProtocol);
-    expect(exporters.traces.ctor).toHaveBeenCalledTimes(1);
-    expect(exporters.metrics.ctor).toHaveBeenCalledTimes(1);
     expect(ctx.logger.warn).not.toHaveBeenCalled();
   });
 
@@ -1799,7 +1794,6 @@ describe("diagnostics-otel service", () => {
     expect(JSON.stringify({ events, health: getReportedExporterHealth(ctx) })).not.toContain(
       "private",
     );
-
     unsubscribe();
   });
 
@@ -1808,9 +1802,7 @@ describe("diagnostics-otel service", () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     const diagnosticsLogs = createDiagnosticsLogExporter({
       captureContent: false,
-      emitExporterEvent: createExporterHealthEventEmitter((event) => {
-        events.push(event);
-      }),
+      emitExporterEvent: createExporterHealthEventEmitter((event) => events.push(event)),
       logger,
       logsToOtlp: true,
       logsToStdout: false,

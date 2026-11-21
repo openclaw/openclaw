@@ -167,34 +167,63 @@ export async function stopStartedOtelServices() {
   await Promise.all(services.map(({ service, ctx }) => Promise.resolve(service.stop?.(ctx))));
 }
 
-export async function startOtlpReceiver(statusForRequest = (_count: number) => 200) {
-  const requests: Array<
-    Pick<IncomingMessage, "headers" | "method"> & {
-      contentType: string | undefined;
-      url: string;
-    }
-  > = [];
+export async function startOtlpReceiver(
+  statusForRequest = (_count: number) => 200,
+  responseDelayForRequest: number | ((count: number) => number) = 0,
+) {
+  type CapturedRequest = Pick<IncomingMessage, "headers" | "method"> & {
+    contentType: string | undefined;
+    url: string;
+  };
+  const requests: CapturedRequest[] = [];
+  const requestWaiters = new Map<number, (request: CapturedRequest) => void>();
   const server = createServer((request, response) => {
     request.resume();
     request.on("end", () => {
-      requests.push({
+      const capturedRequest = {
         contentType: request.headers["content-type"],
         headers: request.headers,
         method: request.method,
         url: request.url ?? "",
-      });
+      };
+      requests.push(capturedRequest);
+      requestWaiters.get(requests.length)?.(capturedRequest);
+      requestWaiters.delete(requests.length);
       const status = statusForRequest(requests.length);
-      response.writeHead(status, {
-        "content-type": "application/x-protobuf",
-        ...(status === 503 ? { "retry-after": "Thu, 01 Jan 1970 00:00:00 GMT" } : {}),
-      });
-      response.end();
+      const delay =
+        typeof responseDelayForRequest === "function"
+          ? responseDelayForRequest(requests.length)
+          : responseDelayForRequest;
+      const respond = () => {
+        if (response.destroyed) {
+          return;
+        }
+        response.writeHead(status, {
+          "content-type": "application/x-protobuf",
+          ...(status === 503 ? { "retry-after": "Thu, 01 Jan 1970 00:00:00 GMT" } : {}),
+        });
+        response.end();
+      };
+      if (delay > 0) {
+        setTimeout(respond, delay);
+      } else {
+        respond();
+      }
     });
   });
   const port = await listenOnLoopback(server);
   return {
     endpoint: `http://127.0.0.1:${port}`,
     requests,
+    waitForRequest(requestNumber = 1) {
+      const request = requests[requestNumber - 1];
+      if (request) {
+        return Promise.resolve(request);
+      }
+      return new Promise<CapturedRequest>((resolve) => {
+        requestWaiters.set(requestNumber, resolve);
+      });
+    },
     async close() {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
