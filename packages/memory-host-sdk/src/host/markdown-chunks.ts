@@ -19,7 +19,9 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 6;
+// Version 7: managed dreaming ranges are blanked before chunking, so indexes
+// built by earlier versions must rebuild to drop fenced chunks.
+export const MEMORY_CHUNKING_VERSION = 7;
 
 type CuratedMarkdownEntry = {
   startLine: number;
