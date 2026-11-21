@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, onSettled, Show } from "solid-js";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -44,7 +45,9 @@ export function McpAppConfirmation(props: { confirmation: McpAppConfirm }) {
               </div>
               <div>{question()}</div>
               <div class="mcp-app-confirm__preview" title={decision.text}>
-                {decision.text.length > 200 ? `${decision.text.slice(0, 200)}…` : decision.text}
+                {decision.text.length > 200
+                  ? `${truncateUtf16Safe(decision.text, 200)}…`
+                  : decision.text}
               </div>
             </div>
             <div class="mcp-app-confirm__actions">
