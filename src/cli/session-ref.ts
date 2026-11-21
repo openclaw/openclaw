@@ -21,7 +21,7 @@ export class SessionTargetParseError extends Error {
 
 export type SessionTargetRef =
   | { kind: "main" }
-  | { kind: "short"; shortId: string; slugHint?: string }
+  | { kind: "short"; shortId: string; slugHint?: string; literalSessionKey?: string }
   | { kind: "literal"; sessionKey: string };
 
 export type SessionTargetInput =
@@ -59,6 +59,7 @@ function refFromPathTarget(target: ControlUiSessionPathTarget): SessionTargetRef
     return {
       kind: "short",
       shortId: target.shortId,
+      literalSessionKey: target.literalSessionKey,
       ...(target.slugHint ? { slugHint: target.slugHint } : {}),
     };
   }

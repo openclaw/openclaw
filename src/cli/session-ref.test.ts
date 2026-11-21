@@ -62,7 +62,12 @@ describe("session target parsing", () => {
     [
       "Gateway.Example/Ops/movies-A1166B81/",
       "",
-      { kind: "short", shortId: "a1166b81", slugHint: "movies" },
+      {
+        kind: "short",
+        shortId: "a1166b81",
+        slugHint: "movies",
+        literalSessionKey: "agent:ops:movies-A1166B81",
+      },
     ],
   ])("parses %s", (input, basePath, ref) => {
     expect(parseSessionTargetInput(input)).toEqual({
@@ -163,7 +168,7 @@ describe("session target resolution", () => {
       url: "wss://gateway.example/base",
       token: "explicit-token",
       method: "sessions.resolve",
-      params: { shortId: "a1166b81", slugHint: "movies" },
+      params: { shortId: "a1166b81", slugHint: "movies", allowMissing: true },
       useStoredDeviceAuth: true,
       requiredStoredDeviceAuthScopes: ["operator.read"],
     });
@@ -183,6 +188,26 @@ describe("session target resolution", () => {
       params: {},
       requiredStoredDeviceAuthScopes: ["operator.read"],
     });
+  });
+
+  it("opens a legacy URL whose literal session key resembles a short reference", async () => {
+    const sessionKey = "agent:ops:release-deadbeef";
+    callGatewayMock.mockImplementation(async ({ params }) => {
+      if (params.shortId === "deadbeef" && params.slugHint === "release") {
+        if (params.allowMissing) {
+          return { ok: false };
+        }
+        throw requestError("No session found: deadbeef");
+      }
+      if (params.reference?.key === sessionKey) {
+        return { ok: true, key: sessionKey, agentId: "ops" };
+      }
+      throw new Error("Unexpected session lookup");
+    });
+
+    await expect(
+      resolveSessionTarget({ raw: "https://gateway.example/base/chat/ops/release-deadbeef" }),
+    ).resolves.toMatchObject({ sessionKey, agentId: "ops" });
   });
 
   it.each([
@@ -215,20 +240,23 @@ describe("session target resolution", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("prints bounded ambiguity candidates without listing or describing", async () => {
-    callGatewayMock.mockResolvedValue({
-      ok: false,
-      candidates: [
-        ["agent:main:thread:12345678-0aaa-4000-8000-000000000001", "Alpha"],
-        ["agent:main:thread:12345678-0bbb-4000-8000-000000000002", "Beta"],
-      ].map(([key, displayName]) => ({ key, displayName })),
-    });
+  it.each(["12345678", "https://gateway.example/chat/main/12345678"])(
+    "prints bounded ambiguity candidates without a fallback for %s",
+    async (raw) => {
+      callGatewayMock.mockResolvedValue({
+        ok: false,
+        candidates: [
+          ["agent:main:thread:12345678-0aaa-4000-8000-000000000001", "Alpha"],
+          ["agent:main:thread:12345678-0bbb-4000-8000-000000000002", "Beta"],
+        ].map(([key, displayName]) => ({ key, displayName })),
+      });
 
-    await expect(resolveSessionTarget({ raw: "12345678" })).rejects.toThrow(
-      /Alpha\s+123456780aaa4000[\s\S]*Beta\s+123456780bbb4000/u,
-    );
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-  });
+      await expect(resolveSessionTarget({ raw })).rejects.toThrow(
+        /Alpha\s+123456780aaa4000[\s\S]*Beta\s+123456780bbb4000/u,
+      );
+      expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("sends remote not-found recovery to the target Control UI, not the local session store", async () => {
     callGatewayMock.mockRejectedValue(requestError("No session found: a1166b81"));
