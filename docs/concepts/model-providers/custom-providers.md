@@ -240,6 +240,38 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 }
 ```
 
+### Synap
+
+Synap is Linkrra's hosted OpenAI-compatible model router, serving a free tier
+and a paid tier that brokers to external models:
+
+- Provider: `synap` (custom; `api: "openai-completions"`)
+- Auth: `SYNAP_API_KEY`
+- Base URL: `https://pool.linkrra.com/v1`
+- Example models: `synap/synap-v1` (free tier) or `synap/synap-v1-pro` (paid tier, reasoning)
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "synap/synap-v1-pro" } },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      synap: {
+        baseUrl: "https://pool.linkrra.com/v1",
+        apiKey: "${SYNAP_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "synap-v1", name: "Synap v1" },
+          { id: "synap-v1-pro", name: "Synap v1 Pro", reasoning: true },
+        ],
+      },
+    },
+  },
+}
+```
+
 ### MiniMax
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
