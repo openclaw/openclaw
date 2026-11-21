@@ -41,7 +41,7 @@ import {
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
@@ -592,7 +592,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     validateEnvironmentsCreateParams,
     async (options, service) => {
       const invocation = readGatewayRequestMutationAuthority(options);
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client: options.client,
         context: options.context,
         hasCurrentClientAuthority: options.hasCurrentClientAuthority,

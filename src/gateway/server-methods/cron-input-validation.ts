@@ -58,7 +58,7 @@ import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
@@ -417,7 +417,7 @@ export async function captureCronCreatorSession(
     job.operatorSource?.source.snapshot.openclawIdPrincipal ||
     job.streamOperatorSource,
   );
-  let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
   try {
     if (!inheritedAuthority && independent) {
       if (!caller.hasCurrentClientAuthority) {
@@ -425,7 +425,7 @@ export async function captureCronCreatorSession(
           "Current authenticated requester authority is required to reauthorize this automation.",
         );
       }
-      captured = await captureGatewayOperatorRunAuthority({
+      captured = await prepareGatewayOperatorRunAuthority({
         client: caller.client,
         context: caller.context,
         hasCurrentClientAuthority: caller.hasCurrentClientAuthority,

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
-import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
 import { CronOperatorSourceError } from "../cron/operator-source-error.js";
@@ -8,6 +7,7 @@ import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-
 import { isCronOperatorSourceParent } from "../cron/session-target.js";
 import type { CronJobPatch, CronStoredJob } from "../cron/types.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -16,7 +16,6 @@ import {
   intersectOperatorScopes,
 } from "../shared/operator-scope-compat.js";
 import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import {
   hasAutomationAdminDelegation,
   decodeGatewayOperatorRecoverySource,
@@ -49,8 +48,7 @@ export async function restoreCronOperatorSource(params: {
         : { agentId: source.agentId, sessionKey: source.sessionKey });
     const context =
       params.context ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
-    const assertOccurrence = captureCronJobSourceAuthority(params.job.id);
-    if (!context || !assertOccurrence || !params.deliveryAttemptFence) {
+    if (!context || !params.deliveryAttemptFence) {
       throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
     }
     const fence = params.deliveryAttemptFence;
@@ -60,7 +58,6 @@ export async function restoreCronOperatorSource(params: {
       params.signal?.throwIfAborted();
       // Admission may force-run an already paused job; later disable/remove edits
       // revoke this exact occurrence through its existing cancellation owner.
-      assertOccurrence();
       fence.assertCurrent();
       if (admitted) {
         return;
@@ -94,8 +91,9 @@ export async function restoreCronOperatorSource(params: {
     };
     assertCurrent();
     operator = await restoreGatewayOperatorSource({
+      agentId: target?.agentId ?? source.agentId,
       snapshot: source.snapshot,
-      target,
+      source,
       context,
       assertCurrent,
     });
@@ -104,7 +102,10 @@ export async function restoreCronOperatorSource(params: {
     return operator;
   } catch (error) {
     operator?.release();
-    if (error instanceof GatewayDispatchUnavailableError && error.retryable) {
+    if (
+      isOperatorAuthorityUnavailable(error) ||
+      (error instanceof GatewayDispatchUnavailableError && error.retryable)
+    ) {
       throw error;
     }
     // Restart and cancellation end this attempt; they say nothing about the stored source.
@@ -182,15 +183,11 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
     previous.source.snapshot.openclawIdPrincipal,
     fresh.snapshot.openclawIdPrincipal,
   );
-  const samePolicy = isDeepStrictEqual(
-    sourceRolePolicy(previous.source.snapshot.rolePolicy),
-    sourceRolePolicy(fresh.snapshot.rolePolicy),
-  );
   if (sameRequester && !controlOnly) {
     // Changing what runs authorizes the new task under the editing device, as recreating it would.
     return params.capture;
   }
-  if (sameRequester && sameDevice && samePolicy) {
+  if (sameRequester && sameDevice) {
     // A fresh connection may have broader invocation scopes; a timing edit does not grant them.
     const scopes = intersectOperatorScopes(fresh.snapshot.scopes, previous.source.snapshot.scopes);
     return {
@@ -200,6 +197,8 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
         snapshot: {
           ...fresh.snapshot,
           scopes,
+          modelPolicy: previous.source.snapshot.modelPolicy,
+          localOperator: previous.source.snapshot.localOperator && fresh.snapshot.localOperator,
           ...(fresh.snapshot.sourceIngress !== "principal"
             ? {
                 automationAdmin:

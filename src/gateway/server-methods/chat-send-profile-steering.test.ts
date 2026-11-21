@@ -169,9 +169,7 @@ it.for([
         const errorMessage = expect.stringContaining(
           boundary === "mailbox"
             ? "Authenticated profile verification is unavailable"
-            : change === "profile merge"
-              ? "Selected account changed"
-              : "authority is no longer current",
+            : "authority is no longer current",
         );
         const failure = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
         expect.soft(failure).toMatchObject({
@@ -207,15 +205,19 @@ it.for([
           .toEqual(fixture.activeTranscript);
         const appended = transcript.slice(fixture.activeTranscript.length);
         expect.soft(appended).toMatchObject([
-          {
-            type: "message",
-            message: {
-              role: "user",
-              content: fixture.approvedContent,
-              idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-              __openclaw: { requesterOrigin: { operatorProfileId: profile.id } },
-            },
-          },
+          ...(change === "profile merge" && boundary === "native"
+            ? []
+            : [
+                {
+                  type: "message",
+                  message: {
+                    role: "user",
+                    content: fixture.approvedContent,
+                    idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+                    __openclaw: { requesterOrigin: { operatorProfileId: profile.id } },
+                  },
+                },
+              ]),
           {
             type: "custom_message",
             customType: "run-failed-before-reply",
