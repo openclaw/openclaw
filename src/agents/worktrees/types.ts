@@ -177,7 +177,9 @@ export type WorktreeCreationPublication = {
 };
 
 /** Exact retirement retains the original checkout, not merely its captured bytes. */
-export type RemoveManagedWorktreeResult = Omit<SchemaContract<WorktreesRemoveResult>, "cleanup">;
+export type RemoveManagedWorktreeResult = Omit<SchemaContract<WorktreesRemoveResult>, "cleanup"> & {
+  cleanup?: ManagedWorktreeRunEndCleanup;
+};
 
 export type ManagedWorktreeBranch = WorktreeBranch;
 

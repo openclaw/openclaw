@@ -28,12 +28,13 @@ export async function hasMissingManagedWorktreeGitdir(record: ManagedWorktreeRec
 
 export async function inspectManagedWorktreeCheckout(
   record: ManagedWorktreeRecord,
-  kind: "lossless" | "provisioned" | "nested-repository",
+  kind: "lossless" | "provisioned" | "nested-repository" | "custody",
   context: {
     env: NodeJS.ProcessEnv;
     getConfig: () => OpenClawConfig;
     signal?: AbortSignal;
     beforeRun?: () => void;
+    provisionedPaths?: readonly string[];
   },
 ) {
   const input =
@@ -42,7 +43,9 @@ export async function inspectManagedWorktreeCheckout(
       : {
           kind,
           checkoutPath: record.path,
-          provisionedPaths: await getRegistryWorktreeProvisionedPaths(context.env, record.id),
+          provisionedPaths:
+            context.provisionedPaths ??
+            (await getRegistryWorktreeProvisionedPaths(context.env, record.id)),
         };
   // Known provisioning ledgers need only filesystem checks. Legacy rows without
   // a ledger retain Git admission so missing metadata still reaches orphan recovery.

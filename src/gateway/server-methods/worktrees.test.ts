@@ -262,6 +262,13 @@ it("maps snapshot failures onto a structured removed=false result", async () => 
 it.each([
   ["create", { repoRoot: "" }],
   ["remove", { id: record.id, force: true, ifLossless: true }],
+  ["remove", { id: record.id, ownerCleanup: { terminalBefore: 1 } }],
+  ["remove", { id: record.id, ifLossless: true, ownerCleanup: { terminalBefore: Date.now() } }],
+  ["remove", { id: record.id, ifLossless: true, ownerCleanup: { terminalBefore: -1 } }],
+  [
+    "remove",
+    { id: record.id, ifLossless: true, ownerCleanup: { terminalBefore: 1 }, retryPreserved: true },
+  ],
 ])("refuses invalid %s parameters before admitting a mutation", async (method, params) => {
   const response = await requests()(method, params);
 

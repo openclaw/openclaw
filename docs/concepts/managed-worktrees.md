@@ -876,6 +876,21 @@ Sandbox-created ignored files (including symlinks) and empty directories already
 
 Ordinary removal is archival: after a successful snapshot it uses Git's forced checkout removal so dirty files can be restored later. The CLI's `--force` option permits snapshot loss; omitting it does **not** select non-force Git removal. Use `openclaw worktrees remove <id> --if-lossless` when deletion must be non-force. This uses the same owner as run-end cleanup, retains dirty or unpublished work, and never retries a Git refusal with force. It cannot be combined with `--force`.
 
+For operator cleanup based on a session inventory, add `--owner-terminal-before <ms>`
+(epoch milliseconds). This implies `--if-lossless` and requires a cutoff at least
+24 hours in the past. The removal owner reads current session facts and requires
+terminal status, an unchanged checkout binding, and no newer session or checkout
+activity. Active controller work and live worker placements retain the
+checkout even if there is no worktree run lease. Listing a terminal session is
+not removal authorization.
+
+This stronger mode retains ignored files outside ordinary snapshot custody,
+including `node_modules`. It conservatively retains collapsed ignored directories
+rather than assuming their contents are disposable or fully provisioned. Nested
+repositories and filesystems, preserved checkouts, and stopped retries remain
+protected. The existing seven-day GC policy and ordinary run-end cleanup are
+unchanged.
+
 Ordinary removal requires HEAD to remain on the recorded managed branch. Switching branches or detaching HEAD preserves the checkout and recorded branch during ordinary removal and idle cleanup, but does not exempt the checkout from cap eviction. Branch deletion uses native `git branch -d` against the completed snapshot, so a tip advanced beyond that snapshot remains intact. Without a snapshot, the branch stays retained. Removal deletes only its own Git worktree registration and never runs repository-wide `git worktree prune`.
 
 Idle cleanup preserves an outer worktree containing a user nested Git repository or linked worktree, even when it shares the same Git common directory. Untracked or ignored clones under the checkout’s `.openclaw/tmp/` are disposable scratch: they are excluded from nested-repository inspection and snapshots, and leave with an eligible checkout. Existing stopped nested-repository records are re-evaluated once per maintenance-owner lifetime and after their checkout fingerprint changes; real user repositories remain protected. Re-armed removals use the ordinary pacing and leases. Cap eviction can purge unmanaged nested repositories. Nested OpenClaw-managed checkouts retire individually through their own claims and snapshots; a live nested checkout also protects its enclosing checkout. Capacity admission holds live custody of managed source and destination containers needed by creation or restoration.
@@ -1237,7 +1252,7 @@ It does not bypass preservation checks or authorize deleting unpreserved content
 `gc --retry-deferred` remains the explicit retry for a cleanup sweep.
 The Control UI shows the preservation reason and offers a separate **Retry** confirmation that keeps snapshot safety enabled.
 
-`--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The qualified Gateway removal contract preserves this outcome.
+`--if-lossless --json` (including `--owner-terminal-before`) returns `removed` plus the current attempt’s `cleanup` outcome and any retention `reason`. A newer owner activity stamp can suppress persistence of a stale cleanup outcome without suppressing the response. A retained checkout returns `removed: false`; it is not a successful deletion. The qualified Gateway removal contract preserves this outcome. The RPC equivalent is `worktrees.remove` with `ifLossless: true` and `ownerCleanup: { terminalBefore: <ms> }`. A cancellation or failure is not a removal receipt. An unknown outcome or an incomplete-removal recovery marker must be reconciled before another attempt; never retry it blindly.
 
 With a running local Gateway, `openclaw worktrees gc` queues background cleanup and prints its receipt plus a command to inspect progress:
 

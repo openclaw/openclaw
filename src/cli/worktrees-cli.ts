@@ -238,6 +238,12 @@ export function registerWorktreesCli(program: Command): void {
     )
     .addOption(
       new Option(
+        "--owner-terminal-before <ms>",
+        "Require a terminal session owner idle before epoch milliseconds (at least 24 hours ago)",
+      ).implies({ ifLossless: true }),
+    )
+    .addOption(
+      new Option(
         "--exact-state <file>",
         "Retire detached checkout using an owner-fenced exact-state JSON request",
       ).conflicts(["force", "ifLossless"]),
@@ -249,29 +255,46 @@ export function registerWorktreesCli(program: Command): void {
         opts: JsonOption & {
           force?: boolean;
           ifLossless?: boolean;
+          ownerTerminalBefore?: string;
           exactState?: string;
           retryPreserved?: boolean;
         },
       ) => {
+        const terminalBefore =
+          opts.ownerTerminalBefore === undefined
+            ? undefined
+            : parseStrictNonNegativeInteger(opts.ownerTerminalBefore);
+        if (
+          opts.ownerTerminalBefore !== undefined &&
+          (terminalBefore === undefined || terminalBefore > Date.now() - 24 * 60 * 60 * 1000)
+        ) {
+          throwExpectedCliError(
+            "--owner-terminal-before must be epoch milliseconds at least 24 hours ago.",
+          );
+        }
+        const ownerCleanup = terminalBefore === undefined ? undefined : { terminalBefore };
         const exactState = await readExactStateRequest(opts.exactState);
-        const result = await mutateWorktree<
-          RemoveManagedWorktreeResult & { cleanup?: ManagedWorktreeRunEndCleanup }
-        >(
+        const result = await mutateWorktree<RemoveManagedWorktreeResult>(
           "worktrees.remove",
           GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
           {
             id,
             force: opts.force,
             ifLossless: opts.ifLossless,
+            ...(ownerCleanup ? { ownerCleanup } : {}),
             exactState,
             retryPreserved: opts.retryPreserved,
           },
           async (service, guard) => {
             if (opts.ifLossless) {
-              const removed = await service.removeIfLossless(id, guard);
-              const cleanup = (await service.listRegistryRecords()).find(
-                (record) => record.id === id,
-              )?.runEndCleanup;
+              let cleanup: ManagedWorktreeRunEndCleanup | undefined;
+              const removed = await service.removeIfLossless(id, {
+                ...guard,
+                ...(ownerCleanup ? { ownerCleanup } : {}),
+                onCleanup: (outcome) => {
+                  cleanup = outcome;
+                },
+              });
               return { removed, cleanup };
             }
             return service.remove({
@@ -304,7 +327,7 @@ export function registerWorktreesCli(program: Command): void {
             defaultRuntime.log(
               removed
                 ? terminalText`Removed ${id} without force.`
-                : terminalText`Retained ${id}: ${cleanup?.outcome ?? "cleanup not admitted"}.`,
+                : terminalText`Retained ${id}: ${cleanup?.reason ?? cleanup?.outcome ?? "cleanup not admitted"}.`,
             );
           }
           return;

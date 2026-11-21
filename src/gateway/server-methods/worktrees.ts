@@ -21,7 +21,10 @@ import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../agents/worktrees/git.js";
 import { readLiveRegistryWorktreeByPath } from "../../agents/worktrees/registry-read.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
-import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type {
+  ManagedWorktreeRecord,
+  ManagedWorktreeRunEndCleanup,
+} from "../../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { resolveRecordedProjectByRoot } from "../../projects/project-registry.js";
@@ -216,7 +219,10 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     const { respond } = opts;
     if (
       [params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1 ||
-      (params.ifLossless && params.retryPreserved)
+      (params.ifLossless && params.retryPreserved) ||
+      (params.ownerCleanup &&
+        (!params.ifLossless ||
+          params.ownerCleanup.terminalBefore > Date.now() - 24 * 60 * 60 * 1000))
     ) {
       invalidParams(respond);
       return;
@@ -229,10 +235,14 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     const guard = commitGuard ? { commitGuard, signal: opts.signal } : {};
     try {
       if (params.ifLossless) {
-        const removed = await managedWorktrees.removeIfLossless(id, guard);
-        const cleanup = (await managedWorktrees.listRegistryRecords()).find(
-          (record) => record.id === id,
-        )?.runEndCleanup;
+        let cleanup: ManagedWorktreeRunEndCleanup | undefined;
+        const removed = await managedWorktrees.removeIfLossless(id, {
+          ...guard,
+          ...(params.ownerCleanup ? { ownerCleanup: params.ownerCleanup } : {}),
+          onCleanup: (outcome) => {
+            cleanup = outcome;
+          },
+        });
         commitGuard?.();
         respond(true, { removed, ...(cleanup ? { cleanup } : {}) }, undefined);
         return;

@@ -55,7 +55,7 @@ it("reads GC owner facts without parsing unrelated session payloads", () => {
       lifecycleRevision: "active-revision-\ud800",
       worktree,
     },
-    { sessionId: "idle", updatedAt: 1, status: "done" as const },
+    { sessionId: "idle", updatedAt: 1, endedAt: 2, status: "done" as const },
     { sessionId: "archived", updatedAt: 10, archivedAt: 20, status: "failed" as const },
   ].map((entry) => ({ sessionKey: `agent:main:${entry.sessionId}`, entry }));
   for (const { sessionKey, entry } of entries) {

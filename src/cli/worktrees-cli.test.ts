@@ -109,6 +109,9 @@ describe("worktrees cli", () => {
     ["remove", "--exact-state", "/missing-request", "--if-lossless"],
     ["remove", "--if-lossless", "--force"],
     ["remove", "--if-lossless", "--retry-preserved"],
+    ["remove", "--owner-terminal-before", "1", "--force"],
+    ["remove", "--owner-terminal-before", "1", "--retry-preserved"],
+    ["remove", "--owner-terminal-before", "1", "--exact-state", "/missing-request"],
     ["remove", "--exact-state", "."],
     ["restore", "--recover-exact-state", "."],
     ["create", "--source-profile"],
@@ -234,3 +237,30 @@ describe("worktrees cli", () => {
     );
   });
 });
+
+it("passes conditional owner cleanup and reports this attempt's retention", async () => {
+  const cleanup = { outcome: "retained-busy" as const, at: 2, reason: "owner resumed" };
+  const remove = vi.spyOn(owner, "removeIfLossless").mockImplementation(async (_id, options) => {
+    options?.onCleanup?.(cleanup);
+    return false;
+  });
+  const output = muteOutput();
+  await run(["remove", "worktree-id", "--owner-terminal-before", "1", "--json"]);
+  expect(remove).toHaveBeenCalledWith("worktree-id", {
+    ...admission,
+    ownerCleanup: { terminalBefore: 1 },
+    onCleanup: expect.any(Function),
+  });
+  expect(output).toHaveBeenCalledWith({ removed: false, cleanup });
+});
+
+it.each(["1700000000100ms", "-1", "", "9007199254740993", String(Date.now())])(
+  "rejects unsafe owner cutoff %j before mutation",
+  async (cutoff) => {
+    const remove = vi.spyOn(owner, "removeIfLossless");
+    await expect(run(["remove", "worktree-id", "--owner-terminal-before", cutoff])).rejects.toThrow(
+      "at least 24 hours ago",
+    );
+    expect(remove).not.toHaveBeenCalled();
+  },
+);

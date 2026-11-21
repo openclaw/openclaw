@@ -90,12 +90,18 @@ export type GitWorktreeOperations = {
     input:
       | { kind: "nested-repository"; checkoutPath: string }
       | {
-          kind: "lossless" | "provisioned";
+          kind: "lossless" | "provisioned" | "custody";
           checkoutPath: string;
           provisionedPaths: readonly string[] | undefined;
         };
     output: {
-      retainedReason: "dirty" | "unpushed" | "provisioned-drift" | "nested-repository" | undefined;
+      retainedReason:
+        | "dirty"
+        | "unpushed"
+        | "provisioned-drift"
+        | "nested-repository"
+        | "ignored-files"
+        | undefined;
     };
   };
 };
