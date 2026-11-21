@@ -5,6 +5,37 @@ import Testing
 
 @MainActor
 struct ClientCredentialStartupTests {
+    @Test func `startup recovery shows the matching CLI refusal only where its remedy applies`() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let refusal = "Refusing a forward database schema migration: this CLI is 2026.10.5 but the Gateway " +
+            "service runs 2026.10.4 from /opt/openclaw; run openclaw update (or the CLI from /opt/openclaw)."
+        var environment = fixture.environment
+        environment["TEST_EXIT_CODE"] = "1"
+        environment["TEST_STDERR"] = "[openclaw] The CLI command failed.\n[openclaw] Reason: \(refusal)"
+        let error: any Error
+        do {
+            try await ClientCredentialStartup.prepare(
+                executionRoot: fixture.executionRoot,
+                configURL: fixture.configURL,
+                bundle: fixture.bundle,
+                profile: AppProfile(environment: [:]),
+                environment: environment)
+            Issue.record("Refused credential preparation was reported as ready")
+            return
+        } catch let caught {
+            error = caught
+        }
+
+        #expect(AppDelegate.credentialStartupRecovery(for: error, replacingAppManagedService: false) == refusal)
+        // An app-owned service cannot run the refusal's `openclaw update` remedy.
+        #expect(AppDelegate.credentialStartupRecovery(for: error, replacingAppManagedService: true) == nil)
+        // Native admission failures name no next step and keep the generic recovery.
+        #expect(AppDelegate.credentialStartupRecovery(
+            for: OpenClawNativeStateError("Local client credential schema does not match version 1"),
+            replacingAppManagedService: false) == nil)
+    }
+
     @Test(arguments: ["default", "credential-fixture"])
     func `startup uses the matching bundled owner and explicit execution root`(_ profileName: String) async throws {
         let fixture = try Fixture()
@@ -43,8 +74,10 @@ struct ClientCredentialStartupTests {
                 profile: AppProfile(environment: [:]),
                 environment: environment)
             Issue.record("Failed credential preparation was reported as ready")
-        } catch let error as OpenClawNativeStateError {
-            #expect(error.message.contains("synthetic preparation failure"))
+        } catch let error as ClientCredentialStartup.PreparationError {
+            #expect(error.localizedDescription.contains("synthetic preparation failure"))
+            // A failure with another cause keeps the generic recovery.
+            #expect(AppDelegate.credentialStartupRecovery(for: error, replacingAppManagedService: false) == nil)
         }
         #expect(FileManager.default.fileExists(atPath: fixture.capture.path))
         #expect(!FileManager.default.fileExists(atPath: fixture.externalMarker.path))
@@ -148,7 +181,7 @@ struct ClientCredentialStartupTests {
                 printf '%s\\n' "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_PROFILE" \\
                   "$OPENCLAW_SQLITE_LIBRARY" "$@" > "$TEST_CAPTURE"
                 if [ "${TEST_EXIT_CODE:-0}" != 0 ]; then
-                  printf '%s\\n' 'synthetic preparation failure' >&2
+                  printf '%s\\n' "${TEST_STDERR:-synthetic preparation failure}" >&2
                   exit "$TEST_EXIT_CODE"
                 fi
                 """.write(to: package.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)

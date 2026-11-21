@@ -33,9 +33,29 @@ enum ClientCredentialStartup {
         let result = await runCommand(command, runtime.packageRoot.path, childEnvironment)
         try Task.checkCancellation()
         guard result.success, !result.timedOut, result.exitCode == 0 else {
-            let detail = [result.preflightError, result.stderr, result.errorMessage]
-                .compactMap { $0?.nonEmpty }.first ?? "Credential preparation did not complete."
-            throw OpenClawNativeStateError("Could not prepare local client credentials. " + detail.suffix(4000))
+            let preflightError = result.preflightError?.nonEmpty
+            let stderr = result.stderr.nonEmpty.map { String($0.suffix(4000)) }
+            let detail = preflightError ?? stderr ?? result.errorMessage?.nonEmpty
+            throw PreparationError(
+                detail: detail ?? "Credential preparation did not complete.",
+                // A timed-out child may have stopped mid-message; only a settled refusal is the CLI's answer.
+                schemaRefusal: preflightError == nil && !result.timedOut ? Self.schemaRefusal(in: result.stderr) : nil)
+        }
+    }
+
+    /// The refusal from `assertGatewayServiceSchemaMigrationAllowed` (src/state), which names both
+    /// versions, the older service's root, and its recovery.
+    nonisolated static func schemaRefusal(in stderr: String) -> String? {
+        guard let start = stderr.range(of: "Refusing a forward database schema migration:") else { return nil }
+        return String(stderr[start.lowerBound...].prefix(while: { !$0.isNewline }))
+    }
+
+    struct PreparationError: LocalizedError {
+        let detail: String
+        let schemaRefusal: String?
+
+        var errorDescription: String? {
+            "Could not prepare local client credentials. " + self.detail
         }
     }
 }
