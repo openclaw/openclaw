@@ -231,9 +231,9 @@ Result counts:
   person, or missing a scope the category needs) enter no counter.
 - `pruned` counts failed deliveries whose endpoint the push service reported as
   gone; the Gateway removes those subscriptions.
-- A person with no current subscription, or an unknown profile when roles are
-  off, returns zero counts rather than an error. Quiet hours suppress the send;
-  nothing is queued for later.
+- A person with no current subscription, or an unknown profile the requester
+  may target, returns zero counts rather than an error. Quiet hours suppress the
+  send; nothing is queued for later.
 
 ### Session resource methods
 
