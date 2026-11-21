@@ -2,7 +2,7 @@ export class CronOperatorSourceError extends Error {
   constructor(cause: unknown) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     super(
-      `The operator authority that created this automation was refused (device, access grant, role or definition changed); recreate it from an authenticated turn. Cause: ${reason}`,
+      `The access of the person who created it was refused because their device, access grant or role changed. Cause: ${reason}`,
       { cause },
     );
   }

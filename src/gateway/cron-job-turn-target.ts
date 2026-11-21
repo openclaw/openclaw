@@ -74,9 +74,10 @@ export async function captureCronJobTurnTarget(params: {
         if (
           !current ||
           !previous ||
-          current.kind !== previous.kind ||
           current.agentId !== previous.agentId ||
-          (current.kind !== "gateway" && current.sessionKey !== previous.sessionKey) ||
+          (current.kind === "gateway" || previous.kind === "gateway"
+            ? current.kind !== previous.kind
+            : current.sessionKey !== previous.sessionKey) ||
           current.snapshot.profileId !== previous.snapshot.profileId ||
           !isSameOpenClawIdTunnelPrincipal(
             current.snapshot.openclawIdPrincipal,

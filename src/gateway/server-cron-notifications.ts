@@ -511,12 +511,13 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           { inheritSessionThread: params.inheritSessionThread },
         );
         if (!resolved.ok) {
-          // Like its results, a conversation-bound job without an external route is
-          // notified in the conversation that created it.
+          // Like its results, a job bound to its conversation (`current`, or that conversation
+          // by key) without an external route is notified in that conversation.
           if (
             requiresExternalCronDelivery(route, resolved) ||
-            params.job.sessionTarget !== "current" ||
-            !sessionKey
+            !sessionKey ||
+            (params.job.sessionTarget !== "current" &&
+              params.job.sessionTarget !== `session:${sessionKey}`)
           ) {
             throw resolved.error;
           }

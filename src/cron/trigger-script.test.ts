@@ -191,7 +191,7 @@ it.each([
     host: "node",
     expected: {
       kind: "error",
-      code: "internal_error",
+      code: "script_error",
       error: expect.stringContaining(
         "exec host not allowed (requested gateway; configured host is node",
       ),
@@ -217,7 +217,7 @@ it.each([
       }),
     ).resolves.toEqual({
       kind: "error",
-      code: "internal_error",
+      code: "script_error",
       error: expect.stringContaining(
         "exec is pinned to host=gateway; the requested host or node is not allowed for this job.",
       ),
@@ -241,7 +241,7 @@ it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
     scheduledToolPolicy: { version: 1, mode: "trusted" },
   });
 
-  expect(result).toMatchObject({ kind: "error", code: "internal_error" });
+  expect(result).toMatchObject({ kind: "error", code: "script_error" });
   expect(result.kind === "error" ? result.error : "").toContain("exec is not defined");
 });
 
@@ -268,30 +268,43 @@ it("projects typed exec details into trigger scripts without content wrappers", 
 });
 
 it.skipIf(process.platform === "win32")(
-  "gives a trigger only the command's output when the command leaves a process running",
+  "waits for exec to finish and returns its exit code and output, whatever yieldMs asks",
   async () => {
-    // One JSON line, then a child that outlives the command (as `gh` does with its telemetry).
-    const command = `printf '{"ok":true}\\n'; (sleep 5 >/dev/null 2>&1 &)`;
-
     await expect(
       execEvaluator("gateway")({
         ...INPUT,
         toolsAllow: ["exec", "process"],
         scheduledToolPolicy: { version: 1, mode: "trusted" },
         script: `
-          const result = await exec({ command: ${JSON.stringify(command)} });
-          const observed = JSON.parse(result.aggregated);
-          const left = /keeps running as background session (\\S+):/.exec(result.warningText ?? "");
-          if (!left) {
-            throw new Error("the process left running was not reported");
-          }
-          await process({ action: "kill", sessionId: left[1] });
-          return { fire: false, state: observed };
+          const { exitCode, output } = await exec({ command: "sleep 1; printf done", yieldMs: 10 });
+          return { fire: exitCode === 0 && output === "done" };
         `,
       }),
-    ).resolves.toEqual({ kind: "evaluated", fire: false, state: { ok: true } });
+    ).resolves.toEqual({ kind: "evaluated", fire: true });
   },
 );
+
+it.each([
+  [
+    "throws",
+    'throw new Error("gh search did not complete: running");',
+    "gh search did not complete",
+  ],
+  [
+    "calls the unavailable process tool",
+    'await process({ action: "poll", sessionId: "s1", timeout: 26000 });',
+    "process is unavailable in automation scripts",
+  ],
+] as const)("records a script that %s as script_error", async (_name, script, message) => {
+  const result = await execEvaluator("gateway")({
+    ...INPUT,
+    toolsAllow: ["exec", "process"],
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+    script,
+  });
+  expect(result).toMatchObject({ kind: "error", code: "script_error" });
+  expect(result.kind === "error" ? result.error : "").toContain(message);
+});
 
 it.each([
   [

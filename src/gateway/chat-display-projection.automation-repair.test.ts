@@ -36,6 +36,7 @@ it.each(["cron_failure_repair", "restart", "session_state", "session"] as const)
               job: makeCronJob({ id: "queue-check" }),
               consecutiveErrors: 2,
               error: "The queue helper is unavailable.",
+              notice: 'Automation "queue-check" failed 2 times in a row.',
             });
       const repair = buildPersistedUserTurnMessage({
         text: brief,

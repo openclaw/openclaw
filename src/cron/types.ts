@@ -265,6 +265,8 @@ export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
   state?: unknown;
+  /** The quiet condition's own message, reported to whoever requested the run. */
+  message?: string;
 };
 
 export type CronJobExecutionResult = CronRunOutcome &
@@ -400,6 +402,8 @@ export type CronTriggerFailureCode =
   | "internal_error"
   | "plugin_reload_failed"
   | "tool_budget_exceeded"
+  /** The script threw, or did not handle a tool error; the job stays scheduled. */
+  | "script_error"
   | "source_unavailable";
 
 /** Result union returned by the cron trigger-script evaluator. */

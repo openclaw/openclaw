@@ -17,7 +17,7 @@ import { isJobEnabled } from "./jobs-scheduling.js";
 import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
-import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
+import { resolveCronTriggerSkip, type CronRunOptions as RunOptions } from "./run-queue-requests.js";
 import { awaitCronRunQueueTurn, wakeCronRunQueues } from "./run-queue-wake.js";
 import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
@@ -215,7 +215,9 @@ export async function launchCronRun(
   }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
-    executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
+    if (resolveCronTriggerSkip(executionJob, options)) {
+      delete executionJob.trigger;
+    }
   }
   const activeJobMarker = manual
     ? markManualCronJobActive(state, entry.job, entry.runReceipt)

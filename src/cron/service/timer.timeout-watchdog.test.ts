@@ -572,5 +572,7 @@ it("re-arms the pre-execution watchdog when a fallback runner returns to setup (
   });
   expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
   expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-  expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain("Cause: timeout");
+  expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain(
+    "Cause: the AI provider took too long to answer.",
+  );
 });

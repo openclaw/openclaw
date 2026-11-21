@@ -17,7 +17,7 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   });
   const container = await renderView({ editingJob: job, detailTab: "history" });
   expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')?.textContent).toContain(
-    "Auto-disabled",
+    "Turned off",
   );
   // The raw cause stays collapsed until asked for.
   expect(container.querySelector(".cron-error-details__text")).toBeNull();
@@ -28,7 +28,9 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("Provider rejected the request");
   expect(warning?.textContent).toContain("No response was recorded");
-  expect(warning?.textContent).toContain("Check for completed actions before running again");
+  // Why it is off and the one action that resumes it, without the raw cause.
+  expect(warning?.textContent).toContain("Turned off after 10 failed runs in a row");
+  expect(warning?.textContent).toContain("Fix the cause, then switch Active back on to resume.");
   expect(warning?.textContent).not.toContain("Paused");
 });
 

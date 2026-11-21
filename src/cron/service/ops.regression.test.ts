@@ -394,7 +394,7 @@ it("publishes a queued quiet run's next schedule in its one terminal event", asy
       jobId: job.id,
       runId,
       status: "skipped",
-      error: "queued manual run skipped: trigger condition not met",
+      error: "Trigger did not fire. The payload did not run.",
       nextRunAtMs: dueAt + 60_000,
     });
     expect(finishedContext).toMatchObject({ quietTrigger: true });

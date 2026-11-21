@@ -54,7 +54,7 @@ it.each<
       expect(f.enqueueSessionEvent).toHaveBeenCalledTimes(notices);
       if (notices) {
         expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
-          expect.stringContaining("was turned off"),
+          expect.stringContaining("so it will not try again"),
           expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
         );
       }

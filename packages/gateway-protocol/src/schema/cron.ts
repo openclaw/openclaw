@@ -716,6 +716,8 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
   expectedProcessInstanceId: Type.Optional(NonEmptyString),
   /** Holds the response until the queued run records its outcome or this many ms pass. */
   waitTimeoutMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 2_147_483_647 })),
+  /** Runs the payload without evaluating the job's trigger; the result says so. */
+  skipTrigger: Type.Optional(Type.Boolean()),
 });
 
 /** Query params for cron run history. */

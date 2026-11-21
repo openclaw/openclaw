@@ -29,7 +29,7 @@ type CronStop =
       deferredNotifications: DeferredCronNotifications;
     });
 
-/** The notice for a recorded stop: why the job is off and how to resume it. */
+/** The notice for a recorded stop: why the job is off and the one reply that resumes it. */
 export function buildCronAutoDisableNotice(
   job: Pick<CronJob, "id" | "name" | "state">,
   autoDisabled: CronAutoDisabled,
@@ -37,20 +37,27 @@ export function buildCronAutoDisableNotice(
 ): string {
   const { reason, consecutiveErrors: count } = autoDisabled;
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
+  if (reason === "failed") {
+    return [
+      `⚠️ Automation "${name}" failed. It was set to run one time, so it will not try again.`,
+      ...cronFailureDetailLines(job.state.lastErrorReason, facts.failureNotificationDetail),
+      `To try again, reply "run ${name} again".`,
+    ].join("\n");
+  }
   const why = {
-    "consecutive-failures": `after ${count} consecutive run failures.`,
-    "schedule-errors": `after ${count} consecutive schedule errors.`,
-    failed: "because its run failed and will not be retried.",
-    "source-unavailable": `because something it needs is gone. ${facts.cause ?? ""}`.trimEnd(),
+    "consecutive-failures": `It failed ${count} times in a row.`,
+    "schedule-errors": `Its schedule could not be worked out ${count} times in a row.`,
+    "source-unavailable": facts.cause?.trim() ?? "Something it needs is no longer available.",
   }[reason];
   return [
-    `⚠️ Automation "${name}" was turned off ${why}`,
-    ...(reason === "failed" || reason === "consecutive-failures"
+    `⚠️ Automation "${name}" is turned off. ${why}`,
+    ...(reason === "consecutive-failures"
       ? cronFailureDetailLines(job.state.lastErrorReason, facts.failureNotificationDetail)
       : []),
-    ...(reason === "failed"
-      ? []
-      : [`Fix the cause, then run \`openclaw automations enable ${job.id}\` to turn it back on.`]),
+    "It will not run again until it is turned back on.",
+    reason === "schedule-errors"
+      ? `To resume it, reply "fix the schedule of ${name}".`
+      : `To resume it, reply "resume ${name}".`,
   ].join("\n");
 }
 

@@ -372,10 +372,11 @@ describe("cron batch outcome finalization", () => {
         : enqueueSessionEvent.mock.calls[0]?.[0];
       for (const fragment of [
         "Recurring report",
-        job.id,
-        "10 consecutive run failures",
-        `Cause: ${cause}`,
-        `openclaw automations enable ${job.id}`,
+        "It failed 10 times in a row",
+        routed
+          ? "Cause: the AI provider had a server error."
+          : "Cause: the AI provider took too long",
+        'To resume it, reply "resume',
       ]) {
         expect(text).toContain(fragment);
       }
@@ -385,14 +386,14 @@ describe("cron batch outcome finalization", () => {
           mode: "webhook",
           to: "https://alerts.example.com/hook",
         });
-        expect(text).toContain('Automation "Recurring report" was turned off');
+        expect(text).toContain('Automation "Recurring report" is turned off');
         expect(text).toContain(`Last error: ${error}`);
         expect(enqueueSessionEvent).not.toHaveBeenCalled();
       } else {
         expect(order).toEqual(["notify"]);
         expect(text).not.toContain("/private/agent/work");
         expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(`openclaw automations enable ${job.id}`),
+          expect.stringContaining('To resume it, reply "resume'),
           {
             agentId: "main",
             sessionKey: undefined,

@@ -284,28 +284,19 @@ it.each([
           });
         }
         if (originalRevoked) {
-          await cron.run(job.id, "force", {
-            evaluateTrigger: true,
-            onTriggerDisposition: disposition,
-          });
+          await cron.run(job.id, "force", { onTriggerDisposition: disposition });
           // The admin's timing edit did not lend its authority to the removed member's task.
           expect(disposition).toHaveBeenLastCalledWith("error");
           expect(effect).not.toHaveBeenCalled();
           return;
         }
-        await cron.run(job.id, "force", {
-          evaluateTrigger: true,
-          onTriggerDisposition: disposition,
-        });
+        await cron.run(job.id, "force", { onTriggerDisposition: disposition });
         expect(disposition).toHaveBeenLastCalledWith("dropped");
         expect(effect).toHaveBeenCalledOnce();
         expect(payload).not.toHaveBeenCalled();
         principal = undefined;
         setOpenClawIdTunnelPrincipalLookup(lookup);
-        await cron.run(job.id, "force", {
-          evaluateTrigger: true,
-          onTriggerDisposition: disposition,
-        });
+        await cron.run(job.id, "force", { onTriggerDisposition: disposition });
         expect(disposition).toHaveBeenLastCalledWith("error");
         expect(effect).toHaveBeenCalledOnce();
         expect(payload).not.toHaveBeenCalled();

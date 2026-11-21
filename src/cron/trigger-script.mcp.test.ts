@@ -104,8 +104,9 @@ it.each([
         toolsAllow: ["sources__list_sources", "broken__*"],
       }),
     ).resolves.toMatchObject({
+      // The script used a server that is not there: its own error, named with the cause.
       kind: "error",
-      code: "internal_error",
+      code: "script_error",
       error: expect.stringContaining('MCP server "broken" is unavailable'),
     });
   }

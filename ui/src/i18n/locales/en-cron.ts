@@ -81,7 +81,7 @@ const enCron = {
       deliverySection: "Delivery",
       active: "Active",
       paused: "Paused",
-      autoDisabled: "Auto-disabled",
+      autoDisabled: "Turned off",
     },
     actions: {
       runNow: "Run now",
@@ -97,13 +97,23 @@ const enCron = {
 
     attention: {
       title: "Last run failed",
-      autoDisabledTitle: "Automatically stopped",
+      stopped: {
+        "consecutive-failures": "Turned off after {count} failed runs in a row",
+        "schedule-errors": "Turned off because its schedule could not be worked out",
+        "source-unavailable": "Turned off because something it needs is no longer available",
+        failed: "One-time run failed",
+      },
+      resume: {
+        "consecutive-failures": "Fix the cause, then switch Active back on to resume.",
+        "schedule-errors": "Correct the schedule, then switch Active back on to resume.",
+        "source-unavailable": "Restore what it needs, then switch Active back on to resume.",
+        failed: "It will not try again. Use Run now to try again.",
+      },
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
       nextRun: "Next run is scheduled for {time}.",
       noNextRun: "No further run is scheduled.",
       running: "A new run is in progress. Review its outcome before starting another run.",
-      effectsUnknown: "Check for completed actions before running again.",
       reviewRun: "Review run",
       errorDetails: "Error details",
     },

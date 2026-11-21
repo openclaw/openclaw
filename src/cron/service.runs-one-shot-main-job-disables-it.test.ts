@@ -169,7 +169,7 @@ it.each([
     await f.cron.run(job.id, "force");
     expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("was turned off"),
+      expect.stringContaining("so it will not try again"),
       expect.objectContaining({
         contextKey: `cron:${job.id}:auto-disabled`,
         agentId: "ops",
@@ -239,7 +239,7 @@ it.each([false, true])(
       expect(stored?.state.autoDisabled).toMatchObject({ reason: "failed", consecutiveErrors: 1 });
       expect(stored?.state.nextRunAtMs).toBeUndefined();
       expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining('Automation "one-shot" was turned off'),
+        expect.stringContaining('Automation "one-shot" failed. It was set to run one time'),
         expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
       );
     } else {

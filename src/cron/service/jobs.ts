@@ -397,6 +397,11 @@ export function applyJobPatch(
       job.payload = normalizeCronScriptPayload(job.payload);
     }
   }
+  if ("trigger" in patch || patch.payload) {
+    // An edit to what runs is a fix attempt: its next failure is news, not a repeat.
+    delete job.state.failureAlertIncident;
+    job.state.lastFailureAlertAtMs = undefined;
+  }
   if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
     // `null` means unrestricted, not a return to ambiguous legacy semantics.
     // Ordinary edits to an existing capless job intentionally remain legacy.

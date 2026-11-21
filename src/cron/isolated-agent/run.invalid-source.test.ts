@@ -81,7 +81,7 @@ describe("undecodable scheduled authority", () => {
       ).resolves.toMatchObject({
         status: "error",
         error: expect.stringMatching(
-          /operator authority that created this automation was refused.*Restart recovery operator source/,
+          /access of the person who created it was refused.*Restart recovery operator source/,
         ),
         errorClassification: { kind: "source-unavailable" },
         executionStarted: false,
@@ -260,9 +260,7 @@ describe("undecodable scheduled authority", () => {
           expect(result).toMatchObject({ error: history.entries[0]?.error });
           expect(result).toMatchObject({
             status: "error",
-            error: expect.stringContaining(
-              "operator authority that created this automation was refused",
-            ),
+            error: expect.stringContaining("access of the person who created it was refused"),
             errorClassification: { kind: "source-unavailable" },
             executionStarted: false,
             admissionDisposition: "rejected",
@@ -285,7 +283,7 @@ describe("undecodable scheduled authority", () => {
               to: "fixture-recipient",
               payload: {
                 text: expect.stringMatching(
-                  /^Automation "Test Job" failed\nCheck automation history for details\.\nNext attempt: /,
+                  /^⚠️ Automation "Test Job" failed\.\nCause: .*\nIt is still on\. Next attempt: /,
                 ),
               },
             }),
@@ -294,7 +292,7 @@ describe("undecodable scheduled authority", () => {
           // A refused source stops on its first attempt with one notice instead of an alert.
           expect(sendCronFailureAlert).not.toHaveBeenCalled();
           expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining(`openclaw automations enable ${job.id}`),
+            expect.stringContaining('To resume it, reply "resume'),
             expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
           );
         }

@@ -8,11 +8,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import { buildProviderLoginRecovery } from "../../auto-reply/provider-login-recovery.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import {
@@ -278,6 +280,8 @@ function buildFailureAlertPayload(params: {
   localProviderUnavailable?: boolean;
   /** The failure turned the job off: lead with that notice and its recovery command. */
   autoDisabled?: CronAutoDisabled;
+  /** The user's configured timezone for the next-attempt time. */
+  timeZone?: string;
 }) {
   const safeJobName = params.job.name || params.job.id;
   const errorReason = params.status === "error" ? params.errorReason : undefined;
@@ -291,8 +295,13 @@ function buildFailureAlertPayload(params: {
   } else {
     // Keep alert bodies compact because they may route through chat channels
     // with notification previews and provider-specific message limits.
-    const statusVerb = params.status === "skipped" ? "skipped" : "failed";
     const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
+    const headline =
+      params.status === "skipped"
+        ? `⚠️ Automation "${safeJobName}" skipped a run.`
+        : params.consecutiveErrors > 1
+          ? `⚠️ Automation "${safeJobName}" failed ${params.consecutiveErrors} times in a row.`
+          : `⚠️ Automation "${safeJobName}" failed.`;
     const detailLines =
       params.route.mode === "webhook"
         ? [
@@ -301,22 +310,17 @@ function buildFailureAlertPayload(params: {
           ]
         : params.localProviderUnavailable
           ? [
-              "Cause: the local model provider is unreachable.",
-              "Start the provider or check its configured endpoint in automation history.",
-              isJobEnabled(params.job) && params.job.state.nextRunAtMs !== undefined
-                ? "OpenClaw will check again on a later scheduled run."
-                : "After restoring the provider, use Run Now or reschedule this automation.",
+              "Cause: the local model provider cannot be reached. Start it, or check its address in the automation's settings.",
+              ...whatHappensNextLines(params.job, safeJobName, params.timeZone),
             ]
           : [
               ...cronFailureDetailLines(errorReason, params.failureNotificationDetail),
-              ...nextAttemptLines(params.job),
+              ...whatHappensNextLines(params.job, safeJobName, params.timeZone),
             ];
-    text = [
-      params.consecutiveErrors > 1
-        ? `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times in a row`
-        : `Automation "${safeJobName}" ${statusVerb}`,
-      ...detailLines,
-    ].join("\n");
+    const webhookHeadline = `Automation "${safeJobName}" ${params.status === "skipped" ? "skipped" : "failed"}${params.consecutiveErrors > 1 ? ` ${params.consecutiveErrors} times in a row` : ""}`;
+    text = [params.route.mode === "webhook" ? webhookHeadline : headline, ...detailLines].join(
+      "\n",
+    );
   }
   const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
   const providerLoginRecovery =
@@ -334,12 +338,29 @@ function buildFailureAlertPayload(params: {
   return payload;
 }
 
-/** Every failure notice says what happens next from the recorded schedule. */
-function nextAttemptLines(job: CronJob): string[] {
+/** What happens next, from the recorded schedule, in the user's timezone, and the one reply. */
+function whatHappensNextLines(job: CronJob, name: string, timeZone: string | undefined): string[] {
+  const nextAttempt = formatNextAttempt(job, timeZone);
+  if (nextAttempt) {
+    return [`It is still on. Next attempt: ${nextAttempt}.`, `To fix it, reply "fix ${name}".`];
+  }
+  // Event, stream and on-exit jobs have no next time; they run on their next event.
+  return isJobEnabled(job) && job.schedule.kind !== "at"
+    ? ["It is still on and runs again on its next event.", `To fix it, reply "fix ${name}".`]
+    : ["It will not run again on its own.", `To try again, reply "run ${name} again".`];
+}
+
+function formatNextAttempt(job: CronJob, timeZone: string | undefined): string | undefined {
   const nextRunAtMs = job.state.nextRunAtMs;
-  return isJobEnabled(job) && nextRunAtMs !== undefined
-    ? [`Next attempt: ${new Date(nextRunAtMs).toISOString()}`]
-    : [];
+  if (!isJobEnabled(job) || nextRunAtMs === undefined) {
+    return undefined;
+  }
+  const scheduleZone = job.schedule.kind === "cron" ? job.schedule.tz : undefined;
+  return (
+    formatZonedTimestamp(new Date(nextRunAtMs), {
+      timeZone: resolveUserTimezone(timeZone ?? scheduleZone),
+    }) ?? new Date(nextRunAtMs).toISOString()
+  );
 }
 
 function startFailureNotification(job: CronJob): void {
@@ -403,8 +424,17 @@ function failureIncident(params: {
   failureNotificationDetail?: CronFailureNotificationDetail;
   route: ResolvedFailureAlert;
 }): FailureAlertSignal {
-  // Classified causes ignore changing provider prose; unknown errors stay private.
-  const cause = params.errorReason ?? params.failureNotificationDetail ?? params.error?.trim();
+  // Classified causes ignore changing provider prose; unknown errors stay private. A script's
+  // own error is its cause, so a different message (numbers aside) is a new failure.
+  const detail = params.failureNotificationDetail;
+  const scriptMessage =
+    detail?.kind === "script-failure" && detail.code === "script_error"
+      ? params.error?.trim().split("\n", 1)[0]?.replace(/\d+/g, "#")
+      : undefined;
+  const cause =
+    params.errorReason ??
+    (scriptMessage ? [detail, scriptMessage] : detail) ??
+    params.error?.trim();
   const scope = failureRecoveryScope(params.failureNotificationDetail);
   return {
     signature: sha256Hex(
@@ -490,10 +520,14 @@ function maybeEmitFailureAlert(
       status: params.status,
       localProviderUnavailable,
       autoDisabled: params.autoDisabled,
+      timeZone: state.deps.resolveUserTimezone?.(),
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,
   };
+  // The plain notice always goes out first, so a repair turn that fails, is cancelled or
+  // stays silent cannot leave the user without it.
+  params.deferredNotifications.push(alert);
   // Destination selectors express alert-only intent; policy or mode-only overrides
   // still go to the owner conversation. Do not infer intent from resolved routes.
   const hasJobFailureDestination = [
@@ -507,8 +541,8 @@ function maybeEmitFailureAlert(
         route.threadId !== undefined ||
         route.accountId !== undefined),
   );
-  // A recurring job's auto-disable notice goes straight to the route: a repair turn can
-  // fail the same way the job did and leave the route silent.
+  // The owner agent may follow up on the notice: fix the workspace, or ask for what it needs.
+  // A recurring job's stop notice needs no repair: the job will not run until resumed.
   if (
     !hasJobFailureDestination &&
     params.autoDisabled?.reason !== "consecutive-failures" &&
@@ -518,22 +552,18 @@ function maybeEmitFailureAlert(
     hasFailureRepairOwner(params.job) &&
     (terminal || isJobEnabled(params.job))
   ) {
-    // If the owner turn cannot start, the user still gets the plain alert.
     params.deferredNotifications.push({
       kind: "failure-repair",
       job,
-      fallback: alert,
       text: buildCronFailureRepairBrief({
         job: params.job,
         consecutiveErrors: params.consecutiveCount,
         error: params.error,
         errorReason: params.errorReason,
-        nextAttempt: nextAttemptLines(params.job)[0],
+        notice: alert.payload.text ?? "",
       }),
     });
-    return "queued";
   }
-  params.deferredNotifications.push(alert);
   return "queued";
 }
 

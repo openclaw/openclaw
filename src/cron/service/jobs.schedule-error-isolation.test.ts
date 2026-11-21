@@ -76,10 +76,12 @@ it("auto-disables job after 3 consecutive schedule errors", async () => {
     consecutiveErrors: 3,
   });
   expect(state.deps.enqueueSessionEvent).toHaveBeenCalledWith(
-    expect.stringContaining("openclaw automations enable bad-job"),
+    expect.stringContaining('To resume it, reply "fix the schedule of'),
     expect.objectContaining({ contextKey: "cron:bad-job:auto-disabled" }),
   );
   const notification = vi.mocked(state.deps.enqueueSessionEvent!).mock.calls[0]?.[0];
-  expect(notification).toContain("was turned off after 3 consecutive schedule errors.");
+  expect(notification).toContain(
+    "is turned off. Its schedule could not be worked out 3 times in a row.",
+  );
   expect(notification).not.toContain("invalid configuration format");
 });

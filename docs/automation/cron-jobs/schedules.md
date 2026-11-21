@@ -266,13 +266,12 @@ identities, not an aggregate pass/fail string:
 const repo = "owner/repo";
 const pr = 123;
 async function readJson(command) {
-  const response = await exec({ command });
-  if (response.status !== "completed" || response.exitCode !== 0) {
+  const { exitCode, output } = await exec({ command });
+  if (exitCode !== 0) {
     // A failed evaluation records only this message, so say what failed in it.
-    const output = String(response.message || response.aggregated || "").slice(-200);
-    throw new Error("CI observation failed (exit " + response.exitCode + "): " + output);
+    throw new Error("CI observation failed (exit " + exitCode + "): " + output.slice(-200));
   }
-  return JSON.parse(response.aggregated);
+  return JSON.parse(output);
 }
 const { headRefOid: head } = await readJson(
   "gh pr view " + pr + " --repo " + repo + " --json headRefOid",
@@ -316,15 +315,16 @@ returns `fire: false`, so no model turn or visible update is produced. Observati
 errors throw and remain actionable scheduler failures; do not convert them to
 `fire: false`. A failed evaluation records the thrown message as the run's error
 and keeps no command output, so the message must carry what you need to diagnose
-it. A successful command's `aggregated` is exactly what the command wrote. When a
-command leaves a process running (`gh`, for example, can start a helper that
-outlives it), OpenClaw reports that in `response.warningText`, not in the
-output. Keep this example within the 16 KiB state limit by scoping large
+it. In a script, `exec` waits for its command to finish within the script's
+deadline and returns `{ exitCode, output }`; `yieldMs` and `background` are
+ignored and the `process` tool is unavailable, because a headless script has no
+later turn to collect a background process. A thrown error is recorded with the
+`script_error` code, and the job stays scheduled for its next occurrence. Keep this example within the 16 KiB state limit by scoping large
 repositories to the checks the watcher owns. Do not use a change-only gate for an
 explicitly requested recurring report or digest: that job should deliver at its
 requested cadence even if the observations are unchanged.
 
-Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
+Manual runs evaluate this gate: `openclaw automations run <job-id>` and the `automations` tool with `action: "run", runMode: "force"` run `trigger.script` first. A run whose script returns `fire: false` is recorded as skipped with `Trigger did not fire` and the script's `message`; a script error is recorded as a failed run. A manual run is a real occurrence: it advances `trigger.state` and consumes `trigger.once`. To run the payload without the gate, pass `--skip-trigger` (or `skipTrigger: true`); the result reports `Trigger skipped: the trigger script was not tested.` Manual runs of `stream`, `event`, and `on-exit` jobs have no event to evaluate and report `Trigger skipped: there is no event to test it with.`
 
 `openclaw doctor --fix` converts persisted trigger scripts that call `tools.call('exec', args)` and read the `.result.details` envelope. Doctor leaves custom or ambiguous scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not converted.
 

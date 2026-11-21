@@ -439,7 +439,7 @@ suite.define(() => {
           },
         });
         expect(due.state.nextRunAtMs).toEqual(expect.any(Number));
-        // Wait for this real scheduled occurrence; force mode intentionally bypasses triggers.
+        // Wait for this real scheduled occurrence.
         await delay(Math.max(0, due.state.nextRunAtMs! - Date.now()) + 1, undefined, { signal });
         const triggerRun = await rpc<{ run?: CronRunLogEntry }>("cron.run", {
           id,
@@ -448,7 +448,7 @@ suite.define(() => {
         });
         expect(triggerRun.run).toMatchObject({
           status: "skipped",
-          error: "queued manual run skipped: trigger condition not met",
+          error: "Trigger did not fire. The payload did not run.",
         });
         await expect
           .poll(async () => (await rpc<CronJob>("cron.get", { id })).state.lastTriggerEvalAtMs)

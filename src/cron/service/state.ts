@@ -375,7 +375,7 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
   deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "defaultAgentId"> &
-    Partial<Pick<CronServiceDepsInternal, "resolveDefaultAgentId">>;
+    Partial<Pick<CronServiceDepsInternal, "resolveDefaultAgentId" | "resolveUserTimezone">>;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
@@ -632,7 +632,7 @@ export type CronStatusSummary = {
 
 export type CronRunResult =
   | { ok: true; ran: true }
-  | { ok: true; enqueued: true; runId: string }
+  | { ok: true; enqueued: true; runId: string; trigger?: string }
   | { ok: true; ran: false; reason: "disabled" }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }

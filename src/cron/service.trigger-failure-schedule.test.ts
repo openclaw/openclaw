@@ -146,8 +146,9 @@ describe("a scheduled trigger script that throws", () => {
         expect(job.state.autoDisabled).toBeUndefined();
         expect(job.state.nextRunAtMs).toBeGreaterThan(dueAtMs);
         expect(h.runCronFailureRepair).toHaveBeenCalledTimes(1);
+        // The plain notice reached the user first; the repair brief carries it.
         expect(h.runCronFailureRepair.mock.calls[0]?.[0].message).toContain(
-          `Next attempt: ${new Date(job.state.nextRunAtMs!).toISOString()}`,
+          "It is still on. Next attempt: ",
         );
       } finally {
         h.cron.stop();
@@ -165,9 +166,9 @@ describe("a scheduled trigger script that throws", () => {
       expect(job.state.nextRunAtMs).toBeUndefined();
       expect(job.state.autoDisabled).toMatchObject({ reason: "source-unavailable", atMs: dueAtMs });
       const notices = h.enqueueSessionEvent.mock.calls.map(([text]) => text);
-      expect(notices).toEqual([expect.stringContaining("was turned off")]);
-      expect(notices[0]).toContain("operator authority that created this automation was refused");
-      expect(notices[0]).toContain(`openclaw automations enable ${job.id}`);
+      expect(notices).toEqual([expect.stringContaining("is turned off")]);
+      expect(notices[0]).toContain("access of the person who created it was refused");
+      expect(notices[0]).toContain('To resume it, reply "resume');
       expect(h.runCronFailureRepair).not.toHaveBeenCalled();
     } finally {
       h.cron.stop();

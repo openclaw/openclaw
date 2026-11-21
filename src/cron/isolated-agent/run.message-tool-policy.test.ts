@@ -38,6 +38,7 @@ function makeJob(
     sessionTarget: "isolated",
     payload: { kind: "agentTurn", message: "send a message", ...payload },
     delivery,
+    state: {},
     ...overrides,
   } as never;
 }

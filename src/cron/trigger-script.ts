@@ -95,6 +95,7 @@ import {
   type CronScriptPayloadExecutionResult,
 } from "./trigger-script-result.js";
 import { createCronTriggerRuntimeLifetime } from "./trigger-script-runtime-lifetime.js";
+import { headlessScriptTool } from "./trigger-script-tools.js";
 import type {
   CronToolsAllowExecTarget,
   CronTriggerEvaluationResult,
@@ -582,13 +583,15 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       assertActive();
       const triggerState = await observePrAutoFix(params, caller, evaluationScope, assertActive);
       // Reload during setup is best effort; the next invocation refreshes its cache.
-      let tools = await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
-        runtime.createTools(
-          admitted,
-          evaluationScope.signal,
-          admission?.messageActionTurnCapability,
-        ),
-      );
+      let tools = (
+        await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
+          runtime.createTools(
+            admitted,
+            evaluationScope.signal,
+            admission?.messageActionTurnCapability,
+          ),
+        )
+      ).map((tool) => headlessScriptTool(tool, evaluationScope.deadline));
       assertActive();
       if (cronScriptReferencesMcp(params.script)) {
         const reservedToolNames = tools.map((tool) => tool.name);
@@ -654,7 +657,10 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           // A failed server is absent from `MCP`; name why when the script fails.
           return scriptFailure(
             mcpUnavailable ? `${result.error} (${mcpUnavailable})` : result.error,
-            result.code,
+            // The script's own throw, or a tool error it did not handle, is not a host fault.
+            result.code === "internal_error" && result.failurePhase !== "host"
+              ? "script_error"
+              : result.code,
           );
         }
         assertActive();
