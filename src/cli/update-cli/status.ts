@@ -19,6 +19,7 @@ import {
   auditGatewayServiceConfig,
   type ServiceDefinitionDrift,
 } from "../../daemon/service-audit.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
@@ -55,6 +56,7 @@ import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { resolveRefusedRestartRecovery } from "./update-refused-restart-recovery.js";
 
 async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
   try {
@@ -340,6 +342,7 @@ async function inspectUpdateStatus(
     ? { ...replacement, reason: safeMessage(replacement.reason) }
     : undefined;
   let serviceDefinition: { drift: ServiceDefinitionDrift[]; warnings: string[] } | undefined;
+  let serviceCommand: GatewayServiceCommandConfig | undefined;
   if (
     config.gateway?.mode !== "remote" &&
     isDefaultInstallIdentity(process.env) &&
@@ -362,6 +365,7 @@ async function inspectUpdateStatus(
         },
       );
       if (command) {
+        serviceCommand = command;
         const audit = await inspect(
           "service definition",
           () => auditGatewayServiceConfig({ env: process.env, command, timeoutMs: remainingMs() }),
@@ -652,9 +656,22 @@ async function inspectUpdateStatus(
           `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
+      // A refused restart on a stopped Gateway has a verified recovery; name it, not triage.
+      const refusedRestartRecovery =
+        currentRunHealth?.kind === "responding"
+          ? undefined
+          : await resolveRefusedRestartRecovery({
+              run,
+              command: serviceCommand,
+              activeRoot: update.root,
+            }).catch(() => undefined);
       const report = renderUpdateRunReport(
         run,
-        run.status === "failed" ? { currentHealth: currentRunHealth } : {},
+        refusedRestartRecovery
+          ? { nextAction: refusedRestartRecovery }
+          : run.status === "failed"
+            ? { currentHealth: currentRunHealth }
+            : {},
       );
       const historical =
         currentRunHealth?.kind === "responding"

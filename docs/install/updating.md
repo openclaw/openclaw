@@ -1567,10 +1567,34 @@ get them.
 
 When 2026.11.4 or 2026.11.5 updates a pnpm install to a release with this fix,
 it still publishes a launcher that points into its removed stage. The new
-package's Doctor, which runs during that update, repairs the launcher. Both of
-those updaters hand the later update steps to the new package, which restarts
-the Gateway on the new version. In test runs this first hop ended with a working
-CLI and Gateway.
+package's Doctor, which runs during that update, repairs the launcher. If the
+new release migrates the database schema, those updaters hand the later update
+steps to the new package, which restarts the Gateway on the new version. In test
+runs, 2026.11.4 to 2026.11.6 and 2026.11.5 to 2026.11.10 ended with a working
+CLI and Gateway this way.
+
+Without a schema migration there is no handoff. When 2026.11.5 or earlier (or a
+2026.11.6 or 2026.11.10 build without the fix) updates a pnpm install to a
+release with the same schema, such as 2026.11.5 to 2026.11.6, the installed
+updater refuses the Gateway restart and ends with `service-revalidation-failed`;
+the command still works, but the Gateway stays stopped. The new
+package's Doctor then prints that OpenClaw will try to restart the Gateway
+after the updater exits, together with the manual recovery, and leaves one
+background process. That process waits for the updater and any update helper
+to exit: until each recorded process is gone, or, if one still looks alive or
+cannot be read, until 5 minutes after the refused restart was recorded, and
+never longer than 60 minutes. It then checks that no other update has started,
+the Gateway is still stopped and the service still belongs to this
+installation, and reruns the update through the active global `openclaw`
+entry, pinned to the installed version (the same tarball or exact version the
+update used, when that names the installed version). That update refreshes the
+service definition with its port and options, restarts and verifies the
+Gateway, and records its own result. Each decision the process takes is written
+to the OpenClaw log file (subsystem `update/restart-finisher`). If the Gateway
+is still stopped a few minutes later, run `openclaw gateway install --force`
+and then `openclaw gateway restart`; `openclaw update status` names the same
+two commands in that state. `openclaw gateway restart` alone does not work
+there, because the service definition still names the previous version.
 
 If `openclaw` still points into a missing `.openclaw-update-native-*` directory,
 the new package's Doctor and Gateway startup repair it. They rewrite a launcher
