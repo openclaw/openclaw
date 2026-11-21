@@ -250,6 +250,7 @@ export async function runCronSessionTurn(
         operatorAuthority,
         automationAdmin,
         admissionSource: params.admissionSource,
+        providerRunSlot: params.providerRunSlot,
         prepare: params.prepare,
         preparePrompt: async (cfg) => {
           const { applyLegacyHeartbeatPromptContribution } =

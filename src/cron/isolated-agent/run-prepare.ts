@@ -220,11 +220,11 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     },
     prepare: async (signal: AbortSignal) => {
       input = { ...input, abortSignal: signal };
-      return await prepareAdmittedSession();
+      return await prepareAdmittedSession(signal);
     },
   };
 
-  async function prepareAdmittedSession() {
+  async function prepareAdmittedSession(signal: AbortSignal) {
     const now = Date.now();
     // A child run never runs looser than its parent.
     const sandbox =
@@ -282,33 +282,6 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     let workspaceLease: CronWorkspaceLease | undefined;
     let workspaceLeaseTransferred = false;
     try {
-      const selectedWorkspace = await prepareCronSessionWorkspace({
-        cfg: runtimeCfg,
-        agentId,
-        input,
-        agentCfg,
-        sessionKey: agentSessionKey,
-        cronSession,
-        defaultWorkspaceDir: modelOwner.workspaceDir,
-        sessionPreparationEffect,
-        isFastTestEnv: params.isFastTestEnv,
-        childParent: input.occurrence.childParent,
-      });
-      workspaceLease = selectedWorkspace.lease;
-      const workspaceDir = selectedWorkspace.workspaceDir;
-      const persistCronSessionRow = createCronSessionRowWriter({
-        agentId,
-        agentSessionKey,
-        assertCurrent: input.assertCurrent,
-      });
-      const persistSessionEntry = createPersistCronSessionEntry({
-        cronSession,
-        agentSessionKey,
-        createdActor: cronExecutionActor(input.job),
-        sandbox,
-        workspaceDir,
-        persistSessionEntry: persistCronSessionRow,
-      });
       const withRunSession: WithRunSession = (result) => ({
         ...result,
         sessionId: currentRunSessionId(),
@@ -331,7 +304,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         isGmailHook,
         agentId,
         agentDir,
-        workspaceDir,
+        workspaceDir: modelOwner.workspaceDir,
       });
       if (!resolvedModelSelection.ok) {
         return {
@@ -380,6 +353,37 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         };
       }
       const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
+      if (input.providerRunSlot?.tryStart(provider) === false) {
+        await input.providerRunSlot.wait(provider, signal);
+        input.assertCurrent?.();
+      }
+      const selectedWorkspace = await prepareCronSessionWorkspace({
+        cfg: runtimeCfg,
+        agentId,
+        input,
+        agentCfg,
+        sessionKey: agentSessionKey,
+        cronSession,
+        defaultWorkspaceDir: modelOwner.workspaceDir,
+        sessionPreparationEffect,
+        isFastTestEnv: params.isFastTestEnv,
+        childParent: input.occurrence.childParent,
+      });
+      workspaceLease = selectedWorkspace.lease;
+      const workspaceDir = selectedWorkspace.workspaceDir;
+      const persistCronSessionRow = createCronSessionRowWriter({
+        agentId,
+        agentSessionKey,
+        assertCurrent: input.assertCurrent,
+      });
+      const persistSessionEntry = createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey,
+        createdActor: cronExecutionActor(input.job),
+        sandbox,
+        workspaceDir,
+        persistSessionEntry: persistCronSessionRow,
+      });
       // A captured runtime replaces the override the cron session copied from its source row.
       const runtimeSessionEntryFor = (candidateProvider: string) =>
         resolveCronRuntimeSessionEntry(

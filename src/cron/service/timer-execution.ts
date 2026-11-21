@@ -446,6 +446,7 @@ async function executeMainSessionCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
     job,
     text,
@@ -551,6 +552,7 @@ async function executeDetachedCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
   });
 

@@ -36,6 +36,7 @@ import {
   prepareScheduledAutomationStart,
   resolveSessionEventReplyOptions,
   settleSessionEventTurn,
+  withScheduledSessionProviderAdmission,
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
@@ -66,9 +67,8 @@ import {
 } from "./session-event-target.js";
 import {
   createSessionEventReadmission,
-  prepareSessionEventReadmission,
-  readmitSessionEventOccurrence,
   resolveSessionEventTerminalOutcome,
+  settleSessionEventAttempt,
   type SessionEventReadmission,
 } from "./session-event-terminal.js";
 
@@ -138,6 +138,7 @@ export function enqueueSessionEventForHost(
   let started = false;
   let admissionStarted = false;
   let deferred = false;
+  let waitingProvider: string | undefined;
   const automationAdmission: ScheduledAutomationAdmission = { admissionDeferred: false };
   let adopted = false;
   const configPolicy = captureSessionEventConfigPolicy(
@@ -325,65 +326,52 @@ export function enqueueSessionEventForHost(
       // carries the still-live assertion so revoked ingress rejects the retry.
       const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
       acceptanceAssertion = undefined;
-      // Producers never retry; re-admit the same unstarted occurrence when policy or the
-      // workspace node changed under it. Stop, abort and abandonment settle terminally.
-      const nextReadmission = await prepareSessionEventReadmission(retry, signal, () => ({
-        source: options.source,
-        failure,
-        configPolicy,
-        inputSettled,
-        accepted,
-        adopted,
-        started,
-        conversationResultCommitted,
-        delivery,
-        abandoned,
-      }));
-      settlement = "finished";
-      const terminal = resolveSessionEventTerminalOutcome({
-        operation,
-        signal,
-        failure,
-        genericFailure,
-        terminalOutcome,
-      });
-      ({ failure, terminalOutcome } = terminal);
-      const { status } = terminal;
-      if (status === "failed" && !nextReadmission) {
-        log.error("session event execution failed", {
-          source: options.source,
+      const readmission = await settleSessionEventAttempt({
+        text: eventText,
+        options: {
+          ...options,
           agentId,
           sessionKey,
-          eventId: occurrenceId,
-          error: String(failure),
-        });
-      }
-      signal.removeEventListener("abort", onAbort);
-      generationLease?.release();
-      if (nextReadmission) {
-        ownership.release();
-        const readmission = readmitSessionEventOccurrence({
-          text: eventText,
-          options: {
-            ...options,
-            agentId,
-            sessionKey,
-            assertAcceptanceCurrent: pendingAcceptanceAssertion,
-            occurrences,
-          },
-          readmission: nextReadmission,
+          occurrences,
+          assertAcceptanceCurrent: pendingAcceptanceAssertion,
+        },
+        signal,
+        occurrenceId,
+        ownership,
+        retry,
+        waitingProvider,
+        facts: () => ({
+          source: options.source,
+          failure,
+          configPolicy,
+          inputSettled,
+          accepted,
           adopted,
-          occurrenceId,
-          enqueue: enqueueSessionEventForHost,
-          log,
-        });
-        readmittedReceipt = readmission.receipt;
-        failure = readmission.failure ?? failure;
-      } else if (options.preserveOccurrenceOnRejection && !adopted && !started) {
-        ownership.release();
-      } else {
-        ownership.cancel();
-      }
+          started,
+          conversationResultCommitted,
+          delivery,
+          abandoned,
+        }),
+        onSettling(error) {
+          settlement = "finished";
+          signal.removeEventListener("abort", onAbort);
+          generationLease?.release();
+          generationLease = undefined;
+          return resolveSessionEventTerminalOutcome({
+            operation,
+            signal,
+            failure: error ?? failure,
+            genericFailure,
+            terminalOutcome,
+          });
+        },
+        enqueue: enqueueSessionEventForHost,
+        log,
+      });
+      const { terminal, receipt } = readmission;
+      readmittedReceipt = receipt;
+      ({ terminalOutcome } = terminal);
+      failure = readmission.failure ?? terminal.failure;
       releaseOperatorAuthority?.();
       if (!accepted) {
         acceptance.resolve(
@@ -398,6 +386,7 @@ export function enqueueSessionEventForHost(
         resolve(readmittedReceipt.settled);
         return;
       }
+      const { status } = terminal;
       resolve({
         status,
         executionStarted: started,
@@ -520,7 +509,12 @@ export function enqueueSessionEventForHost(
           !options.scheduledAutomation &&
           !isCronSessionKey(sessionKey) &&
           !hasSessionEventOriginatingCaller(target),
-        scheduledAutomation: options.scheduledAutomation,
+        scheduledAutomation: withScheduledSessionProviderAdmission(
+          options.scheduledAutomation,
+          (provider) => {
+            waitingProvider = provider;
+          },
+        ),
         ...resolveSessionEventReplyOptions(options),
         operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
         admittedSessionSettings: settings,
@@ -697,7 +691,7 @@ export function enqueueSessionEventForHost(
       // onDeferred precedes queue insertion; only the dispatch result proves acceptance.
       accept();
     } else {
-      if (!started) {
+      if (!started && waitingProvider === undefined) {
         genericFailure ??= "Session event was not admitted; retry against the current session";
       }
       finish();
