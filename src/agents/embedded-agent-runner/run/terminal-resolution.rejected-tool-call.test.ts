@@ -201,19 +201,39 @@ it("continues after a consumed not-started refusal with visible progress text", 
   expect(activateInternalPrompt).toHaveBeenCalledOnce();
 });
 
-it("continues after multiple consumed not-started refusals", async () => {
-  const turn = await refusedExecThenRejectedCall();
-  prependFailedExec(turn, await refusedExecResult("call_earlier"));
+const startedExecFailure = (toolCallId: string) => ({
+  role: "toolResult" as const,
+  toolCallId,
+  toolName: "exec",
+  content: [{ type: "text" as const, text: "Command failed after starting" }],
+  isError: true,
+  timestamp: 0,
+});
 
+it.each(
+  Object.entries({
+    "multiple not-started refusals": async (turn) =>
+      prependFailedExec(turn, await refusedExecResult("call_earlier")),
+    started: ({ attempt, failure }) => {
+      Object.assign(failure, { executionStarted: true });
+      attempt.messagesSnapshot[2] = startedExecFailure("call_exec");
+    },
+    unknown: ({ failure }) => {
+      delete failure.executionStarted;
+    },
+    "earlier started": (turn) => prependFailedExec(turn, startedExecFailure("call_earlier")),
+  } satisfies Record<
+    string,
+    (turn: Awaited<ReturnType<typeof refusedExecThenRejectedCall>>) => unknown
+  >),
+)("continues after consumed tool failures (%s)", async (_condition, alter) => {
+  const turn = await refusedExecThenRejectedCall();
+  await alter(turn);
   await expect(terminalCase(turn).resolve()).resolves.toEqual({ action: "retry" });
 });
 
 it.each(
   Object.entries({
-    started: ({ failure }) => Object.assign(failure, { executionStarted: true }),
-    unknown: ({ failure }) => {
-      delete failure.executionStarted;
-    },
     "missing-result": ({ attempt }) => attempt.messagesSnapshot.splice(2, 1),
     unconsumed: ({ attempt, failedResult }) => {
       attempt.messagesSnapshot.splice(2, 1);
@@ -224,15 +244,6 @@ it.each(
     "different-tool": ({ failure }) => Object.assign(failure, { toolName: "write" }),
     active: ({ attempt }) => Object.assign(attempt.itemLifecycle, { activeCount: 1 }),
     async: ({ failedTool }) => Object.assign(failedTool, { asyncStarted: true }),
-    "earlier-failure": (turn) =>
-      prependFailedExec(turn, {
-        role: "toolResult",
-        toolCallId: "call_earlier",
-        toolName: "exec",
-        content: [{ type: "text", text: "Command failed after starting" }],
-        isError: true,
-        timestamp: 0,
-      }),
   } satisfies Record<
     string,
     (turn: Awaited<ReturnType<typeof refusedExecThenRejectedCall>>) => unknown
