@@ -14,7 +14,7 @@ import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
-import { resolveUserPath } from "./home-dir.js";
+import { resolveRequiredOsHomeDir, resolveUserPath } from "./home-dir.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 
@@ -193,7 +193,8 @@ export function resolveLegacyStateDirMigrationCandidates(params: {
   ) {
     return [];
   }
-  const homedir = params.homedir ?? os.homedir;
+  const home = resolveRequiredOsHomeDir(env, params.homedir ?? os.homedir);
+  const homedir = () => home;
   const target = resolveNewStateDir(homedir);
   return resolveLegacyStateDirs(homedir).map((source) => ({ source, target }));
 }

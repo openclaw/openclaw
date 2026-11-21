@@ -24,9 +24,9 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import {

@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ClawHubTemplateCatalogEntry } from "../../../../src/templates/clawhub-source.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { iconData } from "../../components/icon-data.ts";
@@ -18,7 +18,7 @@ import {
 import {
   agentsList,
   auditUrl,
-  installTemplateCatalogGateway,
+  createTemplateCatalogFixture,
   publishedAtMs,
   skillExcerpt,
   soulExcerpt,
@@ -73,33 +73,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await server?.close();
   });
 
-  async function fixture(
-    viewport = { width: 1440, height: 900 },
-    entry: ClawHubTemplateCatalogEntry = workflowOperator,
-    detailPublisher: Partial<Pick<ClawHubTemplateCatalogEntry, "ownerHandle" | "official">> = {},
-    loading = false,
-    colorScheme: "light" | "dark" = "light",
-    linkPreviews = false,
-    catalogEntries: ClawHubTemplateCatalogEntry[] = [entry],
-  ) {
-    const context = await browser.newContext({
-      colorScheme,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: viewport.width, height: viewport.height },
-    });
-    onTestFinished(() => context.close());
-    const page = await context.newPage();
-    const gateway = await installTemplateCatalogGateway(page, {
-      entry,
-      detailPublisher,
-      loading,
-      linkPreviews,
-      catalogEntries,
-    });
-    await page.goto(`${server.baseUrl}templates`);
-    return { page, gateway };
-  }
+  const fixture = createTemplateCatalogFixture(() => ({ browser, baseUrl: server.baseUrl }));
 
   it.each([
     { name: "desktop", width: 1200, height: 697 },
@@ -159,7 +133,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
     await card.locator(".agents-home__template-card-link").click();
     const detail = page.locator(".plugin-catalog-detail");
-    await detail.getByRole("heading", { name: "Workspace files" }).waitFor();
+    await detail.getByRole("heading", { level: 1 }).waitFor();
     return detail;
   }
 
@@ -201,7 +175,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       }
       await page.setViewportSize({ width: 390, height: 844 });
       await page.goto(templateUrl);
-      await detail.getByRole("heading", { name: "Workspace files" }).waitFor();
+      await detail.getByRole("heading", { level: 1, name: workflowOperator.displayName }).waitFor();
       await checkInsets("cold-phone");
       await evaluateControlUiContext(page, (app) => app.navigate("appearance"));
       await page.locator(".settings-section").first().waitFor();
@@ -211,7 +185,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await page.goto(
         new URL(pathForPluginCatalogEntry(inspection.catalog.plugin.id), server.baseUrl).href,
       );
-      await detail.getByRole("heading", { name: "README", exact: true }).waitFor();
+      await detail
+        .getByRole("heading", { level: 1, name: inspection.catalog.plugin.catalog.name })
+        .waitFor();
       await checkInsets("plugin-phone");
       for (const width of [820, 1400]) {
         await page.setViewportSize({ width, height: 1000 });
@@ -336,13 +312,15 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await capture(page, `detail-rail-${viewport.name}`, rail, rail);
       const audit = rail.locator(".plugin-catalog-detail__security");
       expect(await audit.getByRole("link").getAttribute("href")).toBe(auditUrl);
-      expect(await audit.locator("strong").textContent()).toBe("Clean");
+      await audit.getByText("Clean", { exact: true }).waitFor();
       expect(await audit.locator(".is-filled").count()).toBe(3);
       const date = (value: number) =>
         new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(value);
       expect(
         await rail
-          .locator(".plugin-metadata__facts > div")
+          .locator(
+            ".plugin-metadata__facts > div:not(.plugin-catalog-detail__security, .plugin-metadata__section)",
+          )
           .evaluateAll((rows) =>
             rows.map((row) => [
               row.querySelector("dt")!.textContent,
@@ -574,32 +552,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(boxes[0]!.x).toBe(boxes[2]!.x);
       expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
       expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
-      const rows = await cards.evaluateAll((elements) =>
-        elements.map((card) => {
-          const art = card.querySelector(".agents-home__template-art")!;
-          const body = card.querySelector(".agents-home__template-head")!.getBoundingClientRect();
-          const image = art.getBoundingClientRect();
-          const add = card.querySelector(".agents-home__template-add")!.getBoundingClientRect();
-          const name = card.querySelector("h3")!.getBoundingClientRect();
-          const owner = card
-            .querySelector(".agents-home__template-identity span")!
-            .getBoundingClientRect();
-          return {
-            background: getComputedStyle(art).backgroundColor,
-            artworkHeight: image.height,
-            bodyHeight: body.height,
-            centerDelta: Math.abs(add.y + add.height / 2 - (body.y + body.height / 2)),
-            identityDelta: Math.abs(name.y - owner.y),
-          };
-        }),
-      );
-      for (const row of rows) {
-        expect(row.background).toBe("rgba(0, 0, 0, 0)");
-        expect(row.artworkHeight).toBe(row.bodyHeight);
-        expect(row.centerDelta).toBeLessThan(1);
-        // Different font sizes share a baseline, with a one-pixel top offset.
-        expect(row.identityDelta).toBeLessThanOrEqual(1);
-      }
     }
     await gateway.waitForRequest("templates.catalog.search", {
       match: { overview: true, limit: 4 },
@@ -632,48 +584,70 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await capture(
         page,
         `after-detail-${viewport.name}`,
-        detail.getByRole("heading", { name: "Workspace files" }),
+        detail.getByRole("heading", { name: "Personality" }),
       );
       await expectPublisher(detail, "openclaw", true);
-      const workspace = detail.locator(".plugin-capabilities").first();
-      const help = workspace.getByRole("button", { name: "About SOUL.md" });
-      await workspace.getByRole("button", { name: "SOUL.md", exact: true }).focus();
-      await page.keyboard.press("Tab");
-      expect(await help.evaluate((button) => button === document.activeElement)).toBe(true);
-      const tooltip = workspace.locator("openclaw-tooltip").first();
-      await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
+      await detail.getByText(soulExcerpt, { exact: true }).waitFor();
       expect(await gateway.getRequests("templates.catalog.preview")).toHaveLength(0);
-      await page.keyboard.press("Escape");
-      await tooltip.locator("[role=tooltip]").waitFor({ state: "hidden" });
-      await help.click();
-      await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
-      expect(await gateway.getRequests("templates.catalog.preview")).toHaveLength(0);
-      await page.keyboard.press("Escape");
-      await detail.getByRole("heading", { name: "Workspace files" }).click();
-      const fileDescriptions = workspace.locator(".settings-row__desc");
-      expect(await fileDescriptions.allTextContents()).toEqual([soulExcerpt]);
-      await expectClamped(fileDescriptions.first());
       await expectClamped(detail.getByText(skillExcerpt, { exact: true }));
       expect(await detail.getByRole("heading", { name: "Plugins" }).count()).toBe(1);
       expect(await detail.getByRole("heading", { name: "Automations" }).count()).toBe(0);
       await detail.getByText("Installed", { exact: true }).waitFor();
       expect(await detail.locator(".plugin-connection-status svg").count()).toBe(1);
-      const descriptionBounds = await detail
-        .locator(".plugin-catalog-detail__summary")
-        .boundingBox();
-      const actionBounds = await detail
-        .locator("openclaw-plugin-install-action button")
-        .boundingBox();
-      expect(descriptionBounds).not.toBeNull();
-      expect(actionBounds).not.toBeNull();
-      expect(actionBounds!.y).toBeGreaterThanOrEqual(
-        descriptionBounds!.y + descriptionBounds!.height,
-      );
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
+      const fileContent = "Personality file content.";
+      await gateway.setMethodResponse("templates.catalog.preview", {
+        preview: { kind: "instruction", name: "SOUL.md", content: fileContent },
+      });
+      await detail.getByRole("button", { name: "SOUL.md", exact: true }).press("Enter");
+      await gateway.waitForRequest("templates.catalog.preview", {
+        match: { kind: "instruction", name: "SOUL.md" },
+      });
+      await page
+        .getByRole("dialog", { name: "Workspace files", exact: true })
+        .getByText(fileContent, { exact: true })
+        .waitFor();
     },
   );
+
+  it("reads and collapses the full SOUL.md when its excerpt already fits", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.setMethodResponse("templates.catalog.detail", {
+      detail: {
+        ...workflowOperator,
+        version: "1.2.0",
+        agentId: "workflow-operator",
+        contents: {
+          instructions: [
+            { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: "Short excerpt." },
+          ],
+          skills: [],
+          integrations: [],
+          automations: [],
+        },
+      },
+    });
+    await gateway.setMethodResponse("templates.catalog.preview", {
+      preview: {
+        content:
+          "A full instruction.\n\n![External illustration](https://example.invalid/soul.png)",
+      },
+    });
+    const detail = await openDetail(page);
+    const personality = detail.locator(".templates-personality");
+    await personality.getByText("Short excerpt.", { exact: true }).waitFor();
+    expect(await gateway.getRequests("templates.catalog.preview")).toHaveLength(0);
+    await personality.getByRole("button", { name: "Show more", exact: true }).click({
+      timeout: 5000,
+    });
+    await personality.getByText("A full instruction.", { exact: true }).waitFor();
+    expect(await gateway.getRequests("templates.catalog.preview")).toHaveLength(1);
+    expect(await personality.getByRole("img", { name: "External illustration" }).count()).toBe(0);
+    await personality.getByRole("button", { name: "Show less", exact: true }).click();
+    await personality.getByText("Short excerpt.", { exact: true }).waitFor();
+  });
 
   it("opens automation instructions from the template row and describes the schedule in both views", async () => {
     const { page, gateway } = await fixture(undefined, undefined, undefined, false, "dark");
@@ -707,20 +681,24 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     const detail = await openDetail(page);
     const automations = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
-    const row = automations.getByRole("button", { name: /Weekly brief/ });
+    const row = automations.locator("summary").filter({ hasText: "Weekly brief" });
     await row.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
     await capture(page, "paused-automation-detail", automations);
     await row.click();
-    const dialog = page.getByRole("dialog", { name: "Weekly brief", exact: true });
-    await dialog.getByText("List anything still waiting on a decision.").waitFor();
-    await dialog.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
-    await capture(page, "paused-automation-dialog", dialog);
-    await dialog.getByRole("button", { name: "Close", exact: true }).click();
-    await dialog.waitFor({ state: "hidden" });
-    await automations.getByRole("button", { name: /Midweek nudge/ }).click();
-    await page
-      .getByRole("dialog", { name: "Midweek nudge", exact: true })
-      .getByText("Wednesday at 9:00 PM · UTC · Disabled", { exact: true })
+    const prompt = automations.getByText(
+      "Summarize last week's work. List anything still waiting on a decision.",
+      { exact: true },
+    );
+    await prompt.waitFor();
+    expect(await page.getByRole("dialog").count()).toBe(0);
+    await capture(page, "paused-automation-inline", automations);
+    await row.click();
+    await prompt.waitFor({ state: "hidden" });
+    const midweek = automations.locator("summary").filter({ hasText: "Midweek nudge" });
+    await midweek.getByText("Wednesday at 9:00 PM · UTC · Disabled", { exact: true }).waitFor();
+    await midweek.click();
+    await automations
+      .getByText("Remind me of anything due before Friday.", { exact: true })
       .waitFor();
     await page.goto(`${server.baseUrl}chat/main`);
     await page.locator("a.markdown-template-link").first().click();

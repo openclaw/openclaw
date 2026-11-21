@@ -12,11 +12,11 @@ import { cloneTranscriptView } from "../../../config/sessions/transcript-snapsho
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { labelRuntimeContextText } from "../../../llm/types.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
