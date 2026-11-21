@@ -513,27 +513,33 @@ export async function resolveGitReleaseCheckout(
   return path.basename(commonDir) === ".git" ? path.dirname(commonDir) : fallback;
 }
 
-/** npm's global package when an earlier switch to Git linked it to this checkout. */
+/** The global package (npm, pnpm or Bun) linked to this checkout, by a user or an earlier switch. */
 async function findGlobalPackageLinkedTo(checkout: string, timeoutMs: number) {
-  const target = await resolveGlobalInstallTarget({
-    manager: "npm",
-    runCommand: runCommandWithTimeout,
-    timeoutMs,
-  }).catch(() => null);
-  const packageRoot = target?.packageRoot;
-  if (!packageRoot) {
-    return null;
+  // A checkout is linked globally with `npm link`, `pnpm add -g openclaw@link:` or `bun link`.
+  for (const manager of ["npm", "pnpm", "bun"] as const) {
+    const target = await resolveGlobalInstallTarget({
+      manager,
+      runCommand: runCommandWithTimeout,
+      timeoutMs,
+    }).catch(() => null);
+    const packageRoot = target?.packageRoot;
+    if (!packageRoot) {
+      continue;
+    }
+    // A swap killed between its two renames left the link under its backup name.
+    if (!(await fs.lstat(packageRoot).catch(() => null))) {
+      await restoreInterruptedNpmPackageRootLink(
+        path.dirname(packageRoot),
+        packageRoot,
+        checkout,
+        false,
+      ).catch(() => undefined);
+    }
+    if (await isLinkTo(packageRoot, checkout)) {
+      return packageRoot;
+    }
   }
-  // A swap killed between its two renames left the link under its backup name.
-  if (!(await fs.lstat(packageRoot).catch(() => null))) {
-    await restoreInterruptedNpmPackageRootLink(
-      path.dirname(packageRoot),
-      packageRoot,
-      checkout,
-      false,
-    ).catch(() => undefined);
-  }
-  return (await isLinkTo(packageRoot, checkout)) ? packageRoot : null;
+  return null;
 }
 
 async function isLinkTo(link: string, dir: string): Promise<boolean> {

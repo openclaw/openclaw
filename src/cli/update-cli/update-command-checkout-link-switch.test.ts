@@ -6,6 +6,7 @@ import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
+import * as gitReleaseRunner from "../../infra/update-runner-git-release.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -15,6 +16,7 @@ import {
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import * as shared from "./shared.js";
+import { updateGitInstall } from "./update-command-git.js";
 import { inspectCheckoutLinkPackageSwitch } from "./update-command-package-destination.js";
 import * as servicePlan from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";
@@ -233,5 +235,47 @@ it.each([true, false])(
     expect(
       (await fs.readdir(path.dirname(globalRoot))).filter((name) => name !== "node_modules"),
     ).toEqual([]);
+  },
+);
+
+it.each(["pnpm", "bun"] as const)(
+  "points a %s global link to the checkout at the release after a Git update",
+  async (manager) => {
+    // The refusal above sends this topology to `openclaw update`; the CLI must then run the release.
+    const release = path.join(base, "state", "git-install", "openclaw");
+    vi.stubEnv("PATH", "");
+    vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockImplementation(async (params) =>
+      params.manager === manager
+        ? { ...pnpmTarget(), manager, command: manager }
+        : { ...pnpmTarget(path.join(base, "absent", "openclaw")), manager: "npm", command: "npm" },
+    );
+    vi.spyOn(gitReleaseRunner, "updateGitRelease").mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      root: release,
+      steps: [],
+      durationMs: 0,
+    });
+
+    const result = await updateGitInstall({
+      root: checkout,
+      switchToGit: false,
+      installKind: "git",
+      timeoutMs: 1_000,
+      startedAt: Date.now(),
+      progress: {},
+      channel: "dev",
+      beforeGitMutation: async () => {},
+      validateCandidate: async () => [],
+      inspectGitTarget: async () => {},
+    });
+
+    expect(result.steps.filter((step) => step.name === "git-release-cli")).toEqual([]);
+    // The link is now a directory whose entry starts the release launcher; the checkout is untouched.
+    expect((await fs.lstat(link)).isDirectory()).toBe(true);
+    await expect(fs.readFile(path.join(link, "openclaw.mjs"), "utf8")).resolves.toContain(
+      path.join(base, "state", "git-install", "openclaw-launcher.mjs"),
+    );
+    await expect(fs.access(path.join(checkout, "package.json"))).resolves.toBeUndefined();
   },
 );
