@@ -44,16 +44,6 @@ type HiddenProjectConfigFile = {
 type InstallPackageDirFailure = { ok: false; error: string; recoveryIncomplete?: boolean };
 type InstallPackageDirSuccess = { ok: true };
 
-export function hasPackageRuntimeDependencies(manifest: {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-}): boolean {
-  return (
-    Object.keys(manifest.dependencies ?? {}).length > 0 ||
-    Object.keys(manifest.optionalDependencies ?? {}).length > 0
-  );
-}
-
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
   const originalPath = path.join(targetDir, STAGED_NPM_PROJECT_CONFIG_NAME);
   let hiddenDir = "";
