@@ -170,10 +170,10 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     before converting the roster. Current keyed `agents.entries` configurations
     without a legacy marker keep their dynamic system-agent selection.
 
-    When adopting inference accounts for legacy jobs, Doctor shares one captured
-    configuration across the migration. Agent workspaces can reuse provider
-    preparation, while each job still resolves its own model, account preferences,
-    and authorization. Existing bindings and model selections stay unchanged.
+    When restoring recorded inference accounts after a state upgrade, Doctor shares
+    one captured configuration across the repair, while each job still resolves its
+    own model and authorization. Jobs without a recorded account select their
+    account at run time and are left unchanged.
 
     Missing interval anchors are repaired by Doctor. Runtime scheduling can
     calculate the next run without writing an anchor into an old definition.
