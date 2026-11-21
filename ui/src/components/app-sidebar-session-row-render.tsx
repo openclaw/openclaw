@@ -9,6 +9,7 @@ import {
   For,
   onSettled,
   Show,
+  useContext,
 } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { formatUiError } from "../lib/format-error.ts";
@@ -31,6 +32,7 @@ import {
   sidebarSessionRowSubtitleParams,
 } from "./session-row-subtitle.ts";
 import { sameSidebarPresentation } from "./sidebar-projection-cache.ts";
+import { SidebarRenameScope, orderWhileRenaming } from "./sidebar-rename-order.ts";
 import type { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { InlineAlert } from "./solid/inline-alert.tsx";
@@ -481,11 +483,16 @@ export function renderSessionTree(params: {
     listItem = createMemo(() => params.listItem ?? true),
     icon = createMemo(() => params.icon);
   const expanded = createMemo(() => host().isSessionChildrenExpanded(session()));
-  const visibleChildren = createMemo(() =>
-    visibleSessionChildren({
-      session: session(),
-      fullyShown: host().isSessionChildrenFullyShown(session().key),
-    }),
+  const renameScope = useContext(SidebarRenameScope);
+  const visibleChildren = createMemo((previous: readonly SidebarRecentSession[] | undefined) =>
+    orderWhileRenaming(
+      visibleSessionChildren({
+        session: session(),
+        fullyShown: host().isSessionChildrenFullyShown(session().key),
+      }),
+      previous,
+      renameScope?.editing,
+    ),
   );
   const hiddenChildCount = createMemo(() => session().children.length - visibleChildren().length);
   const windowItem = () => params.window?.item(session().key);

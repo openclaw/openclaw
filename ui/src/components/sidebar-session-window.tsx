@@ -1,6 +1,7 @@
 import { createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { visibleSessionChildren, type SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SidebarScrollContext } from "./sidebar-context-controller.ts";
@@ -76,6 +77,24 @@ export function createSidebarSessionWindow(
       rowRef: (_key: () => string) => (_element: HTMLDivElement) => {},
     };
   }
+  // A keyed move keeps the control but the browser can blur it during insertion.
+  createPendingFocus(
+    () => {
+      rows();
+      const active = list?.ownerDocument.activeElement;
+      return active instanceof HTMLElement && list.contains(active) ? { active } : null;
+    },
+    {
+      requested: (request) =>
+        Boolean(
+          request &&
+          request.active.isConnected &&
+          list.contains(request.active) &&
+          request.active.ownerDocument.activeElement === request.active.ownerDocument.body,
+        ),
+      focus: (request) => request?.active.focus({ preventScroll: true }),
+    },
+  );
   const measured = new Map<string, { signature: string; height: number }>();
   const mounted = new Map<string, HTMLDivElement>();
   const [mountRevision, setMountRevision] = createSignal(0);
