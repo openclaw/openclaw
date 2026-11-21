@@ -3,6 +3,7 @@ import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 const TOOLING_PROMPT = [
   "## Tooling",
+  "Tools policy-filtered. Names case-sensitive; call exact.",
   "- message: Send a message to the current source conversation.",
   "",
   "## Messaging",
@@ -23,10 +24,22 @@ function transformPrompt(systemPrompt: string, openClawMcpToolNames?: readonly s
 }
 
 describe("Claude CLI tool naming guidance", () => {
-  it("preserves the prompt prefix and supplies registered message delivery and discovery names", () => {
+  it("puts the registered MCP name before the exact-name Tooling instructions", () => {
     const prompt = transformPrompt(TOOLING_PROMPT, ["message"]);
 
-    expect(prompt?.startsWith(TOOLING_PROMPT)).toBe(true);
+    const exactNameInstruction = prompt?.indexOf("Names case-sensitive; call exact.") ?? -1;
+    const registeredNameGuidance = prompt?.indexOf("mcp__openclaw__<name>") ?? -1;
+    expect(exactNameInstruction).toBeGreaterThanOrEqual(0);
+    expect(registeredNameGuidance).toBeGreaterThanOrEqual(0);
+    expect(registeredNameGuidance).toBeLessThan(exactNameInstruction);
+    expect(prompt).toContain("bare Tooling labels are not callable");
+  });
+
+  it("preserves Tooling text and supplies registered message delivery and discovery names", () => {
+    const prompt = transformPrompt(TOOLING_PROMPT, ["message"]);
+
+    expect(prompt?.startsWith("## Tooling\n")).toBe(true);
+    expect(prompt).toContain(TOOLING_PROMPT.slice("## Tooling\n".length));
     expect(prompt).toContain("`mcp__openclaw__<name>`");
     expect(prompt).toContain("ToolSearch `select:mcp__openclaw__<name>`");
     expect(prompt).toContain("`mcp__openclaw__message(action=send)`");
