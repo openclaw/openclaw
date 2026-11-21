@@ -435,13 +435,11 @@ it("keeps the anchored message when the history byte cap trims neighbors", async
 });
 
 it("paginates history with default filtering and explicit tool inclusion", async () => {
+  const visibleBlock = { type: "text", text: "visible" };
   const visibleMessages = [
     {
       role: "assistant",
-      content: [
-        { type: "text", text: "visible" },
-        { type: "toolCall", id: "outer-call", name: "read", arguments: {} },
-      ],
+      content: [visibleBlock],
       __openclaw: { seq: 7 },
     },
     { role: "custom", customType: "notice", content: "visible notice", __openclaw: { seq: 8 } },
@@ -469,7 +467,15 @@ it("paginates history with default filtering and explicit tool inclusion", async
       ],
       __openclaw: { seq: 6 },
     },
-    ...visibleMessages,
+    {
+      ...visibleMessages[0],
+      content: [
+        visibleBlock,
+        { type: "toolCall", id: "outer-call", name: "read", arguments: {} },
+        { type: "tool_use", id: "imported-call", name: "read", input: {} },
+      ],
+    },
+    ...visibleMessages.slice(1),
   ];
   const { tool } = historyFixture({
     messages,
@@ -501,6 +507,55 @@ it("paginates history with default filtering and explicit tool inclusion", async
   );
   expect(withTools.messages).toEqual(messages);
   expect(withTools.nextOffset).toBe(7);
+});
+
+it("preserves the anchor and user text while stripping structured tool blocks", async () => {
+  const anchor = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call", name: "read", arguments: {} }],
+    __openclaw: { id: "tool-only" },
+  };
+  const text = { type: "text", text: "Keep this user message" };
+  const result = { type: "tool_result", tool_use_id: "call", content: "hidden" };
+  const { tool } = historyFixture({
+    messages: [anchor, { role: "user", content: [result, text] }],
+  });
+
+  const details = readHistoryDetails(
+    await tool.execute("anchored", { sessionKey: "main", messageId: "tool-only" }),
+  );
+  expect(details.messages).toEqual([
+    { ...anchor, content: [] },
+    { role: "user", content: [text] },
+  ]);
+  expect(details).toMatchObject({ truncated: false, droppedMessages: false });
+});
+
+it("omits Claude CLI tool blocks and signature-only thinking from default recall", async () => {
+  const reasoning = { type: "thinking", thinking: "Check the result", signature: "signed" };
+  const answer = { type: "text", text: "The final reply" };
+  const imported = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "", signature: "opaque-signature" },
+      { type: "redacted_thinking", data: "opaque-redacted-data" },
+      { type: "toolcall", id: "claude-call", name: "Read", arguments: { file_path: "sample" } },
+      { type: "tool_result", tool_use_id: "claude-call", content: "sample contents" },
+      reasoning,
+      answer,
+    ],
+    __openclaw: { id: "claude-answer", importedFrom: "claude-cli" },
+  };
+  const { tool } = historyFixture({ messages: [imported] });
+
+  for (const params of [{}, { includeTools: false }, { includeTools: true }]) {
+    const { messages } = readHistoryDetails(
+      await tool.execute("claude-import", { sessionKey: "main", ...params }),
+    );
+    expect(messages).toEqual([
+      params.includeTools ? imported : { ...imported, content: [reasoning, answer] },
+    ]);
+  }
 });
 
 it.each([
