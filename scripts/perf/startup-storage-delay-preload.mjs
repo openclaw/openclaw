@@ -12,7 +12,9 @@ if (!state) {
 const control = path.join(state, "benchmark-commit-delay.json");
 const output = path.join(state, `benchmark-commits.${threadId}.jsonl`);
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
+/* oxlint-disable typescript/unbound-method -- The bound call takes the database receiver explicitly below. */
 const exec = Function.prototype.call.bind(DatabaseSync.prototype.exec);
+/* oxlint-enable typescript/unbound-method */
 DatabaseSync.prototype.exec = function (sql) {
   let settings;
   if (/^\s*COMMIT(?:\s+TRANSACTION)?\s*;?\s*$/iu.test(sql) && this.isTransaction) {
