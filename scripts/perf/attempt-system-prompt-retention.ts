@@ -142,7 +142,8 @@ async function batch() {
   });
   const pending = agents.map((agent) => agent.prompt("Synthetic request."));
   await entered;
-  const weak = preparations.map((prepared) => new WeakRef(prepared));
+  const weak =
+    values.mode === "retention" ? preparations.map((prepared) => new WeakRef(prepared)) : [];
   return {
     preparations,
     agents,
