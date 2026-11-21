@@ -120,6 +120,8 @@ describe("monitorMatrixProvider", () => {
     hoisted.getRoomInfo.mockReset().mockResolvedValue(roomInfo());
     hoisted.getMemberDisplayName.mockReset().mockResolvedValue("Bot");
     hoisted.registeredOnRoomMessage = null;
+    hoisted.ingressLifecycles.length = 0;
+    hoisted.messagesConfig = undefined;
     hoisted.registeredHealthySyncGetter = undefined;
     hoisted.stopThreadBindingManager.mockReset().mockResolvedValue(undefined);
     hoisted.client.removeAllListeners();
@@ -239,17 +241,100 @@ describe("monitorMatrixProvider", () => {
 
       const onRoomMessage = registeredRoomMessageHandler();
 
-      await expect(onRoomMessage("!room:example.org", { event_id: "$event" })).rejects.toThrow(
-        "room handler exploded",
-      );
+      // Delivery is deferred to the inbound debouncer; the claim's lifecycle owns the failure.
+      await expect(onRoomMessage("!room:example.org", { event_id: "$event" })).resolves.toEqual({
+        kind: "deferred",
+      });
       await Promise.resolve();
 
       expect(unhandled).toHaveLength(0);
+      const [lifecycle] = hoisted.ingressLifecycles;
+      expect(lifecycle?.onFailed).toHaveBeenCalledOnce();
+      expect(String(mockCallArg(lifecycle!.onFailed, 0, 0))).toContain("room handler exploded");
+      expect(lifecycle?.onAdopted).not.toHaveBeenCalled();
 
       abortController.abort();
       await monitorPromise;
     } finally {
       process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("merges a Matrix text burst when messages.inbound.byChannel.matrix is set", async () => {
+    hoisted.messagesConfig = { inbound: { byChannel: { matrix: 1000 } } };
+    const handler = vi.fn(async () => {});
+    hoisted.createMatrixRoomMessageHandler.mockReturnValue(handler);
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await waitForCallOrderEntry("start-client");
+    const onRoomMessage = registeredRoomMessageHandler();
+    vi.useFakeTimers();
+    try {
+      for (const [eventId, body] of [
+        ["$1", "one"],
+        ["$2", "two"],
+      ]) {
+        await onRoomMessage("!room:example.org", {
+          type: "m.room.message",
+          event_id: eventId,
+          sender: "@alice:example.org",
+          content: { msgtype: "m.text", body },
+        });
+      }
+      expect(handler).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(mockCallArg(handler, 0, 0)).toBe("!room:example.org");
+      expect(mockCallArg(handler, 0, 1)).toMatchObject({
+        event_id: "$2",
+        content: { body: "one\ntwo" },
+      });
+      // The gated test handler never adopts; the flush still settles both durable claims.
+      for (const lifecycle of hoisted.ingressLifecycles) {
+        expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
+      }
+    } finally {
+      vi.useRealTimers();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("applies a debounce delay committed after startup without reconnecting", async () => {
+    hoisted.messagesConfig = { inbound: { byChannel: { matrix: 1000 } } };
+    const handler = vi.fn(async () => {});
+    hoisted.createMatrixRoomMessageHandler.mockReturnValue(handler);
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await waitForCallOrderEntry("start-client");
+    const onRoomMessage = registeredRoomMessageHandler();
+    hoisted.messagesConfig = { inbound: { byChannel: { matrix: 5000 } } };
+    vi.useFakeTimers();
+    try {
+      for (const [eventId, body] of [
+        ["$1", "one"],
+        ["$2", "two"],
+      ]) {
+        await onRoomMessage("!room:example.org", {
+          type: "m.room.message",
+          event_id: eventId,
+          sender: "@alice:example.org",
+          content: { msgtype: "m.text", body },
+        });
+      }
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(handler).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(mockCallArg(handler, 0, 1)).toMatchObject({ content: { body: "one\ntwo" } });
+    } finally {
+      vi.useRealTimers();
+      abortController.abort();
+      await monitorPromise;
     }
   });
 
@@ -370,7 +455,8 @@ describe("monitorMatrixProvider", () => {
     );
     await expect(
       registeredRoomMessageHandler()("!room:example.org", { event_id: "$late" }),
-    ).rejects.toThrow("Matrix monitor is stopped");
+    ).resolves.toEqual({ kind: "deferred" });
+    expect(hoisted.ingressLifecycles[0]?.onCancelled).toHaveBeenCalledOnce();
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -524,14 +610,17 @@ describe("monitorMatrixProvider", () => {
     const onRoomMessage = registeredRoomMessageHandler();
 
     const roomMessagePromise = onRoomMessage("!room:example.org", { event_id: "$event" });
+    await waitForCallOrderEntry("handler-start:$event");
     abortController.abort();
     await waitForCallOrderEntry("dispose-monitor-events");
     expect(hoisted.callOrder).not.toContain("stop-manager");
     expect(hoisted.callOrder).not.toContain("release-client");
 
-    await expect(onRoomMessage("!room:example.org", { event_id: "$late" })).rejects.toThrow(
-      "Matrix monitor is stopped",
-    );
+    // Closed admission returns late events to the durable queue instead of running them.
+    await expect(onRoomMessage("!room:example.org", { event_id: "$late" })).resolves.toEqual({
+      kind: "deferred",
+    });
+    expect(hoisted.ingressLifecycles[1]?.onCancelled).toHaveBeenCalledOnce();
     expect(hoisted.callOrder).not.toContain("handler-start:$late");
 
     handlerDone.resolve();
