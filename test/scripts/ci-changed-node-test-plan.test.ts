@@ -1901,6 +1901,10 @@ describe("CI changed Node test plan", () => {
 
   it.each([
     ["test/scripts/control-ui-i18n.test.ts", "test/vitest/vitest.tooling-isolated.config.ts"],
+    [
+      "test/scripts/installed-terminal-observer.test.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
+    ],
     ["test/scripts/docker-build-helper.test.ts", "test/vitest/vitest.tooling-docker.config.ts"],
   ])("selects only the canonical tooling config for %s", (target, config) => {
     const jobs = createSelectedNodeTestShardBundles([target]);

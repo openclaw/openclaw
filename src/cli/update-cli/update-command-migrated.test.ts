@@ -31,6 +31,7 @@ import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
+  finishUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import {
@@ -637,6 +638,132 @@ it.for([
     });
     expect(driver.pid).not.toBe(process.pid);
     expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
+  },
+);
+
+it.for(["package", "release", "success"] as const)(
+  "keeps a successful candidate private through held %s settlement",
+  { timeout: 30_000 },
+  async (stage, { signal }) => {
+    const stateDir = await fs.realpath(dirs.make("migrated-success-settlement-"));
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const control = path.join(stateDir, "executor-control");
+    await fs.mkdir(control);
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const hold = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    let stdout = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout += String(chunk);
+      return true;
+    });
+    vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockResolvedValue(candidateContract);
+    const result = updateResult({ root: candidateRoot, runId: run.runId, status: "ok" });
+    const published = JSON.stringify({ ...result, fixturePublication: true }, null, 2) + "\n";
+    const worker = path.join(stateDir, "settlement-worker.cjs");
+    await fs.writeFile(
+      worker,
+      `const fs = require('node:fs');
+       let input = ''; process.stdin.setEncoding('utf8');
+       process.stdin.on('data', chunk => { input += chunk; });
+       process.stdin.on('end', () => {
+         const request = JSON.parse(input);
+         fs.writeFileSync(request.resultPath, JSON.stringify({
+           result: ${JSON.stringify(result)}, terminalRunId: ${JSON.stringify(run.runId)},
+           exitCode: 0, executorDelegation: 'pid-start-v1'
+         }));
+         process.stdout.write(${JSON.stringify(published)});
+       });`,
+    );
+    // Keep beforeInput's native PID/argv admission and the runner's owned join.
+    // Only the worker's result is synthetic; parent settlement remains real.
+    const nativeCommand = childCommandBuffers.runUtf8CommandBuffersWithTimeout;
+    vi.spyOn(childCommandBuffers, "runUtf8CommandBuffersWithTimeout").mockImplementation(
+      async (_argv, options) => {
+        if (typeof options === "number" || typeof options.input !== "string") {
+          throw new Error("Missing migrated fixture input");
+        }
+        const child = await nativeCommand([process.execPath, worker], options);
+        finishUpdateRun(run.runId, { status: "succeeded" }, { env });
+        expect(child).toMatchObject({ code: 0, termination: "exit", cleanup: "normal" });
+        return child;
+      },
+    );
+    const work = withUpdateCommandTerminalResult(
+      (register) =>
+        withUpdateCommandExecutor(run.runId, async (executor) => {
+          const scopedRun = { ...run, executorFence: await executor.enter(candidateRoot) };
+          register(scopedRun);
+          const migratedResult = await continueMigratedUpdateInFreshProcess(
+            finishParams({
+              root: candidateRoot,
+              result: updateResult({ root: candidateRoot }),
+              configSnapshot: createTestConfigSnapshot(
+                {},
+                {},
+                path.join(stateDir, "openclaw.json"),
+              ),
+              opts: { json: true, run: scopedRun },
+              packageUpdateNodeRunner: process.execPath,
+              updateStepTimeoutMs: 30_000,
+              packageTransaction: {
+                backupRoot: path.join(stateDir, "backup"),
+                rollback: vi.fn(),
+                complete: async () => {
+                  if (stage === "release") {
+                    return;
+                  }
+                  await hold();
+                  if (stage === "package") {
+                    throw new Error("fixture late package refusal");
+                  }
+                },
+              },
+            }),
+            [],
+          );
+          if (stage === "release") {
+            await hold();
+            using leases = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+            leases.exec(
+              "CREATE TRIGGER deny_success_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture late executor refusal'); END",
+            );
+          }
+          return migratedResult;
+        }),
+      { json: true },
+    );
+    const outcome = work.then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, work, "Settlement was not held"),
+        signal,
+      );
+      expect(stdout).toBe("");
+    } finally {
+      release.resolve();
+      await outcome;
+    }
+    const settled = await outcome;
+    if (stage === "success") {
+      expect(settled.error).toBeUndefined();
+      expect(stdout).toBe(published);
+    } else {
+      expect(settled.error).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+      expect(stdout).toBe("");
+    }
   },
 );
 

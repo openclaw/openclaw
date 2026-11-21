@@ -9,9 +9,12 @@ import {
   readInstalledTerminalMetadata,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
 import {
+  buildInstalledTerminalSummary,
   type InstalledTerminalProcessAbsence,
+  publishInstalledTerminalEvidence,
   readInstalledTerminalEvents,
   readInstalledTerminalHeartbeat,
+  summarizeInstalledTerminalLaunches,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs";
 import { readWorkerCellPackageIdentity } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
 import { execNodeEvalSync, resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -343,17 +346,67 @@ it("admits post-reap absence of the real watch after its creator exits without c
   expect(records(f).filter((row) => row.event === "startup" && row.pid === pid)).toEqual([]);
   expect(records(f).filter((row) => row.event === "spawn-exit" && row.child === pid)).toEqual([]);
   expect(() => readInstalledTerminalEvents(f.directory, f.spec)).toThrow("no unique native exit");
+  const created = records(f).find((row) => row.event === "spawn" && row.child === pid);
+  assert(created);
+  const filename = path.join(f.directory, `${created.pid}-${created.thread}.jsonl`);
+  const original = readJsonLines<Row>(filename);
+  const terminal = original.at(-1);
+  assert(terminal?.event === "exit" && typeof terminal.time === "string");
+  // Supply the compact summary's fixture handoff window, as in the enclosing
+  // teardown fixture. The child lifecycle and subsequent ESRCH are real.
+  const scope = { time: String(BigInt(terminal.time) - 1n), child: -1, databases: [] };
+  rewrite(filename, [
+    ...original.slice(0, -1),
+    { ...terminal, event: "handoff", ...scope },
+    terminal,
+  ]);
+  writeJson(path.join(f.directory, "handoff.json"), scope);
   const processAbsence = absence(f.directory);
   expect(processAbsence).toHaveLength(1);
   expect(processAbsence[0]).toMatchObject({ child: pid, errorCode: "ESRCH", ownExitCode: null });
-  expect(
-    readInstalledTerminalEvents(f.directory, { ...f.spec, processAbsence }).find(
-      (row) => row.event === "spawn" && row.child === pid,
-    ),
-  ).toMatchObject({
+  const qualified = readInstalledTerminalEvents(f.directory, { ...f.spec, processAbsence });
+  expect(qualified.find((row) => row.event === "spawn" && row.child === pid)).toMatchObject({
     coverage: { reason: "closed-helper-lifetime" },
     lifetimeBound: processAbsence[0],
   });
+  const summary = {
+    status: "passed",
+    cells: [{ name: "healthy", ...summarizeInstalledTerminalLaunches(qualified) }],
+  };
+  const compact = summary.cells[0]!.processesWithoutPreload[0]!;
+  expect(compact.nativeSettlement).toEqual([]);
+  expect(compact.lifetimeBound).toEqual(processAbsence[0]);
+  const exported = (receipts = processAbsence) => {
+    const output = dirs.make("installed-watch-export-");
+    for (const name of [
+      "candidate-package-identity",
+      "package-hasher-contract",
+      "package-heartbeat-contracts",
+      "installed-terminal-contracts",
+      "healthy-dependencies",
+    ])
+      writeJson(path.join(output, `${name}.json`), {});
+    fs.cpSync(f.directory, path.join(output, "healthy"), { recursive: true });
+    writeJson(path.join(output, "healthy/observer.json"), { ...f.spec, processAbsence: receipts });
+    publishInstalledTerminalEvidence(output, { ...summary, commands: [] });
+    const manifest = fs.readFileSync(path.join(output, "export/manifest.json"));
+    return (value = summary) =>
+      buildInstalledTerminalSummary(value, manifest, (name) =>
+        fs.readFileSync(path.join(output, "export", name)),
+      );
+  };
+  const validate = exported();
+  expect(() => validate()).not.toThrow();
+  for (const receipt of [
+    undefined,
+    { ...processAbsence[0], child: pid + 1 },
+    { ...processAbsence[0], ownExitCode: 0 },
+  ]) {
+    const changed = structuredClone(summary);
+    changed.cells[0]!.processesWithoutPreload[0]!.lifetimeBound = receipt;
+    expect(() => validate(changed)).toThrow();
+  }
+  expect(() => exported([])()).toThrow("Kernel absence is missing");
   for (const errorCode of [null, "EPERM"]) {
     expect(() =>
       readInstalledTerminalEvents(f.directory, {
