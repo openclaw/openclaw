@@ -48,6 +48,8 @@ With native Ollama, discovery also fills a configured model's missing
 text for models that always think, including when reasoning display is off.
 Explicit thinking maps and other configured settings are preserved; models using
 the OpenAI-compatible API or a different endpoint do not inherit that metadata.
+Disabling discovery also disables this enrichment. To keep discovery off while
+using the server's thinking levels, [configure the map manually](/providers/ollama/advanced).
 
 Failed discovery records an unavailable or catalog-authentication failure and
 keeps the last successful inventory for the same endpoint and credentials. A
