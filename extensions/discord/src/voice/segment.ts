@@ -170,6 +170,7 @@ export async function respondToDiscordVoiceTranscript(
     const text = await runDiscordVoiceAgentTurn({
       ...params,
       message: prompt,
+      finalizedTranscript: transcript,
       context: ingress,
     });
     if (text === null) {

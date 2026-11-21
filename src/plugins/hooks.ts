@@ -98,6 +98,20 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
     ]),
   );
 
+function projectHookContext<T extends object>(hookName: PluginHookName, hostCtx: T): T {
+  const ctx = projectHookRequesterDevice(hostCtx);
+  if (PLUGIN_HOOK_METADATA[hookName].conversationAccess || !("channelContext" in ctx)) {
+    return ctx;
+  }
+  const channel = ctx.channelContext;
+  if (!channel || typeof channel !== "object" || !("voice" in channel)) {
+    return ctx;
+  }
+  // Identity is still available to hooks that do not receive conversation content.
+  const { voice: _voice, ...identity } = channel;
+  return { ...ctx, channelContext: identity };
+}
+
 type ClaimingHookName = {
   [K in PluginHookName]: [HookResult<K>] extends [never]
     ? never
@@ -418,7 +432,7 @@ export function createHookRunner(
     matcherToolName?: string,
     projectContext?: VoidHookContextProjection<HookContext<K>, K>,
   ): Promise<void> {
-    const ctx = projectHookRequesterDevice(hostCtx);
+    const ctx = projectHookContext(hookName, hostCtx);
     const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return;
@@ -498,7 +512,7 @@ export function createHookRunner(
     policy: ModifyingHookPolicy<K> = {},
     matcherToolName?: string,
   ): Promise<HookResult<K> | undefined> {
-    const ctx = projectHookRequesterDevice(hostCtx);
+    const ctx = projectHookContext(hookName, hostCtx);
     const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     const selectedHooks = policy.includeRegistration
       ? hooks.filter(policy.includeRegistration)

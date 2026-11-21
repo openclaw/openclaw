@@ -88,6 +88,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   accountId: string;
   userId: string;
   message: string;
+  finalizedTranscript?: string;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
   context: DiscordVoiceIngressContext;
@@ -132,6 +133,15 @@ export async function runDiscordVoiceAgentTurn(params: {
         accountId: params.accountId,
         extraSystemPrompt: context.extraSystemPrompt,
         senderIsOwner: context.senderIsOwner,
+        runContext: {
+          senderId: params.userId,
+          channelContext: {
+            sender: { id: params.userId },
+            ...(params.finalizedTranscript
+              ? { voice: { finalizedTranscript: params.finalizedTranscript } }
+              : {}),
+          },
+        },
         allowModelOverride: Boolean(voiceModel),
         model: voiceModel,
         toolsAllow: params.toolsAllow,

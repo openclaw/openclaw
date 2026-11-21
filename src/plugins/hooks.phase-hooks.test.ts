@@ -30,6 +30,40 @@ function hookRunner(
   return createHookRunner(createMockPluginRegistry(hooks), options);
 }
 
+it("exposes the original voice utterance only to hooks with conversation access", async () => {
+  const resolve = vi.fn();
+  const resolveEnv = vi.fn();
+  const afterCompaction = vi.fn();
+  const runner = hookRunner([
+    { hookName: "before_model_resolve", handler: resolve },
+    { hookName: "resolve_exec_env", handler: resolveEnv },
+    { hookName: "after_compaction", handler: afterCompaction },
+  ]);
+  const identity = { sender: { id: "333" } };
+  const ctx = {
+    ...TEST_PLUGIN_AGENT_CTX,
+    senderId: "333",
+    channelContext: { ...identity, voice: { finalizedTranscript: "Read the agenda." } },
+  };
+
+  await runner.runResolveExecEnv({ toolName: "exec", host: "sandbox" }, ctx);
+  await runner.runAfterCompaction({ messageCount: 1, compactedCount: 1 }, ctx);
+  await runner.runBeforeModelResolve({ prompt: "Formatted voice prompt." }, ctx);
+
+  expect(resolveEnv).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ channelContext: identity }),
+  );
+  expect(afterCompaction).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ channelContext: identity }),
+  );
+  expect(resolve).toHaveBeenCalledWith(
+    { prompt: "Formatted voice prompt." },
+    expect.objectContaining({ senderId: ctx.senderId, channelContext: ctx.channelContext }),
+  );
+});
+
 describe("pre-durable channel ingress policy", () => {
   const context = () => ({
     channelId: "discord",

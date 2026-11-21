@@ -103,6 +103,86 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it.each(["delegation first", "transcript first"] as const)(
+  "delegates with only the matching finalized user utterance (%s)",
+  async (order) => {
+    const { controller, runAgentConsult } = createDelegationHarness({ model: "gpt-live-1-codex" });
+    const sendDelegation = () =>
+      frame(controller, {
+        type: "delegation.created",
+        item: {
+          type: "delegation",
+          target: "client",
+          id: "delegation-2",
+          user_bidi_turn_id: "user-turn-2",
+          content: inputText("Write the agenda."),
+        },
+      });
+    const sendTranscript = () =>
+      frame(controller, {
+        type: "turn.done",
+        turn: { id: "user-turn-2", role: "user", transcript: "Read the agenda. Change nothing." },
+      });
+    frame(controller, {
+      type: "turn.done",
+      turn: { id: "user-turn-1", role: "user", transcript: "Earlier request." },
+    });
+    if (order === "delegation first") {
+      sendDelegation();
+      frame(controller, {
+        type: "turn.done",
+        turn: { id: "user-turn-2", role: "assistant", transcript: "Assistant summary." },
+      });
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      sendTranscript();
+    } else {
+      sendTranscript();
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      sendDelegation();
+    }
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+    expect(runAgentConsult.mock.calls[0]?.[0]).toMatchObject({
+      prompt: expect.stringContaining("<input>Read the agenda. Change nothing.</input>"),
+      finalizedUserTranscript: "Read the agenda. Change nothing.",
+    });
+    sendDelegation();
+    expect(runAgentConsult).toHaveBeenCalledOnce();
+  },
+);
+
+it("expires an explicitly linked delegation without substituting another utterance", async () => {
+  vi.useFakeTimers();
+  try {
+    const { controller, runAgentConsult, socket } = createDelegationHarness({
+      model: "gpt-live-1-codex",
+    });
+    frame(controller, {
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "missing-transcript",
+        user_bidi_turn_id: "missing-turn",
+        content: inputText("Run this task."),
+      },
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    frame(controller, {
+      type: "turn.done",
+      turn: { id: "missing-turn", role: "user", transcript: "Final text was late." },
+    });
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    expect(readAppends(socket, "missing-transcript")).toContainEqual(
+      delegationAppend(
+        "missing-transcript",
+        "Ask the user to repeat their request; no user transcript was received.",
+      ),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("targets the control delegation without consuming transcript context or cancelling the task", async () => {
   const { controller, socket, runAgentConsult, result } = pendingHarness({
     handleDelegationInput: (text, respond) => {
