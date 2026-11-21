@@ -324,8 +324,16 @@ export function resolveMemoryDreamingPluginConfig(
   const plugins = asNullableRecord(root?.plugins);
   const entries = asNullableRecord(plugins?.entries);
   const pluginId = resolveMemoryDreamingPluginId(cfg);
-  const memoryPlugin = asNullableRecord(entries?.[pluginId]);
-  return asNullableRecord(memoryPlugin?.config) ?? undefined;
+  const pluginConfig = asNullableRecord(asNullableRecord(entries?.[pluginId])?.config);
+  if (pluginConfig?.dreaming !== undefined || pluginId === DEFAULT_MEMORY_DREAMING_PLUGIN_ID) {
+    return pluginConfig ?? undefined;
+  }
+  // A slot owner without dreaming settings leaves the documented Memory Core settings in charge,
+  // so its explicit opt-out still stops the sidecar.
+  const engineConfig = asNullableRecord(
+    asNullableRecord(entries?.[DEFAULT_MEMORY_DREAMING_PLUGIN_ID])?.config,
+  );
+  return (engineConfig?.dreaming !== undefined ? engineConfig : pluginConfig) ?? undefined;
 }
 
 export function resolveMemoryDreamingConfig(params: {
