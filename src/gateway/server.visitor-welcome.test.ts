@@ -1,12 +1,19 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { managedWorktrees } from "../agents/worktrees/service.js";
+import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import type { GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -21,7 +28,14 @@ import {
   rpcReq,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import { initializeRepository } from "./server.sessions.create.projects.test-support.js";
 import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+
+// This fixture exercises the welcome RPC, not the bundled GitHub plugin transport.
+vi.mock("./github-public-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-public-api.js")>()),
+  gitHubPublicApi: { fetchGitHubJson: async () => ({ visibility: "public" }) },
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -84,6 +98,21 @@ async function connectAs(
 
 test("a guest's plugin RPC sees its visitor grant, owns the session it creates, and gets an agent message", async () => {
   await configureBrowserAuth(browserProxyAuth(), { roles });
+  const repoRoot = await initializeRepository(process.env.OPENCLAW_STATE_DIR!, "welcome-project");
+  await promisify(execFile)("git", [
+    "-C",
+    repoRoot,
+    "remote",
+    "set-url",
+    "origin",
+    "https://github.com/example/welcome.git",
+  ]);
+  const project = await registerProjectRegistry({ path: repoRoot });
+  const snapshot = await readConfigFileSnapshot();
+  await writeConfigFile({
+    ...snapshot.config,
+    gateway: { ...snapshot.config.gateway, projects: { defaultProjectId: project.id } },
+  });
   const staff = ensureProfileForEmail("staff@example.com");
   setUserProfileRole(staff.id, "staff");
   setDisplayName(staff.id, "Staff");
@@ -177,6 +206,12 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
         messageId: expect.any(String),
       });
       const sessionKey = welcome.payload?.sessionKey ?? "";
+      const checkout = await managedWorktrees.findLiveByOwner("session", sessionKey);
+      expect(checkout?.repoRoot).toBe(repoRoot);
+      expect(checkout?.path).not.toBe(repoRoot);
+      expect(await fs.readFile(path.join(checkout!.path, "README.md"), "utf8")).toBe(
+        "welcome-project\n",
+      );
       const retried = await probe({ key: sessionKey, create: true });
       expect(retried.payload, JSON.stringify(retried)).toMatchObject({
         sessionKey,

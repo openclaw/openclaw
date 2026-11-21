@@ -156,6 +156,19 @@ export function restoreDraftPlacePreferences(params: {
     state.requiredModelDefaults = params.requiredPlacement;
     params.loadConfiguredDefaults(params.requiredPlacement);
   }
+  const defaultProject =
+    state.configuredDefaultRepositoryPending && browser.projectsReady
+      ? browser.projects.find((project) => project.id === browser.defaultProjectId)
+      : undefined;
+  if (defaultProject) {
+    browser.selectProject({ kind: "local", id: defaultProject.id });
+    state.freshWorkspace = false;
+    state.folderSelectedByUser = false;
+    state.configuredDefaultRepositoryPending = false;
+    repositoryState.selectWorktree(true, false);
+    repositoryState.load();
+    notify();
+  }
   if (params.requiredPlacement) {
     if (
       browser.browserOpen ||
@@ -273,6 +286,7 @@ export function restoreDraftPlacePreferences(params: {
     const project = browser.projects.find((candidate) => candidate.id === preferredProject);
     if (project) {
       browser.selectProject({ kind: "local", id: project.id });
+      state.freshWorkspace = false;
       state.folderSelectedByUser = false;
     }
     if (project || browser.projectsReady) {

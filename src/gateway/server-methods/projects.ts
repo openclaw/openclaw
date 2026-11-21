@@ -271,6 +271,14 @@ export const projectsHandlers: GatewayRequestHandlers = {
           ...(canCreate ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
           // The default repository opens through projectGitUrl, an operator.write capability.
           ...(defaultRepository && writable ? { defaultRepository } : {}),
+          ...(canCreate &&
+          registryProjects.some(
+            (project) =>
+              project.id === cfg.gateway?.projects?.defaultProjectId &&
+              project.source !== "workspace",
+          )
+            ? { defaultProjectId: cfg.gateway?.projects?.defaultProjectId }
+            : {}),
           ...(recents
             ? {
                 recents: writable ? recents : recents.filter((recent) => recent.kind === "project"),

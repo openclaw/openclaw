@@ -248,7 +248,8 @@ export class DraftPlaceState {
   get freshWorkspace(): boolean {
     return (
       !this.deviceFolder &&
-      (this.requiredPlacement || (this.remotePlacement && this.selection.freshWorkspace))
+      ((this.requiredPlacement && !this.browser.projectId) ||
+        (this.remotePlacement && this.selection.freshWorkspace))
     );
   }
 

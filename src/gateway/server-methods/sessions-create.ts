@@ -124,7 +124,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const operatorRoleActor = client?.internal?.operatorRoleActor
       ? { ...client.internal.operatorRoleActor }
       : undefined;
-    const emptyWorkspace = p.worktreeSource === "empty";
+    let emptyWorkspace = p.worktreeSource === "empty";
     const worktreeSelectionError = validateSessionWorktreeSelection(p);
     if (worktreeSelectionError) {
       return respond(false, undefined, worktreeSelectionError);
@@ -352,15 +352,28 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, reuseError);
       return;
     }
+    const inheritParentWorktree =
+      p.worktree === true &&
+      !emptyWorkspace &&
+      !requestedCwd &&
+      !requestedProjectId &&
+      !requestedProjectGitUrl &&
+      Boolean(spawnRequesterSessionKey) &&
+      spawnRequesterSessionKey === parentSessionKey &&
+      sessionCreation.actor?.type === "agent" &&
+      normalizeAgentId(sessionCreation.actor.id) === explicitlyRequestedAgent.agentId;
     const requestedProject = await resolveRequestedSessionProject(cfg, p, client, {
       cwd: requestedExecNode ? undefined : requestedCwd,
       existingTargetEntry,
+      automaticEmptyWorkspace: automaticEmptyWorkspace && params.worktree !== false,
+      inheritParentWorktree,
     });
     if (!requestedProject.ok) {
       respond(false, undefined, requestedProject.error);
       return;
     }
     requestedProjectId = requestedProject.value.projectId;
+    emptyWorkspace &&= !requestedProjectId;
     const projectRoot = requestedProject.value.root;
     if (requestedProject.value.worktree || requestedProjectGitUrl) {
       p.worktree = true;
@@ -439,15 +452,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
       targetKey ??= buildDashboardSessionKey(agentId, { incognito: p.incognito });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
-      const inheritParentWorktree =
-        !emptyWorkspace &&
-        !projectRoot &&
-        !requestedCwd &&
-        !requestedProjectGitUrl &&
-        spawnRequesterSessionKey &&
-        spawnRequesterSessionKey === parentSessionKey &&
-        sessionCreation.actor?.type === "agent" &&
-        normalizeAgentId(sessionCreation.actor.id) === agentId;
       prepareLifecycle = async (lifecycleTarget) => {
         const prepared = await prepareSessionWorktreeCreation({
           cfg,

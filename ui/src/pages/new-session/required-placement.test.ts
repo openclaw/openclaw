@@ -97,9 +97,12 @@ it.each(["idle", "rejected"] as const)(
     });
     await f.flow.submit(undefined, true);
     expect(f.context.sessions.createResult).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
+      expect.objectContaining({ message: "" }),
       expect.anything(),
     );
+    const request = vi.mocked(f.context.sessions.createResult).mock.calls[0]?.[0];
+    expect(request).not.toHaveProperty("worktreeSource");
+    expect(request).not.toHaveProperty("worktree");
     expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(f.context.placementStartup.start).toHaveBeenCalledWith(
       expect.objectContaining({

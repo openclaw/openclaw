@@ -148,6 +148,8 @@ export const GatewayConfigSchema = z
     repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z
       .strictObject({
+        /** Registered project for new sessions without an explicit workspace source. */
+        defaultProjectId: z.string().trim().min(1).optional(),
         defaultRepository: z
           .strictObject({
             url: z.string().trim().min(1),
