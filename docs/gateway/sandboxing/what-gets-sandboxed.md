@@ -24,4 +24,5 @@ it is absent, and OpenClaw does not fall back to reading the host filesystem.
 Not sandboxed:
 
 - The Gateway process itself.
+- `image_generate`, `music_generate`, and `video_generate` call configured providers on the Gateway. The default sandbox tool policy allows these tools; explicit tool denies and custom sandbox allowlists still apply. Reference files stay subject to sandbox file access, and generated files are copied into the originating sandbox for follow-up edits when available. Provider credentials are not exposed to sandbox processes.
 - Any tool explicitly allowed to run outside an ordinary sandbox via `tools.elevated`. Elevated exec uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`), but cannot escape a session whose creator role requires sandboxing. If sandboxing is off, `tools.elevated` changes nothing since exec already runs on the host. See [Elevated Mode](/tools/elevated).
