@@ -1,0 +1,117 @@
+name: Runner A/B targeted comparison
+run-name: ${{ github.ref_name }} / matched Bun workload
+on:
+  push:
+    branches:
+      - experiment/runner-ab-20261121-boat
+      - experiment/runner-ab-20261121-blacksmith
+    paths:
+      - .github/workflows/runner-ab.yml
+permissions:
+  contents: read
+concurrency:
+  group: runner-ab-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  matched-workload:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      NODE_VERSION: "24.22.1"
+      AB_SOURCE_SHA: "2f15f6f468caef26eac05d1cb6cac75184cd4e28"
+      CI: "true"
+      NODE_OPTIONS: "--max-old-space-size=8192"
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all"
+      OPENCLAW_CI_TEST_RUNTIME: ""
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+      OPENCLAW_NODE_TEST_CPU_BUDGET: "8"
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]"
+      FROZEN_TARGET: "false"
+      RUNNER_ENVIRONMENT: "self-hosted"
+      OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1"
+      OPENCLAW_NODE_TEST_GROUPS_JSON: "[{\"configs\":[\"test/vitest/vitest.gateway-database-workers.config.ts\"],\"env\":{\"OPENCLAW_VITEST_MAX_WORKERS\":\"2\"},\"fallbackMaxWorkers\":2,\"includePatterns\":[\"src/gateway/github-pr-workspace-refresh.test.ts\",\"src/gateway/github-user-identity.authority.test.ts\",\"src/gateway/provider-browser-auth/persistence.integration.test.ts\",\"src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts\",\"src/gateway/session-pr-workspace-adoption.test.ts\"],\"minTotalMemoryBytes\":30064771072,\"shard_name\":\"agentic-gateway-server-isolated-hosted-20\"},{\"configs\":[\"test/vitest/vitest.gateway-server.config.ts\"],\"env\":{\"OPENCLAW_VITEST_MAX_WORKERS\":\"2\"},\"includePatterns\":[\"src/gateway/server.cron-session-cleanup.test.ts\"],\"shard_name\":\"agentic-control-plane-runtime-cron\"},{\"configs\":[\"test/vitest/vitest.gateway-server.config.ts\"],\"env\":{\"OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS\":\"60000\",\"OPENCLAW_VITEST_MAX_WORKERS\":\"2\"},\"includePatterns\":[\"src/gateway/server-runtime-config.test.ts\",\"src/gateway/server-runtime-subscriptions.access.test.ts\"],\"shard_name\":\"agentic-control-plane-startup-health-runtime\"},{\"configs\":[\"test/vitest/vitest.runtime-config.config.ts\"],\"env\":{\"OPENCLAW_VITEST_MAX_WORKERS\":\"2\"},\"includePatterns\":[\"src/config/sessions/session-accessor.pending-inputs-worker-custody.test.ts\",\"src/config/sessions/session-accessor.sqlite-maintenance-writer.test.ts\"],\"shard_name\":\"core-runtime-config-hosted-3\"}]"
+    steps:
+      - name: Checkout identical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 2f15f6f468caef26eac05d1cb6cac75184cd4e28
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Record source, workload, and host
+        env:
+          AB_RUNNER_NAME: ${{ runner.name }}
+          AB_RUNNER_OS: ${{ runner.os }}
+          AB_RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AB_SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/runner-ab"
+          printf '%s\n' "$OPENCLAW_NODE_TEST_GROUPS_JSON" > "$RUNNER_TEMP/runner-ab/groups.json"
+          sha256sum "$RUNNER_TEMP/runner-ab/groups.json"
+          {
+            printf 'source=%s\nrunner=%s\nos=%s\narch=%s\n' "$AB_SOURCE_SHA" "$AB_RUNNER_NAME" "$AB_RUNNER_OS" "$AB_RUNNER_ARCH"
+            uname -a
+            lscpu
+            free -b
+            cat /proc/self/cgroup
+            cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io
+          } | tee "$RUNNER_TEMP/runner-ab/host-before.txt"
+      - name: Setup identical Node environment without restored caches
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          semantic-checks: "true"
+          cache-mode: "off"
+          install-bun: "false"
+          dependency-cache: "false"
+          vitest-fs-cache: "false"
+          vitest-worker-cache: "false"
+          node-compile-cache: "false"
+      - name: Setup identical pinned Bun runtime
+        uses: ./.github/actions/setup-test-bun
+        with:
+          cache-mode: "off"
+      - name: Run identical ordered test groups
+        run: |
+          set -euo pipefail
+          node --version
+          pnpm --version
+          bun --version
+          bun --revision
+          sha256sum package.json pnpm-lock.yaml scripts/lib/openclaw-bun.json
+          # Both providers use ordinary Unix permissions and the same wrapper.
+          # Ordinary test failures remain failures; continue collects all groups.
+          time -p setpriv --inh-caps=-dac_read_search --ambient-caps=-dac_read_search \
+            node --import tsx scripts/ci-run-node-test-shard.mts \
+            2>&1 | tee "$RUNNER_TEMP/runner-ab/tests.log"
+      - name: Record final host counters
+        if: always()
+        run: |
+          {
+            date -u +%FT%TZ
+            free -b
+            cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io
+            group="$(awk -F: '$1 == 0 {print $3}' /proc/self/cgroup)"
+            for counter in cpu.stat memory.current memory.peak memory.events memory.max; do
+              path="/sys/fs/cgroup$group/$counter"
+              if [[ -r "$path" ]]; then
+                printf '\n%s\n' "$counter"
+                cat "$path"
+              fi
+            done
+          } | tee "$RUNNER_TEMP/runner-ab/host-after.txt"
+      - name: Upload comparison evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runner-ab-${{ github.run_id }}
+          path: ${{ runner.temp }}/runner-ab/
+          retention-days: 7
+          if-no-files-found: warn
