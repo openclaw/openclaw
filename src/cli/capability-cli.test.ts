@@ -2002,7 +2002,7 @@ describe("capability cli", () => {
           result: { results: [] },
         });
       } else {
-        vi.mocked(fetch.resolveWebFetchDefinition).mockReturnValueOnce({
+        vi.mocked(fetch.resolveWebFetchDefinition).mockResolvedValueOnce({
           provider: { id: "firecrawl" },
           definition: { execute },
         } as never);
