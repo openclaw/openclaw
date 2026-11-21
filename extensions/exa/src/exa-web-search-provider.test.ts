@@ -191,6 +191,22 @@ it("applies scoped auth, endpoint, contents, freshness, and result normalization
 });
 
 it.each([
+  ["year", "2028-02-29T12:00:00.000Z", "2027-02-28T12:00:00.000Z"],
+  ["month", "2026-03-31T12:00:00.000Z", "2026-02-28T12:00:00.000Z"],
+] as const)("clamps %s freshness to the end of a shorter month", async (freshness, now, start) => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  vi.setSystemTime(new Date(now));
+  respondWith([]);
+
+  await requireExaTool({}, { cacheTtlMinutes: 0 }).execute({ query: "freshness", freshness });
+
+  expect(requestBody().startPublishedDate).toBe(start);
+});
+
+it.each([
   ["invalid_contents", { contents: { highlights: { numSentences: 0 } } }],
   ["conflicting_time_filters", { freshness: "day", date_after: "2026-03-01" }],
   ["invalid_date", { date_after: "2026-02-31" }],
