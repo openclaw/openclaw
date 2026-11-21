@@ -53,16 +53,16 @@ function readSourceProjection(factory: ts.Block) {
     throw new Error("Expected the core helper to project a literal source path and extension.");
   }
   const [modulePath, suffix] = projection.templateSpans;
-  const extension = suffix!.expression;
+  const extensionFallback = suffix!.expression;
   const defaultParameter = core.parameters[3]?.initializer;
   if (
     !ts.isIdentifier(modulePath!.expression) ||
     modulePath!.expression.text !== core.parameters[0]?.name.getText() ||
-    !ts.isBinaryExpression(extension) ||
-    extension.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken ||
-    !ts.isIdentifier(extension.left) ||
-    extension.left.text !== core.parameters[3]?.name.getText() ||
-    !ts.isStringLiteral(extension.right) ||
+    !ts.isBinaryExpression(extensionFallback) ||
+    extensionFallback.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken ||
+    !ts.isIdentifier(extensionFallback.left) ||
+    extensionFallback.left.text !== core.parameters[3]?.name.getText() ||
+    !ts.isStringLiteral(extensionFallback.right) ||
     (defaultParameter && !ts.isStringLiteral(defaultParameter))
   ) {
     throw new Error("Cannot read the core runtime helper's source path projection.");
@@ -75,7 +75,8 @@ function readSourceProjection(factory: ts.Block) {
   ) {
     throw new Error("Expected the loader-free helper to call the core runtime helper.");
   }
-  const [forwardedPath, , , forwardedExtension] = loaderFree.body.arguments;
+  const forwardedPath = loaderFree.body.arguments[0];
+  const forwardedExtension = loaderFree.body.arguments[3];
   if (
     !forwardedPath ||
     !ts.isIdentifier(forwardedPath) ||
@@ -85,7 +86,7 @@ function readSourceProjection(factory: ts.Block) {
   ) {
     throw new Error("Cannot read the loader-free runtime helper's source path projection.");
   }
-  const defaultExtension = defaultParameter?.text ?? extension.right.text;
+  const defaultExtension = defaultParameter?.text ?? extensionFallback.right.text;
   return (helper: string, path: string, sourceExtension?: string) => {
     const extension =
       helper === "loaderFreeEntrypoint"
