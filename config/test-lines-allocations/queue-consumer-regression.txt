@@ -1,0 +1,2 @@
+10
+# Replace extractor-only queue checks with native/text composite-consumer proof; whole test totals31 lines.
