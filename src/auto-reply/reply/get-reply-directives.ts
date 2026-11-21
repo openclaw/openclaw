@@ -97,9 +97,10 @@ export async function resolveReplyDirectives(params: {
   resetTriggered: boolean;
   commandAuthorized: boolean;
   defaultProvider: string;
-  defaultModel: string;
+  /** Undefined when the agent has no configured model. */
+  defaultModel: string | undefined;
   primaryProvider?: string;
-  primaryModel?: string;
+  primaryModel?: string | undefined;
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;

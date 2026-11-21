@@ -7,7 +7,6 @@ import {
   type PreparedModelRuntimeLease,
   type PreparedReplyDispatchRuntime,
 } from "../../agents/prepared-model-runtime.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import type {
@@ -103,7 +102,11 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
+  const admission = resolveAgentRunAdmissionModel(params);
+  if (!admission) {
+    return undefined;
+  }
+  const { resolvedRuntime, providerFacts, modelSelection } = admission;
   const { lifecycleStorePath } = modelSelection;
   let timeoutSeconds: number | undefined;
   let preparing = true;
@@ -133,12 +136,6 @@ export async function prepareAgentRunDispatch(
         cfg: params.cfgForAgent ?? params.cfg,
         overrideSeconds: timeoutSeconds,
       });
-      const providerFacts = {
-        providerId: resolvedRuntime.provider,
-        authProviderId: resolveProviderIdForAuth(resolvedRuntime.provider, {
-          config: params.cfgForAgent ?? params.cfg,
-        }),
-      };
       if (existing?.entry) {
         // Retain the exact preparing input; admission adds presentation facts only.
         updateRpcSourceSessionId(existing.entry, params.getAdmittedSessionId());

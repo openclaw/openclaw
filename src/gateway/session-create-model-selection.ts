@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
@@ -243,8 +244,8 @@ export function prepareSessionCreateModelSelection(params: {
     agentId,
     catalog: [],
     raw: model,
-    defaultProvider: defaults.provider,
-    defaultModel: defaults.model,
+    defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
+    defaultModel: defaults?.model,
     preparedModelSelection,
   });
   if (!resolved.ok) {
@@ -346,11 +347,16 @@ export async function prepareSessionCreateDefaultAccount(params: {
     await import("../agents/auth-profiles/session-override.js");
   params.assertCurrent?.();
   params.defaults.assertCurrent();
+  const sessionModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  if (!sessionModel) {
+    // No configured model: no account to bind; the session is created unpinned.
+    return { ok: true, validate: () => undefined };
+  }
   const selected = prepareSessionPatchModelSelection({
     cfg: params.cfg,
     agentId: params.agentId,
     selection: {
-      ...resolveSessionModelRef(params.cfg, params.entry, params.agentId),
+      ...sessionModel,
       isDefault: params.resetToDefault,
     },
     resetToDefault: params.resetToDefault,
@@ -414,6 +420,9 @@ export async function resolveSessionForkMaxTokens(params: {
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
 }): Promise<number | undefined> {
   const childModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  if (!childModel) {
+    return undefined;
+  }
   const childCatalog = params.loadGatewayModelCatalogSnapshot
     ? await params.loadGatewayModelCatalogSnapshot()
     : undefined;

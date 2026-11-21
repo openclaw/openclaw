@@ -18,6 +18,7 @@ import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import {
   normalizeProviderId,
   normalizeModelRef,
@@ -149,7 +150,8 @@ export async function createModelSelectionState(params: {
   parentSessionKey?: string;
   storePath?: string;
   defaultProvider: string;
-  defaultModel: string;
+  /** Undefined when the agent has no configured model. */
+  defaultModel: string | undefined;
   primaryProvider?: string;
   primaryModel?: string;
   provider: string;
@@ -210,7 +212,7 @@ export async function createModelSelectionState(params: {
       cfg,
       catalog,
       defaultProvider,
-      defaultModel: { provider: defaultProvider, model: defaultModel },
+      defaultModel: defaultModel ? { provider: defaultProvider, model: defaultModel } : undefined,
       agentId: params.agentId,
       ...runtimeModelNormalization,
     });
@@ -219,10 +221,9 @@ export async function createModelSelectionState(params: {
   const hasConfiguredModels =
     Object.keys(agentCfg?.models ?? {}).length > 0 ||
     Object.keys(agentEntry?.models ?? {}).length > 0;
-  const defaultModelVisibleByWildcard = visibilityPolicy.allowsByWildcard({
-    provider: defaultProvider,
-    model: defaultModel,
-  });
+  const defaultModelVisibleByWildcard =
+    defaultModel !== undefined &&
+    visibilityPolicy.allowsByWildcard({ provider: defaultProvider, model: defaultModel });
   const configuredModelCatalog = mergePreparedConfiguredCatalog({
     configured: [...visibilityPolicy.configuredCatalog],
     prepared: params.preparedModelCatalog?.entries,
@@ -287,6 +288,7 @@ export async function createModelSelectionState(params: {
       normalizeProviderId(override.provider ?? "") === OPENAI_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
+      primaryModel !== undefined &&
       normalizeModelRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
         normalizeModelRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
     // Reapplying the current selection must not fight an explicit override.
@@ -366,7 +368,7 @@ export async function createModelSelectionState(params: {
       // The child's policy cannot clear the parent's choice.
       resetModelOverrideRef = key;
       resetModelOverrideReason = "disallowed";
-    } else if (shouldResetOverride) {
+    } else if (shouldResetOverride && primaryModel !== undefined) {
       const initialSessionEntry = { ...sessionEntry };
       const nextSessionEntry = { ...sessionEntry };
       const { updated } = applyModelOverrideToSessionEntry({
@@ -417,6 +419,10 @@ export async function createModelSelectionState(params: {
     params.provider === storedOverrideRef?.provider &&
     params.model === storedOverrideRef.model
   ) {
+    if (primaryModel === undefined) {
+      // The refused pin was the only model; no configured primary can replace it.
+      throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+    }
     provider = primaryProvider;
     model = primaryModel;
   }

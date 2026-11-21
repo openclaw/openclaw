@@ -44,9 +44,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const hasModelOverride = Boolean(
         requestProvider || configuredProvider || requestModel || configuredModel,
       );
-      const defaultProvider =
-        normalizeOptionalString(requestedProvider) ??
-        normalizeOptionalString(api.runtime.agent.defaults.provider);
+      const defaultProvider = normalizeOptionalString(requestedProvider);
       const normalizedModel = normalizeOptionalString(rawModel);
       const providerPrefix = requestedProvider?.trim();
       let selectedModelRef = {

@@ -2,7 +2,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -405,8 +404,8 @@ it.each<{
   "does not mistake the fallback model for configured demand: $name",
   async ({ config, authModes, acquired }) => {
     const native: ModelCatalogEntry = {
-      provider: DEFAULT_PROVIDER,
-      id: DEFAULT_MODEL,
+      provider: "openai",
+      id: "gpt-6-astra",
       name: "Default model",
       nativeRuntime: "codex",
     };
@@ -427,8 +426,8 @@ it.each<{
     expect(
       await loadProviderScopedThinkingCatalog({
         config,
-        provider: DEFAULT_PROVIDER,
-        model: DEFAULT_MODEL,
+        provider: "openai",
+        model: "gpt-6-astra",
         agentRuntime: "codex",
       }),
     ).toEqual([native]);

@@ -39,7 +39,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   provider: string;
   model: string;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   currentThinkLevel: ThinkLevel;
@@ -210,7 +210,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   const authByProvider = prepared.providerAuthLabels;
 
   lines.push(
-    `Default: ${params.defaultProvider}/${params.defaultModel}`,
+    `Default: ${params.defaultModel ? `${params.defaultProvider}/${params.defaultModel}` : "not configured"}`,
     `Agent: ${params.activeAgentId}`,
     `Auth store: ${shortenHomePath(await resolveAuthStorePathForDisplayAsync(params.agentDir))}`,
   );

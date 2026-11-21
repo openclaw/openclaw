@@ -182,7 +182,7 @@ export function createTelegramMessageSessionRuntime({
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,
-      }).provider,
+      })?.provider,
     });
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();

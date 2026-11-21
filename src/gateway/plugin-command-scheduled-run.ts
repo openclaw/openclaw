@@ -5,6 +5,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -315,6 +316,9 @@ export async function runPluginCommandScheduledTurn(params: {
       modelLease = bindOperatorModelExecution(operatorAuthority, model);
       assertCurrent();
       if (job.inferenceBinding) {
+        if (!model) {
+          throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+        }
         if (job.inferenceBinding.provider !== model.provider) {
           throw new Error("Scheduled plugin command provider route changed.");
         }

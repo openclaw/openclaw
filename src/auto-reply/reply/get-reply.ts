@@ -6,8 +6,8 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -57,6 +57,7 @@ import {
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { pickUnconfiguredTurnModel, resolveActiveMediaModel } from "./get-reply-turn-model.js";
 import {
   prepareInternalGetReplyOptions,
   withExtractedFileImages,
@@ -422,11 +423,7 @@ async function resolveReplyFromConfig(
         applyMediaUnderstandingIfNeeded({
           ctx: finalized,
           ...workspaceContext,
-          activeModel: {
-            provider,
-            model,
-            api: findModelInCatalog(preparedModelCatalog?.entries ?? [], provider, model)?.api,
-          },
+          activeModel: resolveActiveMediaModel(provider, model, preparedModelCatalog?.entries),
           // Cache and classify now; the final provider and owner policy are
           // resolved later, immediately before the embedded turn starts.
           selfServeLocalPaths: false,
@@ -673,6 +670,14 @@ async function resolveReplyFromConfig(
       provider = resolvedChannelModelOverride.ref.provider;
       model = resolvedChannelModelOverride.ref.model;
     }
+    // Nothing configured or selected a model: only a `/model` pick in this message can run.
+    const selected = model
+      ? { provider, model }
+      : pickUnconfiguredTurnModel(cfg, agentId, triggerBodyNormalized, defaultProvider, aliasIndex);
+    if (!selected) {
+      return rejectSessionPreparation(new Error(NO_MODEL_CONFIGURED_MESSAGE));
+    }
+    ({ provider, model } = selected);
 
     const conversation =
       resolvedOpts?.replyConversation ??
@@ -695,12 +700,13 @@ async function resolveReplyFromConfig(
         resetTriggered,
         commandAuthorized,
         defaultProvider,
-        defaultModel,
+        // With no configured default, the model picked by this message is the turn's default.
+        defaultModel: defaultModel ?? selected.model,
         primaryProvider,
         primaryModel,
         aliasIndex,
         provider,
-        model,
+        model: selected.model,
         hasResolvedTurnModelOverride,
         typing,
         opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
@@ -955,7 +961,8 @@ async function resolveReplyFromConfig(
           : requestedRouteResolution,
         typing,
         opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
-        defaultModel,
+        // The runner falls back to this model id; without a configured model the run's own applies.
+        defaultModel: defaultModel ?? runModel,
         timeoutMs,
         isNewSession,
         resetTriggered,

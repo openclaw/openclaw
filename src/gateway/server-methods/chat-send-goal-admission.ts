@@ -68,6 +68,7 @@ export function resolveCodexGoalAdmission(
       requestedSessionId: session.requestedSessionId,
       sessionKey: current.canonicalKey,
     }) &&
+    session.resolvedSessionModel !== undefined &&
     resolveEffectiveAgentRuntime({
       cfg,
       agentId: session.agentId,
