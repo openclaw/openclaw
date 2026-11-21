@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GatewayClientRequestError,
   GatewayClientRequestTimeoutError,
@@ -7,6 +8,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sleep } from "../utils/sleep.js";
 import type { TuiRequestScope } from "./tui-backend.js";
+import { loadFullTextForCappedHistory } from "./tui-history-full-text.js";
 
 type WriteRequest = <T>(method: string, params: unknown) => Promise<T>;
 
@@ -129,6 +131,22 @@ export class GatewayChatRequests {
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
+    const history = await this.requestHistory(opts);
+    const sessionId = asOptionalRecord(history)?.sessionId;
+    return await loadFullTextForCappedHistory(
+      history,
+      async (messageId) =>
+        await this.client.request("chat.message.get", {
+          sessionKey: opts.sessionKey,
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          ...(typeof sessionId === "string" && sessionId ? { sessionId } : {}),
+          messageId,
+        }),
+      this.signal,
+    );
+  }
+
+  private async requestHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     const deadline = performance.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
     for (;;) {
       this.signal.throwIfAborted();
