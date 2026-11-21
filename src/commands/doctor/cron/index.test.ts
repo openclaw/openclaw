@@ -649,7 +649,7 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
     await repairCronStore();
-    expectNoteContaining("2 automations are auto-disabled");
+    expectNoteContaining("2 automations were turned off by the scheduler.");
     expectNoteContaining("Run failure job (run-failure-job)");
     expectNoteContaining("recorded reason `consecutive-failures` after 10");
     expectNoteContaining("openclaw automations enable run-failure-job");
