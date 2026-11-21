@@ -1,3 +1,5 @@
+import MarkdownIt from "markdown-it";
+
 // Pure curated-memory annotation parsing shared by runtime and doctor paths.
 export const INVALID_PROJECT_ANNOTATION_KEY = "!invalid-project-annotation";
 
@@ -54,6 +56,71 @@ export function stripMemoryAnnotationCarriers(text: string): string {
     const end = offset + space.length;
     return end === source.length || /[\r\n\u2028\u2029]/u.test(source.charAt(end)) ? "" : space;
   });
+}
+
+const PER_ENTRY_CHUNKING_MARKER = /^ {0,3}<!--[ \t]*chunking[ \t]*:[ \t]*entries[ \t]*-->[ \t]*$/iu;
+// Block parsing owns container fences and their implicit close on dedent. Inline parsing is unnecessary.
+const markerBlockParser = new MarkdownIt("commonmark").disable("inline");
+
+/**
+ * File-level opt-in to per-entry chunking for topic files. The carrier must sit on
+ * its own line outside fenced or indented code, so prose or code samples that merely mention it
+ * do not opt a file in.
+ */
+export function hasPerEntryChunkingMarker(text: string): boolean {
+  return !perEntryChunkingMarkerLines(text).next().done;
+}
+
+/**
+ * Blanks recognized marker lines and keeps their line breaks, so indexed line
+ * numbers still match the source. Anything the detector ignores stays verbatim.
+ */
+export function stripPerEntryChunkingMarkers(text: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const line of perEntryChunkingMarkerLines(text)) {
+    parts.push(text.slice(cursor, line.start));
+    cursor = line.end;
+  }
+  if (parts.length === 0) {
+    return text;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join("");
+}
+
+function* perEntryChunkingMarkerLines(text: string) {
+  // Avoid parsing files with no candidate control line. Keep original offsets and line endings.
+  const candidates: { start: number; end: number; line: number }[] = [];
+  const lineBreak = /\r\n|[\r\n]/gu;
+  for (let start = 0, line = 0; ; start = lineBreak.lastIndex, line += 1) {
+    lineBreak.lastIndex = start;
+    const end = lineBreak.exec(text)?.index ?? text.length;
+    if (PER_ENTRY_CHUNKING_MARKER.test(text.slice(start, end))) {
+      candidates.push({ start, end, line });
+    }
+    if (end === text.length) {
+      break;
+    }
+  }
+  if (!candidates.length) {
+    return;
+  }
+  const codeBlocks = markerBlockParser
+    .parse(text, {})
+    .flatMap((token) =>
+      (token.type === "fence" || token.type === "code_block") && token.map ? [token.map] : [],
+    );
+  let blockIndex = 0;
+  for (const candidate of candidates) {
+    while ((codeBlocks[blockIndex]?.[1] ?? Infinity) <= candidate.line) {
+      blockIndex += 1;
+    }
+    const range = codeBlocks[blockIndex];
+    if (!range || candidate.line < range[0]) {
+      yield candidate;
+    }
+  }
 }
 
 export type CuratedProjectAnnotations = {

@@ -135,6 +135,22 @@ OpenClaw indexes `MEMORY.md`, an existing root `USER.md`, and `memory/*.md` into
 chunks (400 tokens with 80-token overlap by default) and stores them in a
 per-agent database. OpenClaw does not create `USER.md` automatically.
 
+`MEMORY.md` and `USER.md` are chunked per entry: each top-level bullet
+becomes its own chunk (a heading joins the entry that follows it), so unrelated
+facts do not share an embedding. Topic files under `memory/` use size-based
+chunks by default. To chunk a topic file per entry too, put this marker on its
+own line anywhere in the file:
+
+```markdown
+<!-- chunking: entries -->
+```
+
+The marker is stripped before indexing, adding or removing it reindexes that
+file on the next sync, and a file that loses it returns to size-based chunks.
+It changes chunk boundaries only. Topic files do not become curated roots, so
+trigger and importance annotations stay ignored there, and project scope and
+provenance rules are unchanged. The marker has no effect outside `memory/`.
+
 Each chunk can carry nullable importance and trigger metadata. Null values are
 neutral, so older indexes remain usable. Search combines hybrid relevance,
 recency decay, and importance before applying MMR diversity; trigger recall
