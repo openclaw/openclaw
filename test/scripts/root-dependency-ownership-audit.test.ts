@@ -75,10 +75,10 @@ it("classifies root dependencies referenced through constant dynamic imports", (
 
 it("does not fail an explicitly root-owned extension runtime dependency", () => {
   const records = audit({
-    "package.json": { dependencies: { "@homebridge/ciao": "^1.3.7" } },
-    "extensions/bonjour/package.json": { dependencies: { "@homebridge/ciao": "^1.3.7" } },
-    "extensions/bonjour/src/advertiser.ts":
-      'const CIAO_MODULE_ID = "@homebridge/ciao";\nrequire(CIAO_MODULE_ID);\n',
+    "package.json": { dependencies: { "playwright-core": "1.64.1" } },
+    "extensions/browser/package.json": { dependencies: { "playwright-core": "1.64.1" } },
+    "extensions/browser/src/browser.ts":
+      'const PLAYWRIGHT_MODULE_ID = "playwright-core";\nrequire(PLAYWRIGHT_MODULE_ID);\n',
   });
   expect(records).toMatchObject([{ category: "root_owned_extension_runtime" }]);
   expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
