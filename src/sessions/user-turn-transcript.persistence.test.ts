@@ -403,7 +403,20 @@ describe("persistUserTurnTranscript", () => {
         }),
       },
     });
-    for (const transcript of [plain, relayed]) {
+    // The prompt shows no forwarded block for a NUL-only origin, so the transcript has no marker.
+    const blankOrigin = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    await persistUserTurnTranscript({
+      ...blankOrigin,
+      input: {
+        text: "hello",
+        sender: buildChannelUserTurnSender({
+          SenderId: "4242",
+          Provider: "telegram",
+          ForwardedFrom: "\u0000",
+        }),
+      },
+    });
+    for (const transcript of [plain, relayed, blankOrigin]) {
       const [message] = await readTranscriptMessages(transcript);
       expect(message?.["__openclaw"]).not.toHaveProperty("forwarded");
     }
