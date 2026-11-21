@@ -1,0 +1,4 @@
+# Presence regression: lastInputSeconds is stored as the non-negative integer that presence snapshots
+# declare, so a fractional system-event value cannot break native clients' hello decode.
+# Exact net growth for this PR.
+23
