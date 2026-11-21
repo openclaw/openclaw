@@ -59,6 +59,13 @@ const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
     session_pending_inputs: ["end_cause", "origin_source_json"],
+    // Added by migrateAgentLocationIntentsInTransaction during schema migration,
+    // after the pre-migration witness was captured. A crossing comparison
+    // (e.g. v24 -> current) sees them only on the current side, so they must
+    // be excluded from the crossing schema hash the same way the session
+    // additive columns are. They cannot hold pre-migration data: the
+    // historical table never had them.
+    standing_intents: ["trigger_kind", "location_trigger", "delivery_target", "last_inside"],
   }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
@@ -508,6 +515,12 @@ export function captureOpenClawMigrationWitness(
           (object.type === "index" &&
             (indexKey === "session_windows.idx_agent_session_windows_conversation" ||
               indexKey === "trajectory_runtime_events.idx_agent_trajectory_runtime_run" ||
+              // Created during migration by the standing-intents column ensure
+              // (the specialized pre-writer-validation path repairs indexes
+              // against the previous schema, which predates the location
+              // index), so a crossing comparison sees it only on the current
+              // side. Same contract as the two entries above.
+              indexKey === "standing_intents.idx_standing_intents_location" ||
               (schemaVersion >= 39 &&
                 (indexKey ===
                   "session_input_completions.idx_agent_session_input_completions_session_key" ||

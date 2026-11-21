@@ -781,8 +781,15 @@ CREATE TABLE IF NOT EXISTS standing_intents (
   cooldown_seconds INTEGER NOT NULL DEFAULT 86400 CHECK (cooldown_seconds >= 0),
   last_fired_at INTEGER,
   created_at INTEGER NOT NULL,
-  source_session_id TEXT
+  source_session_id TEXT,
+  trigger_kind TEXT CHECK (trigger_kind IS NULL OR trigger_kind IN ('keywords', 'location')),
+  location_trigger TEXT,
+  delivery_target TEXT CHECK (delivery_target IS NULL OR length(trim(delivery_target)) > 0),
+  last_inside INTEGER CHECK (last_inside IS NULL OR last_inside IN (0, 1))
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_standing_intents_location
+  ON standing_intents(status, trigger_kind, location_trigger);
 
 CREATE INDEX IF NOT EXISTS idx_standing_intents_lifecycle
   ON standing_intents(status, expires_at, last_fired_at);

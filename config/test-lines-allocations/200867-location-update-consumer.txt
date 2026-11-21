@@ -1,0 +1,38 @@
+# PR #200867: location.update consumption — fence significance detection and
+# event-driven APNs delivery. Allocation covers the net test lines beyond the
+# 400-line allowance; each block is new behavior with no existing suite to
+# consolidate into.
+# server-node-events.location-update.test.ts: the gateway dispatch boundary —
+# validated drop with no consumer, typed single delivery, consumer-failure
+# isolation, registry-retirement stops dispatch, malformed payload rejection.
+# registry-registrars.node-events.test.ts: registerNodeEventConsumer contract —
+# allowlist, single-owner, handler-shape validation riding plugin reload.
+# location-intents.test.ts: fence kernel — accuracy-resolved crossing decisions,
+# baseline-first one-shot state machine, direction-gated enter/exit (two live
+# misfire regressions), idempotent concurrent fixes, restart persistence.
+# location-intent-consumer.test.ts: consumer integration — subscribe/fire-once/
+# single routed wake, one-shot replay silence, push attempted exactly once,
+# and the no-coordinates-in-queued-record privacy regression.
+# server.location-update.e2e.test.ts: real paired-node WebSocket dispatch
+# contract (restructured to a recording-consumer stub; the fire-to-wake chain
+# it previously duplicated lives in the extension suites above).
+# openclaw-agent-latest-stable-upgrade.test.ts: v2026.11.5 (schema 38)
+# latest-stable upgrade proof requested by review — additive columns and
+# index arrive, existing intent rows preserved, stored location format
+# accepted on the migrated table.
+# standing-intents.postgres.test.ts: location-intent creation must be
+# rejected on PostgreSQL agents with an actionable error (keyword intents
+# stay engine-neutral) — regression for the review's silent no-op finding.
+# location-intent-consumer.test.ts: a crossing fix arriving while the
+# baseline pass is still evaluating must be preserved and fired, not
+# dropped — regression for the review's fix-loss finding; back-to-back
+# synchronous handle() calls make the mid-evaluation arrival deterministic.
+# openclaw-agent-v44-postgres-upgrade.evidence.test.ts: live-PostgreSQL
+# v38 -> v44 shipped-upgrade evidence requested by review — destination
+# admission succeeds, existing keyword reminders preserved and usable,
+# location intent accepted by migrated constraints; connection via env var
+# only (no private details), skips without it.
+# server-node-events.location-update.test.ts: async consumer rejection
+# isolation regression — a rejected Promise<void> consumer is logged and
+# the event still acks, never reaching the process-exit rejection path.
+954

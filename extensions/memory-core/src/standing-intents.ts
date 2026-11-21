@@ -16,8 +16,10 @@ import {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
   DEFAULT_INTENT_EXPIRY_MS,
   DEFAULT_INTENT_MAX_FIRES,
+  encodeStoredLocationTrigger,
   normalizeCreatorSender,
   prepareStandingIntentMatch,
+  type LocationFireResult,
   type StandingIntent,
   type StandingIntentOperations,
   type StandingIntentWorkerOperations,
@@ -115,18 +117,24 @@ async function executeStandingIntent(
     async fn() {
       assertCurrent?.();
       const facts = lifecycleFacts.get(options.path);
+      // locationFire always opens the DB and evaluates: intents may have been
+      // created by a separate process (CLI) after the gateway last swept the
+      // cached-empty state; trusting facts.empty here silently drops new fences.
       if (command.type === "match" && facts?.empty) {
         return [];
       }
       // Sweeps only maintain stored rows. Opening a missing SQLite agent database would
       // create and prepare it during Gateway startup, before any agent has used it.
-      if (command.type === "sweep" && (await isMissingSqliteAgentDatabase(options.path))) {
+      if (
+        (command.type === "sweep" || command.type === "locationFire") &&
+        (await isMissingSqliteAgentDatabase(options.path))
+      ) {
         assertCurrent?.();
         if (facts) {
           facts.empty = true;
         }
         recordDueAt(options.path, Infinity);
-        return undefined;
+        return command.type === "locationFire" ? { fired: [], evaluated: 0 } : undefined;
       }
       // Keep committed absence in owner order with creates and lifecycle transitions.
       if (facts) {
@@ -261,6 +269,10 @@ export async function createStandingIntent(params: {
     description: params.description,
     trigger_keywords: JSON.stringify(params.triggerKeywords),
     trigger_embedding: null,
+    trigger_kind: "keywords",
+    location_trigger: null,
+    delivery_target: null,
+    last_inside: null,
     channel_scope: params.channelScope ?? null,
     sender_scope: params.senderScope ?? null,
     creator_sender: normalizeCreatorSender(params.creatorSender),
@@ -308,4 +320,96 @@ export async function matchStandingIntents(params: {
 }): Promise<StandingIntent[]> {
   const input = prepareStandingIntentMatch(params);
   return input ? executeStandingIntent(params, { type: "match", input }) : [];
+}
+
+export async function createLocationStandingIntent(params: {
+  agentId: string;
+  assertCurrent?: () => void;
+  description: string;
+  nodeId: string;
+  direction: "enter" | "exit";
+  centerLat: number;
+  centerLon: number;
+  radiusMeters: number;
+  deliveryTarget: string;
+  creatorSender: string;
+  expiresAt?: number;
+  sourceSessionId?: string | null;
+  nowMs?: number;
+}): Promise<StandingIntent> {
+  const nodeId = params.nodeId.trim();
+  if (!nodeId) {
+    throw new Error("location intent requires a target node id");
+  }
+  if (
+    !Number.isFinite(params.centerLat) ||
+    params.centerLat < -90 ||
+    params.centerLat > 90 ||
+    !Number.isFinite(params.centerLon) ||
+    params.centerLon < -180 ||
+    params.centerLon > 180
+  ) {
+    throw new Error("location intent center is outside WGS84 bounds");
+  }
+  if (!Number.isFinite(params.radiusMeters) || params.radiusMeters <= 0) {
+    throw new Error("location intent radius must be a positive meter count");
+  }
+  const deliveryTarget = params.deliveryTarget.trim();
+  if (!deliveryTarget) {
+    throw new Error("location intent requires a delivery session");
+  }
+  const nowMs = params.nowMs ?? Date.now();
+  const row: StandingIntentRow = {
+    id: randomUUID(),
+    description: params.description,
+    // Location rows keep an empty keyword list so the FTS keyword matcher
+    // never considers them; the location trigger is authoritative.
+    trigger_keywords: "[]",
+    trigger_embedding: null,
+    trigger_kind: "location",
+    location_trigger: encodeStoredLocationTrigger({
+      nodeId,
+      direction: params.direction,
+      centerLat: params.centerLat,
+      centerLon: params.centerLon,
+      radiusMeters: params.radiusMeters,
+    }),
+    delivery_target: deliveryTarget,
+    // v1 one-shot: the location lifecycle has no cooldown/re-arm owner yet.
+    channel_scope: null,
+    sender_scope: null,
+    creator_sender: normalizeCreatorSender(params.creatorSender),
+    status: "armed",
+    expires_at: params.expiresAt ?? nowMs + DEFAULT_INTENT_EXPIRY_MS,
+    max_fires: 1,
+    fire_count: 0,
+    cooldown_seconds: 0,
+    last_fired_at: null,
+    last_inside: null,
+    created_at: nowMs,
+    source_session_id: params.sourceSessionId ?? null,
+  };
+  return executeStandingIntent(params, { type: "create", input: row });
+}
+
+/** Evaluates one node fix against armed location intents and reports fires. */
+export async function fireLocationIntentsForNode(params: {
+  agentId: string;
+  assertCurrent?: () => void;
+  nodeId: string;
+  lat: number;
+  lon: number;
+  accuracyMeters: number;
+  nowMs?: number;
+}): Promise<LocationFireResult> {
+  return executeStandingIntent(params, {
+    type: "locationFire",
+    input: {
+      nodeId: params.nodeId,
+      lat: params.lat,
+      lon: params.lon,
+      accuracyMeters: params.accuracyMeters,
+      nowMs: params.nowMs,
+    },
+  });
 }

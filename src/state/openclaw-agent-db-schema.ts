@@ -108,6 +108,10 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import { AGENT_INDEX_RETIREMENT_SQL } from "./openclaw-agent-index-retirement-migration.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import {
+  AGENT_LOCATION_INTENTS_SCHEMA_VERSION,
+  migrateAgentLocationIntentsInTransaction,
+} from "./openclaw-agent-location-intents-schema.js";
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
@@ -318,6 +322,14 @@ function ensureAgentSchema(
       assertMigration();
       if (previousVersion < targetVersion) {
         interruptHistoricalPendingInputs(db, previousVersion);
+        // The target schema's idx_standing_intents_location references the
+        // additive location columns, and migration branches repair canonical
+        // indexes against the target schema — including early-return
+        // historical branches that never reach the versioned steps below.
+        // migrateAgentLocationIntentsInTransaction is idempotent, so this
+        // converges pre-location tables and re-converges the same columns
+        // when the versioned v44 step runs.
+        migrateAgentLocationIntentsInTransaction(db);
       }
       if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
         // Canonical creation has no legacy rows or definitions to converge or repair.
@@ -399,6 +411,9 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
           migrateAgentPendingInputEndingsInTransaction(db);
+        }
+        if (crossesVersion(AGENT_LOCATION_INTENTS_SCHEMA_VERSION)) {
+          migrateAgentLocationIntentsInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

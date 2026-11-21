@@ -93,6 +93,7 @@ import type {
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
+import type { OpenClawPluginNodeEventSubscription } from "./types.node-events.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
 
@@ -319,6 +320,8 @@ export type OpenClawPluginApi = {
   ) => void;
   registerReload: (registration: OpenClawPluginReloadRegistration) => void;
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
+  /** Consume a gateway-validated node event (currently only `location.update`). */
+  registerNodeEventConsumer: (subscription: OpenClawPluginNodeEventSubscription) => void;
   registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: {

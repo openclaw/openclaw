@@ -389,6 +389,9 @@ export type PluginRegistry = {
     }
   >;
   nodeHostCommands: PluginNodeHostCommandRegistration[];
+  nodeEventConsumers: (PluginRegistrationOwner & {
+    subscription: import("./types.js").OpenClawPluginNodeEventSubscription;
+  })[];
   nodeInvokePolicies: (PluginRegistrationOwner & {
     policy: import("./types.js").OpenClawPluginNodeInvokePolicy;
     pluginConfig?: Record<string, unknown>;

@@ -21,6 +21,7 @@ export const agentSchemaVersions = new Set([
   40,
   41,
   42,
+  43,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 ]);
 
