@@ -417,9 +417,9 @@ it("marks an oversized answer without keeping part of the next URL", async () =>
   const harness = createHarness({
     run: async () => first + "\nhttps://example.test/" + "x".repeat(2000),
   });
-  const { answer } = await harness.ask("All links?");
-  expect(answer).toBe(first + "\n\nSide chat shortened this answer. Ask for a smaller section.");
-  expectSaved(harness.service, "All links?", answer);
+  const { answer: shortened } = await harness.ask("All links?");
+  expect(shortened).toBe(first + "\n\nSide chat shortened this answer. Ask for a smaller section.");
+  expectSaved(harness.service, "All links?", shortened);
 });
 
 it("caps replay by exchange count and UTF-8 bytes", () => {
