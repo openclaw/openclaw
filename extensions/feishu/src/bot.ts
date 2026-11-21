@@ -45,10 +45,10 @@ import {
   normalizeFeishuCommandProbeBody,
   parseFeishuMessageEvent,
   resolveFeishuGroupSession,
-  resolveFeishuMediaList,
 } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
 import { resolveFeishuBotName } from "./bot-name.js";
+import { resolveFeishuMediaListWithLookback } from "./bot-recent-images.js";
 import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
 import { prepareFeishuThreadRoot } from "./bot-thread-mentions.js";
 import { createFeishuClient } from "./client.js";
@@ -64,6 +64,7 @@ import type { FeishuMessageEvent } from "./event-types.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { isFeishuBroadcastMention, normalizeMentions } from "./mention.js";
 import {
+  buildFeishuFetchedContextPolicy,
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
   resolveFeishuDmIngressAccess,
@@ -728,24 +729,23 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
 
-    const fetchedContextPolicy = {
-      cfg,
+    const fetchedContextPolicy = buildFeishuFetchedContextPolicy({
+      cfg: effectiveCfg,
       accountId: account.accountId,
       chatId: ctx.chatId,
       isGroup,
-      allowFrom: effectiveGroupSenderAllowFrom,
-      mode: contextVisibilityMode,
-    };
+      feishuCfg,
+    });
 
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024;
-    const mediaList = await resolveFeishuMediaList({
+    const mediaList = await resolveFeishuMediaListWithLookback({
       cfg,
-      messageId: ctx.messageId,
-      messageType: event.message.message_type,
-      content: event.message.content,
-      maxBytes: mediaMaxBytes,
+      account,
+      ctx,
+      event,
+      mediaMaxBytes,
       log,
-      accountId: account.accountId,
+      isGroup,
     });
     const unavailableMediaCount = mediaList.filter((media) => !media.path).length;
     const mediaFailureContent =

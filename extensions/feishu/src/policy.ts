@@ -9,7 +9,10 @@ import {
   type ChannelIngressIdentitySubjectInput,
   type ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/context-visibility-runtime";
+import {
+  evaluateSupplementalContextVisibility,
+  resolveChannelContextVisibilityMode,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelGroupContext } from "../runtime-api.js";
@@ -287,6 +290,43 @@ export function resolveFeishuReplyPolicy(params: {
   return {
     requireMention:
       groupRequireMention ?? resolvedCfg.requireMention ?? params.groupPolicy !== "open",
+  };
+}
+
+/**
+ * Assemble the fetched-context policy for one chat: the visibility mode
+ * plus the effective sender allowlist (per-group allowFrom wins over the
+ * channel default). Single owner for the policy object that
+ * shouldIncludeFetchedGroupContextMessage consumes for quotes, threads,
+ * and the recent-image lookback.
+ */
+export function buildFeishuFetchedContextPolicy(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  chatId: string;
+  isGroup: boolean;
+  feishuCfg?: FeishuConfig;
+}) {
+  const mode = resolveChannelContextVisibilityMode({
+    cfg: params.cfg,
+    channel: "feishu",
+    accountId: params.accountId,
+  });
+  const groupConfig = params.isGroup
+    ? resolveFeishuGroupConfig({ cfg: params.feishuCfg, groupId: params.chatId })
+    : undefined;
+  const allowFrom = params.isGroup
+    ? (groupConfig?.allowFrom?.length ?? 0) > 0
+      ? (groupConfig?.allowFrom ?? [])
+      : (params.feishuCfg?.groupSenderAllowFrom ?? [])
+    : [];
+  return {
+    cfg: params.cfg,
+    accountId: params.accountId,
+    chatId: params.chatId,
+    isGroup: params.isGroup,
+    allowFrom,
+    mode,
   };
 }
 
