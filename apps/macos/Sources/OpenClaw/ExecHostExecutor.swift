@@ -155,7 +155,8 @@ enum ExecHostExecutor {
                 cwd: approvedCwdSnapshot,
                 env: env,
                 timeout: timeoutSec,
-                executableSnapshots: executableSnapshots)
+                executableSnapshots: executableSnapshots,
+                mutableFileOperand: request.mutableFileOperand)
         }
         return await self.commandResponse(execution: execution)
     }
@@ -166,7 +167,8 @@ enum ExecHostExecutor {
         cwd: ExecApprovalCwdSnapshot,
         env: [String: String],
         timeout: Double?,
-        executableSnapshots: [ExecApprovalExecutableSnapshot] = []) async -> ShellExecutor.ShellResult
+        executableSnapshots: [ExecApprovalExecutableSnapshot] = [],
+        mutableFileOperand: ExecApprovalScriptOperand? = nil) async -> ShellExecutor.ShellResult
     {
         await ShellExecutor.runDetailed(
             command: command,
@@ -175,6 +177,9 @@ enum ExecHostExecutor {
             timeout: timeout,
             beforeSpawn: {
                 guard !Task.isCancelled else { return "SYSTEM_RUN_CANCELLED: execution cancelled" }
+                if let mutableFileOperand, !mutableFileOperand.isCurrent(command: command, cwd: cwd.path) {
+                    return "SYSTEM_RUN_DENIED: approval script operand changed before execution"
+                }
                 guard executableSnapshots.allSatisfy({
                     ExecCommandResolution.revalidateApprovalExecutable($0, cwd: cwd.path, env: env)
                 }) else {
