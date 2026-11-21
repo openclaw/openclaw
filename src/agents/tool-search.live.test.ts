@@ -1,10 +1,11 @@
 // Real provider discovery through the admitted OpenClaw runner; no response or tool-choice mocks.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { configureAiTransportHost, getAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -183,6 +184,13 @@ module.exports = {
       const cache = createPluginCache();
       try {
         return await withPluginCache(cache, async () => {
+          // Capture the prepared transport, not a host replaced by first-use plugin loading.
+          await loadAndActivateRootPluginRegistry({
+            config,
+            workspaceDir: state.workspaceDir,
+            throwOnLoadError: true,
+          });
+          await import("./ai-transport-runtime-host.js");
           const sessionManager = SessionManager.inMemory(state.workspaceDir);
           const requests: RequestMetrics[] = [];
           const host = getAiTransportHost();
@@ -256,6 +264,8 @@ module.exports = {
               };
             },
           });
+          // Retain the observer across lazy installers that replace the process default.
+          const captureHost = getAiTransportHost();
           try {
             lease = await createContextEngineLogicalTurnLease({
               identity: { runId: sessionId, sessionId },
@@ -263,34 +273,36 @@ module.exports = {
               agentDir: state.agentDir(),
               workspaceDir: state.workspaceDir,
             });
-            const result = await runEmbeddedAgent({
-              preparedRunAdmission: admission,
-              contextEngineLogicalTurnLease: lease,
-              agentId: "main",
-              sessionId,
-              sessionKey: `agent:main:${sessionId}`,
-              sessionManager,
-              sessionPersistence: "detached",
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-              config,
-              provider: "openai",
-              model: modelId,
-              agentHarnessRuntimeOverride: "openclaw",
-              modelSelectionLocked: true,
-              codeModeOverride: false,
-              thinkLevel: "off",
-              // Include the decoy here so tools.deny, not an omission, must remove it.
-              toolsAllow: definitions.map((tool) => tool.name),
-              requireWorkspaceOnly: true,
-              prompt:
-                "What is the exact current release-receipt verification code for warehouse order WH-4821? " +
-                "Look it up in the warehouse service and report the order identifier and code verbatim. " +
-                "Do not guess or substitute another order.",
-              timeoutMs: 180_000,
-              runId: sessionId,
-              cleanupBundleMcpOnRunEnd: true,
-            });
+            const result = await runWithAiTransportHost(captureHost, () =>
+              runEmbeddedAgent({
+                preparedRunAdmission: admission,
+                contextEngineLogicalTurnLease: lease,
+                agentId: "main",
+                sessionId,
+                sessionKey: `agent:main:${sessionId}`,
+                sessionManager,
+                sessionPersistence: "detached",
+                agentDir: state.agentDir(),
+                workspaceDir: state.workspaceDir,
+                config,
+                provider: "openai",
+                model: modelId,
+                agentHarnessRuntimeOverride: "openclaw",
+                modelSelectionLocked: true,
+                codeModeOverride: false,
+                thinkLevel: "off",
+                // Include the decoy here so tools.deny, not an omission, must remove it.
+                toolsAllow: definitions.map((tool) => tool.name),
+                requireWorkspaceOnly: true,
+                prompt:
+                  "What is the exact current release-receipt verification code for warehouse order WH-4821? " +
+                  "Look it up in the warehouse service and report the order identifier and code verbatim. " +
+                  "Do not guess or substitute another order.",
+                timeoutMs: 180_000,
+                runId: sessionId,
+                cleanupBundleMcpOnRunEnd: true,
+              }),
+            );
             if (wireFailure) {
               throw wireFailure;
             }

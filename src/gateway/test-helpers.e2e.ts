@@ -310,6 +310,7 @@ export async function startGatewayWithClient(
     origin?: string;
     clientDisplayName?: string;
     scopes?: string[];
+    requestTimeoutMs?: number;
     onEvent?: (evt: { event?: string; payload?: unknown }) => void;
     beforeConnect?: (server: GatewayServer) => void | Promise<void>;
     sidecarStartup?: GatewayServerOptions["sidecarStartup"];
@@ -366,6 +367,7 @@ export async function startGatewayWithClient(
       origin: params.origin,
       clientDisplayName: params.clientDisplayName,
       scopes: params.scopes,
+      requestTimeoutMs: params.requestTimeoutMs,
       onEvent: params.onEvent,
     });
 

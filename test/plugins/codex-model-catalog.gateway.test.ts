@@ -140,6 +140,8 @@ it("models.list selects a native user-home API-key catalog through the prepared 
           configPath: state.configPath,
           token,
           scopes: ["operator.admin"],
+          // Cold native catalog preparation can exceed the ordinary RPC budget.
+          requestTimeoutMs: 60_000,
         });
         try {
           await gateway.server.startupSettled;
