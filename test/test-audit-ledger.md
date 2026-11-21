@@ -1226,6 +1226,21 @@ reload result, not immediate retention before background reacquisition. Both
 copies share that limitation; no stronger timing coverage is claimed. Targeted
 agents-other typecheck, lint, formatting and all three line-count ratchets pass.
 
+### Chat mention duplicate layer (qualification in progress)
+
+At `1ed570fb2b288299e2e2a99036d2b9b1e1953a3e`, seven declarations / ten
+expanded cases in `chat-send-pending-inputs.test.ts` repeat the committed-mention
+suite under the same admission and SQLite fixture. Keep guest lookup/authority,
+commit-time recipient notification, idle ACK ordering, approved-token handling,
+recipient identity and replay/cancellation coverage in `chat-send-mentions.test.ts`.
+Transfer the guest display name to prevent unrelated background session naming.
+Keep its dispatch-before-Inbox-disposal cleanup order. The real-WebSocket
+presence-audience suite retains the guest `presence.query` refusal.
+
+Independent preservation review found no coverage gap at this base. The new
+active-steer path does not apply to these ordinary input fixtures. Removal,
+baseline/candidate runs, mutation controls and scoped checks remain pending.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
