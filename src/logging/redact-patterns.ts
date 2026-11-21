@@ -313,7 +313,7 @@ function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
         continue;
       }
     }
-    const char = text[index];
+    const char = text[index]!;
     const before = text[index - 1];
     if (char >= "0" && char <= "9" && (!before || INLINE_WHITESPACE_RE.test(before))) {
       // Clocks and grep line-number prefixes are context, not compact key:value fields.
