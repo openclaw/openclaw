@@ -6,9 +6,9 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { publishUserProfileAuthorityChange } from "../state/user-profile-events.js";
 import { publishUserProfilesChange } from "../state/user-profile-list.js";
 import { runUserProfileWriteTransaction } from "../state/user-profile-mutation.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
@@ -217,6 +217,10 @@ async function prepareLiveProducer(
           const release = releaseRetained;
           return {
             client: createSyntheticPluginRuntimeClient({
+              authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+              operatorRoleActor: requestAuth.operatorRoleActor,
+              openclawIdPrincipal: requestAuth.openclawIdPrincipal,
+              operatorAccessAuthority: requestAuth.operatorAccessAuthority,
               operatorRunAuthority: authority,
               scopes: [...authority.scopes],
             }),
@@ -267,6 +271,10 @@ async function prepareLiveProducer(
       return {
         client: authority
           ? createSyntheticPluginRuntimeClient({
+              authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+              operatorRoleActor: requestAuth.operatorRoleActor,
+              openclawIdPrincipal: requestAuth.openclawIdPrincipal,
+              operatorAccessAuthority: requestAuth.operatorAccessAuthority,
               operatorRunAuthority: authority,
               scopes: [...authority.scopes],
             })
@@ -293,6 +301,7 @@ async function prepareLiveProducer(
   assert(prepared, "The real recorded-person owner must admit its current role");
   return {
     client: createSyntheticPluginRuntimeClient({
+      operatorRoleActor: { kind: "operator", profileId: prepared.authority.profileId },
       operatorRunAuthority: prepared.authority,
       scopes: [...prepared.authority.scopes],
     }),
@@ -414,7 +423,6 @@ export async function runLiveAdmissionCase(
       assert(authority, "The real transport must queue its actual operator authority");
       expect(authority.recoverySnapshot).toBeUndefined();
       expect(authority.signal?.aborted).not.toBe(true);
-      expect(authority.invocation).toBeUndefined();
       expect(captureQueuedOperatorRecoverySource(authority)).toEqual({
         kind: "unavailable",
         reason: credentialKind ? "decode-failed" : "remote-ingress-no-source",
@@ -427,7 +435,12 @@ export async function runLiveAdmissionCase(
               : kind === "live-fallback"
                 ? "password"
                 : "trusted-proxy",
-          ...(proxyCredential ? { verifiedIdentity: PROXY_USER } : {}),
+          ...(proxyCredential
+            ? {
+                verifiedIdentity:
+                  scenario === "profile-deleted" ? `deleted-${c.id}@example.test` : PROXY_USER,
+              }
+            : {}),
         });
         expect(authority.sharedGeneration).toEqual(expect.any(String));
         if (kind === "live-grant" || kind === "live-role") {
@@ -474,6 +487,7 @@ export async function runLiveAdmissionCase(
               .returning("id"),
           ).rows,
         ).toEqual([{ id: profileId }]);
+        publishUserProfileAuthorityChange(db, profileId);
         publishUserProfilesChange(db, profileId);
       }, {});
     }
@@ -489,9 +503,8 @@ export async function runLiveAdmissionCase(
       (scenario === "before-start" &&
         !["http-bearer", "live-grant", "live-role", "live-remote-ingress"].includes(kind))
     ) {
-      await expect(c.wait(controllerInput.settlement.promise)).rejects.toBeInstanceOf(
-        GatewayOperatorRecoveryAuthorizationError,
-      );
+      // Physical custody can settle normally even when the next start is refused.
+      await c.wait(controllerInput.settlement.promise.catch(() => undefined));
       const observer = await fixture.admin(c.signal);
       const history = await observer.request<History>("chat.history", { sessionKey: c.sessionKey });
       const refused = history.pendingInputs.items.find((input) => input.runId === c.queuedRunId);

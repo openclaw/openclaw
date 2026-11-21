@@ -102,7 +102,7 @@ const modeFor = (row: Row): Mode =>
       : "token";
 
 // Auth-mode transitions require a real Gateway restart (config-reload-plan.ts).
-// Three shared mode owners plus one restart sentinel cover all rows with four boots.
+// Three shared mode owners plus two restart sentinels cover all rows with five boots.
 describe.each(["token", "password", "trusted-proxy"] as const)("saved admission: %s", (mode) => {
   let fixture: AdmissionFixture;
   beforeAll(async () => {
@@ -135,7 +135,6 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
   if (mode === "token") {
     it.for([
       ["ocid-owner", "owner-unavailable"],
-      ["ocid-owner", "owner-disabled"],
       ["ocid-member", "live-ocid-grant"],
       ["token:internal", "generation-unavailable"],
       ["device-token:internal", "narrowed-token"],
@@ -163,6 +162,15 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       }
     },
   );
+  if (mode === "token") {
+    it(
+      "refuses a disabled OCID owner after a real restart",
+      { timeout: 90_000 },
+      async ({ signal }) => {
+        await runCase(fixture, rows["ocid-owner"], "owner-disabled", signal, true);
+      },
+    );
+  }
   if (mode === "trusted-proxy") {
     // Last case: keep the transitioned listener until this pool closes, never hot-reset its mode.
     it(

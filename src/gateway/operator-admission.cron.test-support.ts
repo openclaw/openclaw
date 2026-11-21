@@ -6,6 +6,10 @@ import * as cronCreator from "../agents/cron-creator-authority-context.js";
 import * as attemptTools from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  wrapToolWithGatewayCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import * as cronRun from "../cron/run-admission.js";
 import type { CronStandingGrantAuthority } from "../cron/standing-grant-authority.types.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -48,10 +52,14 @@ export async function runCronAdmissionCase(
   let creatorScope: CronCreatorAuthorityRunScope | undefined;
   let standingAuthority: CronStandingGrantAuthority | undefined;
   let job: CronStoredJob | undefined;
+  let jobRemoved = false;
   let creatorRunId: string | undefined;
   let creatorTool: AnyAgentTool | undefined;
   const requesterOwners: boolean[] = [];
-  const prepareTools = attemptTools.prepareEmbeddedAttemptToolBase;
+  const previousToolPreparation = vi.isMockFunction(attemptTools.prepareEmbeddedAttemptToolBase)
+    ? vi.mocked(attemptTools.prepareEmbeddedAttemptToolBase).getMockImplementation()
+    : undefined;
+  const prepareTools = previousToolPreparation ?? attemptTools.prepareEmbeddedAttemptToolBase;
   const toolObserver = vi
     .spyOn(attemptTools, "prepareEmbeddedAttemptToolBase")
     .mockImplementation(async (params) => {
@@ -65,7 +73,19 @@ export async function runCronAdmissionCase(
           requesterOwners.push(authority.requesterOwner === true);
           expect(authority.requesterOwner).toBe(true);
         } else {
-          creatorTool = tools.toolsRaw.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME);
+          const tool = tools.toolsRaw.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME);
+          assert(params.attempt.admittedRunContext);
+          creatorTool = tool
+            ? wrapToolWithGatewayCallerIdentity(
+                tool,
+                createAdmittedGatewayToolCallerIdentity({
+                  admittedRunContext: params.attempt.admittedRunContext,
+                  agentId: params.setup.sessionAgentId,
+                  sessionKey: c.sessionKey,
+                  approvalSignals: [tools.toolAbortSignal],
+                }),
+              )
+            : undefined;
         }
       }
       return tools;
@@ -117,6 +137,10 @@ export async function runCronAdmissionCase(
         ),
       );
       assert(creatorTool, "The actual admitted parent run must expose its bound automation tool");
+      await creatorTool.execute(`${c.id}:plan`, {
+        action: "plan",
+        names: [definition.name],
+      });
       const added = await creatorTool.execute(c.id, {
         action: "add",
         job: { ...definition, sessionTarget: "current" },
@@ -249,6 +273,7 @@ export async function runCronAdmissionCase(
       // admission. Its in-flight guards remain in LIFETIME_CHECK_CALLS until
       // the later lifetime PR; removing a job must retire the receipt.
       await admin.request("cron.remove", { id: job.id });
+      jobRemoved = true;
       assert(standingAuthority);
       const authority = standingAuthority;
       expect(() => authority.assertCurrent()).toThrow();
@@ -292,13 +317,17 @@ export async function runCronAdmissionCase(
       await admin.request("chat.abort", { sessionKey: creatorSessionKey });
     } finally {
       try {
-        if (job) {
+        if (job && !jobRemoved) {
           await admin.request("cron.remove", { id: job.id });
         }
       } finally {
         creatorObserver.mockRestore();
         runObserver.mockRestore();
-        toolObserver.mockRestore();
+        if (previousToolPreparation) {
+          toolObserver.mockImplementation(previousToolPreparation);
+        } else {
+          toolObserver.mockRestore();
+        }
       }
     }
   }

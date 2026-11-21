@@ -12,7 +12,10 @@ import {
   ingressMessage,
 } from "../channels/message-access/host-ingress.test-support.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
+import {
+  captureSessionQueuedInputsForRestart,
+  readSessionQueuedInputPage,
+} from "../config/sessions/session-pending-input-history.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
@@ -63,6 +66,7 @@ import { runLiveAdmissionCase } from "./operator-admission.live.test-support.js"
 import { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import * as queuedInputs from "./queued-chat-inputs.js";
+import { persistRunningSessionsForRestart } from "./session-restart-resume.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -507,22 +511,41 @@ export async function runCase(
     if (restartSentinel) {
       assert(fixture.server);
       c.restarting = true;
+      await captureSessionQueuedInputsForRestart(c.target);
+      await persistRunningSessionsForRestart({ cfg: fixture.config });
       await fixture.server.close({ reason: "gateway restarting", restartExpectedMs: 1_500 });
       await fixture.closeClients();
       await fixture.claim?.release();
-      assert(row.credential === "trusted-proxy" && scenario === "method-disabled");
       fixture.config = structuredClone(fixture.baseline);
-      fixture.config.gateway!.auth = {
-        ...fixture.config.gateway!.auth,
-        mode: "token",
-        token: "admission-restarted-token",
-      };
-      await fixture.start(false);
-      await c.wait(c.drainEntered.promise);
-      c.releaseDrain.resolve();
-      await c.wait(c.drained.promise);
-      assert(fixture.server);
-      await fixture.server.startupSettled;
+      if (scenario === "owner-disabled") {
+        assert(row.credential === "ocid-owner");
+        fixture.config.gateway!.openclawId = { enabled: false };
+      } else {
+        assert(row.credential === "trusted-proxy" && scenario === "method-disabled");
+        fixture.config.gateway!.auth = {
+          ...fixture.config.gateway!.auth,
+          mode: "token",
+          token: "admission-restarted-token",
+        };
+      }
+      await fixture.start();
+      assert(fixture.kernel);
+      const context = fixture.kernel.gatewayRequestContext;
+      expect(
+        await c.wait(
+          runWithGatewayIndependentRootWorkAdmission(
+            () =>
+              withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+                queuedInputs.continueSessionQueuedInputs(context, c.target, {
+                  signal: c.signal,
+                  assertCurrent: () => c.signal.throwIfAborted(),
+                }),
+              ),
+            "test:accepted-input-restart",
+            c.signal,
+          ),
+        ),
+      ).toBeUndefined();
     } else if (row.credential === "channel" || scenario === "live-ocid-grant") {
       // Native rows lack durable sources; the OCID row deliberately exceeds codec limits.
       // Both use the ordinary in-memory lifecycle -> prepare/decide boundary.
@@ -617,7 +640,6 @@ export async function runCase(
   } finally {
     fallbackEnv.restore();
     c.releaseFirst.resolve();
-    c.releaseDrain.resolve();
     c.releasePrepared.resolve();
     c.releaseRecovered.resolve();
     try {

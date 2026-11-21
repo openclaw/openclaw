@@ -50,6 +50,7 @@ export async function prepareLiveCredentialProducer(
   const c = fixture.current;
   assert(c && fixture.kernel);
   const proxyCredential = kind !== "live-token" && kind !== "live-fallback";
+  const proxyUser = c.scenario === "profile-deleted" ? `deleted-${c.id}@example.test` : PROXY_USER;
   const next = structuredClone(fixture.config);
   assert(next.gateway?.roles?.definitions.operator && next.gateway.auth);
   if (proxyCredential) {
@@ -57,6 +58,11 @@ export async function prepareLiveCredentialProducer(
       next.gateway.auth.mode === "trusted-proxy",
       "Live proxy credentials belong in the identified proxy pool",
     );
+    if (proxyUser !== PROXY_USER) {
+      assert(next.gateway.auth.trustedProxy?.allowUsers && next.gateway.auth.identityScopes);
+      next.gateway.auth.trustedProxy.allowUsers.push(proxyUser);
+      next.gateway.auth.identityScopes[proxyUser] = [...WRITER];
+    }
     // Valid live policy beyond the codec's 256-wildcard bound. None of the
     // denied providers is the fixture's actual provider.
     next.gateway.roles.definitions.operator.modelPolicy = {
@@ -64,7 +70,7 @@ export async function prepareLiveCredentialProducer(
     };
     if (kind === "live-grant" || kind === "live-role") {
       assert(next.gateway.auth.identityScopes);
-      next.gateway.auth.identityScopes[PROXY_USER] = [...WRITER, "operator.approvals"];
+      next.gateway.auth.identityScopes[proxyUser] = [...WRITER, "operator.approvals"];
     }
     if (kind === "live-role") {
       next.gateway.roles.definitions["live-role-narrowed"] = {
@@ -97,6 +103,7 @@ export async function prepareLiveCredentialProducer(
     scopes: deviceLess ? [...WRITER, "operator.approvals"] : WRITER,
     ingress: browser ? "control-ui" : "internal",
     origin: proxyCredential ? ORIGIN : LIVE_ONLY_ORIGIN,
+    proxyUser,
   });
   if (kind === "live-device-revoked" || kind === "live-device-key-changed") {
     // This incidental token is not used for proxy authentication. Its real
@@ -126,7 +133,7 @@ export async function prepareLiveCredentialProducer(
         case "live-grant": {
           const narrowed = structuredClone(fixture.config);
           assert(narrowed.gateway?.auth?.identityScopes);
-          narrowed.gateway.auth.identityScopes[PROXY_USER] = [...WRITER];
+          narrowed.gateway.auth.identityScopes[proxyUser] = [...WRITER];
           await fixture.publish(narrowed, c.signal);
           return;
         }
@@ -134,7 +141,7 @@ export async function prepareLiveCredentialProducer(
           const revoked = structuredClone(fixture.config);
           assert(revoked.gateway?.auth?.trustedProxy?.allowUsers);
           revoked.gateway.auth.trustedProxy.allowUsers =
-            revoked.gateway.auth.trustedProxy.allowUsers.filter((user) => user !== PROXY_USER);
+            revoked.gateway.auth.trustedProxy.allowUsers.filter((user) => user !== proxyUser);
           await fixture.publish(revoked, c.signal);
           return;
         }

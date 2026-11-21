@@ -26,6 +26,11 @@ import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import { closeProvider } from "./gateway-provider-fixture.test-support.js";
 import type { LinkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdTunnelPrincipalResolver,
+} from "./openclaw-id/tunnel-principal.js";
+import {
   ADMIN,
   ADMIN_USER,
   WRITER,
@@ -53,9 +58,6 @@ export class AdmissionCase {
   readonly firstReached = createDeferred();
   readonly releaseFirst = createDeferred();
   readonly enqueued = createDeferred();
-  readonly drainEntered = createDeferred();
-  readonly releaseDrain = createDeferred();
-  readonly drained = createDeferred();
   readonly prepared = createDeferred();
   readonly releasePrepared = createDeferred();
   readonly finalAdmissionSettled = createDeferred();
@@ -220,6 +222,14 @@ export class AdmissionFixture {
       "applied",
     );
     this.config = next;
+    const c = this.current;
+    if (c?.claw && next.gateway?.openclawId?.enabled !== false) {
+      // Reload republishes daemon I/O; this fixture's signed claw remains that owner.
+      const authority = c.claw.authority;
+      setOpenClawIdTunnelPrincipalResolver((key) => authority.resolvePeer(key));
+      setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
+      setOpenClawIdMemberAccountLookup((id) => id === c.id);
+    }
   }
   async setSessionOwner(profileId: string) {
     const c = this.current;

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import https from "node:https";
@@ -53,7 +53,6 @@ import {
 } from "./operator-admission.contracts.test-support.js";
 import * as admission from "./operator-admission.js";
 import type { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
-import * as queuedInputs from "./queued-chat-inputs.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 
@@ -61,7 +60,7 @@ export async function prepareAdmissionOcidPeer(c: AdmissionCase) {
   c.claw = await linkedClaw();
   c.peerKey = c.claw.w1;
   if (c.row.credential !== "ocid-owner") {
-    c.peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(173));
+    c.peerKey = formatIrohEndpointKey(randomBytes(32));
     expect(
       await c.claw.authority.submit(
         await c.claw.sign({
@@ -158,24 +157,6 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       }
       return facts;
     });
-  const drain = queuedInputs.continueSessionQueuedInputs;
-  const drained = vi
-    .spyOn(queuedInputs, "continueSessionQueuedInputs")
-    .mockImplementation(async (context, target, options) => {
-      const c = fixture.current;
-      if (c?.sessionKey !== target.sessionKey) {
-        return await drain(context, target, options);
-      }
-      if (c.restarting) {
-        c.drainEntered.resolve();
-        await c.releaseDrain.promise;
-      }
-      try {
-        return await drain(context, target, options);
-      } finally {
-        c.drained.resolve();
-      }
-    });
   const followup = queueLifecycle.prepareFollowupRunOperatorAuthority;
   const followupAdmission = vi
     .spyOn(queueLifecycle, "prepareFollowupRunOperatorAuthority")
@@ -238,7 +219,8 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       if (
         (c?.scenario === "mixed-owner-group" || c?.scenario === "owner-revoked-before-start") &&
         c.original &&
-        params.attempt.sessionKey === c.sessionKey
+        params.attempt.sessionKey === c.sessionKey &&
+        params.attempt.prompt.includes(c.queuedText)
       ) {
         expect(params.attempt.senderIsOwner).toBe(false);
         expect(result.toolsRaw.some((tool) => tool.name === "gateway")).toBe(true);
@@ -290,7 +272,6 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
   fixture.restores.push(
     () => enqueued.mockRestore(),
     () => prepared.mockRestore(),
-    () => drained.mockRestore(),
     () => followupAdmission.mockRestore(),
     () => toolScopes.mockRestore(),
     () => transport.mockRestore(),
@@ -307,6 +288,7 @@ export async function prepareAdmissionOperator(
     scopes: typeof WRITER;
     ingress?: Row["ingress"];
     origin?: string;
+    proxyUser?: string;
   },
 ) {
   const credential = connection?.credential ?? c.row.credential;
@@ -323,6 +305,9 @@ export async function prepareAdmissionOperator(
     ].includes(c.scenario)
   ) {
     initialScopes.push("operator.approvals");
+  }
+  if (legacyTailscale) {
+    initialScopes.push("operator.pairing");
   }
   if (c.scenario === "live-ocid-grant") {
     initialScopes.push("operator.questions");
@@ -407,7 +392,7 @@ export async function prepareAdmissionOperator(
       (connection?.ingress ?? c.row.ingress) === "control-ui"
         ? (connection?.origin ?? ORIGIN)
         : undefined,
-    scopes: legacyTailscale ? [...initialScopes, "operator.pairing"] : initialScopes,
+    scopes: device ? deviceScopes : initialScopes,
   };
   const auth = fixture.config.gateway!.auth!;
   if (credential === "token" || credential === "device-token") {
@@ -426,7 +411,7 @@ export async function prepareAdmissionOperator(
     credential === "proxy-device" ||
     credential === "plugin-grant"
   ) {
-    options.edgeAuthHeaders = proxyHeaders(PROXY_USER);
+    options.edgeAuthHeaders = proxyHeaders(connection?.proxyUser ?? PROXY_USER);
   }
   if (credential === "tailscale" || credential === "tailscale-device") {
     options.edgeAuthHeaders = {
