@@ -492,6 +492,7 @@
   "ui/src/components/app-sidebar-display-agent.ts",
   "ui/src/components/app-sidebar-nav-menus.tsx",
   "ui/src/components/app-sidebar-owner.tsx",
+  "ui/src/components/app-sidebar-pages.tsx",
   "ui/src/components/app-sidebar-panel-headers.tsx",
   "ui/src/components/app-sidebar-personal-navigation.ts",
   "ui/src/components/app-sidebar-presence.ts",
