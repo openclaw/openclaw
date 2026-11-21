@@ -88,9 +88,13 @@ suite.define(() => {
         expect(await dialog.locator(".skill-requirement .settings-status--warn").count()).toBe(0);
         expect(await installer.count()).toBe(0);
         expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-        // Keyboard activation reaches the Back link, and both routes back restore the same button.
+        // Keyboard entry identifies the skill, with the Back link immediately before the heading.
+        const heading = dialog.getByRole("heading", { name: "Coding Agent", exact: true });
+        await expect
+          .poll(() => heading.evaluate((node) => node.matches(":focus-visible")))
+          .toBe(true);
         const back = dialog.getByRole("link", { name: "Skills", exact: true });
-        await page.keyboard.press("Tab");
+        await page.keyboard.press("Shift+Tab");
         await expect
           .poll(() => back.evaluate((link) => link === document.activeElement))
           .toBe(true);
@@ -100,7 +104,7 @@ suite.define(() => {
           .poll(() => originalOpener.evaluate((button) => button === document.activeElement))
           .toBe(true);
         await page.keyboard.press("Enter");
-        await dialog.waitFor();
+        await expect.poll(() => heading.evaluate((node) => node.matches(":focus"))).toBe(true);
         await page.goBack();
         await opener.waitFor();
         await expect
@@ -112,7 +116,7 @@ suite.define(() => {
         await dialog.waitFor();
         // Reload stays on the page; Back returns to the list it came from.
         await page.reload();
-        await expect.poll(() => page.locator(".skill-page h1").textContent()).toBe("Coding Agent");
+        await expect.poll(() => heading.evaluate((node) => node.matches(":focus"))).toBe(true);
         await page.goBack();
         await page.waitForURL(/\/settings\/skills(?:\?|$)/u);
         await expect.poll(() => page.locator(".skill-page").count()).toBe(0);
