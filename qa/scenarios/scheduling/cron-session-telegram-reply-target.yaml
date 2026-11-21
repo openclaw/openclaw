@@ -1,0 +1,116 @@
+title: Session-bound cron message-tool send on Telegram
+
+scenario:
+  id: cron-session-telegram-reply-target
+  surface: cron
+  coverage:
+    primary:
+      - telegram.message-actions
+    secondary:
+      - automation.chat-announce-delivery
+  objective: Verify a session-bound cron run can post to its own Telegram conversation with the message tool when reply threading is enabled.
+  successCriteria:
+    - The scripted model calls the message tool once, without replyTo, targeting the bound Telegram conversation.
+    - The tool result has no replyTo validation error and Telegram receives the sent marker once.
+    - The cron run records ok.
+  docsRefs:
+    - docs/channels/telegram/messaging.md
+  codeRefs:
+    - extensions/telegram/src/threading-tool-context.ts
+    - src/auto-reply/reply/agent-runner-utils.ts
+    - src/auto-reply/reply/session-event-context.ts
+    - src/infra/outbound/message-action-threading.ts
+    - extensions/telegram/src/action-params.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-session-reply-target.ts
+  # Implicit reply threading is what turns a bad current-message id into replyTo.
+  gatewayConfigPatch:
+    channels:
+      telegram:
+        replyToMode: first
+  execution:
+    kind: flow
+    channel: telegram
+    suiteIsolation: isolated
+    isolationReason: Binds a cron job to the only Telegram DM session in the suite.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Bind a cron job to a Telegram DM session, run it once, and check its message-tool send.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
+      conversationId: qa-session-reply-target-dm
+      readyMarker: QA-SESSION-REPLY-TARGET-READY
+      sentMarker: QA-SESSION-EVENT-REPLY-TARGET-SENT
+      promptSnippet: Session event reply-target QA check
+
+flow:
+  steps:
+    - name: a session-bound cron send reaches its Telegram conversation
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: proof
+          value:
+            expr: |
+              await (async () => {
+                const conversation = { id: config.conversationId, kind: 'direct' };
+                const outbound = () => state.getSnapshot().messages.filter(row => row.direction === 'outbound');
+                const readyStart = outbound().length;
+                await transport.sendInbound({ conversation, senderId: config.conversationId, senderName: 'QA Operator', text: `Reply exactly: ${config.readyMarker}` });
+                await transport.waitForOutbound({ conversation, sinceIndex: readyStart, textIncludes: config.readyMarker, timeoutMs: 90000 });
+                const sessions = (await env.gateway.call('sessions.list', {})).sessions;
+                const session = sessions.find(row => row.deliveryContext?.channel === 'telegram' && row.deliveryContext?.to);
+                if (!session) throw new Error(`no Telegram DM session: ${JSON.stringify(sessions.map(row => row.key))}`);
+                const route = session.deliveryContext;
+                const job = await env.gateway.call('cron.add', {
+                  agentId: 'qa',
+                  name: `qa-session-reply-target-${randomUUID().slice(0, 8)}`,
+                  enabled: true,
+                  deleteAfterRun: false,
+                  schedule: { kind: 'at', at: new Date(Date.now() + 60 * 60 * 1000).toISOString() },
+                  sessionTarget: `session:${session.key}`,
+                  wakeMode: 'now',
+                  payload: { kind: 'agentTurn', message: `${config.promptSnippet}. Conversation target: ${route.to} . Send the marker to this conversation with the message tool, then finish.` },
+                  delivery: { mode: 'announce', channel: 'telegram', to: route.to, ...(route.accountId ? { accountId: route.accountId } : {}) },
+                }, { timeoutMs: 30000 });
+                const cursor = (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor;
+                const sendStart = outbound().length;
+                const startedAt = Date.now();
+                const ran = await env.gateway.call('cron.run', { id: job.id, mode: 'force' }, { timeoutMs: 30000 });
+                if (ran?.ok !== true || ran?.ran === false) throw new Error(`cron.run refused: ${JSON.stringify(ran)}`);
+                const run = await waitForCronRunCompletion({ callGateway: env.gateway.call.bind(env.gateway), jobId: job.id, afterTs: startedAt, timeoutMs: liveTurnTimeoutMs(env, 90000) });
+                const requests = (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${cursor}`)).filter(row => String(row.allInputText ?? '').includes(config.promptSnippet));
+                const sends = requests.filter(row => row.plannedToolName === 'message');
+                const result = requests.find(row => sends.length === 1 && row.toolOutputCallId === sends[0].plannedToolCallId);
+                // The model's next request carries the tool result, including a validation error.
+                const replyToError = requests.some(row => String(row.allInputText ?? '').includes('replyTo must be a positive integer'));
+                if (!replyToError) await transport.waitForOutbound({ conversation, sinceIndex: sendStart, textIncludes: config.sentMarker, timeoutMs: 30000 }).catch(() => undefined);
+                const delivered = outbound().slice(sendStart).filter(row => row.text.includes(config.sentMarker));
+                return {
+                  runStatus: run.status,
+                  sends: sends.length,
+                  sendArgs: sends[0]?.plannedToolArgs,
+                  toolOutput: String(result?.toolOutput ?? '').slice(0, 400),
+                  replyToError,
+                  delivered: delivered.length,
+                };
+              })()
+        - assert:
+            expr: "proof.sends === 1 && proof.sendArgs?.replyTo === undefined"
+            message:
+              expr: "`expected one scripted message-tool send without replyTo: ${JSON.stringify(proof)}`"
+        - assert:
+            expr: "!proof.replyToError && proof.delivered === 1"
+            message:
+              expr: "`the session-bound cron send did not reach Telegram: ${JSON.stringify(proof)}`"
+        - assert:
+            expr: "proof.runStatus === 'ok'"
+            message:
+              expr: "`expected an ok cron run: ${JSON.stringify(proof)}`"
+      detailsExpr: JSON.stringify(proof)
