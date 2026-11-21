@@ -18,7 +18,7 @@ import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const DESCRIPTION =
   "Move this conversation into an existing registered project and continue in its managed checkout. " +
-  "list: the projects you may use. move: send a projectId from list; this turn ends, the project opens as it does for a session created in it, and the conversation resumes here in its new checkout. " +
+  "list: the projects you may use. move: send a projectId from list; this turn ends and the same conversation resumes in the selected project's managed checkout. " +
   "Files from before the move stay in the original workspace, where earlier message links still open them. " +
   "When you already cloned this project into a folder of your workspace and worked there, pass that folder as checkout: its current commit and unsaved changes start the new checkout. Without checkout the new checkout starts from the project's default branch. " +
   "A conversation can move into a project only once. " +
@@ -82,7 +82,18 @@ export function createSessionProjectTool(options: {
       if (!projectId || !sessionId) {
         throw new ToolInputError("move requires a projectId from list.");
       }
-      const sandbox = options.sandbox?.enabled ? options.sandbox : undefined;
+      const initialSandbox = options.sandbox;
+      const carrySandbox =
+        input.checkout && initialSandbox?.enabled
+          ? {
+              agentId: initialSandbox.agentId,
+              sessionKey: initialSandbox.sessionKey,
+              agentWorkspaceDir: initialSandbox.agentWorkspaceDir,
+              workspaceDir: initialSandbox.workspaceDir,
+              backendId: initialSandbox.backendId,
+              containerWorkdir: initialSandbox.containerWorkdir,
+            }
+          : undefined;
       const session = {
         agentId: caller.agentId,
         sessionKey: caller.sessionKey,
@@ -91,7 +102,7 @@ export function createSessionProjectTool(options: {
         await import("../../gateway/session-project-move.js");
       const { handoffSessionTool } = await import("./session-tool-handoff.js");
       return handoffSessionTool({
-        name: "Project move",
+        name: "Conversation move",
         sessionId,
         runId: options.runId,
         operation,
@@ -107,8 +118,37 @@ export function createSessionProjectTool(options: {
           const moved = await moveSessionIntoProject({
             context,
             session,
-            carrySource: sandbox
-              ? { kind: "sandbox", sandbox }
+            carrySource: carrySandbox
+              ? async ({ assertCurrent: assertCarryCurrent, skillsSnapshot }) => {
+                  // The initiating turn has settled. Acquire the same workspace
+                  // under the handoff's authority, for the duration of the move.
+                  const { resolveSandboxContext } = await import("../sandbox/context.js");
+                  const sandbox = await resolveSandboxContext({
+                    config: context.getRuntimeConfig(),
+                    agentId: carrySandbox.agentId,
+                    sessionKey: carrySandbox.sessionKey,
+                    workspaceDir: carrySandbox.agentWorkspaceDir,
+                    skillsSnapshot,
+                    assertCurrent: assertCarryCurrent,
+                    abortSignal: handoffSignal,
+                  });
+                  if (
+                    !sandbox?.enabled ||
+                    !sandbox.backend ||
+                    sandbox.backendId !== carrySandbox.backendId ||
+                    sandbox.workspaceDir !== carrySandbox.workspaceDir ||
+                    sandbox.containerWorkdir !== carrySandbox.containerWorkdir
+                  ) {
+                    sandbox?.[Symbol.dispose]?.();
+                    throw new Error(
+                      "This conversation's sandbox checkout is unavailable; nothing was moved.",
+                    );
+                  }
+                  return {
+                    source: { kind: "sandbox", sandbox },
+                    [Symbol.dispose]: () => sandbox[Symbol.dispose]?.(),
+                  };
+                }
               : {
                   kind: "host",
                   workspaceDir: resolveAgentWorkspaceDir(
@@ -133,7 +173,12 @@ export function createSessionProjectTool(options: {
           });
           return { ...moved, status: "moved", ...(branch ? { branch } : {}) };
         },
-        formatResult: (result) => JSON.stringify(result),
+        formatResult: (result) =>
+          result.status === "moved"
+            ? "Moved this conversation from the default workspace into the selected project. " +
+              "Briefly confirm the conversation's move into the project by name. Mention the checkout branch only if useful.\n" +
+              JSON.stringify(result)
+            : JSON.stringify(result),
       });
     },
   };

@@ -2,6 +2,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { isUnboundProjectSession } from "../config/sessions/session-project-eligibility.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { resolveRequesterProject } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
@@ -26,7 +27,12 @@ export async function moveSessionIntoProject(params: {
   context: GatewayRequestContext;
   session: { agentId: string; sessionKey: string };
   /** Where the conversation's files live; the checkout's Git commands run there. */
-  carrySource: CarrySource;
+  carrySource:
+    | CarrySource
+    | ((scope: {
+        assertCurrent: () => void;
+        skillsSnapshot?: SkillSnapshot;
+      }) => Promise<Disposable & { source: CarrySource }>);
   projectId: string;
   /** Folder in the conversation's workspace whose commit and unsaved files come along. */
   checkout?: string;
@@ -105,9 +111,16 @@ export async function moveSessionIntoProject(params: {
     throw new Error("The conversation's earlier files are unavailable; retry the move.");
   }
   assertCurrent();
+  const source = params.carrySource;
+  using carryResources = new DisposableStack();
   const carried = params.checkout
     ? await importCarriedWork({
-        source: params.carrySource,
+        source:
+          typeof source === "function"
+            ? carryResources.use(
+                await source({ assertCurrent, skillsSnapshot: entry.skillsSnapshot }),
+              ).source
+            : source,
         checkout: params.checkout,
         projectRoot: projectRoot.value,
         refName: `refs/openclaw/carry/${entry.sessionId}`,

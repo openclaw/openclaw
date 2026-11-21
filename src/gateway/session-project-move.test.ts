@@ -2,23 +2,33 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assert, expect, it } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import type { SandboxBackendHandle } from "../agents/sandbox/backend-handle.types.js";
+import * as sandboxRuntime from "../agents/sandbox/context.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { createSessionProjectTool } from "../agents/tools/session-project-tool.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { createTestReplyOperation } from "../auto-reply/reply/reply-run-registry.test-helpers.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import { withSessionControllerOwner } from "../sessions/session-controller.context.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
+import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { moveSessionIntoProject, openMovedSession } from "./session-project-move.js";
 import { listCarryCheckouts, type CarrySource } from "./session-workspace-carry.js";
 
@@ -113,41 +123,47 @@ it.each(["sandbox", "host"] as const)(
       // is the workspace. Its git sees only an empty global config, like a fresh container.
       const sandboxGit = path.join(state.root, "sandbox.gitconfig");
       await fs.writeFile(sandboxGit, "");
+      let turnActive = true;
+      const sandboxWithAuthority = (assertCurrent: () => void) => {
+        const runShellCommand: SandboxBackendHandle["runShellCommand"] = async (params) => {
+          assertCurrent();
+          const run = spawnSync("sh", ["-c", params.script, "carry", ...(params.args ?? [])], {
+            input: params.stdin,
+            maxBuffer: 64 * 1024 * 1024,
+            env: { ...process.env, GIT_CONFIG_GLOBAL: sandboxGit },
+          });
+          return { stdout: run.stdout, stderr: run.stderr, code: run.status ?? 1 };
+        };
+        return createSandboxTestContext({
+          overrides: {
+            sessionKey: target.sessionKey,
+            agentWorkspaceDir: state.workspaceDir,
+            workspaceDir: state.workspaceDir,
+            containerWorkdir: state.workspaceDir,
+            backend: {
+              id: "docker",
+              runtimeId: "fixture",
+              runtimeLabel: "fixture",
+              workdir: state.workspaceDir,
+              buildExecSpec: async () => {
+                throw new Error("The carry fixture only accepts shell scripts");
+              },
+              runShellCommand,
+            },
+          },
+        });
+      };
+      const sandbox = sandboxWithAuthority(() => {
+        if (!turnActive) {
+          throw new Error("Initiating turn's sandbox authority has ended");
+        }
+      });
       const source: CarrySource =
         where === "host"
           ? { kind: "host", workspaceDir: state.workspaceDir }
-          : {
-              kind: "sandbox",
-              sandbox: {
-                ...createSandboxTestContext({
-                  overrides: {
-                    sessionKey: target.sessionKey,
-                    workspaceDir: state.workspaceDir,
-                    containerWorkdir: state.workspaceDir,
-                    workspaceSource: undefined,
-                  },
-                }),
-                backend: {
-                  runShellCommand: async (params: {
-                    script: string;
-                    args?: string[];
-                    stdin?: Buffer | string;
-                  }) => {
-                    const run = spawnSync(
-                      "sh",
-                      ["-c", params.script, "carry", ...(params.args ?? [])],
-                      {
-                        input: params.stdin,
-                        maxBuffer: 64 * 1024 * 1024,
-                        env: { ...process.env, GIT_CONFIG_GLOBAL: sandboxGit },
-                      },
-                    );
-                    return { stdout: run.stdout, stderr: run.stderr, code: run.status ?? 1 };
-                  },
-                },
-              } as never,
-            };
+          : { kind: "sandbox", sandbox };
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      context.resolveGatewayContext = () => context;
       // An owner run: no operator drives it, so the Gateway itself asks.
       const move = (projectId = project.id) =>
         moveSessionIntoProject({
@@ -164,47 +180,107 @@ it.each(["sandbox", "host"] as const)(
         expect(await listCarryCheckouts(source)).toEqual([
           { path: "work", originUrl: origin, commit: carriedCommit, unsavedFiles: 5 },
         ]);
-        expect(await move()).toEqual({
-          status: "pending",
-          projectId: project.id,
-          carried: { commit: carriedCommit, unsavedFiles: 5 },
-        });
-        // The move only records intent, exactly like a session created in the project.
-        const pending = loadSessionEntryReadOnly(target);
-        assert(pending);
-        expect(pending).toMatchObject({
-          projectId: project.id,
-          pendingWorktree: {
-            workspace: project.repoRoot,
-            source: { kind: "project", id: project.id },
-            baseCommit: carriedCommit,
-          },
-        });
-        expect(pending.worktree).toBeUndefined();
-        await expect(move("another")).rejects.toThrow("moves into a project only once");
-
-        const branch =
-          where === "host"
-            ? await openMovedSession({
-                context,
-                session: target,
-                runId: "move-handoff",
-                runSetupScript: true,
-                assertCurrent() {},
-              })
-            : undefined;
+        let branch: string | undefined;
         if (where === "sandbox") {
-          await prepareSessionWorkspaceForRun({
-            ...target,
-            entry: pending,
-            cfg,
-            runId: "next-turn",
+          const runId = "move-handoff";
+          const operation = createTestReplyOperation({
+            sessionKey: target.sessionKey,
+            sessionId: "carry",
+            target: captureSessionTarget({
+              storeScope: target.storePath,
+              agentId: target.agentId,
+              sessionKey: target.sessionKey,
+              incarnation: "carry",
+            }),
+          });
+          operation.setPhase("running");
+          operation.attachBackend({ kind: "embedded", runId, cancel() {} });
+          const settled = createDeferredCore();
+          const resumed = createDeferredCore<string>();
+          const acquire = vi
+            .spyOn(sandboxRuntime, "resolveSandboxContext")
+            .mockImplementation(async ({ assertCurrent }) => {
+              assert(assertCurrent);
+              return sandboxWithAuthority(assertCurrent);
+            });
+          const enqueue = vi
+            .spyOn(sessionEvents, "enqueueSessionEventForHost")
+            .mockImplementation((text) => {
+              resumed.resolve(text);
+              return {
+                id: "carry-result",
+                cancel: () => false,
+                accepted: Promise.resolve({ ok: true }),
+                settled: Promise.resolve({
+                  status: "completed",
+                  executionStarted: true,
+                  delivered: false,
+                }),
+              };
+            });
+          try {
+            await withPluginRuntimeGatewayRequestScope(
+              { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+              () =>
+                withOperatorToolGatewayAuthority(
+                  { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+                  () =>
+                    withGatewayToolCallerIdentity(target, () =>
+                      withSessionControllerOwner(operation, async () => {
+                        const result = await createSessionProjectTool({
+                          sandbox,
+                          sessionId: "carry",
+                          runId,
+                          senderIsOwner: true,
+                          onYield: () => operation.completeWithAfterClearBarrier(settled.promise),
+                        }).execute("move-project", {
+                          action: "move",
+                          projectId: project.id,
+                          checkout: "work",
+                        });
+                        expect(result.details).toMatchObject({ status: "started" });
+                      }),
+                    ),
+                ),
+            );
+            turnActive = false;
+            settled.resolve();
+            const message = await resumed.promise;
+            expect(message).toContain('"status":"moved"');
+            expect(message).toContain(`"commit":"${carriedCommit}"`);
+          } finally {
+            settled.resolve();
+            operation.complete();
+            acquire.mockRestore();
+            enqueue.mockRestore();
+          }
+        } else {
+          expect(await move()).toEqual({
+            status: "pending",
+            projectId: project.id,
+            carried: { commit: carriedCommit, unsavedFiles: 5 },
+          });
+          // The move only records intent until the next turn opens the checkout.
+          const pending = loadSessionEntryReadOnly(target);
+          assert(pending);
+          expect(pending).toMatchObject({
+            projectId: project.id,
+            pendingWorktree: {
+              workspace: project.repoRoot,
+              source: { kind: "project", id: project.id },
+              baseCommit: carriedCommit,
+            },
+          });
+          expect(pending.worktree).toBeUndefined();
+          branch = await openMovedSession({
             context,
-            signal: new AbortController().signal,
+            session: target,
+            runId: "next-turn",
             assertCurrent() {},
-            runSetupScript: false,
+            runSetupScript: true,
           });
         }
+        await expect(move("another")).rejects.toThrow("moves into a project only once");
         const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
         assert(worktree, "The move must open a managed project checkout");
         if (where === "host") {
