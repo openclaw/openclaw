@@ -371,7 +371,7 @@ final class RootSidebarModel {
         }
     }
 
-    func refreshSessions(appModel: NodeAppModel) async {
+    func refreshSessions(appModel: NodeAppModel, allowCachedFallback: Bool = false) async {
         await appModel.sessionGroups.refresh(appModel: appModel)
         self.rosterGeneration &+= 1
         self.sessionChangesDuringLoad = [:]
@@ -384,7 +384,7 @@ final class RootSidebarModel {
             }
         }
 
-        let loadedRoster = await self.loadRoster(appModel: appModel, allowCachedFallback: false)
+        let loadedRoster = await self.loadRoster(appModel: appModel, allowCachedFallback: allowCachedFallback)
         guard !Task.isCancelled, rosterGeneration == self.rosterGeneration else { return }
         switch loadedRoster {
         case let .success(roster):
