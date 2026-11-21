@@ -1293,15 +1293,19 @@ describe("Feishu reactions", () => {
   });
 });
 describe("Feishu topic routing", () => {
-  it.each(["implicit", "explicit"] as const)("routes %s replies", async (source) => {
-    const id = "855a9b56-ced7-4627-b9ca-454c30a91f9d";
+  it.each([
+    { source: "implicit", id: "om_inbound", currentMessageId: "om_inbound" },
+    { source: "explicit", id: "om_inbound", currentMessageId: "om_inbound" },
+    { source: "implicit", id: "855a9b56-ced7-4627-b9ca-454c30a91f9d", currentMessageId: undefined },
+    { source: "explicit", id: "855a9b56-ced7-4627-b9ca-454c30a91f9d", currentMessageId: undefined },
+  ] as const)("routes $source replies from $id", async ({ source, id, currentMessageId }) => {
     const threading = feishuPlugin.threading!;
     const context = { To: "oc_group_1", CurrentMessageId: id, MessageThreadId: "om_inbound" };
     const toolContext = threading.buildToolContext!({ cfg, context });
-    expect(toolContext).toHaveProperty("currentMessageId", undefined);
+    expect(toolContext).toHaveProperty("currentMessageId", currentMessageId);
     expect(
       threading.resolveReplyTransport!({ cfg, replyToId: id, threadId: "om_inbound" }),
-    ).toEqual({ replyToId: null, threadId: "om_inbound" });
+    ).toEqual({ replyToId: currentMessageId ?? null, threadId: "om_inbound" });
     textDelivery();
     await run(
       "send",
