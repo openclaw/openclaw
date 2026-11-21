@@ -5,6 +5,7 @@ import type {
   WebPushSubscribeParams,
   WebPushPreferencesGetParams,
   WebPushPreferencesSetParams,
+  WebPushSendParams,
   WebPushTestParams,
   WebPushUnsubscribeParams,
   WebPushVapidPublicKeyParams,
@@ -32,6 +33,10 @@ export const validateWebPushUnsubscribeParams = createProtocolValidator<WebPushU
 export const validateWebPushTestParams = createProtocolValidator<WebPushTestParams>(
   S.WebPushTestParamsSchema,
   Checks.isWebPushTestParams,
+);
+export const validateWebPushSendParams = createProtocolValidator<WebPushSendParams>(
+  S.WebPushSendParamsSchema,
+  Checks.isWebPushSendParams,
 );
 export const validateWebPushPreferencesGetParams =
   createProtocolValidator<WebPushPreferencesGetParams>(

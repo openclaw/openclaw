@@ -7,6 +7,7 @@ export {
   isWebPushSubscribeParams,
   isWebPushUnsubscribeParams,
   isWebPushTestParams,
+  isWebPushSendParams,
   isWebPushPreferencesGetParams,
   isWebPushPreferencesSetParams,
   isTalkModeParams,
