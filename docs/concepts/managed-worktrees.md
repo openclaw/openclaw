@@ -798,14 +798,25 @@ writer, so unrelated queued writes do not delay stopping that session. Committed
 policy changes invalidate the prepared source. The archive mutation still joins
 the writer queue and rechecks the current session and permissions before committing.
 
-Unarchiving, or an authorized human message that reopens the archived session, restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for the saved work.
+Explicit unarchiving restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. An incoming message can reopen an archived session only while its workspace is available; a removed workspace requires explicit restoration first. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for saved work during unarchiving.
 
-If an unarchived session's worktree was removed by cleanup or deletion, a new chat
-turn reports the removal before sandbox preparation. Use **Restore** on
-**Settings > Worktrees** (`worktrees.restore`), or start a new session. Sending
-another message does not automatically restore a removed checkout.
-Opening Review (`sessions.diff`) for a removed or missing worktree reports the
-same Restore guidance instead of an ownership-change error.
+If a conversation's worktree was removed by cleanup or deletion, the Control UI
+shows a warning above the composer's pickers and disables Send. Choose **Restore**
+to recover its snapshot, including saved uncommitted work. If the registry record
+has no snapshot, **Restore fresh checkout** recreates its recorded branch, or its
+recorded base if that branch is gone. Invalid saved snapshots report an error;
+they never silently fall back to a fresh checkout.
+
+The button uses the existing admin-authorized `worktrees.restore` operation,
+also available in **Settings > Worktrees**. Progress stays visible during restore;
+failure includes a typed reason and recovery guidance. Restore has a five-minute
+budget, including lease waits, and joins started Git cleanup before returning.
+Concurrent restores serialize through the worktree lifecycle. An expired registry
+record or unavailable source repository requires recovery or a new conversation.
+
+Channels, API callers, task sessions, subagents, and Review (`sessions.diff`)
+receive the same Restore guidance until explicit restoration completes. Sending
+a prompt never restores a removed workspace or starts the agent there.
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
@@ -1276,16 +1287,16 @@ their specific input error and exit with code 1 before cleanup or removal.
 
 ## Gateway methods
 
-| Method                     | Purpose                                                                 |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `worktrees.list`           | List active and restorable worktree records.                            |
-| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.    |
-| `worktrees.create`         | Create or reuse a named managed worktree.                               |
-| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
-| `worktrees.restore`        | Restore a removed worktree from its snapshot.                           |
-| `worktrees.gc`             | Queue cleanup and read progress.                                        |
-| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.        |
-| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
+| Method                     | Purpose                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `worktrees.list`           | List active and restorable worktree records.                                 |
+| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.         |
+| `worktrees.create`         | Create or reuse a named managed worktree.                                    |
+| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`.      |
+| `worktrees.restore`        | Restore a snapshot, or a fresh recorded branch/base when no snapshot exists. |
+| `worktrees.gc`             | Queue cleanup and read progress.                                             |
+| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.             |
+| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.             |
 
 `worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
