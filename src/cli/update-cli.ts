@@ -211,6 +211,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
         ) {
           throw new Error('--admission must be "auto" or "installed".');
         }
+        // Refuse a bad value now, not after minutes of candidate validation.
+        (await import("./update-cli/shared.js")).parseUpdateTimeoutMs(
+          opts.waitForGatewayStop,
+          "--wait-for-gateway-stop",
+        );
         const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
           runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
@@ -223,6 +228,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           sha: opts.sha,
           timeout: opts.timeout,
           drainTimeout: opts.drainTimeout,
+          waitForGatewayStop: opts.waitForGatewayStop,
           yes: Boolean(opts.yes),
           acceptCapabilities: Boolean(opts.acceptCapabilities),
           fullIntegrityCheck: Boolean(opts.fullIntegrityCheck),

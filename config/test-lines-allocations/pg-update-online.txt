@@ -1,0 +1,3 @@
+# Separate checks cover the sequence race, stopped rollback, serving and stopped
+# disk admission, and killed server captures in both Git and npm layouts.
+194

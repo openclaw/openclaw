@@ -1,9 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatByteSize } from "@openclaw/normalization-core";
+import { resolveStateDir } from "../config/paths.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import {
+  ONLINE_UPDATE_CAPTURE_NAME,
+  resolveGitUpdateArtifactRoot,
+  resolveUpdateCaptureRoot,
+} from "../infra/update-capture-paths.js";
 import { formatUpdateCleanupCommand } from "../infra/update-maintenance.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "../infra/update-npm-prefix.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
@@ -30,30 +36,35 @@ export async function collectUpdateSnapshotHealthFindings(
   const layout = packageRoot
     ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(path.dirname(packageRoot))
     : null;
-  if (!layout) {
-    return [];
+  const roots: [string, RegExp][] = [
+    [resolveUpdateCaptureRoot(resolveStateDir(env)), ONLINE_UPDATE_CAPTURE_NAME],
+  ];
+  if (packageRoot && !layout) {
+    roots.push([resolveGitUpdateArtifactRoot(packageRoot), ONLINE_UPDATE_CAPTURE_NAME]);
+  }
+  if (layout) {
+    roots.unshift([layout.globalRoot, SNAPSHOT_NAME]);
   }
 
   const deadline = performance.now() + SCAN_BUDGET_MS;
   const directories: string[] = [];
   let partial = false;
   let rootEntries = 0;
-  try {
-    const root = await fs.opendir(layout.globalRoot);
-    for await (const entry of root) {
-      if (++rootEntries > MAX_ROOT_ENTRIES || performance.now() > deadline) {
-        partial = true;
-        break;
+  for (const [rootPath, name] of roots) {
+    try {
+      const root = await fs.opendir(rootPath);
+      for await (const entry of root) {
+        if (++rootEntries > MAX_ROOT_ENTRIES || performance.now() > deadline) {
+          partial = true;
+          break;
+        }
+        if (entry.isDirectory() && name.test(entry.name)) {
+          directories.push(path.join(rootPath, entry.name));
+        }
       }
-      if (entry.isDirectory() && SNAPSHOT_NAME.test(entry.name)) {
-        directories.push(path.join(layout.globalRoot, entry.name));
-      }
+    } catch (error) {
+      partial ||= !hasErrnoCode(error, "ENOENT");
     }
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return [];
-    }
-    partial = true;
   }
   if (directories.length === 0) {
     return partial
@@ -61,7 +72,7 @@ export async function collectUpdateSnapshotHealthFindings(
           {
             checkId: "core/doctor/update-snapshots",
             severity: "warning",
-            message: `Inspection was incomplete; retained pre-migration database snapshots may remain. Manually list the npm global root ${layout.globalRoot}, including hidden entries, and check for .openclaw.package-backup-*.databases and .openclaw-package-backup-*.databases directories.`,
+            message: `Inspection was incomplete; retained pre-migration database snapshots may remain. Manually list ${roots.map(([root]) => root).join(" and ")}, including hidden entries, and check for .openclaw.package-backup-*.databases, .openclaw-package-backup-*.databases and online-*.databases directories.`,
           },
         ]
       : [];

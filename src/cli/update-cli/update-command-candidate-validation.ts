@@ -62,6 +62,8 @@ export async function validateUpdateCandidateWithProgress(
     assertCurrent: () => void;
     /** The service the updater will stop before activation, if any. */
     ownerService?: Pick<PreManagedServiceStop, "running" | "serviceUpdateVerdict">;
+    /** --wait-for-gateway-stop: the operator releases the owner before activation. */
+    waitsForGatewayStop?: boolean;
   },
   execution: {
     packageUpdateNodeRunner?: string;
@@ -74,7 +76,8 @@ export async function validateUpdateCandidateWithProgress(
     config: params.config,
     env: params.env,
     hasRun: Boolean(run),
-    parksBeforeActivation: parksForegroundUpdateBeforeActivation(run),
+    parksBeforeActivation:
+      parksForegroundUpdateBeforeActivation(run) || params.waitsForGatewayStop === true,
     service: params.ownerService,
   });
   params.assertCurrent();

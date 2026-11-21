@@ -31,7 +31,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
-import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import {
   copyFileHandle,
   hashFileMutationSnapshotSync,
@@ -41,11 +41,11 @@ import {
 import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
-import { isUpdateCapturePath, resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import {
-  UPDATE_CAPTURE_PRIVACY_MARKER,
-  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
-} from "./update-capture-privacy-marker.js";
+  isUpdateCapturePath,
+  markPrivateCapture,
+  resolveUpdateCaptureRoot,
+} from "./update-capture-paths.js";
 import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
@@ -86,27 +86,6 @@ function within(candidate: string, root: string): boolean {
 
 async function statOrMissing(value: string): Promise<BigIntStats | undefined> {
   return fs.lstat(value, { bigint: true }).catch(ignoreMissingPath);
-}
-
-async function markPrivateCapture(directory: string): Promise<void> {
-  const marker = path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER);
-  try {
-    await using output = await fs.open(marker, "wx", 0o600);
-    await output.writeFile(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
-    await output.sync();
-  } catch (error) {
-    if (!hasErrnoCode(error, "EEXIST")) {
-      throw error;
-    }
-    const root = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
-    if (
-      (await root.readText(UPDATE_CAPTURE_PRIVACY_MARKER, { maxBytes: 128 })) !==
-      UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT
-    ) {
-      throw new Error(`Private update capture marker changed: ${directory}`, { cause: error });
-    }
-  }
-  requireDirectorySync(await syncDirectory(directory), "Private update capture marker");
 }
 
 /** Capture chosen originals for manual recovery, not authority to restore active sources. */

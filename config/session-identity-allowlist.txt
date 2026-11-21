@@ -701,7 +701,7 @@ src/commands/onboard-guided.ts	6
 src/commands/sessions-lifecycle.ts	1
 src/commands/sessions-tail.ts	1
 src/commands/status-update-restart.ts	2
-src/commands/update-capture-cleanup.ts	2
+src/commands/update-capture-cleanup.ts	1
 src/commands/update-cleanup-unmanifested.ts	3
 src/config/control-ui-link-base.ts	2
 src/config/io.audit.ts	1

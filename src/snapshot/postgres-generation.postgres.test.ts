@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { inspectPostgresGeneration } from "./postgres-generation.js";
+import { digestPostgresGeneration, inspectPostgresGeneration } from "./postgres-generation.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -104,5 +104,37 @@ describe.skipIf(!connection)("PostgreSQL generation row hashing", () => {
     const above = await inspect({ runRows: 10_000, wholeSortBytes: Number(tree) + 1 });
     expect(tidReads(above.statements, "parts")).toEqual([]);
     expect(above.generation).toEqual(below.generation);
+  });
+
+  // Last: it writes to the fixture.
+  it("changes the capture-reuse digest on every committed write, and only then", async () => {
+    const digest = async () => {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      try {
+        return await digestPostgresGeneration(client, anchor);
+      } finally {
+        await client.query("ROLLBACK");
+      }
+    };
+    await client.query(`CREATE SEQUENCE "${namespace}".ids`);
+    const original = await digest();
+    expect(await digest()).toBe(original);
+
+    await client.query(`UPDATE "${namespace}".rows SET amount = -1 WHERE id = 7`);
+    const updated = await digest();
+    expect(updated).not.toBe(original);
+
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM "${namespace}".parts WHERE id = 1`);
+    await client.query("ROLLBACK");
+    expect(await digest()).toBe(updated);
+
+    // Restore resets sequences to the capture, so an allocation is a change.
+    await client.query(`SELECT nextval('"${namespace}".ids')`);
+    const allocated = await digest();
+    expect(allocated).not.toBe(updated);
+
+    await client.query(`TRUNCATE "${namespace}".rows`);
+    expect(await digest()).not.toBe(allocated);
   });
 });

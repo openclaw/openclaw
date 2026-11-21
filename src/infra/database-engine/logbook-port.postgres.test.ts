@@ -8,11 +8,17 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as bundledDir from "../../plugins/bundled-dir.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import {
+  exportPostgresBackup,
+  fingerprintPostgresDatabase,
+  observePostgresSnapshot,
+} from "../../snapshot/database-backup-core.worker.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { logbookPortProvider } from "./logbook-port.js";
-import { portBackupFixture } from "./port-backup.test-support.js";
+import { portBackupFixture, writePortAnchor } from "./port-backup.test-support.js";
 import type { PortDescriptor } from "./port-descriptor.js";
 import { requireDatabasePortProvider, sqliteDatabasePortProvider } from "./port-provider.js";
+import { admitDatabasePortDescriptor, readDatabasePortAllocations } from "./port.worker.js";
 import { teamReportsPortProvider } from "./team-reports-port.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -193,6 +199,59 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
           `INSERT INTO "${restored.namespace}".batches (day, start_ms, end_ms, created_ms, updated_ms) VALUES ('2026-07-05', 1, 2, 1, 2) RETURNING id`,
         ),
       ).toEqual([{ id: "72" }]);
+    } finally {
+      spy.mockRestore();
+      await writer.end();
+    }
+  });
+
+  it("uses one allocation observation when a serving insert rolls back during capture", async () => {
+    const { file, namespace, storeId, postgres } = fixture;
+    const anchor = { engine: "postgres" as const, namespace, storeId };
+    const exportDirectory = file("online-rollback");
+    await fs.mkdir(exportDirectory);
+    writePortAnchor(path.join(exportDirectory, "anchor.sqlite"), storeId, namespace);
+    const admitted = await admitDatabasePortDescriptor(postgres, descriptor);
+    const writer = new Client({ connectionString: connection });
+    await writer.connect();
+    const forward = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+    const spy = vi.spyOn(client, "query").mockImplementation((async (...args: unknown[]) => {
+      const result = await forward(...args);
+      if (
+        typeof args[0] === "string" &&
+        args[0].includes("last_value::text AS value") &&
+        args[0].endsWith('."batches_id_seq"')
+      ) {
+        spy.mockRestore();
+        await writer.query("BEGIN");
+        try {
+          await writer.query(
+            `INSERT INTO "${namespace}".batches (day, start_ms, end_ms, created_ms, updated_ms) VALUES ('2026-07-06', 1, 2, 1, 2)`,
+          );
+        } finally {
+          await writer.query("ROLLBACK");
+        }
+      }
+      return result;
+    }) as never);
+    try {
+      let observed: Awaited<ReturnType<typeof observePostgresSnapshot>> | undefined;
+      const capture = await exportPostgresBackup({
+        ...fixture.backup,
+        sourcePath,
+        directory: exportDirectory,
+        descriptor: admitted,
+        anchor,
+        observeSource: async (source) => {
+          observed = await observePostgresSnapshot(client, anchor);
+          return readDatabasePortAllocations(source, admitted, observed.allocations);
+        },
+      });
+      expect(capture.verification.allocations["batches.id"]).toEqual({ value: "71", called: true });
+      expect(await fingerprintPostgresDatabase({ client, anchor, digest: true })).not.toBe(
+        observed?.digest,
+      );
+      expect(await fingerprintPostgresDatabase({ client, anchor })).not.toBe(observed?.generation);
     } finally {
       spy.mockRestore();
       await writer.end();

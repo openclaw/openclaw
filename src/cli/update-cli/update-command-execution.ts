@@ -397,6 +397,7 @@ export async function executeMutableUpdate(
           env,
           assertCurrent: assertExecutionCurrent,
           ownerService: params.shouldRestart ? preManagedServiceStop : undefined,
+          waitsForGatewayStop: opts.waitForGatewayStop !== undefined,
         },
         params,
         originalRun,
@@ -476,8 +477,12 @@ export async function executeMutableUpdate(
       );
     }
     assertExecutionCurrent();
-    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
+    if (!servicePrepared) {
+      // PostgreSQL stores are captured before the Gateway stops (#196154).
+      await rollbackCapture.captureOnline(env);
+    }
     await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
+    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
     await prepareMutableUpdate(env, activationTimeoutMs);
     assertExecutionCurrent();
     await recordPhase("activating");
@@ -510,7 +515,10 @@ export async function executeMutableUpdate(
     });
     if (originalRun) {
       // The run's database capture follows activation; refuse while nothing has changed.
-      await assertUpdatePostgresCaptureOwnership({ config, env });
+      await assertUpdatePostgresCaptureOwnership(
+        { config, env },
+        { opts, assertCurrent: assertExecutionCurrent },
+      );
       assertExecutionCurrent();
     }
     const postStopStep: UpdateStepResult = {
@@ -666,6 +674,7 @@ export async function executeMutableUpdate(
   } catch (err) {
     params.stop();
     if (err instanceof UpdateCommandAbort && !hasCommandProcessCleanupError(err)) {
+      await rollbackCapture.discardOnline();
       return null;
     }
     ({ result, failure } = await resolveMutableUpdateFailure({
@@ -677,6 +686,8 @@ export async function executeMutableUpdate(
       run: mutationStarted ? undefined : params.opts.run,
     }));
   }
+  // A run that ended before its capture under ownership adopted the online capture drops it.
+  await rollbackCapture.discardOnline();
 
   result = await settleMutableUpdateResult(params, {
     result,

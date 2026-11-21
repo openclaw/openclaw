@@ -12,7 +12,10 @@ import * as databaseBackup from "../../infra/update-database-backup.js";
 import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as snapshotBackup from "../../snapshot/database-backup.js";
-import { captureUpdateDatabases } from "./update-command-database-backup.js";
+import {
+  captureUpdateDatabases,
+  type OnlineUpdateDatabaseCapture,
+} from "./update-command-database-backup.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
@@ -120,7 +123,12 @@ it.runIf(process.platform !== "win32").each([false, true])(
   },
 );
 
-function captureWith(base: string, root: string, env: NodeJS.ProcessEnv) {
+function captureWith(
+  base: string,
+  root: string,
+  env: NodeJS.ProcessEnv,
+  online?: OnlineUpdateDatabaseCapture,
+) {
   return captureUpdateDatabases({
     transaction: {
       backupRoot: path.join(base, "runtime.backup"),
@@ -134,6 +142,7 @@ function captureWith(base: string, root: string, env: NodeJS.ProcessEnv) {
     execution: captureExecution(root, env, "package"),
     context: undefined,
     assertCurrent: () => {},
+    online,
   });
 }
 
@@ -167,6 +176,76 @@ it("skips the pre-migration image and continues when the owner measures a shortf
   ]);
   await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+it.each(["recovered", "still-short", "drop-failed"] as const)(
+  "retries a low-space capture after retiring the online copy (%s)",
+  async (outcome) => {
+    const base = await fs.realpath(dirs.make("update-online-database-skip-"));
+    const root = path.join(base, "install");
+    await fs.mkdir(root);
+    const env = await captureEnvironment(path.join(base, "state"));
+    const backupRoot = path.join(base, "online-00000000-0000-4000-8000-000000000001");
+    const directory = `${backupRoot}.databases`;
+    const exportDirectory = path.join(directory, "agent.sqlite.postgres");
+    const manifest = path.join(exportDirectory, "manifest.json");
+    await fs.mkdir(exportDirectory, { recursive: true });
+    await fs.writeFile(manifest, "server capture manifest");
+    const source = path.join(base, "agent.sqlite");
+    const config = {};
+    const backup: databaseBackup.UpdateDatabaseBackup = {
+      directory,
+      databases: [
+        {
+          path: source,
+          snapshotPath: path.join(directory, "agent.sqlite"),
+          userVersion: 1,
+          sha256: "0".repeat(64),
+          sizeBytes: 1,
+          engine: "postgres",
+          exportDirectory,
+        },
+      ],
+      missingPaths: [],
+      sourcePaths: [source],
+      sourceGenerations: { [source]: "observed generation" },
+      warnings: [],
+    };
+    const offline = { ...backup, databases: [], sourceGenerations: {} };
+    const create = vi
+      .spyOn(databaseBackup, "createUpdateDatabaseBackup")
+      .mockRejectedValueOnce(shortfall())
+      .mockImplementation(async (input) => {
+        expect(input.reuse).toBeUndefined();
+        await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+        if (outcome === "still-short") {
+          await fs.mkdir(directory);
+          throw shortfall();
+        }
+        return offline;
+      });
+    const discard = vi
+      .spyOn(snapshotBackup, "discardPostgresSchemaCaptures")
+      .mockImplementation(async () => {
+        expect(await fs.readFile(manifest, "utf8")).toBe("server capture manifest");
+        if (outcome === "drop-failed") {
+          throw new Error("server unavailable");
+        }
+      });
+
+    const capture = await captureWith(base, root, env, { backupRoot, backup, config });
+
+    expect(discard).toHaveBeenCalledExactlyOnceWith(config, [exportDirectory]);
+    expect(create).toHaveBeenCalledTimes(outcome === "drop-failed" ? 1 : 2);
+    expect(capture.backup).toBe(outcome === "recovered" ? offline : undefined);
+    expect(capture.step.exitCode).toBe(0);
+    if (outcome === "drop-failed") {
+      expect(capture.step.warnings?.[0]).toContain(`Its online capture remains at ${directory}`);
+      expect(await fs.readFile(manifest, "utf8")).toBe("server capture manifest");
+    } else {
+      await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  },
+);
 
 it.each([
   { cause: "an integrity failure", error: () => new Error("synthetic integrity failure") },

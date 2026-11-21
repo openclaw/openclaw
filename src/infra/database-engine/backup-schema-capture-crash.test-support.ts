@@ -1,7 +1,10 @@
 import { fork } from "node:child_process";
 import { once } from "node:events";
 import { Client } from "pg";
-import { capturePostgresSchema } from "../../snapshot/database-backup-core.worker.js";
+import {
+  capturePostgresSchema,
+  type PostgresCapturePrune,
+} from "../../snapshot/database-backup-core.worker.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import { workboardPortFixture } from "./port-backup.test-support.js";
 
@@ -10,7 +13,7 @@ type CaptureInput = {
   namespace: string;
   storeId: string;
   directory: string;
-  prune: { directoryPrefix: string; captureId: string };
+  prune: PostgresCapturePrune;
   phase: "before" | "after";
 };
 type CaptureGate = { namespace: string; backendPid: number };

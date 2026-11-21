@@ -9,7 +9,10 @@ import {
   withDatabasePortPostgres,
   withDatabasePortConnection,
 } from "../infra/database-engine/port-provider.js";
-import { admitDatabasePortDescriptor } from "../infra/database-engine/port.worker.js";
+import {
+  admitDatabasePortDescriptor,
+  readDatabasePortAllocations,
+} from "../infra/database-engine/port.worker.js";
 import {
   assertPostgresCatalog,
   postgresCatalogQuery,
@@ -35,9 +38,12 @@ import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/plugin-metadata-sta
 import {
   captureDatabaseArtifact,
   capturePostgresSchema,
-  exportPostgresBackup,
-  restorePostgresBackup,
   discardPostgresNamespace,
+  exportPostgresBackup,
+  observePostgresSnapshot,
+  pruneOrphanedPostgresCaptures,
+  restorePostgresBackup,
+  type PostgresCapturePrune,
 } from "./database-backup-core.worker.js";
 import {
   readSnapshotExportEnvelope,
@@ -96,9 +102,12 @@ export async function capturePostgresBackupInWorker(params: {
   gitIdentity?: GitBackupIdentity;
   /** Keep an exact capture on its server; omit it for the portable SQLite export. */
   carrier?: "postgres-schema";
-  /** Doctor owns local directory retention; other captures retire through their manifest. */
-  prune?: { directoryPrefix: string; captureId: string };
-}): Promise<PostgresExportEnvelope> {
+  /** Identifies the local directory that protects this server capture from orphan cleanup. */
+  prune?: PostgresCapturePrune;
+  /** Also return the generation and reuse digest read inside the capture's own snapshot. */
+  observe?: boolean;
+  onlineExportByteLimit?: number;
+}): Promise<CapturedPostgresBackup> {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   params.assertCurrent();
   await fs.mkdir(params.directory, { mode: 0o700 });
@@ -118,14 +127,33 @@ export async function capturePostgresBackupInWorker(params: {
     params.config,
     anchor,
     async (client, baseDescriptor) => {
+      // The update directory protects each marked copy until its owner retires it.
+      if (params.prune?.directorySuffix) {
+        await pruneOrphanedPostgresCaptures(client, {
+          storeId: anchor.storeId,
+          directoryPrefix: params.prune.directoryPrefix,
+          directorySuffix: params.prune.directorySuffix,
+        });
+      }
       const descriptor = await admitDatabasePortDescriptor(
         { engine: "postgres", db: client, namespace: anchor.namespace },
         baseDescriptor,
       );
       params.assertCurrent();
+      let observed: CapturedPostgresBackup["observed"];
+      const observeSource = params.observe
+        ? async (source: Parameters<typeof readDatabasePortAllocations>[0]) => {
+            if (source.engine !== "postgres" || source.db !== client) {
+              throw new Error("PostgreSQL capture observed an unexpected source.");
+            }
+            const { allocations, ...snapshot } = await observePostgresSnapshot(client, anchor);
+            observed = snapshot;
+            return readDatabasePortAllocations(source, descriptor, allocations);
+          }
+        : undefined;
       const manifest = params.carrier
-        ? await capturePostgresSchema({ ...params, client, descriptor, anchor })
-        : await exportPostgresBackup({ ...params, client, descriptor, anchor });
+        ? await capturePostgresSchema({ ...params, client, descriptor, anchor, observeSource })
+        : await exportPostgresBackup({ ...params, client, descriptor, anchor, observeSource });
       try {
         await verifyPostgresExportEnvelope(
           params.directory,
@@ -146,11 +174,18 @@ export async function capturePostgresBackupInWorker(params: {
         await syncDirectory(path.dirname(params.directory)),
         "PostgreSQL backup parent",
       );
-      return manifest;
+      if (params.observe && !observed) {
+        throw new Error("PostgreSQL capture did not observe its snapshot.");
+      }
+      return observed ? { ...manifest, observed } : manifest;
     },
     params.pluginOwners,
   );
 }
+
+export type CapturedPostgresBackup = PostgresExportEnvelope & {
+  observed?: { generation: string; digest: string };
+};
 
 /** Build a new namespace and anchor; the caller alone publishes the anchor. Never drop the old namespace. */
 export async function preparePostgresRestoreInWorker(params: {
@@ -322,6 +357,8 @@ export type Capture = Parameters<typeof capturePostgresBackupInWorker>[0];
 export type Restore = Parameters<typeof preparePostgresRestoreInWorker>[0];
 export type BackupTask =
   | { operation: "discard"; params: { config: OpenClawConfig; namespaces: string[] } }
+  | { operation: "retire-update"; params: { config: OpenClawConfig; prune: PostgresCapturePrune } }
+  | { operation: "estimate"; params: { sourcePath: string; config: OpenClawConfig } }
   | { operation: "capture"; params: Omit<Capture, "assertCurrent"> }
   | { operation: "restore"; params: Omit<Restore, "assertCurrent"> }
   | {
@@ -342,6 +379,8 @@ export type BackupTask =
         sourcePath: string;
         config: OpenClawConfig;
         pluginOwners?: DatabasePortPluginOwners;
+        /** Return the cheap capture-reuse digest instead of the generation fingerprint. */
+        digest?: boolean;
       };
     };
 export type BackupReply =
@@ -349,4 +388,5 @@ export type BackupReply =
   | PostgresExportEnvelope
   | string
   | string[]
+  | number
   | Awaited<ReturnType<typeof preparePostgresRestoreInWorker>>;

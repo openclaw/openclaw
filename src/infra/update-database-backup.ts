@@ -31,7 +31,6 @@ import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
-import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import { UpdateStateDatabaseOwnerSchema, recoveryOwner } from "./update-candidate-paths.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
 import {
@@ -49,8 +48,15 @@ import {
 import {
   inspectRestorableDatabaseFiles,
   prepareRestorableDatabaseFiles,
+  UpdateDatabaseBackupEntrySchema,
 } from "./update-database-backup-files.js";
-import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
+import {
+  planUpdateCaptureStores,
+  planOnlinePostgresCapture,
+  prepareUpdateDatabaseBackupDirectory,
+  resolveOnlineCapturePrune,
+  type OnlineCaptureInput,
+} from "./update-database-backup-online.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
   readUpdatePhysicalDatabaseObservation,
@@ -61,19 +67,7 @@ import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture
 
 export const UpdateDatabaseBackupSchema = z.object({
   directory: z.string(),
-  databases: z.array(
-    z.object({
-      path: z.string(),
-      snapshotPath: z.string(),
-      userVersion: z.number().int().nonnegative(),
-      sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-      sizeBytes: z.number().int().nonnegative(),
-      engine: z.literal("postgres").optional(),
-      storeId: z.string().uuid().optional(),
-      namespace: z.string().optional(),
-      exportDirectory: z.string().optional(),
-    }),
-  ),
+  databases: z.array(UpdateDatabaseBackupEntrySchema),
   pluginOwners: z
     .record(
       z.string(),
@@ -88,6 +82,8 @@ export const UpdateDatabaseBackupSchema = z.object({
   missingPaths: z.array(z.string()),
   sourcePaths: z.array(z.string()),
   sourceGenerations: z.record(z.string(), z.string().nullable()),
+  /** Capture-reuse digests read in each online capture's own snapshot (all-PostgreSQL updates). */
+  sourceDigests: z.record(z.string(), z.string()).optional(),
   /** Manual original images held under maintenance custody; never automatic rollback authority. */
   originalCaptureSourcePaths: z.array(z.string()).optional(),
   databaseOwners: z
@@ -112,7 +108,7 @@ export type UpdateDatabaseBackup = z.infer<typeof UpdateDatabaseBackupSchema> & 
   pluginCohortRecovery?: import("./update-plugin-cohort-schema.js").PluginCohortRecoveryBinding;
 };
 
-type BackupInput = {
+type BackupInput = OnlineCaptureInput & {
   backupRoot: string;
   stateDir: string;
   config: OpenClawConfig;
@@ -247,10 +243,10 @@ export async function createUpdateDatabaseBackupInProcess(
       input.excludedDatabasePaths,
     );
   const inventory = await inventoryFor(inspectionPlan);
-  // Preflight reserves no space; admit the complete family before checkpointing.
-  const { warnings } = await checkUpdateDatabaseBackupSpace(
+  const { online, databases, sourceGenerations, warnings, pending } = await planUpdateCaptureStores(
+    input,
     directory,
-    await measureUpdateStateFiles(inventory.present),
+    inventory,
   );
   const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
     inventory.present,
@@ -260,10 +256,6 @@ export async function createUpdateDatabaseBackupInProcess(
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
     await import("./sqlite-snapshot.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
-  const databases: UpdateDatabaseBackup["databases"] = [];
-  const sourceGenerations: UpdateDatabaseBackup["sourceGenerations"] = Object.fromEntries(
-    inventory.missing.map((file) => [file, null]),
-  );
   const readGeneration = async (
     file: string,
     observation?: ReturnType<typeof readUpdatePhysicalDatabaseObservation>,
@@ -349,17 +341,25 @@ export async function createUpdateDatabaseBackupInProcess(
             (file) => engines.get(file)?.engine === "sqlite",
           ),
         );
+        const prune = resolveOnlineCapturePrune(directory);
         if (
           [...engines.values()].some((engine) => engine.engine === "postgres") &&
-          !input.postgresOffline &&
+          !(input.postgresOffline || input.postgresOnline) &&
           !input.stopped
         ) {
           throw new Error(
             "PostgreSQL update capture requires exclusive ownership; stop through the service owner, then rerun.",
           );
         }
-        for (const sourcePath of inventory.present) {
+        for (const sourcePath of pending) {
           input.onProgress?.({ phase: "pre-migration database backup", path: sourcePath });
+          if (input.postgresOnline && engines.get(sourcePath)?.engine !== "postgres") {
+            continue;
+          }
+          const capture = await planOnlinePostgresCapture(input, directory, sourcePath, warnings);
+          if (!capture) {
+            continue;
+          }
           const archivePath = buildBackupArchivePath("", sourcePath);
           let parent = directory;
           for (const component of path.posix.dirname(archivePath).split("/")) {
@@ -371,7 +371,10 @@ export async function createUpdateDatabaseBackupInProcess(
           }
           const snapshotPath = path.join(directory, archivePath);
           const retainGeneration =
-            !input.stopped && !input.originalState && !originalCaptureSources.has(sourcePath);
+            !input.stopped &&
+            !input.postgresOnline &&
+            !input.originalState &&
+            !originalCaptureSources.has(sourcePath);
           const before = retainGeneration
             ? await readGeneration(sourcePath, observations.get(sourcePath))
             : undefined;
@@ -422,23 +425,19 @@ export async function createUpdateDatabaseBackupInProcess(
           if (engine.engine === "postgres") {
             const { capturePostgresBackup } = await import("../snapshot/database-backup.js");
             const exportDirectory = `${snapshotPath}.postgres`;
-            // Client credential rollback reads the shared state family's portable image.
-            const schemaCapture =
-              input.postgresSchemaCaptures &&
-              resolvePathViaExistingAncestorSync(sourcePath) !==
-                resolvePathViaExistingAncestorSync(
-                  path.join(input.stateDir, "state", "openclaw.sqlite"),
-                );
-            await capturePostgresBackup({
+            const captured = await capturePostgresBackup({
               sourcePath,
               directory: exportDirectory,
               profile: "exact",
               config: input.config,
               pluginOwners: input.pluginOwners,
               assertCurrent: () => {},
-              ...(schemaCapture ? { carrier: "postgres-schema" as const } : {}),
+              ...(capture.server ? { carrier: "postgres-schema" as const, prune } : {}),
+              observe: input.postgresOnline,
+              onlineExportByteLimit: capture.onlineExportByteLimit,
             });
             postgres = { ...engine, exportDirectory };
+            online.record(sourcePath, captured.observed, sourceGenerations);
           }
           // Automatic rollback keeps write attribution after custody ends. Manual original
           // capture stays under its maintenance owner and never grants restore authority.
@@ -495,6 +494,7 @@ export async function createUpdateDatabaseBackupInProcess(
           missingPaths: inventory.missing,
           sourcePaths: inventory.sourcePaths,
           sourceGenerations,
+          ...(input.postgresOnline ? await online.finish() : {}),
           ...(input.originalCaptureSourcePaths
             ? { originalCaptureSourcePaths: [...originalCaptureSources] }
             : {}),
@@ -615,7 +615,7 @@ export async function createUpdateDatabaseBackup({
     signal.throwIfAborted();
     const backupRoot = path.resolve(input.backupRoot);
     const directory = `${backupRoot}.databases`;
-    await createPrivateSqliteDirectory(directory);
+    await prepareUpdateDatabaseBackupDirectory(directory, input.reuse);
     const identity = await fs.lstat(directory, { bigint: true });
     try {
       const sourceEnv = input.env ?? process.env;

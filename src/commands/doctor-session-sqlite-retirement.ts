@@ -439,6 +439,7 @@ export async function retireOwnedSessionSqliteRecovery(
   });
   await retireUpdateCaptures({
     selected: captures,
+    config: currentConfig,
     identities: captureIdentities,
     assertCurrent: () => authority.assertCurrent(),
     onProgress: (item, index) =>

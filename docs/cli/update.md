@@ -835,7 +835,21 @@ These private recovery captures preserve canonical data,
 transient rows, and allocation facts; ordinary sanitized user backups cannot
 replace them. Recovery receipts record the physical engine and store identity.
 
-PostgreSQL capture runs under the update's exclusive maintenance ownership.
+For updates that take a pre-migration image, the updater first captures each
+PostgreSQL store while the Gateway serves when its portable export fits with
+space reserved for the serving Gateway. Server-side schema captures and
+exports with insufficient or unknown capacity wait for the stop. The capture, store generation, and
+reuse digest come from the same `REPEATABLE READ` snapshot. The digest covers
+the catalog, sequence allocations, and each table's row count and sum of
+64-bit row hashes.
+
+After the stop, the updater holds exclusive ownership and compares each live
+digest with its capture. It keeps matching captures and captures stores with
+changed or unreadable digests again. This usually includes shared state,
+because the updater records its run there. If online capture fails, the
+updater attempts the full capture after the stop. SQLite stores, including the
+local credential and service stores, are always captured after the stop.
+
 Rollback verifies the capture, restores a fresh owned PostgreSQL namespace, and
 publishes the matching anchor through the existing recovery owner. It retains the
 migrated namespace until recovery is confirmed. If state has changed since the
@@ -1029,6 +1043,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                                                        |
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                                                     |
 | `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Without it, package installation and deferred lifecycle scripts have no work deadline; candidate Doctor, checks, and recovery retain their step bounds.                                                                                                                       |
+| `--wait-for-gateway-stop <seconds>`              | For a custom service or foreground Gateway on PostgreSQL, prepare while it serves, then ask you to stop it and wait up to this long for exclusive state ownership. On timeout, activation is refused with `database-engine-preflight` and the updater retires the online captures. Start the Gateway through its owner after the update.                                                         |
 | `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of candidate check and readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                                                  |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                                                              |

@@ -3,6 +3,8 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -10,6 +12,10 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { readUpdateDatabaseGenerationsIsolated } from "../../infra/update-candidate-state.inspection.js";
+import {
+  resolveGitUpdateArtifactRoot,
+  resolveUpdateCaptureRoot,
+} from "../../infra/update-capture-paths.js";
 import { findUpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import { formatUpdateDatabaseImageSkip } from "../../infra/update-database-backup-space.js";
 import {
@@ -23,11 +29,14 @@ import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   prepareOpenClawStateDatabaseRemoval,
 } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { sleep } from "../../utils/sleep.js";
+import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   readUpdateCandidateSource,
@@ -62,25 +71,193 @@ async function acquireUpdateCaptureOwnership(env: NodeJS.ProcessEnv | undefined)
 }
 
 /**
- * PostgreSQL capture refuses without exclusive state ownership, and capture runs after
- * activation replaces the install. Refuse here, before activation, so a Gateway the
- * updater did not stop keeps serving an unchanged install.
+ * The final PostgreSQL capture requires exclusive state ownership. Check before
+ * activation so a Gateway that keeps serving retains the original install.
  */
-export async function assertUpdatePostgresCaptureOwnership(params: {
-  config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
-  env: NodeJS.ProcessEnv;
-}): Promise<void> {
+export async function assertUpdatePostgresCaptureOwnership(
+  params: {
+    config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
+    env: NodeJS.ProcessEnv;
+  },
+  handoff?: {
+    opts: Pick<UpdateCommandOptions, "json" | "waitForGatewayStop">;
+    assertCurrent: () => void;
+  },
+): Promise<void> {
   if (!Object.values(resolveDatabaseFamilyEngines(params.config)).includes("postgres")) {
     return;
   }
-  const { maintenance, unavailable } = await acquireUpdateCaptureOwnership(params.env);
+  const waitMs =
+    parseUpdateTimeoutMs(handoff?.opts.waitForGatewayStop, "--wait-for-gateway-stop") ?? 0;
+  const deadline = performance.now() + waitMs;
+  let { maintenance, unavailable } = await acquireUpdateCaptureOwnership(params.env);
+  if (unavailable !== undefined && waitMs > 0) {
+    defaultRuntime[handoff?.opts.json ? "error" : "log"](
+      `Update prepared while the Gateway served. Stop the Gateway through its owner now; waiting up to ${Math.round(waitMs / 1000)}s for it to release state ownership (${unavailable}).`,
+    );
+    // The updater never stops or signals a Gateway it does not own; it only waits for ownership.
+    while (unavailable !== undefined) {
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      await sleep(Math.min(1_000, remainingMs));
+      handoff?.assertCurrent();
+      ({ maintenance, unavailable } = await acquireUpdateCaptureOwnership(params.env));
+    }
+  }
   await maintenance?.release();
   if (unavailable !== undefined) {
     throw new UpdatePreMutationError(
       "database-engine-preflight",
-      `Update refused before changing the install: PostgreSQL database backup requires exclusive state ownership (${unavailable}). Stop the Gateway through its service owner, then rerun openclaw update.`,
+      `Update refused before changing the install: PostgreSQL database backup requires exclusive state ownership (${unavailable}).${waitMs > 0 ? ` The Gateway was still running after ${Math.round(waitMs / 1000)}s.` : ""} Stop the Gateway through its service owner, then rerun openclaw update${waitMs > 0 ? "" : ", or pass --wait-for-gateway-stop <seconds> to prepare while it serves and stop it when asked"}.`,
     );
   }
+}
+
+/** A capture taken while the Gateway served; this run's capture under ownership adopts or discards it. */
+export type OnlineUpdateDatabaseCapture = {
+  backupRoot: string;
+  backup: UpdateDatabaseBackup;
+  config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
+};
+
+/**
+ * Capture each PostgreSQL store while the Gateway still serves, so the stop window only checks
+ * each store's digest and captures again the stores that changed. SQLite stores are captured
+ * after the stop as before. Best effort: on any failure the run keeps the capture under ownership.
+ */
+export async function captureUpdateDatabasesOnline(params: {
+  execution: MutableUpdateExecutionParams;
+  env: NodeJS.ProcessEnv;
+  assertCurrent: () => void;
+}): Promise<OnlineUpdateDatabaseCapture | undefined> {
+  const { execution, env } = params;
+  const runId = execution.opts.run?.runId;
+  if (!runId) {
+    return undefined;
+  }
+  const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
+  if (!Object.values(resolveDatabaseFamilyEngines(source.config)).includes("postgres")) {
+    return undefined;
+  }
+  params.assertCurrent();
+  const startedAt = Date.now();
+  // Raw captures stay where backups, exports and Doctor recognize them: the update-capture root,
+  // or the Git checkout's artifact directory that Git updates already use for their snapshots.
+  const parent =
+    execution.updateInstallKind === "git" && !execution.switchToGit
+      ? resolveGitUpdateArtifactRoot(execution.root)
+      : resolveUpdateCaptureRoot(resolveStateDir(env));
+  let backupRoot: string | undefined;
+  let online: OnlineUpdateDatabaseCapture | undefined;
+  let failure: string | undefined;
+  try {
+    await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+    backupRoot = path.join(await fs.realpath(parent), `online-${runId}`);
+    const backup = await createUpdateDatabaseBackup({
+      backupRoot,
+      stateDir: resolveStateDir(env),
+      config: source.config,
+      env,
+      timeoutMs: execution.updateStepTimeoutMs,
+      nodeRunner: execution.packageUpdateNodeRunner,
+      postgresOnline: true,
+      postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
+    });
+    online = { backupRoot, backup, config: source.config };
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    failure = formatErrorMessage(error);
+    if (backupRoot) {
+      const cleanup = await discardOnlineUpdateDatabaseCapture({
+        backupRoot,
+        config: source.config,
+      });
+      if (cleanup) {
+        failure += `. Capture cleanup remains pending at ${backupRoot}.databases: ${cleanup}`;
+      }
+    }
+  }
+  const step: UpdateStepResult = {
+    name: "database snapshot (Gateway serving)",
+    command: "snapshot PostgreSQL stores while the Gateway serves",
+    cwd: resolveStateDir(env),
+    durationMs: Date.now() - startedAt,
+    exitCode: 0,
+    ...(failure
+      ? {
+          warnings: [
+            `Capture while serving was skipped; every store is captured after the stop: ${failure}`,
+          ],
+        }
+      : online?.backup.warnings.length
+        ? { warnings: online.backup.warnings }
+        : {}),
+  };
+  try {
+    params.assertCurrent();
+    await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
+  } catch (error) {
+    // Nothing owns the capture until it is returned; a run cancelled here must not leak it.
+    if (online) {
+      await discardOnlineUpdateDatabaseCapture(online);
+    }
+    throw error;
+  }
+  return online;
+}
+
+/** Drop a capture taken while serving that this run did not adopt; never fails the run. */
+export async function discardOnlineUpdateDatabaseCapture(
+  online: Pick<OnlineUpdateDatabaseCapture, "backupRoot" | "config"> & {
+    backup?: UpdateDatabaseBackup;
+  },
+): Promise<string | undefined> {
+  const directory = `${online.backupRoot}.databases`;
+  const { discardPostgresSchemaCaptures } = await import("../../snapshot/database-backup.js");
+  // A failed online capture has no backup record; its finished stores still hold server schemas.
+  // A store that failed mid-capture is still marked pending and dropped its own schema.
+  let failure: string | undefined;
+  try {
+    const entries = online.backup
+      ? online.backup.databases.flatMap((entry) => entry.exportDirectory ?? [])
+      : (await listDirectoryTreeStrict(directory))
+          .filter(
+            ({ relativePath, dirent }) =>
+              dirent.isDirectory() && relativePath.endsWith(".postgres"),
+          )
+          .map(({ relativePath }) => path.join(directory, relativePath));
+    for (const exportDirectory of entries) {
+      if (
+        !(await fs.lstat(exportDirectory).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+        })) ||
+        (await fs.stat(path.join(exportDirectory, ".pending")).catch(() => undefined))
+      ) {
+        continue;
+      }
+      // Each store on its own: one unreadable manifest must not strand the others' schemas.
+      await discardPostgresSchemaCaptures(online.config, [exportDirectory]).catch(
+        (error: unknown) => {
+          failure ??= formatErrorMessage(error);
+        },
+      );
+    }
+    // A schema that could not be dropped keeps its manifest for recovery.
+    if (!failure) {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      failure ??= formatErrorMessage(error);
+    }
+  }
+  return failure;
 }
 
 /**
@@ -107,36 +284,47 @@ export async function assertUpdatePostgresOwnerReleasable(params: {
   await assertUpdatePostgresCaptureOwnership({ config: params.config, env: params.env });
 }
 
-/**
- * Owner decision: an image that does not fit is skipped and the update continues.
- * Migrations commit in one SQLite transaction each, so nothing is lost; what is
- * given up is restoring the previous version once a migration commits.
- *
- * Only the backup owner's own measured shortfall qualifies: it is raised before any
- * family is checkpointed or copied, so nothing was captured and nothing needs
- * settling. Any other failure, including one a cleanup failure joins, still fails.
- */
-async function skipUpdateDatabaseImageForSpace(
-  error: unknown,
-  directory: string | undefined,
-  env: NodeJS.ProcessEnv,
-  assertCurrent: () => void,
-): Promise<{ step: UpdateStepResult; retained: boolean } | undefined> {
-  const space = findUpdateCaptureSpaceError(error)?.capacity;
+function measuredCaptureShortfall(error: unknown) {
   if (
-    !space ||
     collectErrorGraphCandidates(error, (current) => [current.cause]).some(
       (candidate) => candidate instanceof AggregateError,
     )
   ) {
     return undefined;
   }
+  return findUpdateCaptureSpaceError(error)?.capacity;
+}
+
+/**
+ * Owner decision: an image that does not fit is skipped and the update continues.
+ * Migrations commit in one SQLite transaction each, so nothing is lost; what is
+ * given up is restoring the previous version once a migration commits.
+ *
+ * Only the backup owner's own measured shortfall qualifies: it is raised before any
+ * family is checkpointed or copied in this pass. An earlier online copy still
+ * needs retirement. Any other failure, including one a cleanup failure joins, still fails.
+ */
+async function skipUpdateDatabaseImageForSpace(
+  error: unknown,
+  directory: string | undefined,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+  onlineCleanupFailure?: string,
+): Promise<{ step: UpdateStepResult; retained: boolean } | undefined> {
+  const space = measuredCaptureShortfall(error);
+  if (!space) {
+    return undefined;
+  }
   let retained = "";
   if (directory) {
     try {
       assertCurrent();
-      // The capture created this directory exclusively; it holds no image.
-      await fs.rm(directory, { recursive: true, force: true });
+      if (onlineCleanupFailure) {
+        retained = ` Its online capture remains at ${directory} (${onlineCleanupFailure}).`;
+      } else {
+        // This pass exclusively created the directory and has copied nothing.
+        await fs.rm(directory, { recursive: true, force: true });
+      }
     } catch (cleanupError) {
       retained = ` Its scratch files remain at ${directory} (${formatErrorMessage(cleanupError)}).`;
     }
@@ -165,6 +353,8 @@ export async function captureUpdateDatabases(params: {
   execution: MutableUpdateExecutionParams;
   context: OwnedManagedUpdateContext | undefined;
   assertCurrent: () => void;
+  online?: OnlineUpdateDatabaseCapture;
+  onOnlineAdopted?: () => void;
 }) {
   const assertCurrent = params.assertCurrent;
   const startedAt = Date.now();
@@ -185,6 +375,7 @@ export async function captureUpdateDatabases(params: {
   const ownership = await acquireUpdateCaptureOwnership(env);
   const maintenance = ownership.maintenance;
   let unavailable = ownership.unavailable;
+  let retryCleanupFailure: string | undefined;
   let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
   let backupDirectory: string | undefined;
   try {
@@ -218,17 +409,21 @@ export async function captureUpdateDatabases(params: {
         params.assertCurrent();
         maintenance.assertCurrent();
       }
-      let backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
-      if (execution.updateInstallKind === "git" && !execution.switchToGit) {
+      let backupRoot =
+        params.online?.backupRoot ?? transaction.databaseBackupRoot ?? transaction.backupRoot;
+      if (!params.online && execution.updateInstallKind === "git" && !execution.switchToGit) {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
-        const artifactRoot = path.join(execution.root, ".artifacts");
+        const artifactRoot = resolveGitUpdateArtifactRoot(execution.root);
         await fs.mkdir(artifactRoot, { recursive: true });
         const physicalArtifactRoot = await fs.realpath(artifactRoot);
         params.assertCurrent();
         backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
       }
       backupDirectory = `${backupRoot}.databases`;
-      const captured = await createUpdateDatabaseBackup({
+      // From this point the worker can replace captures. Its partial results
+      // follow the normal recovery retention path if the capture fails.
+      params.onOnlineAdopted?.();
+      const backupInput = {
         backupRoot,
         stateDir: resolveStateDir(env),
         config: source.config,
@@ -248,9 +443,29 @@ export async function captureUpdateDatabases(params: {
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
         postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
-      });
-      if (execution.updateInstallKind === "git") {
-        // Git runtime transactions have no package journal; retire these snapshots with them.
+      } satisfies Parameters<typeof createUpdateDatabaseBackup>[0];
+      let captured: UpdateDatabaseBackup;
+      try {
+        captured = await createUpdateDatabaseBackup({
+          ...backupInput,
+          ...(params.online ? { reuse: params.online.backup } : {}),
+        });
+      } catch (error) {
+        if (!params.online || !measuredCaptureShortfall(error)) {
+          throw error;
+        }
+        params.assertCurrent();
+        maintenance?.assertCurrent();
+        retryCleanupFailure = await discardOnlineUpdateDatabaseCapture(params.online);
+        if (retryCleanupFailure) {
+          throw error;
+        }
+        params.assertCurrent();
+        maintenance?.assertCurrent();
+        captured = await createUpdateDatabaseBackup(backupInput);
+      }
+      if (execution.updateInstallKind === "git" || params.online) {
+        // Retire these captures with the runtime, including online copies outside the package root.
         transaction.databaseBackupRoot = backupRoot;
       }
       params.assertCurrent();
@@ -282,6 +497,7 @@ export async function captureUpdateDatabases(params: {
       backupDirectory,
       env,
       assertCurrent,
+      retryCleanupFailure,
     );
     if (!skipped) {
       throw outcome.error;

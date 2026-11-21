@@ -484,12 +484,27 @@ its matching binary for rollback rather than lowering version markers.
 PostgreSQL original-state captures acquire offline custody before using the exact
 database backup provider. The installed updater must contain this repair.
 
-The pre-migration database backup for PostgreSQL families needs exclusive state
-ownership, and it runs after activation replaces the install. When ownership is
-unavailable after the service stop, for example because a Gateway the updater does
-not manage is still serving, the update now refuses before activation, leaving
-the install unchanged and the Gateway running. Stop the Gateway through its service
-owner, then rerun the update. The installed updater must contain this repair.
+For an update that takes a pre-migration image, the installed updater starts
+capturing PostgreSQL stores before it stops the Gateway. Each capture uses a
+consistent snapshot of one store. Under exclusive ownership, the updater reuses
+captures of unchanged stores and captures changed or unreadable stores again.
+SQLite stores are captured under exclusive ownership. Before writing a portable
+PostgreSQL export, the updater estimates its size and checks available space
+with room for the export, its rollback journal, and a serving reserve. It
+defers an export that cannot fit or whose volume cannot be measured.
+Server-side schema captures wait for the stop because PostgreSQL does not report
+free disk space to the updater. If the online stage fails, the updater attempts
+the full capture under exclusive ownership. If the remaining captures do not
+fit alongside retained online copies, it removes those copies and tries the full
+stopped capture once before skipping the image.
+
+The updater needs exclusive ownership before activation. For a custom service
+or foreground Gateway on a PostgreSQL install, pass
+`--wait-for-gateway-stop <seconds>` to let it prepare and capture while the
+Gateway serves. If the Gateway still holds ownership when the updater is ready
+to activate, the updater asks you to stop it and waits up to the given time. A
+timeout refuses activation and retires the online captures. Start the Gateway
+through its owner after the update. The installed updater must support the flag.
 Update-history writes participate in PostgreSQL's generation handoff to Doctor;
 all other generation checks remain in force. Update status reads history and
 recovery outcomes through the configured database engine.
@@ -1214,6 +1229,12 @@ the Node executable in a service definition does not update its OpenClaw package
 ```bash
 openclaw update
 ```
+
+On a PostgreSQL install with a custom or foreground Gateway, run
+`openclaw update --wait-for-gateway-stop 300` to keep serving through
+preparation. Stop the Gateway when asked and start it again when the update
+finishes. For a Gateway managed by the updater, use `openclaw update` and let it
+coordinate the stop and restart. See [update options](/cli/update#options).
 
 ### Host prerequisites
 
