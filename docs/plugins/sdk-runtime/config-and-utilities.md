@@ -354,10 +354,19 @@ Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
 Channel plugins must admit authenticated agent turns through their injected
-`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
-accepts owner authority only from the exact active, trusted plugin registered for
-`options.messageChannel`; guest turns retain their non-owner identity. The public
-`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. A named
+`options.messageChannel` must be a channel the calling plugin registers. Owner
+authority needs a bundled or trusted official plugin; guest turns retain their
+non-owner identity. Plugins without a channel, such as phone, meeting, and FaceTime
+bridges, omit `messageChannel`. `options.toolBindings` may scope only tools the
+calling plugin declares in `contracts.tools`. The public `agentCommandFromIngress`
+SDK helper never accepts a caller-supplied owner claim.
+
+`consultRealtimeVoiceAgent` from `openclaw/plugin-sdk/realtime-voice` accepts
+`runner: "agent-turn"` to run the consult as a turn of the consult session through
+`runCommandFromIngress`. The agent's runtime selection (including Claude CLI),
+fallbacks, and tool policy then apply as they do for a typed message. The default
+`runner: "embedded"` runs `runEmbeddedAgent` on the given provider and model.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from

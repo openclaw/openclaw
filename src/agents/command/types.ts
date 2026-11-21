@@ -76,7 +76,11 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** With `thinkingOnce`: run an unsupported level at the closest supported one instead of failing. */
+  thinkingOnceClosest?: boolean;
   verbose?: string;
+  /** Verbose level for this run only; unlike `verbose`, never saved to the session. */
+  verboseOnce?: string;
   json?: boolean;
   timeout?: string;
   deliver?: boolean;
@@ -302,6 +306,10 @@ export type AgentCommandIngressOpts = Omit<
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
 };
+
+/** Plugin-runtime ingress; the host admits bindings only for the calling plugin's own tools. */
+export type AgentCommandPluginIngressOpts = AgentCommandIngressOpts &
+  Pick<AgentCommandOpts, "toolBindings">;
 
 /** Gateway-only ingress carries host-issued authority and execution ownership. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &

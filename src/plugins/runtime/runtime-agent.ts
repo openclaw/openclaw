@@ -42,6 +42,7 @@ import {
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   beginSessionEffect,
@@ -49,6 +50,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
@@ -292,13 +294,22 @@ export function createRuntimeAgent(
           opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
           runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
         ) =>
-          await command.agentCommandFromGatewayIngress(
-            {
-              ...identity.sanitizePublicAgentCommandIngressOpts(opts),
-              senderIsOwner: opts.senderIsOwner === true,
-            },
-            runtime,
-            undefined,
+          // Like runEmbeddedAgent: a bridge consult can arrive after the request that opened
+          // the bridge (googlemeet.join) has ended, so the turn owns its own admission.
+          await runWithGatewayDetachedWorkContinuation(
+            () =>
+              command.agentCommandFromGatewayIngress(
+                {
+                  ...identity.sanitizePublicAgentCommandIngressOpts(opts),
+                  senderIsOwner: opts.senderIsOwner === true,
+                  // The plugin-scoped wrapper admitted these bindings for the caller's own tools.
+                  toolBindings: opts.toolBindings,
+                },
+                runtime,
+                undefined,
+              ),
+            `plugin:${getPluginRuntimeGatewayRequestScope()?.pluginId ?? "unknown"}:run-command-from-ingress`,
+            opts.abortSignal,
           ),
     ),
   );

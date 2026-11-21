@@ -468,6 +468,27 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     }
   });
 
+  it.each([
+    { nodeExecAllowed: true, available: false },
+    { nodeExecAllowed: undefined, available: true },
+  ])(
+    "applies wildcard sender policy to a senderless capped grant: nodeExecAllowed=$nodeExecAllowed",
+    async ({ nodeExecAllowed, available }) => {
+      // A capped CLI grant drops node exec; its run's sender policy must still apply.
+      const result = await resolveTools({
+        cfg: { tools: { toolsBySender: { "*": { deny: ["sessions_spawn"] } } } },
+        sessionKey: "agent:main:voice:15550001234",
+        senderIsOwner: true,
+        messageProvider: "voice",
+        toolsAllow: ["read", "sessions_spawn"],
+        nodeExecAllowed,
+      });
+
+      expect(toolNames(result).includes("sessions_spawn")).toBe(available);
+      expect(toolNames(result)).toContain("read");
+    },
+  );
+
   it("does not inherit node-only exec as a generic child or cron capability", async () => {
     const result = await resolveNodeExecTools({
       cfg: { tools: { allow: ["exec", "sessions_spawn", "automations"] } },

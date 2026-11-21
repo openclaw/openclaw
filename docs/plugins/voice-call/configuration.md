@@ -133,7 +133,7 @@ Top-level keys under `plugins.entries.voice-call.config` not shown above:
 | `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                                                                 |
 | `store`                         | unset        | Overrides the default `$OPENCLAW_STATE_DIR/voice-calls` path (normally `~/.openclaw/voice-calls`).                              |
 | `agentId`                       | sole agent   | Agent used for response generation and session storage. Set explicitly with multiple agents.                                    |
-| `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                                                               |
+| `responseModel`                 | unset        | Overrides the agent's model for classic responses and realtime agent consults.                                                  |
 | `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                                                                     |
 | `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                                                                   |
 
