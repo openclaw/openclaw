@@ -7,13 +7,18 @@ import {
   resetTranscriptTestDom,
 } from "./chat-transcript.test-support.ts";
 
-it.each([false, true])("physically stops only an issued smooth command (issued: %s)", (issued) => {
+function cancellationHost() {
   installTranscriptDomMocks();
   const host = new ChatSessionVirtualizerHost(vi.fn());
   onTestFinished(() => {
     host.dispose();
     resetTranscriptTestDom();
   });
+  return host;
+}
+
+it.each([false, true])("physically stops only an issued smooth command (issued: %s)", (issued) => {
+  const host = cancellationHost();
   const element = document.createElement("div");
   element.scrollTop = 100;
   vi.spyOn(host, "scrollElement", "get").mockReturnValue(element);
@@ -34,12 +39,7 @@ it.each([false, true])("physically stops only an issued smooth command (issued: 
 });
 
 it("does not stop a reconnected host at the same native element", () => {
-  installTranscriptDomMocks();
-  const host = new ChatSessionVirtualizerHost(vi.fn());
-  onTestFinished(() => {
-    host.dispose();
-    resetTranscriptTestDom();
-  });
+  const host = cancellationHost();
   const element = document.createElement("div");
   vi.spyOn(host, "scrollElement", "get").mockReturnValue(element);
   host.connect();
@@ -59,12 +59,7 @@ it.each(
     (["settlement", "native write"] as const).map((phase) => ({ change, phase })),
   ),
 )("does not overwrite a completed end after $change during $phase", ({ change, phase }) => {
-  installTranscriptDomMocks();
-  const host = new ChatSessionVirtualizerHost(vi.fn());
-  onTestFinished(() => {
-    host.dispose();
-    resetTranscriptTestDom();
-  });
+  const host = cancellationHost();
   const element = document.createElement("div");
   vi.spyOn(host, "scrollElement", "get").mockReturnValue(element);
   host.connect();
@@ -106,12 +101,7 @@ it.each(
 });
 
 it("retargets automatic following during commandless end settlement", () => {
-  installTranscriptDomMocks();
-  const host = new ChatSessionVirtualizerHost(vi.fn());
-  onTestFinished(() => {
-    host.dispose();
-    resetTranscriptTestDom();
-  });
+  const host = cancellationHost();
   host.initialRange.preparingEnd = true;
   const prepare = vi.spyOn(host.initialRange, "prepareEnd").mockImplementation(() => {});
   expect(host.scrollToEnd({ source: "auto", behavior: "auto" })).toBe(true);

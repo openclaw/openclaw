@@ -16,7 +16,6 @@ import type { ReplyMessageStatus } from "./components/chat-reply-preview.ts";
 registerChatMessageMetadataEnglish();
 
 export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
-  private activeReplyNavigation: symbol | null = null;
   private replyNavigationRead: AbortController | null = null;
   replyNavigationSessionKey: string | null = null;
   replyNavigationId: string | null = null;
@@ -104,7 +103,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   protected resetReplyNavigation(): void {
     this.replyNavigationRead?.abort();
     this.replyNavigationRead = null;
-    this.activeReplyNavigation = null;
     this.replyNavigationSessionKey = null;
     this.replyNavigationId = null;
   }
@@ -122,16 +120,14 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     const read = new AbortController();
     this.replyNavigationRead = read;
     const signal = AbortSignal.any([read.signal, this.transcriptReadAbortController.signal]);
-    const navigation = Symbol("reply-navigation");
     const isCurrent = () =>
       !signal.aborted &&
-      this.activeReplyNavigation === navigation &&
+      this.replyNavigationRead === read &&
       this.state === state &&
       ownsConnection() &&
       resolveChatAgentId(state) === agentId &&
       areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
       (!sessionId || state.currentSessionId === sessionId);
-    this.activeReplyNavigation = navigation;
     this.replyNavigationSessionKey = sessionKey;
     this.replyNavigationId = messageId;
     try {
@@ -183,7 +179,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         state.lastError = formatChatHistoryLoadError(error);
       }
     } finally {
-      if (this.activeReplyNavigation === navigation) {
+      if (this.replyNavigationRead === read) {
         this.resetReplyNavigation();
       }
     }

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import type { ChatItemsFacts } from "./chat-thread-facts.ts";
@@ -11,6 +11,8 @@ import {
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+
+afterEach(() => resetChatThreadState());
 
 function hasLiveTarget(reference: WeakRef<object>): boolean {
   // Keep JSC's dereferenced temporary out of the suspended async test frame.
@@ -48,19 +50,15 @@ describe("tool expansion state", () => {
         collectionControl: new WeakRef({ unowned: true }),
       };
     };
-    try {
-      const { messageReference, collectionControl } = populatePane();
-      await collectGarbageForTest();
-      expect(collectionControl.deref()).toBeUndefined();
-      expect(hasLiveTarget(messageReference)).toBe(true);
+    const { messageReference, collectionControl } = populatePane();
+    await collectGarbageForTest();
+    expect(collectionControl.deref()).toBeUndefined();
+    expect(hasLiveTarget(messageReference)).toBe(true);
 
-      resetChatThreadState(paneId);
-      await collectGarbageForTest();
-      expect(messageReference.deref()).toBeUndefined();
-      expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
-    } finally {
-      resetChatThreadState();
-    }
+    resetChatThreadState(paneId);
+    await collectGarbageForTest();
+    expect(messageReference.deref()).toBeUndefined();
+    expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
   });
 });
 
@@ -95,26 +93,22 @@ it("releases repeated hidden retirements without losing independent raw survivor
       control: new WeakRef({ unowned: true }),
     };
   };
-  try {
-    const { references, prior, retained, control } = populate();
-    await collectGarbageForTest();
-    expect(control.deref()).toBeUndefined();
-    expect(references.map(hasLiveTarget)).toEqual([false, false, false, false]);
-    for (const [index, view] of ["visible", "unfiltered"].entries()) {
-      const next = buildCachedChatItems(
-        createProps({ paneId, messages: retained }),
-        view === "visible" ? "visible" : "unfiltered",
-      ).filter((item) => item.kind === "group");
-      expect(next).toHaveLength(2);
-      const boundary = prior[index]![0]!;
-      expect(boundary).toMatchObject({ replyPreviousMessageId: "hidden-1" });
-      expect(next[0]).not.toBe(boundary);
-      expect(next[0]).toMatchObject({ key: boundary.key, replyPreviousMessageId: undefined });
-      expect(next[0]!.messages[0]!.message).toBe(retained[0]);
-      expect(next[1]).toBe(prior[index]![1]);
-    }
-  } finally {
-    resetChatThreadState(paneId);
+  const { references, prior, retained, control } = populate();
+  await collectGarbageForTest();
+  expect(control.deref()).toBeUndefined();
+  expect(references.map(hasLiveTarget)).toEqual([false, false, false, false]);
+  for (const [index, view] of ["visible", "unfiltered"].entries()) {
+    const next = buildCachedChatItems(
+      createProps({ paneId, messages: retained }),
+      view === "visible" ? "visible" : "unfiltered",
+    ).filter((item) => item.kind === "group");
+    expect(next).toHaveLength(2);
+    const boundary = prior[index]![0]!;
+    expect(boundary).toMatchObject({ replyPreviousMessageId: "hidden-1" });
+    expect(next[0]).not.toBe(boundary);
+    expect(next[0]).toMatchObject({ key: boundary.key, replyPreviousMessageId: undefined });
+    expect(next[0]!.messages[0]!.message).toBe(retained[0]);
+    expect(next[1]).toBe(prior[index]![1]);
   }
 });
 
@@ -151,15 +145,11 @@ it.each(["current", "turn"] as const)(
       retireChatThreadSources(paneId, [retired]);
       return { reference, rows, remaining: messages.filter((source) => source !== retired) };
     };
-    try {
-      const { reference, rows, remaining } = populate();
-      await collectGarbageForTest();
-      expect(reference.deref()).toBeUndefined();
-      expect(rows.map(hasLiveTarget)).toEqual([false, false]);
-      expect(remaining.at(-1)?.content).toBe("answer");
-    } finally {
-      resetChatThreadState(paneId);
-    }
+    const { reference, rows, remaining } = populate();
+    await collectGarbageForTest();
+    expect(reference.deref()).toBeUndefined();
+    expect(rows.map(hasLiveTarget)).toEqual([false, false]);
+    expect(remaining.at(-1)?.content).toBe("answer");
   },
 );
 
@@ -208,28 +198,25 @@ it.each(["current", "turn"] as const)(
         control: new WeakRef({ unowned: true }),
       };
     };
-    try {
-      const { reference, rows, remaining, runId, control } = populate();
-      await collectGarbageForTest();
-      expect(control.deref()).toBeUndefined();
-      expect(reference.deref()).toBeUndefined();
-      expect(rows.map(hasLiveTarget)).toEqual([false, false]);
-      const next = createProps({
-        paneId,
-        sessionKey: paneId,
-        messages: remaining,
-        runId,
-        runActive: true,
-        runWorking: true,
-        stream: "First text after retirement",
-        streamStartedAt: 30,
-      });
-      const expected = buildChatItems(structuredClone(next));
-      for (const view of ["visible", "unfiltered"] as const) {
-        expect(buildCachedChatItems(next, view)).toEqual(expected);
-      }
-    } finally {
-      resetChatThreadState(paneId);
+    const { reference, rows, remaining, runId, control } = populate();
+    await collectGarbageForTest();
+    expect(control.deref()).toBeUndefined();
+    expect(reference.deref()).toBeUndefined();
+    expect(rows.map(hasLiveTarget)).toEqual([false, false]);
+    const next = createProps({
+      paneId,
+      sessionKey: paneId,
+      messages: remaining,
+      runId,
+      runActive: true,
+      runWorking: true,
+      stream: "First text after retirement",
+      streamStartedAt: 30,
+    });
+    const { projectAutomations, ...data } = next;
+    const expected = buildChatItems({ ...structuredClone(data), projectAutomations });
+    for (const view of ["visible", "unfiltered"] as const) {
+      expect(buildCachedChatItems(next, view)).toEqual(expected);
     }
   },
 );
@@ -283,14 +270,10 @@ it("releases hidden-tool Canvas memos held by a surviving raw neighbor without a
       control: new WeakRef({ unowned: true }),
     };
   };
-  try {
-    const { references, rawReference, retained, control } = populate();
-    await collectGarbageForTest();
-    expect(control.deref()).toBeUndefined();
-    expect(rawReference.deref()).toBeUndefined();
-    expect(references.map(hasLiveTarget)).toEqual([false, false]);
-    expect(retained.map((source) => source.content)).toEqual(["canvas-prompt", "canvas-neighbor"]);
-  } finally {
-    resetChatThreadState(paneId);
-  }
+  const { references, rawReference, retained, control } = populate();
+  await collectGarbageForTest();
+  expect(control.deref()).toBeUndefined();
+  expect(rawReference.deref()).toBeUndefined();
+  expect(references.map(hasLiveTarget)).toEqual([false, false]);
+  expect(retained.map((source) => source.content)).toEqual(["canvas-prompt", "canvas-neighbor"]);
 });

@@ -11,29 +11,16 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
-  nativeHistoryMessage,
+  createCapacityHistoryPages,
+  type CapacityHistoryRequest as Request,
   expectNativeHistoryRange,
 } from "./chat-pane-history.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 
-type Request = { cursor: string; limit: number; maxBytes: number };
 type Direction = "older" | "newer";
 
-function source(seq: number, keyed = true) {
-  return Object.assign(nativeHistoryMessage(seq, "x".repeat(4_000)), {
-    __openclaw: { seq, ...(keyed ? { id: `source-${seq}` } : {}) },
-  });
-}
-
-function page(first: number, last: number): ChatHistoryResult {
-  return {
-    messages: Array.from({ length: last - first + 1 }, (_, index) => source(first + index)),
-    hasMore: first > 1,
-    ...(first > 1 ? { olderCursor: `older-${first - 1}` } : {}),
-    ...(last < 900 ? { newerCursor: `newer-${last + 1}` } : {}),
-  };
-}
+const { source, page, wire } = createCapacityHistoryPages(900);
 
 function hydrateResidentWindow(state: Parameters<typeof admitChatHistoryPages>[0], start: number) {
   // Build the resident window from ordinary compliant packets, not an oversized startup reply.
@@ -50,22 +37,6 @@ function hydrateResidentWindow(state: Parameters<typeof admitChatHistoryPages>[0
 function holdCapacityReply(direction: Direction, initialReader: number | null = null) {
   const broad = createDeferred<ChatHistoryResult>();
   const narrowed = createDeferred<ChatHistoryResult>();
-  const wire = (params: Request): ChatHistoryResult => {
-    const edge = Number(params.cursor.split("-")[1]);
-    const older = params.cursor.startsWith("older-");
-    let first = older ? Math.max(1, edge - params.limit + 1) : edge;
-    let last = older ? edge : Math.min(900, edge + params.limit - 1);
-    while (
-      new TextEncoder().encode(JSON.stringify(page(first, last).messages)).length > params.maxBytes
-    ) {
-      if (older) {
-        first++;
-      } else {
-        last--;
-      }
-    }
-    return page(first, last);
-  };
   let second: Request | undefined;
   const request = vi.fn(async (_method: string, params: Request) => {
     if (request.mock.calls.length === 1) {

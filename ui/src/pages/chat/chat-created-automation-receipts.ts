@@ -1,9 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isAutomationsToolName } from "../../../../src/agents/tools/automations-tool-name.js";
-import {
-  automationCreationCall,
-  automationCreationFromToolDetails,
-} from "../../../../src/chat/automation-job-result.js";
+import { automationCreationCall } from "../../../../src/chat/automation-creation-call.js";
+import { automationCreationFromToolDetails } from "../../../../src/chat/automation-job-result.js";
 import {
   isToolCallContentType,
   isToolResultContentType,

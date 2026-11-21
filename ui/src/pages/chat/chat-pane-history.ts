@@ -70,7 +70,6 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
   private historyViewportFillAttempted = false;
   private readonly historyInput = new TranscriptHistoryInput();
   private retireOlderMessagesReads(interrupted = false, keep?: "newer"): void {
-    this.olderLoadGeneration += 1;
     this.activeOlderLoad = null;
     this.activeOlderRead?.abort();
     this.activeOlderRead = null;
@@ -464,19 +463,19 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
     if (!state || this.history.loadingOlder || !this.hasOlderMessages()) {
       return false;
     }
-    const generation = ++this.olderLoadGeneration;
+    const read = new AbortController();
+    this.activeOlderRead = read;
     const ownsConnection = captureChatConnectionOwner(state);
     const sessionKey = state.sessionKey;
     const agentId = resolveChatAgentId(state);
     const isCurrent = () =>
-      generation === this.olderLoadGeneration &&
+      !read.signal.aborted &&
+      this.activeOlderRead === read &&
       this.state === state &&
       ownsConnection() &&
       state.sessionKey === sessionKey &&
       resolveChatAgentId(state) === agentId;
     this.history.olderError = null;
-    const read = new AbortController();
-    this.activeOlderRead = read;
     // A staged page applies without ever entering the loading state, so the
     // boundary shows no shimmer flash for an instant prepend.
     let prepended = false;
@@ -515,8 +514,6 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
     } finally {
       if (this.activeOlderRead === read) {
         this.activeOlderRead = null;
-      }
-      if (generation === this.olderLoadGeneration) {
         if (!prepended || !this.hasOlderMessages()) {
           this.historyAutoLoadBlocked = this.hasOlderMessages();
         }

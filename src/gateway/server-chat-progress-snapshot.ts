@@ -6,10 +6,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
-import {
-  automationCreationCall,
-  automationCreationFromToolDetails,
-} from "../chat/automation-job-result.js";
+import { automationCreationCall } from "../chat/automation-creation-call.js";
+import { automationCreationFromToolDetails } from "../chat/automation-job-result.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { boundedJsonUtf8Bytes, jsonStringByteLengthUpToLimit } from "../infra/json-utf8-bytes.js";
 import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";

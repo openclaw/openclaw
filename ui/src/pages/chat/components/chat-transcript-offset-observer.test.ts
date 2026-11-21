@@ -4,7 +4,10 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { canAutoFollowChat, handleChatScroll, handleChatScrollTakeover } from "../scroll.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
-import { readerScroll } from "./chat-transcript-offset-observer.test-support.ts";
+import {
+  createOffsetVirtualizer,
+  readerScroll,
+} from "./chat-transcript-offset-observer.test-support.ts";
 import {
   isTranscriptProgrammaticScroll,
   isTranscriptMaintenanceScroll,
@@ -24,14 +27,7 @@ it("waits for measured rows before renewing a growing end destination", () => {
   const state = new TranscriptOffsetState();
   const command = { target: "end", behavior: "smooth", offset: 1000 } as const;
   state.scrollCommand = command;
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 0,
-    getScrollElement: () => element,
-    estimateSize: () => 120,
-    scrollToFn: () => {},
-    observeElementRect: () => () => {},
-    observeElementOffset: () => () => {},
-  });
+  const virtualizer = createOffsetVirtualizer(element, { estimateSize: () => 120 }, false);
   virtualizer.scrollElement = element;
   const scroll = vi.spyOn(virtualizer, "scrollToEnd").mockImplementation(() => {});
   const prepare = vi.fn<Parameters<typeof scrollTranscriptToEnd>[6]>();
@@ -67,14 +63,7 @@ function createWheelForecastObserver() {
   });
   element.scrollTop = 1000;
   const state = new TranscriptOffsetState();
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 0,
-    getScrollElement: () => element,
-    estimateSize: () => 120,
-    scrollToFn: () => {},
-    observeElementRect: () => () => {},
-    observeElementOffset: () => () => {},
-  });
+  const virtualizer = createOffsetVirtualizer(element, { estimateSize: () => 120 }, false);
   virtualizer.scrollElement = element;
   virtualizer.scrollOffset = 1000;
   virtualizer.targetWindow = window;
@@ -210,14 +199,7 @@ it.each([undefined, 1000])(
     const state = new TranscriptOffsetState();
     const command = { target: "end" as const, behavior: "smooth" as const, offset };
     state.scrollCommand = command;
-    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 0,
-      getScrollElement: () => element,
-      estimateSize: () => 40,
-      scrollToFn: vi.fn(),
-      observeElementRect: vi.fn(),
-      observeElementOffset: vi.fn(),
-    });
+    const virtualizer = createOffsetVirtualizer(element);
     virtualizer.scrollElement = element;
     virtualizer.targetWindow = window;
     const cancelScroll = vi.fn(() => {
@@ -270,14 +252,7 @@ it.each([
       },
     });
   }
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 0,
-    getScrollElement: () => element,
-    estimateSize: () => 40,
-    scrollToFn: vi.fn(),
-    observeElementRect: vi.fn(),
-    observeElementOffset: vi.fn(),
-  });
+  const virtualizer = createOffsetVirtualizer(element);
   virtualizer.scrollElement = element;
   virtualizer.targetWindow = window;
   const state = new TranscriptOffsetState();

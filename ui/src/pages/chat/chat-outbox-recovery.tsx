@@ -1,34 +1,38 @@
-import { action, createMemo, createOptimistic, createSignal, For, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  For,
+  lazy,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
 import "../../styles/chat/outbox-recovery.css";
 import {
   captureChatOutboxRecoveryDestination,
-  discardChatOutboxRecovery,
   readChatOutboxRecovery,
-  restoreChatOutboxRecovery,
   retireDeliveredChatOutboxRecovery,
   type ChatOutboxRecoveryEntry,
 } from "../../lib/chat/outbox-recovery.ts";
 import {
-  parseStoredChatOutboxScope,
   storageTargetForGateway,
   storedChatOutboxScopeKey,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
-import { formatDateTimeMs } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
-type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
-type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
+export type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
+export type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
   Required<
     Pick<
       Parameters<typeof captureChatOutboxRecoveryDestination>[0],
@@ -43,6 +47,23 @@ type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
 let draftStore: Promise<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>;
 const loadDraftStore = () =>
   (draftStore ??= import("../../lib/chat/composer-draft-store.runtime.ts"));
+
+const RecoveryRows = lazy(() => import("./chat-outbox-recovery.runtime.tsx"), {
+  export: "RecoveryRows",
+});
+
+function captureRestore(
+  host: RecoveryHost,
+  owner: { gatewayOwner: string; recoveryScope: string },
+) {
+  const scope = resolveUiConversationIdentity(host, host.sessionKey);
+  return {
+    scope,
+    destination: captureChatOutboxRecoveryDestination(host, scope),
+    durableScope: { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` },
+  };
+}
+export type RecoveryRestore = ReturnType<typeof captureRestore>;
 
 type RecoveryProps = {
   host: RecoveryHost | undefined;
@@ -182,113 +203,23 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
     setBusy(true);
     setError("");
     try {
-      if (!restoring) {
-        // A dialog must render outside the transaction waiting for its answer.
-        const confirmed: boolean = yield Promise.resolve().then(() =>
-          isCurrent()
-            ? showConfirmDialog({
-                title: t("chat.outboxRecoveryDeleteTitle"),
-                message: t("chat.outboxRecoveryDeleteConfirm"),
-                details: details(entry),
-                confirmLabel: t("chat.outboxRecoveryDelete"),
-                danger: true,
-              })
-            : false,
-        );
-        if (!confirmed || !isCurrent()) {
-          return undefined;
-        }
-        let result: ReturnType<typeof discardChatOutboxRecovery>;
-        if ("id" in entry) {
-          result = discardChatOutboxRecovery(host, entry, isCurrent);
-        } else {
-          const store: Awaited<typeof draftStore> = yield loadDraftStore();
-          const discarded: Awaited<ReturnType<typeof store.discardDurableComposerRecovery>> =
-            yield store.discardDurableComposerRecovery(owner, entry, isCurrent);
-          result = discarded.status;
-        }
-        if (!isCurrent()) {
-          return undefined;
-        }
-        if (result === "discarded") {
-          return "discarded" as const;
-        }
-        setError(
-          t(
-            result === "conflict"
-              ? "chat.outboxRecoveryDeleteConflict"
-              : "chat.outboxRecoveryStorageFailed",
-          ),
-        );
-        return undefined;
-      }
-      if (!isCurrent()) {
+      if (restoring && !isCurrent()) {
         setError(t("chat.outboxRecoveryConflict"));
         return undefined;
       }
-      const scope = resolveUiConversationIdentity(host, host.sessionKey);
-      const destination = captureChatOutboxRecoveryDestination(host, scope);
-      const durableScope = { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` };
-      const store: Awaited<typeof draftStore> = yield loadDraftStore();
-      const before: Awaited<ReturnType<typeof store.readDurableComposerDraft>> =
-        yield store.readDurableComposerDraft(durableScope);
-      if (before.status === "storage-failed") {
-        setError(t("chat.outboxRecoveryStorageFailed"));
-        return undefined;
-      }
-      if (!destination || before.status === "found" || !isCurrent()) {
-        setError(t("chat.outboxRecoveryConflict"));
-        return undefined;
-      }
-      const confirmed: boolean = yield Promise.resolve().then(() =>
-        isCurrent()
-          ? showConfirmDialog({
-              title: t("chat.outboxRecoveryReviewTitle"),
-              message: t("chat.outboxRecoveryConfirm", { chat: chatName(scope.sessionKey) }),
-              details: details(entry),
-              confirmLabel: t("chat.outboxRecoveryRestore"),
-            })
-          : false,
-      );
-      if (!confirmed || !isCurrent()) {
-        return undefined;
-      }
-      const currentDraft: Awaited<ReturnType<typeof store.readDurableComposerDraft>> =
-        yield store.readDurableComposerDraft(durableScope);
-      if (!isCurrent() || JSON.stringify(currentDraft) !== JSON.stringify(before)) {
-        setError(t("chat.outboxRecoveryConflict"));
-        return undefined;
-      }
-      let result:
-        | ReturnType<typeof restoreChatOutboxRecovery>
-        | Awaited<ReturnType<typeof store.restoreDurableComposerRecovery>>["status"];
-      if ("id" in entry) {
-        result = restoreChatOutboxRecovery(host, entry, destination, before.revision ?? 0);
-      } else {
-        const restored: Awaited<ReturnType<typeof store.restoreDurableComposerRecovery>> =
-          yield store.restoreDurableComposerRecovery(
-            durableScope,
-            entry,
-            before.revision ?? 0,
-            before.writeId,
-            () =>
-              isCurrent() &&
-              JSON.stringify(captureChatOutboxRecoveryDestination(host, scope)) ===
-                JSON.stringify(destination),
-            destination.revision,
-          );
-        result = restored.status;
-      }
-      if (result === "restored" || result === "persisted") {
-        return "restored" as const;
-      }
-      setError(
-        t(
-          result === "conflict"
-            ? "chat.outboxRecoveryConflict"
-            : "chat.outboxRecoveryStorageFailed",
-        ),
-      );
+      // Preserve the clicked destination before a cold implementation can settle.
+      const restore = restoring ? captureRestore(host, owner) : null;
+      const runtime: typeof import("./chat-outbox-recovery.runtime.tsx") =
+        yield RecoveryRows.preload();
+      return yield* runtime.commitOutboxRecovery({
+        host,
+        entry,
+        owner,
+        restore,
+        isCurrent,
+        loadDraftStore,
+        setError,
+      });
     } catch {
       if (active && (restoring || isCurrent())) {
         setError(t("chat.outboxRecoveryStorageFailed"));
@@ -318,140 +249,9 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       }
     }
   }
-  function chatName(sessionKey: string) {
-    const row = props.host?.sessionsResult?.sessions.find((session) => session.key === sessionKey);
-    return resolveSessionDisplayName(sessionKey, row);
-  }
   return { rows, error, busy, canRecover: () => readOwner() !== null, changeRecovery };
 }
 
-function preview(entry: RecoveryEntry) {
-  const text =
-    "id" in entry
-      ? entry.session.draft || entry.session.queue?.find((item) => item.text.trim())?.text
-      : entry.text;
-  if (text?.trim()) {
-    return text.trim();
-  }
-  const attachments =
-    "id" in entry
-      ? (entry.session.queue ?? [])
-          .flatMap((item) => item.attachments ?? [])
-          .map((a) => a.fileName ?? a.mimeType)
-      : entry.attachmentNames;
-  if (attachments.length) {
-    return t("chat.outboxRecoveryAttachments", { files: attachments.join(", ") });
-  }
-  const { goalMode: goal, replyTarget: reply } = "id" in entry ? entry.session : entry;
-  if (goal) {
-    return t("chat.outboxRecoveryGoal");
-  }
-  if (reply) {
-    return t("chat.outboxRecoveryReply", { text: reply.text });
-  }
-  return t("chat.outboxRecoveryQueued");
-}
-function details(entry: RecoveryEntry) {
-  const session = "id" in entry ? entry.session : null;
-  const text = "id" in entry ? entry.session.draft : entry.text;
-  const { goalMode: goal, replyTarget: reply } = "id" in entry ? entry.session : entry;
-  const attachmentNames = "id" in entry ? [] : entry.attachmentNames;
-  return [
-    text?.trim(),
-    goal ? t("chat.outboxRecoveryGoal") : "",
-    reply ? t("chat.outboxRecoveryReply", { text: reply.text }) : "",
-    attachmentNames.length
-      ? t("chat.outboxRecoveryAttachments", { files: attachmentNames.join(", ") })
-      : "",
-    ...(session?.queue ?? []).flatMap((item) => [
-      item.text.trim(),
-      item.attachments?.length
-        ? t("chat.outboxRecoveryAttachments", {
-            files: item.attachments
-              .map((attachment) => attachment.fileName ?? attachment.mimeType)
-              .join(", "),
-          })
-        : "",
-      item.attachmentStorageError ? t("chat.outboxRecoveryAttachmentMissing") : "",
-    ]),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-function RecoveryRow(props: {
-  entry: RecoveryEntry;
-  host: RecoveryHost | undefined;
-  busy: boolean;
-  canRecover: boolean;
-  onChange: (entry: RecoveryEntry, action: "restore" | "discard") => Promise<void>;
-}) {
-  const view = createMemo(() => {
-    const entry = props.entry;
-    const scope = parseStoredChatOutboxScope("id" in entry ? entry.sourceScopeKey : entry.scopeKey);
-    const currentScope = props.host
-      ? resolveUiConversationIdentity(props.host, props.host.sessionKey)
-      : undefined;
-    // Old global/main buckets do not identify a conversation. Never use today's
-    // defaults to invent their source or show an inaccessible chat's raw key.
-    const source =
-      scope &&
-      !["global", "main"].includes(scope.sessionKey) &&
-      (!currentScope || storedChatOutboxScopeKey(scope) !== storedChatOutboxScopeKey(currentScope))
-        ? props.host?.sessionsResult?.sessions.find((row) => row.key === scope.sessionKey)
-        : undefined;
-    const updatedAt = "id" in entry ? entry.session.updatedAt : entry.updatedAt;
-    const queued = "id" in entry && Boolean(entry.session.queue?.length);
-    return {
-      source,
-      updatedAt,
-      queued,
-      sourceLabel: source ? resolveSessionDisplayName(source.key, source) : "",
-    };
-  });
-  return (
-    <div
-      class="chat-outbox-recovery-row"
-      title={
-        view().updatedAt > 0
-          ? t("chat.outboxRecoveryUpdated", {
-              time: formatDateTimeMs(view().updatedAt, {
-                dateStyle: "medium",
-                timeStyle: "short",
-              }),
-            })
-          : ""
-      }
-    >
-      <span class="chat-outbox-recovery__kind">
-        {t(view().queued ? "chat.outboxRecoveryQueued" : "chat.outboxRecoveryDraft")}
-      </span>
-      <span class="chat-outbox-recovery__preview">{preview(props.entry)}</span>
-      {view().source ? (
-        <span class="chat-outbox-recovery__source">
-          {t("chat.outboxRecoverySource", {
-            chat: view().sourceLabel,
-          })}
-        </span>
-      ) : null}
-      <div class="chat-outbox-recovery__actions">
-        <button
-          class="btn btn--sm"
-          disabled={props.busy || !props.canRecover}
-          onClick={() => void props.onChange(props.entry, "restore")}
-        >
-          {t("chat.outboxRecoveryRestore")}
-        </button>
-        <button
-          class="btn btn--sm"
-          disabled={props.busy || !props.canRecover}
-          onClick={() => void props.onChange(props.entry, "discard")}
-        >
-          {t("chat.outboxRecoveryDelete")}
-        </button>
-      </div>
-    </div>
-  );
-}
 export function PaneOutboxRecovery(props: {
   state: RecoveryHost;
   identity: string;
@@ -482,22 +282,17 @@ export function PaneOutboxRecovery(props: {
                     {recovery.error()}
                   </div>
                 </Show>
-                <For
-                  each={recovery.rows()}
-                  keyed={(entry) =>
-                    "id" in entry ? `outbox:${entry.id}` : `draft:${entry.scopeKey}`
-                  }
-                >
-                  {(entry) => (
-                    <RecoveryRow
-                      entry={entry()}
+                <Show when={recovery.rows().length}>
+                  <ChatLazyBoundary>
+                    <RecoveryRows
+                      rows={recovery.rows()}
                       host={current.host}
                       busy={recovery.busy()}
                       canRecover={recovery.canRecover()}
                       onChange={recovery.changeRecovery}
                     />
-                  )}
-                </For>
+                  </ChatLazyBoundary>
+                </Show>
               </div>
             </Show>
           );

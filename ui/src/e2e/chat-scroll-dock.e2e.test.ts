@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
@@ -18,6 +18,7 @@ import {
   newChatPage,
   scrollChatThreadToTop,
   waitForChatScrollIdle,
+  waitForTranscriptScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -119,6 +120,54 @@ async function publishPr(gateway: Gateway, key: string, withChecks = false) {
 }
 
 suite.define(() => {
+  it("includes native rows in idle readiness without accepting a stable wrong extent", async () => {
+    const page = await newChatPage(suite);
+    await page.setContent(`<div class="chat-thread" style="height:100px;overflow:auto;width:200px">
+      <div class="chat-thread-inner" style="height:200px;position:relative">
+        <div class="chat-virtual-row" data-virtual-row-key="retained" style="height:100px"></div>
+      </div>
+    </div>`);
+    const thread = page.locator(".chat-thread");
+    const outer = () =>
+      thread.evaluate((element) => [element.clientHeight, element.scrollHeight, element.scrollTop]);
+    const before = await outer();
+    await page.locator(".chat-virtual-row").evaluate((row) => {
+      const measure = row.getBoundingClientRect.bind(row);
+      row.getBoundingClientRect = () => {
+        const rect = measure();
+        row.getBoundingClientRect = measure;
+        queueMicrotask(() => ((row as HTMLElement).style.height = "140px"));
+        return rect;
+      };
+    });
+    const samples: boolean[] = [];
+    const evaluate: Locator["evaluate"] = async (fn, arg, options) => {
+      const value = await thread.evaluate(fn, arg, options);
+      samples.push(Boolean(value));
+      return value;
+    };
+    await waitForTranscriptScrollIdle({ evaluate });
+    expect(await outer()).toEqual(before);
+    expect(samples[0]).toBe(false);
+    expect(samples.at(-1)).toBe(true);
+    samples.length = 0;
+    await waitForTranscriptScrollIdle({
+      evaluate: async (fn, arg, options) => {
+        const value = await thread.evaluate(fn, arg, options);
+        samples.push(Boolean(value));
+        return value;
+      },
+    });
+    expect(samples).toEqual([true]);
+    const gap = await thread.evaluate((element) => {
+      const inner = element.querySelector(".chat-thread-inner")!;
+      const row = element.querySelector(".chat-virtual-row")!;
+      return inner.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom;
+    });
+    // Readiness checks stability; the independent geometry oracle still rejects this extent.
+    expect(() => expect(Math.abs(gap)).toBeLessThanOrEqual(1)).toThrow();
+  });
+
   it.each([
     { width: 1280, height: 900 },
     { width: 375, height: 812 },

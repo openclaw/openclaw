@@ -2,10 +2,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
-import {
-  automationCreationCall,
-  automationCreationFromToolDetails,
-} from "../chat/automation-job-result.js";
+import { automationCreationCall } from "../chat/automation-creation-call.js";
+import { automationCreationFromToolDetails } from "../chat/automation-job-result.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   readCollectedSubagentCompletions,

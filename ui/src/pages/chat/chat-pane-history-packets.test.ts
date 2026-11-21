@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
+import { createNestedToolActivity } from "../../../../src/sessions/nested-tool-activity.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
@@ -427,39 +428,40 @@ it("admits four automation-only older packets as visible history", async () => {
   const projector = await automationProjection.loadAutomationProjection();
   const page = (end: number): ChatHistoryResult => {
     const runId = `automation-run-${end}`;
-    const toolCallId = `automation-call-${end}`;
+    const planId = `plan-${end}`;
+    const events = [
+      {
+        type: "automation_creation_plan",
+        planId,
+        slots: [{ slotId: "first", name: `Automation ${end}` }],
+      },
+      {
+        type: "automation_creation_result",
+        planId,
+        slotId: "first",
+        status: "created",
+        jobId: `saved-job-${end}`,
+      },
+    ];
     return {
-      messages: [
-        {
-          ...nativeHistoryMessage(end - 1),
-          role: "assistant",
-          runId,
-          content: [
-            {
-              type: "toolCall",
-              id: toolCallId,
-              name: "automations",
-              arguments: { action: "plan" },
-            },
-          ],
-        },
-        {
-          ...nativeHistoryMessage(end),
-          role: "toolResult",
-          runId,
-          toolCallId,
-          toolName: "automations",
-          isError: false,
-          content: [],
-          details: {
-            automationCreation: {
-              type: "automation_creation_plan",
-              planId: `plan-${end}`,
-              slots: [{ slotId: "first", name: `Automation ${end}` }],
-            },
-          },
-        },
-      ],
+      messages: events.map((event, index) =>
+        Object.assign(
+          nativeHistoryMessage(end - 1 + index),
+          createNestedToolActivity({
+            runId,
+            scopeId: `automation-page-${end}`,
+            afterEntryId: null,
+            startOrder: index,
+            toolCallId: `automation-call-${end}-${index}`,
+            toolName: "automations",
+            input: index === 0 ? { action: "plan" } : { action: "add", planId, slotId: "first" },
+            result: { content: [], details: { automationCreation: event } },
+            isError: false,
+            startedAt: end,
+            timestamp: end,
+          }),
+        ),
+      ),
       hasMore: end > 2,
       ...(end > 2 ? { olderCursor: `older-${end - 2}` } : {}),
       totalMessages: 10,

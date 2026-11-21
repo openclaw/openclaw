@@ -324,3 +324,18 @@ it.each(["restore", "discard"] as const)(
     expect(fixture.request).not.toHaveBeenCalled();
   },
 );
+
+it.each(["restore", "discard"] as const)(
+  "keeps the captured %s owner across the implementation continuation",
+  async (operation) => {
+    const fixture = await mountRecovery();
+    fixture.button(operation).click();
+    fixture.host.client = createTestGatewayClient(async () => ({}));
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(fixture.button(operation).disabled).toBe(false));
+    expect(recoveryIo.confirm).not.toHaveBeenCalled();
+    expect(readChatOutboxRecovery(fixture.host).entries).toHaveLength(1);
+    expect(fixture.restored).not.toHaveBeenCalled();
+    expect(fixture.request).not.toHaveBeenCalled();
+  },
+);

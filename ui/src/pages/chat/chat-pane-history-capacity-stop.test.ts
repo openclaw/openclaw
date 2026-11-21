@@ -2,49 +2,22 @@
 
 import { expect, it, vi } from "vitest";
 import "./chat-pane.tsx";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
-  nativeHistoryMessage,
+  createCapacityHistoryPages,
+  type CapacityHistoryRequest as Request,
   expectNativeHistoryRange,
 } from "./chat-pane-history.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 
-type Request = { cursor: string; limit: number; maxBytes: number };
-
-function page(first: number, last: number): ChatHistoryResult {
-  return {
-    messages: Array.from({ length: last - first + 1 }, (_, index) => {
-      const seq = first + index;
-      return Object.assign(nativeHistoryMessage(seq, "x".repeat(4_000)), {
-        __openclaw: { id: `source-${seq}`, seq },
-      });
-    }),
-    hasMore: first > 1,
-    ...(first > 1 ? { olderCursor: `older-${first - 1}` } : {}),
-    ...(last < 900 ? { newerCursor: `newer-${last + 1}` } : {}),
-  };
-}
+const { page, wire } = createCapacityHistoryPages(900);
 
 it.each(["older", "newer"] as const)(
   "settles a full adaptive %s admission without a small probe and resumes at its exact edge",
   async (direction) => {
     const request = vi.fn(async (_method: string, params: Request) => {
-      const edge = Number(params.cursor.split("-")[1]);
-      let first = direction === "older" ? Math.max(1, edge - params.limit + 1) : edge;
-      let last = direction === "older" ? edge : Math.min(900, edge + params.limit - 1);
-      while (
-        new TextEncoder().encode(JSON.stringify(page(first, last).messages)).length >
-        params.maxBytes
-      ) {
-        if (direction === "older") {
-          first++;
-        } else {
-          last--;
-        }
-      }
-      const result = page(first, last);
+      const result = wire(params);
       expect(result.messages!.length).toBeLessThanOrEqual(params.limit);
       expect(new TextEncoder().encode(JSON.stringify(result.messages)).length).toBeLessThanOrEqual(
         params.maxBytes,

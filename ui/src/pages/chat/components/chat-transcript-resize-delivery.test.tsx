@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { Virtualizer } from "@tanstack/virtual-core";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
@@ -8,6 +7,7 @@ import { createChatTranscript } from "./chat-transcript-controller.ts";
 import { contentRows, emitTranscriptResize } from "./chat-transcript-fixture.test-support.tsx";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import { createOffsetVirtualizer } from "./chat-transcript-offset-observer.test-support.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
@@ -159,14 +159,7 @@ it.each(["flushChange", "cancelChange", "disconnect"] as const)(
   "retires the coalesced row commit on %s before its queued frame",
   (action) => {
     const frame = stubAnimationFrames();
-    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 0,
-      getScrollElement: () => null,
-      estimateSize: () => 100,
-      scrollToFn: vi.fn(),
-      observeElementRect: vi.fn(),
-      observeElementOffset: vi.fn(),
-    });
+    const virtualizer = createOffsetVirtualizer(null, { estimateSize: () => 100 });
     const presentation = createTranscriptPresentation(
       () => null,
       virtualizer,

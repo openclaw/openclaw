@@ -136,6 +136,12 @@ export async function handleChatHistoryRequest({
   if (!selection) {
     return;
   }
+  const respondChangedSession = () =>
+    respondChatHistoryUnavailable(
+      method,
+      respond,
+      "session changed while reading history; reload the conversation",
+    );
   try {
     const {
       selectedSession,
@@ -395,11 +401,7 @@ export async function handleChatHistoryRequest({
         sessionInfo.effectiveFastMode = presentFastMode(sessionInfo.effectiveFastMode);
       }
       if (entry && !sessionInfo) {
-        respondChatHistoryUnavailable(
-          method,
-          respond,
-          "session changed while reading history; reload the conversation",
-        );
+        respondChangedSession();
         return undefined;
       }
       const activeRunState = resolveVisibleActiveSessionRunState({
@@ -564,11 +566,7 @@ export async function handleChatHistoryRequest({
               publicationSharing.visibility !== currentSharing.visibility ||
               publicationSharing.sharingRole !== currentSharing.sharingRole
             ) {
-              respondChatHistoryUnavailable(
-                method,
-                respond,
-                "session changed while reading history; reload the conversation",
-              );
+              respondChangedSession();
               return;
             }
             if (delta.kind === "reset") {

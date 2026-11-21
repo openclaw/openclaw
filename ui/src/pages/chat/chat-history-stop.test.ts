@@ -153,36 +153,26 @@ describe("full tail after a long live turn", () => {
     expect(segments?.every((packet) => packet.boundedPacket)).toBe(true);
   });
 
-  it("restores the held prefix when Stop advances the leaf within the prior read", async () => {
-    const tail = tailFrom(2);
-    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
-    const { state } = await loadAfterLiveTurn(
-      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
-      older,
-      { initialEnd: 4, previousLeaf: "running-leaf" },
-    );
-    expect(state.chatMessages).toEqual(transcript);
-    expect(older).toHaveBeenCalledOnce();
-    const { segments, ...edges } = state.chatHistoryPagination;
-    expect(edges).toEqual({ hasMore: false, totalMessages: 7 });
-    expect(segments).toHaveLength(2);
-  });
-
-  it("restores the held prefix when a refresh supersedes the Stop fallback", async () => {
-    const tail = tailFrom(2);
-    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
-    const { state } = await loadAfterLiveTurn(
-      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
-      older,
-      { initialEnd: 4, previousLeaf: "running-leaf", supersedeFallback: true },
-    );
-    expect(state.chatMessages).toEqual(transcript);
-    expect(older).toHaveBeenCalledOnce();
-    const { segments, ...edges } = state.chatHistoryPagination;
-    expect(edges).toEqual({ hasMore: false, totalMessages: 7 });
-    expect(segments).toHaveLength(2);
-    expect(segments?.every((packet) => packet.boundedPacket)).toBe(true);
-  });
+  it.each([false, true])(
+    "restores the held prefix when Stop advances the leaf (superseded: %s)",
+    async (supersedeFallback) => {
+      const tail = tailFrom(2);
+      const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
+      const { state } = await loadAfterLiveTurn(
+        { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
+        older,
+        { initialEnd: 4, previousLeaf: "running-leaf", supersedeFallback },
+      );
+      expect(state.chatMessages).toEqual(transcript);
+      expect(older).toHaveBeenCalledOnce();
+      const { segments, ...edges } = state.chatHistoryPagination;
+      expect(edges).toEqual({ hasMore: false, totalMessages: 7 });
+      expect(segments).toHaveLength(2);
+      if (supersedeFallback) {
+        expect(segments?.every((packet) => packet.boundedPacket)).toBe(true);
+      }
+    },
+  );
 
   it("refills a fresh tail while the prior mounted reader still names the old prefix", async () => {
     const tail = tailFrom(4);

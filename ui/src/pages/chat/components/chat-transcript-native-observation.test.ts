@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
-import { Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { createNativeShowEarlierPane } from "../chat-pane-history.test-support.ts";
 import { canAutoFollowChat, handleChatScroll, handleChatScrollTakeover } from "../scroll.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
-import { readerScroll, recordOffsets } from "./chat-transcript-offset-observer.test-support.ts";
+import {
+  createOffsetVirtualizer,
+  readerScroll,
+  recordOffsets,
+} from "./chat-transcript-offset-observer.test-support.ts";
 import {
   isTranscriptMaintenanceScroll,
   observeTranscriptOffset,
@@ -32,15 +35,7 @@ function observedMaintenance(useScrollendEvent = false) {
       element.scrollTop = Math.max(0, Math.min(options.top ?? element.scrollTop, maximum));
     }
   };
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    useScrollendEvent,
-    count: 0,
-    getScrollElement: () => element,
-    estimateSize: () => 40,
-    scrollToFn: vi.fn(),
-    observeElementRect: vi.fn(),
-    observeElementOffset: vi.fn(),
-  });
+  const virtualizer = createOffsetVirtualizer(element, { useScrollendEvent });
   virtualizer.scrollElement = element;
   virtualizer.targetWindow = window;
   virtualizer.scrollOffset = element.scrollTop;

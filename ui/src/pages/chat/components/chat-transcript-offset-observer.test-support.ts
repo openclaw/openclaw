@@ -1,4 +1,5 @@
-import { onTestFinished } from "vitest";
+import { Virtualizer, type VirtualizerOptions } from "@tanstack/virtual-core";
+import { onTestFinished, vi } from "vitest";
 import {
   subscribeTranscriptScroll,
   type TranscriptNativeScroll,
@@ -32,4 +33,20 @@ export function recordOffsets<T>(
     }),
   );
   return events;
+}
+
+export function createOffsetVirtualizer(
+  element: HTMLDivElement | null,
+  overrides: Partial<VirtualizerOptions<HTMLDivElement, HTMLElement>> = {},
+  recordAdapters = true,
+) {
+  return new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 0,
+    getScrollElement: () => element,
+    estimateSize: () => 40,
+    scrollToFn: recordAdapters ? vi.fn() : () => {},
+    observeElementRect: recordAdapters ? vi.fn() : () => () => {},
+    observeElementOffset: recordAdapters ? vi.fn() : () => () => {},
+    ...overrides,
+  });
 }

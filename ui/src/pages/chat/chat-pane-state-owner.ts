@@ -669,7 +669,6 @@ export abstract class ChatPaneStateOwner {
   });
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
-  protected olderLoadGeneration = 0;
   protected historyObserver: IntersectionObserver | null = null;
   protected historyObserverSentinel: HTMLElement | null = null;
   protected historyObserverArmed = false;

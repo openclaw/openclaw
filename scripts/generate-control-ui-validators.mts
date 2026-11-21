@@ -54,6 +54,8 @@ type Group =
   | "activity"
   | "approvals"
   | "session-input"
+  | "talk-voice"
+  | "session-files"
   | "transcript"
   | "board"
   | "history-state"
@@ -192,13 +194,13 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "TalkVoiceChangeEvent",
     TalkVoiceChangeEventSchema,
     'import("' + schemaRoot + 'talk-voice.js").TalkVoiceChangeEvent',
-    "session-input",
+    "talk-voice",
   ],
   [
     "SessionFileReadMetadata",
     Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]),
     'Pick<import("' + schemaRoot + 'sessions.js").SessionsFilesGetResult, "root" | "source">',
-    "session-input",
+    "session-files",
   ],
 ];
 
@@ -233,6 +235,8 @@ async function main() {
     "activity",
     "approvals",
     "session-input",
+    "talk-voice",
+    "session-files",
     "transcript",
     "history-state",
     "sender-identity",

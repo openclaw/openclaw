@@ -180,18 +180,33 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
   await waitForTranscriptScrollIdle(page.locator(".chat-pane-cache__pane--active .chat-thread"));
 }
 
-export async function waitForTranscriptScrollIdle(locator: Locator): Promise<void> {
+export async function waitForTranscriptScrollIdle(
+  locator: Pick<Locator, "evaluate">,
+): Promise<void> {
   await expect
     .poll(
       () =>
         locator.evaluate(async (element) => {
           const thread = element as HTMLElement;
-          const readGeometry = () => [
-            thread.clientHeight,
-            thread.scrollHeight,
-            Math.round(thread.scrollTop),
-          ];
-          // Returning to the same offset can still leave a virtualizer idle callback pending.
+          const readGeometry = () => {
+            const inner = thread.querySelector<HTMLElement>(".chat-thread-inner");
+            const origin = inner?.getBoundingClientRect().top ?? 0;
+            return [
+              thread.clientHeight,
+              thread.scrollHeight,
+              Math.round(thread.scrollTop),
+              ...Array.from(
+                thread.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])"),
+              ).flatMap((row) => {
+                const { width, height, bottom } = row.getBoundingClientRect();
+                return width > 0 && height > 0
+                  ? [row.dataset.virtualRowKey ?? "", height, bottom - origin]
+                  : [];
+              }),
+            ];
+          };
+          // Native row growth can precede its virtual extent update even at a stable offset.
+          // Returning to the same offset can also leave an idle callback pending.
           let scrolled = false;
           const onScroll = () => {
             scrolled = true;
@@ -205,7 +220,11 @@ export async function waitForTranscriptScrollIdle(locator: Locator): Promise<voi
             await new Promise(requestAnimationFrame);
             await new Promise(requestAnimationFrame);
             const after = readGeometry();
-            return !scrolled && before.every((value, index) => value === after[index]);
+            return (
+              !scrolled &&
+              before.length === after.length &&
+              before.every((value, index) => value === after[index])
+            );
           } finally {
             thread.removeEventListener("scroll", onScroll);
           }

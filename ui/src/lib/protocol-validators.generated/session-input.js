@@ -47,8 +47,6 @@ var External = [
     /(^mcpServers$|^mcpToolsDeny$|^skills$|^webSearch$)/u,
     /^.*$/u,
     /^.*$/u,
-    /(^changeId$|^voiceSessionId$|^sessionKey$|^voice$|^phase$)/u,
-    /(^workspaceId$|^root$|^fileRoot$)/u,
   ],
   check_0 = (value) => check_1(value),
   check_1 = (value) =>
@@ -310,47 +308,6 @@ var External = [
   check_71 = (value) =>
     Array.isArray(value) && value.every((unique_22, index) => check_4(unique_22)),
   check_72 = (value) => typeof value == "boolean",
-  check_73 = (value) => check_74(value),
-  check_74 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "changeId" in value &&
-    "voiceSessionId" in value &&
-    "sessionKey" in value &&
-    "voice" in value &&
-    "phase" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_23, unique_24) => External[11].test(unique_23) || check_2(value[unique_23]),
-    ) &&
-    check_4(value.changeId) &&
-    check_4(value.voiceSessionId) &&
-    check_4(value.sessionKey) &&
-    check_4(value.voice) &&
-    check_75(value.phase),
-  check_75 = (value) => check_76(value) || check_77(value),
-  check_76 = (value) => typeof value == "string" && value === "requested",
-  check_77 = (value) => typeof value == "string" && value === "cancelled",
-  check_78 = (value) => check_79(value),
-  check_79 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    (value.source === void 0 || !("source" in value) || check_80(value.source)) &&
-    (value.root === void 0 || !("root" in value) || check_14(value.root)),
-  check_80 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "workspaceId" in value &&
-    "root" in value &&
-    "fileRoot" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_25, unique_26) => External[12].test(unique_25) || check_2(value[unique_25]),
-    ) &&
-    check_4(value.workspaceId) &&
-    check_24(value.root) &&
-    check_24(value.fileRoot),
   isAgentRuntimeRestrictionErrorDetails = (value) => check_0(value),
   isSessionsGoalUpdateParams = (value) => check_25(value),
   isSessionsGoalClearParams = (value) => check_42(value),
@@ -361,15 +318,12 @@ var External = [
   isSessionCyberAccessProgram = (value) => check_58(value),
   isSessionTitleSource = (value) => check_64(value),
   isSessionPermissionMode = (value) => check_66(value),
-  isSessionToolOverrides = (value) => check_67(value),
-  isTalkVoiceChangeEvent = (value) => check_73(value),
-  isSessionFileReadMetadata = (value) => check_78(value);
+  isSessionToolOverrides = (value) => check_67(value);
 export {
   isAgentRuntimeRestrictionErrorDetails,
   isSessionCyberAccessProgram,
   isSessionDeviceFolder,
   isSessionFastMode,
-  isSessionFileReadMetadata,
   isSessionPermissionMode,
   isSessionRepository,
   isSessionTitleSource,
@@ -377,5 +331,4 @@ export {
   isSessionWorktreeSource,
   isSessionsGoalClearParams,
   isSessionsGoalUpdateParams,
-  isTalkVoiceChangeEvent,
 };

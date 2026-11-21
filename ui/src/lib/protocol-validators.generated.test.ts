@@ -41,7 +41,9 @@ import * as activityChecks from "./protocol-validators.generated/activity.js";
 import * as approvalChecks from "./protocol-validators.generated/approvals.js";
 import * as boardChecks from "./protocol-validators.generated/board.js";
 import * as historyStateChecks from "./protocol-validators.generated/history-state.js";
+import * as sessionFileChecks from "./protocol-validators.generated/session-files.js";
 import * as sessionInputChecks from "./protocol-validators.generated/session-input.js";
+import * as talkVoiceChecks from "./protocol-validators.generated/talk-voice.js";
 import * as transcriptChecks from "./protocol-validators.generated/transcript.js";
 
 const checks = {
@@ -49,6 +51,8 @@ const checks = {
   ...approvalChecks,
   ...boardChecks,
   ...sessionInputChecks,
+  ...talkVoiceChecks,
+  ...sessionFileChecks,
   ...transcriptChecks,
   ...historyStateChecks,
   isSessionParticipantIdentity,

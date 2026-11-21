@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isAutomationsToolName } from "../../../../src/agents/tools/automations-tool-name.js";
-import { automationCreationCall } from "../../../../src/chat/automation-job-result.js";
+import { automationCreationCall } from "../../../../src/chat/automation-creation-call.js";
 import { isToolCallContentType, resolveToolBlockArgs } from "../../../../src/chat/tool-content.js";
 import { getMessageDerivations } from "../../lib/chat/message-derivations.ts";
 

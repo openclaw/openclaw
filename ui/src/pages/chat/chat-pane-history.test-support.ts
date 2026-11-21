@@ -14,6 +14,8 @@ import {
   nativeHistoryMessage,
   type TestChatPane as BaseTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { buildMessageItems } from "./chat-thread-items.ts";
+import { createTranscriptMessageElements } from "./components/chat-transcript-message-elements.ts";
 import { resetChatScroll } from "./scroll.ts";
 
 export { nativeHistoryMessage, transcriptScrollFact } from "./chat-pane.test-support.ts";
@@ -213,4 +215,70 @@ export function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTM
   thread.append(sentinel);
   pane.historySentinel = sentinel;
   return sentinel;
+}
+
+export type CapacityHistoryRequest = { cursor: string; limit: number; maxBytes: number };
+
+export function createCapacityHistoryPages(lastSource: number) {
+  const source = (seq: number, keyed = true) =>
+    Object.assign(nativeHistoryMessage(seq, "x".repeat(4_000)), {
+      __openclaw: { seq, ...(keyed ? { id: `source-${seq}` } : {}) },
+    });
+  const page = (first: number, last: number, keyed = true): ChatHistoryResult => ({
+    messages: Array.from({ length: last - first + 1 }, (_, index) => source(first + index, keyed)),
+    hasMore: first > 1,
+    ...(first > 1 ? { olderCursor: `older-${first - 1}` } : {}),
+    ...(last < lastSource ? { newerCursor: `newer-${last + 1}` } : {}),
+  });
+  const wire = (params: CapacityHistoryRequest, buildPage = page): ChatHistoryResult => {
+    const edge = Number(params.cursor.split("-")[1]);
+    const older = params.cursor.startsWith("older-");
+    let first = older ? Math.max(1, edge - params.limit + 1) : edge;
+    let last = older ? edge : Math.min(lastSource, edge + params.limit - 1);
+    while (
+      new TextEncoder().encode(JSON.stringify(buildPage(first, last).messages)).length >
+      params.maxBytes
+    ) {
+      if (older) {
+        first++;
+      } else {
+        last--;
+      }
+    }
+    return buildPage(first, last);
+  };
+  return { source, page, wire };
+}
+
+export function mountHistoryReader(
+  pane: Pick<BaseTestChatPane, "append" | "transcript">,
+  {
+    thread = appendChatThread(pane),
+    detached = false,
+    bottom = 80,
+    bottomStep = 100,
+    markId = false,
+  } = {},
+) {
+  vi.spyOn(thread, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 500 } as DOMRect);
+  const refs = createTranscriptMessageElements(() => undefined);
+  vi.spyOn(pane.transcript, "messageElements", "get").mockReturnValue(refs);
+  return (messages: unknown[]) => {
+    thread.replaceChildren();
+    return buildMessageItems(messages).map((item, index) => {
+      const bubble = document.createElement("div");
+      if (markId) {
+        bubble.dataset.messageId = item.key;
+      }
+      if (!detached) {
+        thread.append(bubble);
+      }
+      vi.spyOn(bubble, "getBoundingClientRect").mockReturnValue({
+        top: 20 + index * 100,
+        bottom: bottom + index * bottomStep,
+      } as DOMRect);
+      refs.forKey(item.key)(bubble);
+      return bubble;
+    });
+  };
 }

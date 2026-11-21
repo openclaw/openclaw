@@ -120,18 +120,8 @@ async function loadChatHistoryActions(
   view: ReturnType<typeof captureChatHistoryView>,
 ) {
   try {
-    const {
-      clearChatHistory: clear,
-      rewindChatHistory: rewind,
-      switchChatHistoryBranch: switchBranch,
-    } = await import("./chat-history-actions.runtime.ts");
-    return view.canIssue()
-      ? {
-          clearChatHistory: clear,
-          rewindChatHistory: rewind,
-          switchChatHistoryBranch: switchBranch,
-        }
-      : null;
+    const actions = await import("./chat-history-actions.runtime.ts");
+    return view.canIssue() ? actions : null;
   } catch (error) {
     if (view.canIssue()) {
       setChatError(state, formatUiError(error));

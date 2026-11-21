@@ -10,54 +10,17 @@ import { loadChatHistory } from "./chat-history.ts";
 import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
-  appendChatThread,
-  nativeHistoryMessage,
+  mountHistoryReader,
+  createCapacityHistoryPages,
+  type CapacityHistoryRequest as Request,
   nativeHistorySeq,
   expectNativeHistoryRange,
 } from "./chat-pane-history.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
-import { buildMessageItems } from "./chat-thread-items.ts";
-import { createTranscriptMessageElements } from "./components/chat-transcript-message-elements.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 
-function mountReaderMessages(
-  pane: ReturnType<typeof createStagedPrefetchPane>["pane"],
-  messages: unknown[],
-  detached = false,
-) {
-  const thread = appendChatThread(pane);
-  vi.spyOn(thread, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 500 } as DOMRect);
-  const refs = createTranscriptMessageElements(() => undefined);
-  for (const [index, item] of buildMessageItems(messages).entries()) {
-    const bubble = document.createElement("div");
-    if (!detached) {
-      thread.append(bubble);
-    }
-    vi.spyOn(bubble, "getBoundingClientRect").mockReturnValue({
-      top: 20 + index * 100,
-      bottom: 80 + index * 100,
-    } as DOMRect);
-    refs.forKey(item.key)(bubble);
-  }
-  vi.spyOn(pane.transcript, "messageElements", "get").mockReturnValue(refs);
-}
-
-function source(seq: number, keyed = true) {
-  return Object.assign(nativeHistoryMessage(seq, "x".repeat(4_000)), {
-    __openclaw: { seq, ...(keyed ? { id: `source-${seq}` } : {}) },
-  });
-}
-
-type Request = { cursor: string; limit: number; maxBytes: number };
-
-function page(start: number, end: number, keyed = true): ChatHistoryResult {
-  return {
-    messages: Array.from({ length: end - start + 1 }, (_, index) => source(start + index, keyed)),
-    hasMore: start > 1,
-    ...(start > 1 ? { olderCursor: `older-${start - 1}` } : {}),
-    ...(end < 400 ? { newerCursor: `newer-${end + 1}` } : {}),
-  };
-}
+const { source, page } = createCapacityHistoryPages(400);
+const { wire } = createCapacityHistoryPages(900);
 
 function capacityReaderPane(request: Parameters<typeof createStagedPrefetchPane>[0]) {
   const fixture = createStagedPrefetchPane(request);
@@ -95,46 +58,18 @@ it.each(["older", "newer"] as const)(
           },
         };
       }
-      const edge = Number(params.cursor.split("-")[1]);
-      const older = params.cursor.startsWith("older-");
-      let start = older ? Math.max(1, edge - params.limit + 1) : edge;
-      let end = older ? edge : Math.min(900, edge + params.limit - 1);
-      while (
-        new TextEncoder().encode(JSON.stringify(wirePage(start, end).messages)).length >
-        params.maxBytes
-      ) {
-        if (older) {
-          start++;
-        } else {
-          end--;
-        }
-      }
-      return wirePage(start, end);
+      return wire(params, wirePage);
     });
     const { pane, state } = createStagedPrefetchPane(request);
     state.sessionKey = "agent:main:viewport";
     await loadChatHistory(state, { deferBranches: true });
     expect(request.mock.calls[0]![1]).toMatchObject({ limit: 80, maxBytes: 256 * 1024 });
     expectNativeHistoryRange(state.chatMessages, 842, 59);
-    const thread = appendChatThread(pane);
-    vi.spyOn(thread, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 500 } as DOMRect);
-    const refs = createTranscriptMessageElements(() => undefined);
-    vi.spyOn(pane.transcript, "messageElements", "get").mockReturnValue(refs);
-    const present = (seqs: readonly number[]) => {
-      thread.replaceChildren();
-      for (const [index, seq] of seqs.entries()) {
-        const item = buildMessageItems(state.chatMessages).find(
-          (candidate) => nativeHistorySeq(candidate.message) === seq,
-        )!;
-        const bubble = document.createElement("div");
-        thread.append(bubble);
-        vi.spyOn(bubble, "getBoundingClientRect").mockReturnValue({
-          top: 20 + index * 100,
-          bottom: 80 + index * 300,
-        } as DOMRect);
-        refs.forKey(item.key)(bubble);
-      }
-    };
+    const replaceReader = mountHistoryReader(pane, { bottomStep: 300 });
+    const present = (seqs: readonly number[]) =>
+      replaceReader(
+        seqs.map((seq) => state.chatMessages.find((message) => nativeHistorySeq(message) === seq)),
+      );
     if (direction === "older") {
       // The ordinary small tail first grows through a real capacity-sized admission.
       present([842]);
@@ -267,7 +202,7 @@ it("keeps a fitting viewport intact after live pairing media enriches an overlap
   expect(state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)).toEqual([
     "id:source-40",
   ]);
-  mountReaderMessages(pane, state.chatMessages);
+  mountHistoryReader(pane)(state.chatMessages);
   expect(state.readTranscriptReaderSnapshot?.()?.anchor).toBe("id:source-39");
   const prepared = prepareChatHistoryPages(state, [result], "older");
   expect(prepared.fits).toBe(false);
@@ -347,7 +282,7 @@ it.each(["inferred", "giant-streaming", "giant-provisional"] as const)(
     expect(state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)).toEqual([
       "id:source-40",
     ]);
-    mountReaderMessages(pane, state.chatMessages);
+    mountHistoryReader(pane)(state.chatMessages);
     expect(state.readTranscriptReaderSnapshot?.()).toEqual({
       anchor: "id:source-40",
       visibleSources:
@@ -381,7 +316,7 @@ it.each(["visible", "local-first", "detached", "hidden", "unavailable"] as const
       mode === "local-first"
         ? [{ role: "system", content: "local command result" }, ...native]
         : native;
-    mountReaderMessages(pane, state.chatMessages, mode === "detached");
+    mountHistoryReader(pane, { detached: mode === "detached" })(state.chatMessages);
     if (mode === "hidden") {
       pane.visuallyPresented = false;
     }
@@ -417,7 +352,7 @@ it("allows explicit around replacement of the old mounted viewport", async () =>
   );
   state.sessionKey = scope.key;
   await loadChatHistory(state, { deferBranches: true });
-  mountReaderMessages(pane, state.chatMessages);
+  mountHistoryReader(pane)(state.chatMessages);
   expect(state.readTranscriptReaderSnapshot?.()?.visibleSources).toEqual([
     "id:source-443",
     "id:source-444",
@@ -458,7 +393,7 @@ it("reserves every visible native fragment before a newer admission", async () =
   const { pane, state } = createStagedPrefetchPane(request);
   state.sessionKey = scope.key;
   await loadChatHistory(state, { deferBranches: true });
-  mountReaderMessages(pane, state.chatMessages);
+  mountHistoryReader(pane)(state.chatMessages);
   expect(state.chatMessages).toEqual(held);
   request.mockClear();
   await expect(pane.loadNewerMessages()).resolves.toBe(true);

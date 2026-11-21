@@ -11,17 +11,16 @@ import type { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import {
   createTestChatPane,
   nativeHistorySeq,
+  mountHistoryReader,
   expectNativeHistoryRange,
 } from "./chat-pane-history.test-support.ts";
 import { residentPane } from "./chat-pane-resident.test-support.ts";
 import { createPaneHeaderWorkspaceFixture } from "./chat-pane.test-support.ts";
 import * as duplicatePreparation from "./chat-thread-duplicates.ts";
-import { buildMessageItems } from "./chat-thread-items.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems } from "./chat-thread.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { createTranscriptActions } from "./components/chat-transcript-actions.ts";
-import { createTranscriptMessageElements } from "./components/chat-transcript-message-elements.ts";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
@@ -494,16 +493,11 @@ it("keeps the visible reader's segment contiguous when a growing tail exceeds th
   await loadChatHistory(state, { deferBranches: true });
   await olderPages(pane, 4);
   const held = state.chatMessages[0];
-  const item = buildMessageItems(state.chatMessages)[0]!;
-  const viewport = pane.transcript.scrollElement!;
-  const bubble = document.createElement("div");
-  bubble.dataset.messageId = item.key;
-  viewport.append(bubble);
-  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 500 } as DOMRect);
-  vi.spyOn(bubble, "getBoundingClientRect").mockReturnValue({ top: 20, bottom: 60 } as DOMRect);
-  const refs = createTranscriptMessageElements(() => undefined);
-  refs.forKey(item.key)(bubble);
-  vi.spyOn(pane.transcript, "messageElements", "get").mockReturnValue(refs);
+  mountHistoryReader(pane, {
+    thread: pane.transcript.scrollElement!,
+    bottom: 60,
+    markId: true,
+  })([held]);
   append(80);
   await loadChatHistory(state, { deferBranches: true });
   expect(state.chatMessages[0]).toBe(held);
@@ -525,15 +519,10 @@ it("does not advance a rejected held page and retries its exact edge after the r
   const release = holdNextCursor();
   const load = pane.loadOlderMessages();
   await vi.waitFor(() => expect(requests.length).toBe(before + 1));
-  const item = buildMessageItems(state.chatMessages).at(-1)!;
-  const viewport = pane.transcript.scrollElement!;
-  const bubble = document.createElement("div");
-  viewport.append(bubble);
-  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 500 } as DOMRect);
-  vi.spyOn(bubble, "getBoundingClientRect").mockReturnValue({ top: 20, bottom: 60 } as DOMRect);
-  const refs = createTranscriptMessageElements(() => undefined);
-  refs.forKey(item.key)(bubble);
-  vi.spyOn(pane.transcript, "messageElements", "get").mockReturnValue(refs);
+  const [bubble] = mountHistoryReader(pane, {
+    thread: pane.transcript.scrollElement!,
+    bottom: 60,
+  })([state.chatMessages.at(-1)]);
   release();
   expect(await load).toBe(false);
   expectNativeHistoryRange(state.chatMessages, 241, 400);
@@ -544,7 +533,7 @@ it("does not advance a rejected held page and retries its exact edge after the r
     { cursor: "before-241", limit: 1 },
   ]);
   expect(pane.stagedHistory.page?.limit).toBe(1);
-  bubble.remove();
+  bubble!.remove();
   expect(await pane.loadOlderMessages(false)).toBe(true);
   expect(requests.length).toBe(before + 3);
   expect(pane.stagedHistory.page).toBeNull();

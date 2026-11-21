@@ -1,4 +1,8 @@
-import { defaultRangeExtractor, Virtualizer } from "@tanstack/virtual-core";
+import {
+  defaultRangeExtractor,
+  Virtualizer,
+  type VirtualizerOptions,
+} from "@tanstack/virtual-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
@@ -23,6 +27,50 @@ function mockAnimationFrames() {
   };
 }
 
+function createInitialRangeFixture(
+  count: number,
+  rowHeight: number,
+  {
+    element = null,
+    rangeExtractor = defaultRangeExtractor,
+    invalidate = () => {},
+    presented = () => true,
+    measureRows = () => false,
+    rowsMeasured = () => true,
+    ...options
+  }: Partial<VirtualizerOptions<HTMLDivElement, HTMLElement>> & {
+    element?: HTMLDivElement | null;
+    rangeExtractor?: ConstructorParameters<typeof TranscriptInitialRange>[2];
+    invalidate?: () => void;
+    presented?: () => boolean;
+    measureRows?: () => boolean;
+    rowsMeasured?: () => boolean;
+  } = {},
+) {
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count,
+    estimateSize: () => rowHeight,
+    getScrollElement: () => element,
+    scrollToFn: () => {},
+    observeElementRect: () => () => {},
+    observeElementOffset: () => () => {},
+    ...options,
+  });
+  const range = new TranscriptInitialRange(
+    0,
+    () => virtualizer,
+    rangeExtractor,
+    invalidate,
+    () => 0,
+    presented,
+    () => rowHeight,
+    queueMicrotask,
+    measureRows,
+    rowsMeasured,
+  );
+  return { range, virtualizer };
+}
+
 function createPendingWheelRange(viewport = 300) {
   const invalidate = vi.fn();
   const rows = Array.from({ length: 200 }, (_, index) => ({
@@ -32,29 +80,12 @@ function createPendingWheelRange(viewport = 300) {
     retainDom: true,
     prewarm: true,
   }));
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: rows.length,
+  const { range, virtualizer } = createInitialRangeFixture(rows.length, 120, {
     initialRect: { width: 800, height: viewport },
     initialOffset: 6000,
     getItemKey: (index) => String(index),
-    getScrollElement: () => null,
-    estimateSize: () => 120,
-    scrollToFn: () => {},
-    observeElementRect: () => () => {},
-    observeElementOffset: () => () => {},
-  });
-  const range = new TranscriptInitialRange(
-    0,
-    () => virtualizer,
-    defaultRangeExtractor,
     invalidate,
-    () => 0,
-    () => true,
-    () => 120,
-    queueMicrotask,
-    () => false,
-    () => true,
-  );
+  });
   range.updateRows(rows);
   virtualizer.setOptions({
     ...virtualizer.options,
@@ -169,27 +200,10 @@ it("renews a consumed wheel forecast without publishing an unchanged window", ()
 });
 
 it("keeps following rows during a viewport-sized jump past shorter-than-estimated rows", () => {
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 20,
+  const { range } = createInitialRangeFixture(20, 120, {
     initialRect: { width: 800, height: 300 },
-    getScrollElement: () => null,
-    estimateSize: () => 120,
-    scrollToFn: () => {},
-    observeElementRect: () => () => {},
-    observeElementOffset: () => () => {},
+    rowsMeasured: () => false,
   });
-  const range = new TranscriptInitialRange(
-    0,
-    () => virtualizer,
-    defaultRangeExtractor,
-    () => {},
-    () => 0,
-    () => true,
-    () => 120,
-    queueMicrotask,
-    () => false,
-    () => false,
-  );
   onTestFinished(() => range.disconnect());
   range.recordReaderMovement(1000);
 
@@ -201,32 +215,17 @@ it("keeps following rows during a viewport-sized jump past shorter-than-estimate
 
 it("yields between destination-size corrections and waits for a stable end before scrolling", async () => {
   const animation = mockAnimationFrames();
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 1,
-    getScrollElement: () => null,
-    estimateSize: () => 100,
-    scrollToFn: () => {},
-    observeElementRect: () => () => {},
-    observeElementOffset: () => () => {},
-  });
   const events: string[] = [];
   let remainingCorrections = 2;
   let presented = true;
-  const range = new TranscriptInitialRange(
-    0,
-    () => virtualizer,
-    () => [],
-    () => {},
-    () => 0,
-    () => presented,
-    () => 100,
-    queueMicrotask,
-    () => {
+  const { range } = createInitialRangeFixture(1, 100, {
+    rangeExtractor: () => [],
+    presented: () => presented,
+    measureRows: () => {
       events.push("measure");
       return remainingCorrections-- > 0;
     },
-    () => true,
-  );
+  });
   onTestFinished(() => range.disconnect());
   const settleCommits = async () => {
     // Three chained commit callbacks would complete all corrections without yielding.
@@ -263,33 +262,15 @@ it("yields between destination-size corrections and waits for a stable end befor
 
 it("retains the measured destination until the Latest journey settles", async () => {
   const animation = mockAnimationFrames();
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 20,
-    initialOffset: 0,
-    initialRect: { width: 800, height: 300 },
-    getScrollElement: () => null,
-    estimateSize: () => 100,
-    scrollToFn: () => {},
-    observeElementRect: () => () => {},
-    observeElementOffset: () => () => {},
-  });
   const rows = Array.from({ length: 20 }, (_, index): TranscriptRow => ({
     kind: "content",
     key: `row-${index}`,
     content: null,
   }));
-  const range = new TranscriptInitialRange(
-    0,
-    () => virtualizer,
-    defaultRangeExtractor,
-    () => {},
-    () => 0,
-    () => true,
-    () => 100,
-    queueMicrotask,
-    () => false,
-    () => true,
-  );
+  const { range } = createInitialRangeFixture(20, 100, {
+    initialOffset: 0,
+    initialRect: { width: 800, height: 300 },
+  });
   onTestFinished(() => range.disconnect());
   range.updateRows(rows);
   range.presentation(rows);
@@ -320,30 +301,15 @@ it.each([false, true])(
       scrollHeight: { get: () => height },
     });
     element.scrollTop = 700;
-    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 20,
-      initialRect: { width: 800, height: 300 },
-      getScrollElement: () => element,
-      estimateSize: () => 50,
-      scrollToFn: () => {},
-      observeElementRect: () => () => {},
-      observeElementOffset: () => () => {},
-    });
-    virtualizer.scrollElement = element;
     let measured = false;
     let presented = true;
-    const range = new TranscriptInitialRange(
-      0,
-      () => virtualizer,
-      defaultRangeExtractor,
-      () => {},
-      () => 0,
-      () => presented,
-      () => 50,
-      queueMicrotask,
-      () => false,
-      () => measured,
-    );
+    const { range, virtualizer } = createInitialRangeFixture(20, 50, {
+      initialRect: { width: 800, height: 300 },
+      element,
+      presented: () => presented,
+      rowsMeasured: () => measured,
+    });
+    virtualizer.scrollElement = element;
     onTestFinished(() => range.disconnect());
     range.finishEndWhenSettled();
     paint();
@@ -391,29 +357,12 @@ it.each([
       item: index,
       retainDom: true,
     }));
-    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: rows.length,
+    const { range, virtualizer } = createInitialRangeFixture(rows.length, 120, {
       initialRect: { width: 800, height: 300 },
       initialOffset: 3600,
       getItemKey: (index) => String(index),
-      getScrollElement: () => null,
-      estimateSize: () => 120,
-      scrollToFn: () => {},
-      observeElementRect: () => () => {},
-      observeElementOffset: () => () => {},
+      rowsMeasured: () => false,
     });
-    const range = new TranscriptInitialRange(
-      0,
-      () => virtualizer,
-      defaultRangeExtractor,
-      () => {},
-      () => 0,
-      () => true,
-      () => 120,
-      queueMicrotask,
-      () => false,
-      () => false,
-    );
     onTestFinished(() => {
       range.disconnect();
       vi.restoreAllMocks();
@@ -482,28 +431,12 @@ it.each(["cancel", "parked replacement"] as const)(
   "retains %s ownership through settlement invalidation",
   async (change) => {
     const animation = mockAnimationFrames();
-    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 1,
-      getScrollElement: () => null,
-      estimateSize: () => 100,
-      scrollToFn: () => {},
-      observeElementRect: () => () => {},
-      observeElementOffset: () => () => {},
-    });
     let presented = true;
     let invalidate = () => {};
-    const range = new TranscriptInitialRange(
-      0,
-      () => virtualizer,
-      defaultRangeExtractor,
-      () => invalidate(),
-      () => 0,
-      () => presented,
-      () => 100,
-      queueMicrotask,
-      () => false,
-      () => true,
-    );
+    const { range } = createInitialRangeFixture(1, 100, {
+      invalidate: () => invalidate(),
+      presented: () => presented,
+    });
     onTestFinished(() => range.disconnect());
     range.finish();
     const replacementReady = vi.fn();

@@ -1,14 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Virtualizer } from "@tanstack/virtual-core";
 import { action, createEffect, createRoot, createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { nextFrame } from "../../../test-helpers/modal-dialog.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
+import { ChatPaneRuntime } from "../chat-pane-render.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { ChatPaneRuntime } from "../chat-pane-render.ts";
 import { createPaneTestHost } from "../chat-pane.test-support.ts";
 import { makeMessage } from "../chat-thread.test-support.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
@@ -18,16 +18,14 @@ import { ChatThread } from "./chat-thread-view.tsx";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import { createOffsetVirtualizer } from "./chat-transcript-offset-observer.test-support.ts";
 import {
   observeTranscriptOffset,
-  isTranscriptMaintenanceScroll,
-  isTranscriptProgrammaticScroll,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
-import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
-import { requireElement, threadProps } from "./chat-transcript.test-support.ts";
+import { offsetOwner, requireElement, threadProps } from "./chat-transcript.test-support.ts";
 
 // mock-isolation: Keep the pane shell small while exercising the production transcript owner.
 vi.mock("../chat-pane-layout-view.tsx", async (importOriginal) => {
@@ -133,12 +131,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function watchResize(viewport: HTMLDivElement) {
+  const resized = vi.fn();
+  const stop = subscribeTranscriptScroll(viewport, (event) => {
+    if (event.type === "resize") {
+      resized(event);
+    }
+  });
+  return { resized, stop };
+}
+
 // Let real ResizeObservers and their resulting commits finish between widths.
 async function settleLayout() {
   for (let frame = 0; frame < 4; frame++) {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await nextFrame();
     await pane?.updateComplete;
   }
 }
@@ -159,35 +165,13 @@ it("publishes native scroll policy and row position in one Solid update", async 
         updates.push(value);
       },
     );
-    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 0,
-      getScrollElement: () => viewport,
-      estimateSize: () => 40,
-      scrollToFn: vi.fn(),
-      observeElementRect: vi.fn(),
-      observeElementOffset: vi.fn(),
-    });
+    const virtualizer = createOffsetVirtualizer(viewport);
     virtualizer.scrollElement = viewport;
     virtualizer.targetWindow = window;
     const offsetState = new TranscriptOffsetState();
     onTestFinished(
       observeTranscriptOffset(
-        {
-          state: offsetState,
-          getScrollElement: () => viewport,
-          endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-          canFollowEnd: () => false,
-          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(offsetState, viewport),
-          isMaintenanceScroll: () => isTranscriptMaintenanceScroll(offsetState, viewport),
-          cancelScroll: vi.fn(),
-          onLayoutCorrection: vi.fn(),
-          invalidate: vi.fn(),
-          onOffset: vi.fn(),
-          onReaderScroll: vi.fn(),
-          onComposerLayout: vi.fn(),
-          onNativeScroll: () => setPolicy(1),
-        },
+        offsetOwner(offsetState, viewport, { onNativeScroll: () => setPolicy(1) }),
         virtualizer,
         () => setPosition(1),
       ),
@@ -388,12 +372,7 @@ it.each([
   }
   const before = viewport.scrollTop;
   changed.mockClear();
-  const resized = vi.fn();
-  const stop = subscribeTranscriptScroll(viewport, (event) => {
-    if (event.type === "resize") {
-      resized(event);
-    }
-  });
+  const { resized, stop } = watchResize(viewport);
   const extentReads = vi.spyOn(viewport, "scrollHeight", "get");
   try {
     layout.commitRange(content, scenario.height);
@@ -780,9 +759,7 @@ it("commits uncompensated extents while coalescing reader row updates", async ()
   expect(Number.parseFloat(inner.style.height)).toBe(height + 150);
   expect(viewport.scrollTop).toBe(480);
 
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
+  await nextFrame();
   flush();
   // The post-mount check can repeat the same height without publishing a change.
   expect(commit).toHaveBeenCalledWith(inner, height + 150);
@@ -820,9 +797,7 @@ it.each([
     flush();
     expect(render).not.toHaveBeenCalled();
     expect(paint).not.toHaveBeenCalled();
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await nextFrame();
     flush();
     expect(render).toHaveBeenCalledOnce();
     expect(Number.parseFloat(inner.style.height)).toBe(height + rowHeight - 120);
@@ -1028,12 +1003,7 @@ it.each([
     const { host, session, viewport, slot } = await mountPane();
     viewport.scrollTop = viewport.scrollHeight;
     const before = viewport.scrollTop;
-    const resized = vi.fn();
-    const stop = subscribeTranscriptScroll(viewport, (event) => {
-      if (event.type === "resize") {
-        resized(event);
-      }
-    });
+    const { resized, stop } = watchResize(viewport);
     const mutations = new MutationObserver(() => {});
     mutations.observe(viewport, { attributes: true, attributeFilter: ["style"] });
     const observed: Array<{ width: number; height: number }> = [];
