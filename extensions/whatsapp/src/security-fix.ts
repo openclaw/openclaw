@@ -1,22 +1,22 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function applyGroupAllowFromFromStore(params: {
+async function applyGroupAllowFromFromStore(params: {
   cfg: OpenClawConfig;
-  storeAllowFrom: string[];
+  env: NodeJS.ProcessEnv;
   changes: string[];
-}): OpenClawConfig {
+}): Promise<OpenClawConfig> {
   const next = structuredClone(params.cfg ?? {});
   const section = next.channels?.whatsapp as Record<string, unknown> | undefined;
-  if (!section || typeof section !== "object" || params.storeAllowFrom.length === 0) {
+  if (!section || typeof section !== "object") {
     return params.cfg;
   }
 
   let changed = false;
-  const maybeApply = (prefix: string, holder: Record<string, unknown>) => {
+  const maybeApply = async (prefix: string, holder: Record<string, unknown>, accountId: string) => {
     if (holder.groupPolicy !== "open") {
       return;
     }
@@ -25,12 +25,21 @@ function applyGroupAllowFromFromStore(params: {
     if (allowFrom.length > 0 || groupAllowFrom.length > 0) {
       return;
     }
-    holder.groupAllowFrom = params.storeAllowFrom;
+    const fromStore = await readChannelAllowFromStore(
+      "whatsapp",
+      params.env,
+      normalizeAccountId(accountId),
+    ).catch(() => []);
+    const storeAllowFrom = normalizeUniqueStringEntries(fromStore);
+    if (storeAllowFrom.length === 0) {
+      return;
+    }
+    holder.groupAllowFrom = storeAllowFrom;
     params.changes.push(`${prefix}groupAllowFrom=pairing-store`);
     changed = true;
   };
 
-  maybeApply("channels.whatsapp.", section);
+  await maybeApply("channels.whatsapp.", section, DEFAULT_ACCOUNT_ID);
 
   const accounts = section.accounts;
   if (accounts && typeof accounts === "object") {
@@ -38,9 +47,10 @@ function applyGroupAllowFromFromStore(params: {
       if (!accountValue || typeof accountValue !== "object") {
         continue;
       }
-      maybeApply(
+      await maybeApply(
         `channels.whatsapp.accounts.${accountId}.`,
         accountValue as Record<string, unknown>,
+        accountId,
       );
     }
   }
@@ -52,20 +62,10 @@ export async function applyWhatsAppSecurityConfigFixes(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<ChannelDoctorConfigMutation> {
-  const fromStore = await readChannelAllowFromStore(
-    "whatsapp",
-    params.env,
-    DEFAULT_ACCOUNT_ID,
-  ).catch(() => []);
-  const normalized = normalizeUniqueStringEntries(fromStore);
-  if (normalized.length === 0) {
-    return { config: params.cfg, changes: [] };
-  }
-
   const changes: string[] = [];
-  const config = applyGroupAllowFromFromStore({
+  const config = await applyGroupAllowFromFromStore({
     cfg: params.cfg,
-    storeAllowFrom: normalized,
+    env: params.env,
     changes,
   });
   return { config, changes };
