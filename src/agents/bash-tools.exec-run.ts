@@ -560,6 +560,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
+          workerMemoryBoundary: defaults?.workerMemoryBoundary,
           containerWorkdir,
           usePty,
           warnings,
