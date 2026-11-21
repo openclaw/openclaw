@@ -47,8 +47,9 @@ tools include a bounded expected input signature when one can be rendered,
 plus the received type at the rejected field. Short scalar previews can show
 serialization mistakes such as `"10"` instead of `10`. Sensitive fields and
 registered secrets are redacted; arbitrary text and container contents are
-withheld. Diagnostics are bounded, and invalid arguments still fail before
-the target tool executes.
+withheld. If the signature omits a field, follow the error’s `tool_describe`
+reference for the exact tool ID and input schema. Invalid arguments still fail
+before the target tool executes.
 If a call mistakes an admitted skill name for a tool ID, the error points back
 to the skill’s complete instructions instead of sending the model through tool search.
 

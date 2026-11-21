@@ -77,11 +77,19 @@ function truncateToolResultToChars(
         Math.max(0, maxChars - reservedChars),
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );
-      return replaceToolResultContent(msg, [
-        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
-        ...(bounded as { content: unknown[] }).content,
-        ...notice,
-      ]);
+      // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+      const boundedContent = (bounded as { content: unknown[] }).content;
+      return {
+        message: replaceToolResultContent(msg, [...boundedContent, ...notice]),
+        // A notice-only replacement is not a useful prefix. Try fewer images
+        // rather than dropping the remaining semantic text to keep them.
+        compactedText:
+          boundedContent.length < retainedContent.length &&
+          boundedContent.some(
+            (block) => isText(block) && block.text && retainedContent.includes(block),
+          ),
+        boundedContent,
+      };
     };
 
     // Image cost alone rules out larger prefixes. The allocator still reserves
@@ -92,21 +100,21 @@ function truncateToolResultToChars(
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,
       );
-      const projected = projectContent(
+      const { message, compactedText, boundedContent } = projectContent(
         retainedContent,
         retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
       );
-      const projectedContent = (projected as { content: unknown[] }).content;
       if (
+        !compactedText &&
         retainedContent.some((block, index) => {
-          const projectedBlock = projectedContent[index];
+          const projectedBlock = boundedContent[index];
           return isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text);
         })
       ) {
         continue;
       }
-      if (estimateMessageCharsCached(projected, cache) <= maxChars) {
-        return projected;
+      if (estimateMessageCharsCached(message, cache) <= maxChars) {
+        return message;
       }
     }
     // Dropping unfit non-text content must not flatten away surviving semantic
@@ -122,7 +130,7 @@ function truncateToolResultToChars(
         : formatContextLimitTruncationNotice(
             Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
           ),
-    );
+    ).message;
   }
 
   const truncatedText = truncateToolResultText(getToolResultText(msg), maxChars, {
