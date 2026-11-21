@@ -109,8 +109,13 @@ describe("installed Arcee catalog identity", () => {
       installed(true, (manifestPlugins) => {
         const wireRow = catalogEntry("arcee", wire.model);
         const later = catalogEntry("arcee", "safe-model");
+        const cfg = modelPolicy([
+          `arcee/${logical.model}`,
+          ...(laterRow ? ["arcee/safe-model"] : []),
+        ]);
+        cfg.agents!.defaults!.model = { fallbacks: ["arcee/safe-model"] };
         const policy = createModelVisibilityPolicy({
-          cfg: modelPolicy([`arcee/${logical.model}`, ...(laterRow ? ["arcee/safe-model"] : [])]),
+          cfg,
           catalog: laterRow ? [wireRow, later] : [wireRow],
           defaultProvider: "arcee",
           manifestPlugins,

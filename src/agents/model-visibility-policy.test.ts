@@ -129,11 +129,53 @@ describe("explicit model visibility policy", () => {
     );
   });
 
+  it.each([
+    { name: "default empty chain", agentId: undefined, agentModel: undefined, fallbacks: [] },
+    {
+      name: "agent empty chain overrides global fallbacks",
+      agentId: "fastbot",
+      agentModel: { primary: "external/sensitive", fallbacks: [] },
+      fallbacks: ["openai/gpt-5.5"],
+    },
+    {
+      name: "native agent primary is strict without its own fallbacks",
+      agentId: "fastbot",
+      agentModel: "external/sensitive",
+      fallbacks: ["openai/gpt-5.5"],
+    },
+  ])("rejects catalog substitution for $name", ({ agentId, agentModel, fallbacks }) => {
+    const policy = createPolicy(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "external/sensitive", fallbacks },
+            modelPolicy: { allow: ["openai/*"] },
+          },
+          ...(agentModel ? { entries: { fastbot: { model: agentModel } } } : {}),
+        },
+      },
+      agentId,
+    );
+
+    expect(() => policy.resolveSelection({ provider: "external", model: "sensitive" })).toThrow(
+      'Configured model "external/sensitive" is not allowed by agents.defaults.modelPolicy.allow and model fallback is disabled.',
+    );
+    expect(policy.resolveSelection({ provider: "openai", model: "gpt-5.5" })).toEqual({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+  });
+
   it("warns when a wildcard policy substitutes the configured default", async () => {
     const capture = createWarnLogCapture("model-policy-fallback");
     try {
       const policy = createPolicy({
-        agents: { defaults: { model: "external/sensitive", modelPolicy: { allow: ["openai/*"] } } },
+        agents: {
+          defaults: {
+            model: { primary: "external/sensitive", fallbacks: ["openai/gpt-5.5"] },
+            modelPolicy: { allow: ["openai/*"] },
+          },
+        },
       });
       const requested = { provider: "external", model: "sensitive" };
       expect(policy.resolveSelection(requested)).toEqual({ provider: "openai", model: "gpt-5.5" });
@@ -203,7 +245,11 @@ describe("explicit model visibility policy", () => {
     ["custom/team", "Reader", "custom/*"],
     ["custom", "custom/team/Reader", "custom/team/*"],
   ])("keeps %s/%s outside the literal wildcard %s", (provider, model, allow) => {
-    const cfg = { agents: { defaults: { modelPolicy: { allow: [allow] } } } };
+    const cfg = {
+      agents: {
+        defaults: { model: { fallbacks: ["custom/team/Reader"] }, modelPolicy: { allow: [allow] } },
+      },
+    };
     const allowed = { provider: "custom", model: "team/Reader" };
     const candidate = { provider, model };
     const policy = createModelVisibilityPolicy({
