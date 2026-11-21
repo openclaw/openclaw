@@ -10,6 +10,7 @@ import {
   type RealtimeTalkCallbacks,
   type RealtimeTalkTransport,
 } from "./shared.ts";
+import { PlaybackSpeechInterrupt, type SpeechInterruptHandoff } from "./speech-interrupt.ts";
 
 export type SplitTalkOptions = {
   silenceTimeoutMs: number;
@@ -17,6 +18,8 @@ export type SplitTalkOptions = {
   sendMessage: (message: string, runId: string) => Promise<ChatSendAck>;
   playback: GatewaySpeechPlayback;
   maxTextLength?: number;
+  /** Barge-in: cut reply playback when the user speaks over it. Defaults on (unset). */
+  interruptOnSpeech?: boolean;
 };
 
 /** Split Talk uses the same capture, chat, and speech owners as the composer. */
@@ -25,6 +28,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
   private closed: RealtimeVoiceCloseOptions["disposition"];
   private runId: string | undefined;
   private chatAbort: AbortController | undefined;
+  private monitor: PlaybackSpeechInterrupt | null = null;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -45,6 +49,9 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
       return;
     }
     this.closed = disposition;
+    const monitor = this.monitor;
+    this.monitor = null;
+    monitor?.stop();
     const capture = this.capture;
     this.capture = null;
     void capture?.cancel().catch(() => undefined);
@@ -57,8 +64,9 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     this.callbacks.onInputLevel?.(0);
   }
 
-  private async listen(): Promise<void> {
+  private async listen(handoff?: SpeechInterruptHandoff | null): Promise<void> {
     if (this.closed) {
+      handoff?.release();
       return;
     }
     const capture = new ComposerDictationSession(
@@ -74,6 +82,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         sessionKey: this.sessionKey,
         inputDeviceId: this.inputDeviceId,
         silenceTimeoutMs: this.options.silenceTimeoutMs,
+        ...(handoff ? { handoff } : {}),
       },
     );
     this.capture = capture;
@@ -91,24 +100,60 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         return;
       }
       this.capture = null;
+      let handoff: SpeechInterruptHandoff | null = null;
       if (text) {
         const answer = await this.send(text);
         if (this.closed) {
           return;
         }
         if (answer) {
-          await this.options.playback.speak(
-            this.client,
-            answer,
-            this.options.speechMethod,
-            () => !this.closed,
-            this.options.maxTextLength,
-          );
+          handoff = await this.playReply(answer);
         }
       }
-      await this.listen();
+      if (this.closed) {
+        handoff?.release();
+        return;
+      }
+      await this.listen(handoff);
     } catch (error) {
       this.fail(error);
+    }
+  }
+
+  /** Plays the reply, listening for barge-in unless interruptOnSpeech is false. */
+  private async playReply(answer: string): Promise<SpeechInterruptHandoff | null> {
+    const playback = this.options.playback;
+    const speak = () =>
+      playback.speak(
+        this.client,
+        answer,
+        this.options.speechMethod,
+        () => !this.closed,
+        this.options.maxTextLength,
+      );
+    if (this.options.interruptOnSpeech === false) {
+      await speak();
+      return null;
+    }
+    // Cancel only the current speech; Talk keeps shared playback ownership so a
+    // later Read aloud still supersedes the call. Split Talk awaits the full answer
+    // before speaking, so the run is finished and barge-in only cuts playback.
+    const monitor = new PlaybackSpeechInterrupt(() => playback.interruptSpeech(), {
+      inputDeviceId: this.inputDeviceId,
+    });
+    this.monitor = monitor;
+    try {
+      await monitor.start();
+      if (this.closed) {
+        return null;
+      }
+      await speak();
+      return monitor.handoff();
+    } finally {
+      monitor.stop();
+      if (this.monitor === monitor) {
+        this.monitor = null;
+      }
     }
   }
 

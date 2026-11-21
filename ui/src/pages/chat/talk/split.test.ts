@@ -28,8 +28,15 @@ const states: ChatRealtimeState[] = [];
 let speechStarted = createDeferred();
 const sessionKey = "agent:local:main";
 const transcript = "Tell me something local";
-const config = (provider?: string) => ({
-  config: { talk: { provider, realtime: { mode: "stt-tts" }, silenceTimeoutMs: 100 } },
+const config = (provider?: string, interruptOnSpeech?: boolean) => ({
+  config: {
+    talk: {
+      provider,
+      realtime: { mode: "stt-tts" },
+      silenceTimeoutMs: 100,
+      ...(interruptOnSpeech !== undefined ? { interruptOnSpeech } : {}),
+    },
+  },
 });
 
 class FakeAudioContext {
@@ -106,7 +113,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness(provider?: string) {
+function harness(provider?: string, interruptOnSpeech?: boolean) {
   const listeners = new Set<(event: GatewayEventFrame) => void>();
   const sent = createDeferred();
   const speech = createDeferred();
@@ -121,7 +128,7 @@ function harness(provider?: string) {
   const request = createGatewayRequestMock(async (method, params) => {
     const payload = asOptionalRecord(params);
     if (method === "talk.config") {
-      return config(provider);
+      return config(provider, interruptOnSpeech);
     }
     if (method === "talk.session.create") {
       captureCount += 1;
@@ -266,7 +273,7 @@ it.each([
 ])(
   "routes configured split Talk through STT, chat and Gateway speech (provider: $provider)",
   async ({ provider, leaf }) => {
-    const h = harness(provider);
+    const h = harness(provider, false);
     h.state.chatDisplayedLeafEntryId = leaf;
     await h.state.toggleRealtimeTalk();
     expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
@@ -580,4 +587,174 @@ it("keeps split Talk listening after a successfully completed empty utterance", 
   expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
   expect(tracks).toHaveLength(2);
   expect(h.called("chat.send")).toBe(false);
+});
+
+function feedMonitorSpeech(value: number, frames = 2) {
+  const processor = processors.at(-1)!;
+  for (let i = 0; i < frames; i += 1) {
+    processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(800).fill(value) },
+    });
+  }
+}
+
+it("barsges in by default, preserves the triggering speech, and keeps listening", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A long reply the user talks over.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  const micCallsDuringPlayback = tracks.length;
+  feedMonitorSpeech(0.3);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(expectDefined(audios[0], "reply playback").pause).toHaveBeenCalled();
+  await h.nextCapture.promise;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
+  // The next capture adopts the monitor's live stream: no new microphone acquisition.
+  expect(tracks).toHaveLength(micCallsDuringPlayback);
+  // The buffered onset is replayed into the new transcription session.
+  expect(h.request).toHaveBeenCalledWith("talk.session.appendAudio", {
+    sessionId: "capture-2",
+    audioBase64: expect.any(String),
+  });
+  await h.state.toggleRealtimeTalk();
+});
+
+it("retains Read aloud supersession after a barge-in", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A reply interrupted by speech.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  feedMonitorSpeech(0.3);
+  await vi.advanceTimersByTimeAsync(0);
+  await h.nextCapture.promise;
+  // Read aloud must still supersede Talk after barge-in (shared ownership retained).
+  const playback = new GatewaySpeechPlayback();
+  onTestFinished(() => playback.stop());
+  playback.prepare(expectDefined(h.state.client, "current Gateway client"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
+});
+
+it("cancels the barge-in microphone when Talk stops during playback", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A reply playing when the user stops.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  const monitorTrack = expectDefined(tracks.at(-1), "barge-in microphone track");
+  await h.state.toggleRealtimeTalk();
+  expect(monitorTrack.stop).toHaveBeenCalled();
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
+});
+
+/** Gates the next capture's admission so tests can act while it is pending. */
+function gateNextAdmission(h: ReturnType<typeof harness>) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let creates = 0;
+  h.intercept("talk.session.create", async (next) => {
+    creates += 1;
+    if (creates >= 1) {
+      await gate;
+    }
+    return next();
+  });
+  return { release };
+}
+
+it("keeps recording through delayed transcription admission after a barge-in", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A long reply the user talks over.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  const admission = gateNextAdmission(h);
+  const monitorProcessor = processors.at(-1)!;
+  feedMonitorSpeech(0.3); // onset: two frames, fires the interrupt
+  await vi.advanceTimersByTimeAsync(0);
+  expect(expectDefined(audios[0], "reply playback").pause).toHaveBeenCalled();
+  // The correction continues while admission is pending; none of it may be lost.
+  feedMonitorSpeech(0.4, 3);
+  await vi.advanceTimersByTimeAsync(0);
+  admission.release();
+  await h.nextCapture.promise;
+  await vi.advanceTimersByTimeAsync(0);
+  const appends = h.request.mock.calls.filter(
+    ([method, params]) =>
+      method === "talk.session.appendAudio" &&
+      (params as { sessionId?: string }).sessionId === "capture-2",
+  );
+  // Two onset frames plus three spoken during the admission delay.
+  expect(appends).toHaveLength(5);
+  // The monitor pump hands over exactly once the new capture consumes live audio.
+  expect(monitorProcessor.onaudioprocess).toBeNull();
+  await h.state.toggleRealtimeTalk();
+});
+
+it("releases the handed-off microphone when transcription admission rejects", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A reply interrupted before a refused admission.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  let creates = 0;
+  h.intercept("talk.session.create", async (next) => {
+    creates += 1;
+    if (creates >= 1) {
+      throw new Error("admission refused");
+    }
+    return next();
+  });
+  const monitorTrack = expectDefined(tracks.at(-1), "barge-in microphone track");
+  const monitorProcessor = processors.at(-1)!;
+  feedMonitorSpeech(0.3);
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(monitorTrack.stop).toHaveBeenCalled();
+  expect(monitorProcessor.onaudioprocess).toBeNull();
+});
+
+it("releases the handed-off microphone when Talk stops during pending admission", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A reply interrupted before Stop lands mid-admission.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  const admission = gateNextAdmission(h);
+  const monitorTrack = expectDefined(tracks.at(-1), "barge-in microphone track");
+  const monitorProcessor = processors.at(-1)!;
+  feedMonitorSpeech(0.3);
+  await vi.advanceTimersByTimeAsync(0);
+  await h.state.toggleRealtimeTalk(); // Stop while admission is pending
+  expect(monitorTrack.stop).toHaveBeenCalled();
+  expect(monitorProcessor.onaudioprocess).toBeNull();
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
+  // A late successful admission must not resurrect the released microphone.
+  admission.release();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(monitorTrack.stop).toHaveBeenCalled();
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
 });
