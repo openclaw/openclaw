@@ -14,7 +14,10 @@ import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import { logicalBytes, readCompletedUpdateHistory } from "./update-capture-cleanup.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
-/** The updater's own names: beside a package backup, or a Git runtime transaction's in `.artifacts`. */
+/**
+ * The updater's own names: beside a package backup, or in a Git checkout's `.artifacts`,
+ * where updaters that rebuilt the checkout in place kept theirs.
+ */
 function isSnapshotName(name: string): boolean {
   return (
     /^\.openclaw\.package-backup-\d+-\d+\.databases$/u.test(name) ||
@@ -27,8 +30,8 @@ function isSnapshotName(name: string): boolean {
  * run: the run ledger's snapshot receipt is the only attribution, and it records the
  * physical directory. So discovery starts from the ledger, never from a guessed install
  * root, and reaches a previous install root only through a run that recorded it.
- * Accepted: the ledger redacts a Git checkout outside the home directory to `[path]`, so
- * its snapshots are never found here and stay where they are.
+ * Accepted: the ledger redacts an install root outside the home directory to `[path]`, so
+ * snapshots an in-place Git update left in such a checkout are never found here and stay.
  *
  * A later verified successful update supersedes a finished run's snapshot. A run's own
  * success does not: the updater keeps the snapshots it could not restore automatically.

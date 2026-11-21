@@ -1201,9 +1201,11 @@ check passed), cleanup deletes at once:
   name the updater gives snapshots, and only if it is still the same directory it
   listed. This reaches a snapshot under a previous install root when the update
   that took it recorded that path. Update history records the location relative
-  to the home directory, or in full for a package backup outside it. It records
-  no usable location for a Git checkout outside the home directory, so cleanup
-  does not find that checkout's snapshots.
+  to the home directory, or in full for a package backup outside it. Updaters
+  that rebuilt a Git checkout in place kept their snapshots in the checkout's
+  `.artifacts` directory, and cleanup finds those the same way. Update history
+  records no usable location for a checkout outside the home directory, so
+  cleanup does not find that checkout's snapshots.
 - superseded original-state captures, by the rules above.
 
 Doctor backups whose manifest predates `updateRunId` keep their previous rules: they

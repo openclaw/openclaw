@@ -1051,8 +1051,9 @@ Update cleanup retires the pre-migration `.databases` snapshot directory of an
 earlier update once a later update is verified successful. It finds a snapshot
 only through the location that update recorded in update history, including one
 under a previous install root, and deletes nothing an unfinished update or a
-pending recovery owns. Update history holds no usable location for a Git checkout
-outside the home directory; those snapshots stay. A verified update's own retained snapshot waits for the
+pending recovery owns. This includes the snapshots that older updaters left in a
+Git checkout's `.artifacts` directory. Update history holds no usable location for
+a checkout outside the home directory; those snapshots stay. A verified update's own retained snapshot waits for the
 next verified update. The installed updater or Gateway that finishes the later
 update must contain this change; no schema, journal, or protocol change is
 involved.
