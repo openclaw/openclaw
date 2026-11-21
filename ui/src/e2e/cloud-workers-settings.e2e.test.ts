@@ -196,6 +196,56 @@ suite.define(() => {
     });
   });
 
+  it("keeps advertised and custom device classes aligned with the phone editor fields", async () => {
+    await suite.withPage(
+      {
+        ...editorPageOptions,
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+      },
+      async ({ page }) => {
+        await workerGateway(
+          page,
+          "ready",
+          profilesConfig({ worker: configuredCloudWorkerProfile() }),
+          {
+            methodResponses: {
+              "environments.list": {
+                environments: [],
+                profiles: [
+                  {
+                    id: "worker",
+                    providerId: "crabbox",
+                    machines: [{ id: "standard", os: "linux", label: "Standard" }],
+                  },
+                ],
+              },
+            },
+          },
+        );
+        await page.goto(new URL("settings/cloud-workers", suite.server.baseUrl).href);
+        await page.locator(".settings-disclosure > summary").tap();
+        await exactButton(page, "Edit: worker").tap();
+        const picker = page.getByRole("button", { name: /^Device class:/ });
+        await picker.waitFor();
+        const edges = (field: Locator) =>
+          field.evaluate((element) => {
+            const { left, right } = element.getBoundingClientRect();
+            return { left, right };
+          });
+        const reference = await edges(page.getByLabel("Crabbox backend"));
+        expect(await edges(picker)).toEqual(reference);
+        await picker.tap();
+        await page.getByRole("option", { name: /Custom device class/ }).tap();
+        const input = page.getByRole("textbox", { name: "Device class", exact: true });
+        await input.waitFor();
+        expect(await edges(picker)).toEqual(reference);
+        expect(await edges(input)).toEqual(reference);
+      },
+    );
+  });
+
   it("adds and edits advanced machine profiles while refreshing live availability", async () => {
     await suite.withPage(editorPageOptions, async ({ page }) => {
       const gateway = await workerGateway(page, "initial");
