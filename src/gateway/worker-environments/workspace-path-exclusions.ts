@@ -11,6 +11,10 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   ".mypy_cache",
   ".ruff_cache",
   "node_modules",
+  // AGP output subtrees match at any module depth; authored build/ paths remain eligible.
+  "build/intermediates",
+  "build/outputs/apk",
+  "build/outputs/bundle",
 ] as const;
 
 // These producers own exact checkout-relative roots, not every .cache or .artifacts path.

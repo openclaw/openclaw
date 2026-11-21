@@ -103,7 +103,7 @@ function buildCacheInputPaths(paths = []) {
 }
 const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock", ".openclaw/tmp"];
 const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(
-  "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
+  "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|build/intermediates|build/outputs/apk|build/outputs/bundle|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
 );
 function isRuntimeOwnedWorkspacePath(relativePath) {
   return (
