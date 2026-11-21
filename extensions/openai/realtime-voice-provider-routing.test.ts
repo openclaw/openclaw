@@ -376,7 +376,8 @@ describe("OpenAI realtime voice provider routing", () => {
       tools: [createRealtimeTool("openclaw_agent_consult")],
       ...browserRequest,
     };
-    expect(await provider.isConfiguredAsync?.({ cfg, providerConfig: {} })).toBe(false);
+    // GA direct sockets accept the same ChatGPT OAuth profile.
+    expect(await provider.isConfiguredAsync?.({ cfg, providerConfig: {} })).toBe(true);
     expect(
       await ready({
         cfg,

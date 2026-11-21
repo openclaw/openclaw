@@ -26,21 +26,23 @@ import {
   OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
   OPENAI_REALTIME_DEFAULT_MODEL,
-  OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED,
   OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED,
   OPENAI_REALTIME_SIDEBAND_STARTUP_MAX_BYTES,
   OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
   hasOpenAIRealtimeConfiguredApiKeyInput,
-  isDirectOpenAIRealtimeWebSocketUrl,
   isOpenAIRealtimeMaxSessionDurationError,
-  isOpenAIRealtimeStartupAuthFailure,
   requireOpenAIRealtimeApiKey,
-  requireOpenAIRealtimePlatformAuth,
   resolveOpenAIRealtimeSecretInput,
   type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
   type RealtimeEvent,
 } from "./realtime-voice-session-policy.js";
+import {
+  canRetryRejectedSubscriptionWithKey,
+  mapOpenAIRealtimeStartupError,
+  resolveOpenAIRealtimeConnectionAuth,
+  type OpenAIRealtimeSocketAuth,
+} from "./realtime-voice-socket-auth.js";
 
 const OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS = 5_000;
@@ -51,6 +53,9 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
   private readonly transport: RealtimeVoiceWebSocketTransport<RealtimeEvent>;
   private sessionReadyFired = false;
   private activeConnectionReason: string | undefined;
+  private connectionAuthType: OpenAIRealtimeSocketAuth["type"] = "api-key";
+  // Set once OpenAI refuses the ChatGPT sign-in; later connections in this session use the key.
+  private subscriptionRejected = false;
   private droppedInputAudioFrames = 0;
   private lastInputAudioDropWarningAt = Number.NEGATIVE_INFINITY;
 
@@ -84,11 +89,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       onEvent: (event, connection) => this.handleEvent(event, connection),
       onReset: () => this.resetTerminalState(),
       startupError: (error, url) =>
-        isDirectOpenAIRealtimeWebSocketUrl(url) && isOpenAIRealtimeStartupAuthFailure(error)
-          ? new Error(OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED)
-          : error instanceof Error
-            ? error
-            : new Error(readRealtimeErrorDetail(error)),
+        mapOpenAIRealtimeStartupError(error, url, this.connectionAuthType),
       fatalEventError: (error, event) =>
         event?.type === "session.updated"
           ? { code: 1011, reason: "Readiness callback failed" }
@@ -111,8 +112,29 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
     });
   }
 
-  connect(): Promise<void> {
-    return this.transport.connect();
+  async connect(): Promise<void> {
+    try {
+      await this.transport.connect();
+    } catch (error) {
+      const retry =
+        this.connectionAuthType === "oauth" &&
+        !this.subscriptionRejected &&
+        (await canRetryRejectedSubscriptionWithKey(error, this.authContext()));
+      if (!retry) {
+        throw error;
+      }
+      this.subscriptionRejected = true;
+      await this.transport.connect();
+    }
+  }
+
+  private authContext() {
+    const { apiKey, cfg, agentId, logger } = this.config;
+    return {
+      authParams: { configuredApiKey: apiKey, cfg, agentId },
+      runtime: this.runtime,
+      logger,
+    };
   }
 
   sendAudio(audio: Buffer): void {
@@ -246,6 +268,8 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
       }
+      this.connectionAuthType = "api-key";
+      this.config.logger.debug?.("OpenAI realtime auth: configured realtime API key");
       return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
 
@@ -256,15 +280,17 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
     url: string;
     headers: Record<string, string>;
   }> {
-    const auth = await requireOpenAIRealtimePlatformAuth(
-      {
-        configuredApiKey: this.config.apiKey,
-        cfg: this.config.cfg,
-        agentId: this.config.agentId,
-      },
-      this.runtime,
-    );
-    return this.resolveApiKeyConnectionParams(auth, model);
+    const auth = await resolveOpenAIRealtimeConnectionAuth({
+      ...this.authContext(),
+      customEndpoint: Boolean(this.config.baseUrl),
+      subscriptionRejected: this.subscriptionRejected,
+    });
+    this.connectionAuthType = auth.type;
+    const params = this.resolveApiKeyConnectionParams(auth.token, model);
+    if (auth.type === "oauth") {
+      params.headers = { ...params.headers, "chatgpt-account-id": auth.accountId };
+    }
+    return params;
   }
 
   private resolveApiKeyConnectionParams(
