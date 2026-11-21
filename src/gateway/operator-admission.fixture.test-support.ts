@@ -331,7 +331,8 @@ export async function runCase(
         scenario === "before-start" ||
           scenario === "after-start" ||
           scenario === "stop" ||
-          scenario === "secondary-email-removed",
+          scenario === "secondary-email-removed" ||
+          scenario === "profile-deleted",
       );
       await runLiveAdmissionCase(row.credential, scenario, fixture);
       return;

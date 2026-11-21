@@ -6,15 +6,19 @@ import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/i
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { publishUserProfilesChange } from "../state/user-profile-list.js";
+import { runUserProfileWriteTransaction } from "../state/user-profile-mutation.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import {
   ensureCanonicalUserProfileForEmail,
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { userProfilesDb } from "../state/user-profiles-internal.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   checkGatewayHttpRequestAuth,
@@ -53,7 +57,12 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-type Scenario = "before-start" | "after-start" | "stop" | "secondary-email-removed";
+type Scenario =
+  | "before-start"
+  | "after-start"
+  | "stop"
+  | "secondary-email-removed"
+  | "profile-deleted";
 type History = {
   messages: unknown[];
   pendingInputs: {
@@ -338,7 +347,7 @@ export async function runLiveAdmissionCase(
     kind === "cron-management-grant" ||
     kind === "cron-operator-source"
   ) {
-    assert(scenario !== "secondary-email-removed");
+    assert(scenario !== "secondary-email-removed" && scenario !== "profile-deleted");
     return await runCronAdmissionCase(kind, scenario, fixture);
   }
   const secondaryEmail = `secondary-${c.id}@example.test`;
@@ -483,6 +492,22 @@ export async function runLiveAdmissionCase(
       const other = await ensureCanonicalUserProfileForEmail(`other-${c.id}@example.test`);
       await linkCanonicalUserProfileEmail(secondaryEmail, other.id);
     }
+    if (scenario === "profile-deleted") {
+      const profileId = original.operatorAuthority?.canonicalIdentity?.profileId;
+      assert(profileId, "The queued live source must retain its real canonical profile");
+      runUserProfileWriteTransaction(({ db }) => {
+        expect(
+          executeSqliteQuerySync(
+            db,
+            userProfilesDb(db)
+              .deleteFrom("user_profiles")
+              .where("id", "=", profileId)
+              .returning("id"),
+          ).rows,
+        ).toEqual([{ id: profileId }]);
+        publishUserProfilesChange(db, profileId);
+      }, {});
+    }
     if (scenario === "before-start") {
       await producer.revoke();
     }
@@ -491,8 +516,9 @@ export async function runLiveAdmissionCase(
       await c.wait(producer.predecessor.completion);
     }
     if (
-      scenario === "before-start" &&
-      !["http-bearer", "live-grant", "live-role", "live-remote-ingress"].includes(kind)
+      scenario === "profile-deleted" ||
+      (scenario === "before-start" &&
+        !["http-bearer", "live-grant", "live-role", "live-remote-ingress"].includes(kind))
     ) {
       await expect(c.wait(controllerInput.settlement.promise)).rejects.toBeInstanceOf(
         GatewayOperatorRecoveryAuthorizationError,

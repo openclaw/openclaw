@@ -95,4 +95,5 @@ export type Scenario =
   | "goal-agent-excluded"
   | "mixed-owner-group"
   | "secondary-email-removed"
+  | "profile-deleted"
   | "owner-unavailable";

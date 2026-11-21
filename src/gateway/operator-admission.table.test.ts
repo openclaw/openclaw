@@ -120,6 +120,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["trusted-proxy:internal", "empty-after-role"],
       ["trusted-proxy:control-ui", "goal-agent-excluded"],
       ["live-proxy", "secondary-email-removed"],
+      ["live-proxy", "profile-deleted"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
       await runCase(fixture, rows[kind], scenario, signal);
     });
