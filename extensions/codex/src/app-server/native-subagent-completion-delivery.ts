@@ -163,7 +163,7 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const message = formatErrorMessage(error);
-      await this.scheduleRetry(state, childState, message, !childState.completionDeliveryAbandoned);
+      await this.scheduleRetry(state, childState, message);
       embeddedAgentLog.warn("Failed to deliver Codex native subagent completion", {
         parentThreadId: state.parentThreadId,
         childThreadId: completion.childThreadId,
@@ -271,7 +271,10 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   private async abandon(state: ParentState, child: ChildState): Promise<void> {
-    child.completionDeliveryAbandoned = true;
+    if (!child.completionDeliveryAbandoned) {
+      child.completionDeliveryAbandoned = true;
+      child.completionDeliveryAttempt = 0;
+    }
     try {
       await this.dependencies.abandon(state, child, () => {
         if (
@@ -293,7 +296,7 @@ export class CodexNativeSubagentCompletionDelivery {
         childThreadId: child.childThreadId,
         error: formatErrorMessage(error),
       });
-      await this.scheduleRetry(state, child, formatErrorMessage(error), false);
+      await this.scheduleRetry(state, child, formatErrorMessage(error));
     }
   }
 
@@ -301,7 +304,6 @@ export class CodexNativeSubagentCompletionDelivery {
     state: ParentState,
     childState: ChildState,
     error: string,
-    chargeAttempt = true,
   ): Promise<void> {
     if (
       !childState.pendingCompletion ||
@@ -310,20 +312,27 @@ export class CodexNativeSubagentCompletionDelivery {
     ) {
       return;
     }
-    if (
-      chargeAttempt &&
-      childState.completionDeliveryAttempt >= COMPLETION_DELIVERY_RETRY_DELAYS_MS.length
-    ) {
-      embeddedAgentLog.warn("Native subagent completion retries exhausted", {
-        childThreadId: childState.childThreadId,
-        error,
-      });
+    if (childState.completionDeliveryAttempt >= COMPLETION_DELIVERY_RETRY_DELAYS_MS.length) {
+      const retirement = childState.completionDeliveryAbandoned;
+      embeddedAgentLog.warn(
+        retirement
+          ? "Native completion retirement retries exhausted"
+          : "Native subagent completion retries exhausted",
+        {
+          childThreadId: childState.childThreadId,
+          error,
+        },
+      );
+      if (retirement) {
+        this.dependencies.unregisterChild(childState);
+        return;
+      }
       await this.abandon(state, childState);
       return;
     }
     const delayMs = delayForAttempt(
       COMPLETION_DELIVERY_RETRY_DELAYS_MS,
-      chargeAttempt ? childState.completionDeliveryAttempt++ : childState.completionDeliveryAttempt,
+      childState.completionDeliveryAttempt++,
     );
     childState.completionDeliveryTimer = setTimeout(() => {
       childState.completionDeliveryTimer = undefined;
