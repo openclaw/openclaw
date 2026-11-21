@@ -13,6 +13,7 @@ import {
   type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { getGatewayResourceProfile } from "./gateway-resource-profile.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
@@ -71,8 +72,9 @@ function hostedKind(url: URL): SharedWorkerHostKind | undefined {
 
 /**
  * Pure and synchronous: whether a new slot for this worker would run inside the shared host.
- * Only the lean profile hosts, at most one live endpoint per slot key, and never while a
- * failed host is still exiting, so at most one host isolate exists at a time.
+ * Only the lean profile hosts, only where explicit SQLite close releases native resources,
+ * at most one live endpoint per slot key, and never while a failed host is still exiting,
+ * so at most one host isolate exists at a time.
  */
 export function claimsSharedHostSlot(url: URL, key?: string): boolean {
   if (getGatewayResourceProfile()?.profile !== "lean") {
@@ -80,6 +82,11 @@ export function claimsSharedHostSlot(url: URL, key?: string): boolean {
   }
   const kind = hostedKind(url);
   if (!kind) {
+    return false;
+  }
+  // Without qualified native close, owners rotate so worker exit releases handles and locks;
+  // a logical endpoint stop has no such exit, so these runtimes keep dedicated workers.
+  if (!getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources) {
     return false;
   }
   // The Postgres bridge binds one pool per isolate; hosted endpoints cannot share it.

@@ -222,9 +222,13 @@ export function createSqliteWorkerLifecycle({
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const postgresPool = createPostgresPoolEndpoints();
     // Lean: one carrier per class is a logical endpoint; external databases stay isolated.
+    // A broker that captured unqualified native close retires carriers by worker exit.
     const hostedKey =
       options.carrierClass !== "external" ? `sqlite-store:${options.carrierClass ?? "agent"}` : "";
-    const hosted = hostedKey !== "" && claimsSharedHostSlot(carrierUrl, hostedKey);
+    const hosted =
+      hostedKey !== "" &&
+      explicitSqliteCloseReleasesNativeResources &&
+      claimsSharedHostSlot(carrierUrl, hostedKey);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: hosted
         ? createHostedWorker(

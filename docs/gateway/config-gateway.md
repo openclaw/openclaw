@@ -405,7 +405,9 @@ kind (SQLite store per carrier class, session transcript, state reader and plugi
 catalog reader) as a logical endpoint inside one shared host worker. The endpoints load
 their common code once but keep their own ports, queues and task state; extra workers of
 the same kind, CPU-heavy kinds, external databases, Postgres-engine installs and plugins
-such as Knowledge keep their own workers. A failed, cancelled or timed-out hosted task
+such as Knowledge keep their own workers. Runtimes where closing a SQLite database is not
+qualified to release its native resources (such as Bun on Windows) also keep dedicated
+workers, because their cleanup relies on worker exit. A failed, cancelled or timed-out hosted task
 replaces the whole shared host: every hosted endpoint's in-flight work fails with an
 explicit error, and the next request starts a new host. Neither profile is a memory cap or
 OOM guarantee.
