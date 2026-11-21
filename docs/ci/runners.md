@@ -401,29 +401,28 @@ or change account policy; live qualification remains a separate rollout gate.
 Candidate discovery and binding, plus short Full Release Validation admission,
 reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
 live/E2E source admission and candidate evidence binding use the same label.
-Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
-workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
-and the nightly watcher keep their 720-minute budgets. When
-`OPENCLAW_CI_RUNNER_BACKEND=boat`, short hosted jobs provision separate Boat VMs
-and register ephemeral organization runners for those three jobs. Native Boat
-CI has a six-hour limit, so these watchers use regular VMs instead.
+Release Decision and Diagnostic Drain use `blacksmith-2vcpu-ubuntu-2404`
+independently of `OPENCLAW_CI_RUNNER_BACKEND` and runner-group variables.
+This release-only route does not change normal CI or nightly runner selection.
+Full Release Validation pins the reusable watcher to an immutable revision; when
+changing that definition, update both caller pins. The watcher checks out the
+caller's pinned tooling and admitted verifier. Both watchers retain their
+720-minute budgets and full evidence collection.
 
-This route requires the repository secrets `BOAT_API_KEY` and
+The nightly watcher also keeps its 720-minute budget. When
+`OPENCLAW_CI_RUNNER_BACKEND=boat`, its short hosted provisioning job creates a
+Boat VM and registers an ephemeral organization runner. Native Boat CI has a
+six-hour limit, so the nightly watcher uses a regular VM instead.
+
+The nightly Boat route requires the repository secrets `BOAT_API_KEY` and
 `BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,
 `BOAT_RELEASE_RUNNER_GROUP`, and `BOAT_RUNNER_APP_ID`. Use a dedicated Boat runner
 GitHub App with organization self-hosted runner write access and a dedicated
-runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
-hosted runners. App token creation must succeed before a VM is provisioned;
-a missing app ID or private key stops provisioning.
-The runner group must admit the nightly workflow on `main` and
-`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
-Full Release Validation pins that reviewed watcher definition from its immutable
-`release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
-verifier. When changing the watcher definition, update the caller pin and
-runner-group entry together. Install a Crabbox release supporting
-`actions register --receipt` and `actions unregister --receipt` before enabling
-the backend. The provisioning preflight rejects older clients before creating
-a VM.
+runner group admitting the nightly workflow on `main`. App token creation must
+succeed before a VM is provisioned; a missing app ID or private key stops
+provisioning. Install a Crabbox release supporting `actions register --receipt`
+and `actions unregister --receipt` before enabling the backend. The provisioning
+preflight rejects older clients before creating a VM.
 
 Each VM requests four CPUs, 8 GB RAM, and a 24-hour lifetime. Provisioning checks
 the granted deadline before registering a runner. Same-run job outputs carry

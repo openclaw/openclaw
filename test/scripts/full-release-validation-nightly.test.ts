@@ -252,14 +252,8 @@ it("pins candidate, tooling and qualification inputs through the SHA-pinned help
   );
 });
 
-it("routes long watchers to their own Boat runner and always cleans up after them", () => {
+it("keeps the nightly watcher on its own Boat runner and always cleans up", () => {
   for (const [selected, provision, waiters, cleanup] of [
-    [
-      frv,
-      "boat_release_runners",
-      ["release_decision", "diagnostic_drain"],
-      "cleanup_boat_release_runners",
-    ],
     [nightly, "boat_nightly_runner", ["validate"], "cleanup_boat_nightly_runner"],
   ] as const) {
     const failedProvision = {
@@ -270,13 +264,8 @@ it("routes long watchers to their own Boat runner and always cleans up after the
     for (const name of waiters) {
       const waiter = selected.jobs[name];
       expect(waiter.needs).toContain(provision);
-      const runnerJob = selected === frv ? watcher : waiter;
+      const runnerJob = waiter;
       expect(runnerJob["timeout-minutes"]).toBe(720);
-      if (selected === frv) {
-        expect(waiter.uses).toBe(
-          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@c07cf34d3920043e79c3d586664589b05c05128a",
-        );
-      }
       expect(
         workflow.evaluateWorkflow(runnerJob["runs-on"], {
           inputs: { runner_label: "selected-watcher" },

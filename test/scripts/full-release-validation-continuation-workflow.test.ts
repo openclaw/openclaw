@@ -43,8 +43,18 @@ function step(job: string, name: string) {
   return match;
 }
 
+it("keeps release collectors independent of Boat provisioning without changing nightly", () => {
+  expect(workflow.jobs.boat_release_runners).toBeUndefined();
+  expect(workflow.jobs.cleanup_boat_release_runners).toBeUndefined();
+  for (const name of ["release_decision", "diagnostic_drain"]) {
+    expect(workflowJob(name).needs).not.toContain("boat_release_runners");
+    expect(workflowJob(name).if).toBe("always()");
+    expect(workflowJob(name).with).not.toHaveProperty("runner_label");
+  }
+});
+
 it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
-  const revision = "c07cf34d3920043e79c3d586664589b05c05128a";
+  const revision = "359602511237fb5e448cdea288c0e9ca3d961a78";
   for (const name of ["release_decision", "diagnostic_drain"]) {
     expect((workflowJob(name) as { uses?: string }).uses).toBe(
       "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
@@ -54,7 +64,7 @@ it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
   // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
   const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
   expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
-    "5de8f27a05bdd63e5e2dc7068ee62bf6bc5c3a6c49292000f7720296af89008a",
+    "ac9d013a2ad46a6f3a404eb7998e303b27052b112b70ff638962485148478763",
   );
   const selected = parse(selectedSource);
   expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
