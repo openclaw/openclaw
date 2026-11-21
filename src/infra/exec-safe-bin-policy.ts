@@ -8,6 +8,8 @@ export type SafeBinProfile = {
   allowedValueFlags?: ReadonlySet<string>;
   allowedBooleanFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
+  // Accept a standalone digits-only `-N` token as a count (`head -1`, `tail -20`).
+  allowNumericCount?: boolean;
   // Precomputed long-option metadata for GNU abbreviation resolution.
   knownLongFlags?: readonly string[];
   knownLongFlagsSet?: ReadonlySet<string>;
@@ -25,6 +27,7 @@ export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixtu
 
 type BuiltinSafeBinProfileFixture = SafeBinProfileFixture & {
   allowedBooleanFlags?: readonly string[];
+  allowNumericCount?: boolean;
 };
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
@@ -88,6 +91,7 @@ function compileSafeBinProfile(fixture: BuiltinSafeBinProfileFixture): SafeBinPr
     allowedValueFlags,
     allowedBooleanFlags,
     deniedFlags,
+    allowNumericCount: fixture.allowNumericCount,
     knownLongFlags,
     knownLongFlagsSet: new Set(knownLongFlags),
     longFlagPrefixMap: buildLongFlagPrefixMap(knownLongFlags),
@@ -104,6 +108,7 @@ function compileSafeBinProfiles(
 
 const HEAD_TAIL_PROFILE = {
   maxPositional: 0,
+  allowNumericCount: true,
   allowedBooleanFlags: ["--quiet", "--silent", "--verbose", "--zero-terminated", "-q", "-v", "-z"],
 };
 
@@ -414,6 +419,12 @@ export function validateSafeBinArgv(
     }
     if (token.kind === "terminator") {
       optionsEnded = true;
+      i += 1;
+      continue;
+    }
+    // The obsolete count form (`head -1`, `tail -20`): a standalone digits-only token, never a
+    // cluster with other letters (`tail -5f` follows), and never a file operand.
+    if (profile.allowNumericCount === true && /^-\d+$/.test(token.raw)) {
       i += 1;
       continue;
     }
