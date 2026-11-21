@@ -847,14 +847,9 @@ describe("Gateway message.action Slack download completion", () => {
     });
   });
 
+  // Runtime run-claim release is not a completion fence; turn and plugin retirement are.
   it.each([
     { name: "the provider result", phase: "result", revoke: "turn" },
-    {
-      name: "late image completion after run-claim release",
-      phase: "gateway-mirror",
-      revoke: "claim",
-      image: true,
-    },
     { name: "late completion after plugin disablement", phase: "gateway-mirror", revoke: "plugin" },
   ] satisfies Array<FixtureOptions & { name: string; phase: Phase }>)(
     "does not return or cache revoked download success at $name",
@@ -870,7 +865,11 @@ describe("Gateway message.action Slack download completion", () => {
         }
         expect(response.ok).toBe(false);
         expect(response.payload).toBeUndefined();
-        expect(response.error?.message).toMatch(/no longer active/i);
+        expect(response.error?.message).toMatch(
+          options.revoke === "turn"
+            ? "The message turn has ended. Start a new turn to retry."
+            : /no longer active/i,
+        );
         expect(fixture.gatewayResponses).toHaveLength(1);
         expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);
         expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);

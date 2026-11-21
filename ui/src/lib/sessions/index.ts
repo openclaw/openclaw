@@ -4,6 +4,7 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
+import { isConversationConfigChange } from "../config-change.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { isSessionRunStateActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
@@ -542,10 +543,10 @@ export function createSessionCapability(
       githubPublication.observePullRequests(event.payload);
       return;
     }
-    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+    if (isConversationConfigChange(event) || event.event === "chat.metadata.changed") {
       roster.observations.descriptions.clear();
     }
-    if (event.event === "config.changed") {
+    if (isConversationConfigChange(event)) {
       // Config can change configured-agent membership even with no chat pane mounted.
       roster.scheduleEvent();
       return;

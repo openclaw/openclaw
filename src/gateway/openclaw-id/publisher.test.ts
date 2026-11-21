@@ -11,12 +11,13 @@ import { DiscoveryRequestError } from "./discovery-client.js";
 import { linkedClaw, nowSeconds } from "./openclaw-id.test-support.js";
 import { isRetryableDiscoveryError, publishClaw } from "./publisher.js";
 
-async function setup(publishedBindingSeq: number) {
+async function setup(publishedBindingSeq: number, pending = false) {
   const claw = await linkedClaw();
   await claw.authority.recordDiscovery({
     owner_account_id: "acct-owner",
     published_binding_seq: publishedBindingSeq,
     published_snapshot_seq: 1,
+    publish_pending: pending,
   });
   const client = {
     registerClaw: vi.fn(),
@@ -36,6 +37,22 @@ async function setup(publishedBindingSeq: number) {
 }
 
 describe("publishClaw", () => {
+  it.each([false, true])(
+    "retains pending label changes after a same-second stale snapshot (pending=%s)",
+    async (pending) => {
+      const { client, publish } = await setup(1, pending);
+      client.publishDescriptor.mockResolvedValueOnce(undefined);
+      client.publishSnapshot.mockRejectedValueOnce(
+        new DiscoveryRequestError(409, "stale_snapshot", "issued_at must be newer"),
+      );
+      expect(await publish()).toMatchObject({
+        state: "failed",
+        code: "stale_snapshot",
+        retryable: pending,
+      });
+    },
+  );
+
   it("still publishes the snapshot when the descriptor republish fails and Discovery has the binding", async () => {
     const { client, publish } = await setup(1);
     const outcome = await publish();

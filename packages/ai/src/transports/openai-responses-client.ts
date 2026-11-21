@@ -236,9 +236,7 @@ function createResponsesTransportExecutor(config: {
             model,
             params as Record<string, unknown>,
           ) as typeof params;
-          params = v2Compaction
-            ? v2Compaction.sanitizeImages(params)
-            : sanitizeResponsesImagePayload(params);
+          params = sanitizeResponsesImagePayload(params);
           if (responsesOptions?.openclawCodeModeToolSurface === true) {
             const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
             const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
@@ -282,6 +280,7 @@ function createResponsesTransportExecutor(config: {
               replayMode,
               Boolean(v2Compaction),
               itemRecovery.applied,
+              compactRequest?.mode === "endpoint" && supportsNativeOpenAIResponsesEndpoint(model),
             ),
           );
         const buildItemConflictRequest = () => itemRecovery.retry(buildRequest);

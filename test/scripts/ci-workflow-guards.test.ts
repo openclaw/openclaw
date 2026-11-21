@@ -80,6 +80,10 @@ import {
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 const manifestSource = readFileSync(
   new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
@@ -313,10 +317,7 @@ function runReleaseFallbackHistoryFixture(options: {
     for (const dir of [checkout, bin, home, hooks]) {
       mkdirSync(dir);
     }
-    const realGit = execFileSync("bash", ["--noprofile", "--norc", "-c", "command -v git"], {
-      env: fixtureEnv,
-      encoding: "utf8",
-    }).trim();
+    const realGit = resolveGitOutsideFixtures(fixtureEnv);
     const git = (cwd: string, args: string[], input?: string) =>
       execFileSync(realGit, args, {
         cwd,
@@ -427,6 +428,7 @@ function runReleaseFallbackHistoryFixture(options: {
     );
     writeExecutable(path.join(bin, "git"), [
       "#!/bin/bash",
+      gitPathShimShellPrelude(fixtureEnv),
       `exec ${quoteShell(testNodeExecPath)} ${quoteShell(launcher)} "$@"`,
     ]);
     const allocatedBytes = () =>
@@ -1097,14 +1099,14 @@ AFTER_CD
       "client-id": "${{ inputs.contents-client-id }}",
       "private-key": "${{ inputs.contents-private-key }}",
       owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
+      repositories: "${{ inputs.repository || github.event.repository.name }}",
       "permission-contents": "write",
     });
     expect(pullRequest.with).toEqual({
       "client-id": "${{ inputs.pull-request-client-id }}",
       "private-key": "${{ inputs.pull-request-private-key }}",
       owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
+      repositories: "${{ inputs.repository || github.event.repository.name }}",
       "permission-contents": "${{ inputs.pull-request-contents-permission }}",
       "permission-pull-requests": "write",
     });
@@ -1118,6 +1120,7 @@ AFTER_CD
     const tokens = publisher.runs.steps.find((step: WorkflowStep) => step.id === "tokens");
     expect(tokens.uses).toBe("./.github/actions/create-generated-pr-tokens");
     expect(tokens.with).toEqual({
+      repository: "${{ inputs.repository }}",
       "contents-client-id": "${{ inputs.contents-client-id }}",
       "contents-private-key": "${{ inputs.contents-private-key }}",
       "pull-request-client-id": "${{ inputs.pull-request-client-id }}",
@@ -1156,11 +1159,25 @@ AFTER_CD
   const staleInputs = "Deferred stale generated output because generator inputs changed on main.";
   const staleOutput =
     "Deferred stale generated output because owned generated paths changed on main.";
-  const convergingHead = "Generated pull request head has not converged yet; rechecking";
+  const convergingHead =
+    "Generated pull request head or mergeability has not converged yet; rechecking";
   const preservedHead = { reference: "initialBranch", equals: true } as const;
   const stalePullRequest = { generatedA: "stale-pr-a", mergeCalls: "" };
 
   it.skipIf(process.platform === "win32").each<PublicationCase>([
+    {
+      name: "publishes and merges in the selected destination repository",
+      options: { repository: "openclaw/clawgrit-reports", autoMerge: true },
+      expected: { branchExists: true, generatedA: "desired-a" },
+      contains: [
+        [
+          "mergeCalls",
+          "pr merge https://github.com/openclaw/clawgrit-reports/pull/1 --repo openclaw/clawgrit-reports",
+        ],
+        ["mergeCalls", "--auto --squash --match-head-commit"],
+        ["summary", "Generated pull request: https://github.com/openclaw/clawgrit-reports/pull/1"],
+      ],
+    },
     {
       name: "enables auto-merge for the exact generated pull request head",
       options: { autoMerge: true },
@@ -1168,7 +1185,15 @@ AFTER_CD
       contains: [
         ["mergeCalls", "pr merge https://github.com/openclaw/openclaw/pull/1"],
         ["mergeCalls", "--auto --squash --match-head-commit"],
-        ["summary", "Enabled squash auto-merge for exact generated head"],
+        ["summary", "Requested squash merge for exact generated head"],
+      ],
+    },
+    {
+      name: "waits for known mergeability before requesting the exact-head merge",
+      options: { autoMerge: true, unknownMergeabilityOnce: true },
+      contains: [
+        ["mergeCalls", "--auto --squash --match-head-commit"],
+        ["publishOutput", convergingHead],
       ],
     },
     {

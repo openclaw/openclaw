@@ -209,6 +209,39 @@ describe("models cli", () => {
   });
 
   it.each([
+    "add",
+    "activate",
+    "logout",
+    "login",
+    "setup-token",
+    "paste-token",
+    "paste-api-key",
+    "login-github-copilot",
+    "order set",
+    "order clear",
+  ])("describes agent selection in auth %s help", async (subcommand) => {
+    let output = "";
+    const program = new Command()
+      .enablePositionalOptions()
+      .exitOverride()
+      .configureOutput({ writeOut: (text) => (output += text), writeErr: () => {} });
+    registerModelsCli(program);
+    const originalExitCode = process.exitCode;
+    try {
+      await expect(
+        program.parseAsync(["models", "auth", ...subcommand.split(" "), "--help"], {
+          from: "user",
+        }),
+      ).rejects.toMatchObject({ exitCode: 0 });
+      expect(output.replace(/\s+/g, " ")).toContain(
+        "Agent id (default: the only configured agent; required when multiple agents are configured)",
+      );
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.each([
     ["use personal-account", { action: "use", authProfileId: "personal-account" }],
     ["clear-default anthropic", { action: "clear-default", provider: "anthropic" }],
   ] as const)("resolves personal-account Gateway options for %s", async (args, expected) => {

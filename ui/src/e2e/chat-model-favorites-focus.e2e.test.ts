@@ -52,7 +52,14 @@ suite.define(() => {
             .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-chat-model-option")));
         const row = (model: string) => list.locator('[data-chat-model-option="' + model + '"]');
         const handle = (model: string) => row(model).getByRole("button", { name: /^Reorder/ });
+        const providerColors = () =>
+          picker
+            .locator(".chat-controls__model-option-provider .provider-brand-icon:visible")
+            .evaluateAll((icons) => icons.map((icon) => getComputedStyle(icon).color).toSorted());
+        const brandColors = ["rgb(16, 163, 127)", "rgb(217, 119, 87)", "rgb(66, 133, 244)"];
         await expect.poll(order).toEqual(initial);
+        // Favorites and Search both show model-row marks, not the muted provider rail.
+        await expect.poll(providerColors).toEqual(brandColors);
         expect(await handle(third!).count()).toBe(0);
         const firstRow = row(first!);
         const source = await row(third!).getByText("Example Flash", { exact: true }).boundingBox();
@@ -87,6 +94,7 @@ suite.define(() => {
           }),
         ).toHaveLength(1);
         await search.fill("example");
+        await expect.poll(providerColors).toEqual(brandColors);
         await expect
           .poll(() => picker.locator('[data-chat-model-option][draggable="true"]:visible').count())
           .toBe(0);

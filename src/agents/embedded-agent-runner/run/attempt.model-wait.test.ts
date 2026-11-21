@@ -79,6 +79,20 @@ it("clears wait on the first stream event and admits another wait on a later cal
   expect(h.delivered).toEqual(h.statuses);
 });
 
+it("signals argument preparation once per call without publishing any argument", async () => {
+  const h = harness();
+  const { stream, observed } = await h.start();
+  const partial = makeAssistantMessageFixture();
+  stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+  stream.push({ type: "toolcall_delta", contentIndex: 0, delta: "private value", partial });
+  stream.end(partial);
+  for await (const _ of observed) {
+    /* drain the provider stream */
+  }
+  expect(h.statuses).toEqual([{ phase: "preparing_tool" }]);
+  expect(h.delivered).toEqual(h.statuses);
+});
+
 it.each(["abort", "failure", "completion"] as const)("clears %s waits", async (termination) => {
   const h = harness();
   const abort = new AbortController();

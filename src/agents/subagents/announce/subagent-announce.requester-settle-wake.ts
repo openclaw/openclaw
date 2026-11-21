@@ -190,6 +190,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (settledBatch.length === 0 || settledBatch.some(isClaimedByLiveRequesterTurn)) {
     return false;
   }
+  if (subagentRuns.isCompletionAuthorityRetired(currentSettledEntry)) {
+    await completeBatch(settledBatch, currentState, {
+      delivered: false,
+      path: "none",
+      disposition: "permanent_failure",
+      error:
+        "Child result delivery lost its Gateway owner. Inspect the saved child results and retry.",
+    });
+    return false;
+  }
 
   const resolveGatewayContext = getSharedGatewayContextResolver(settledBatch);
   const hadGatewayContext = resolveGatewayContext ? Boolean(resolveGatewayContext()) : false;
@@ -299,7 +309,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (settledBatch.some((entry) => entry.delivery?.disposition === "ambiguous")) {
       return false;
     }
-    await completeBatch(settledBatch, selectedState, { delivered: true, path: "direct" });
+    await completeBatch(settledBatch, selectedState, {
+      delivered: settledBatch.every((entry) => entry.delivery?.status === "delivered"),
+      path: "direct",
+    });
     return true;
   }
   const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
@@ -639,10 +652,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     // Results committed to the requester transcript are never replayed: settle what the turn did.
     const currentBatch = readCurrentBatch() ?? settledBatch;
-    delivery = resolveRequesterDeliveryOutcome(currentBatch, delivery)!;
-    if (delivery.delivered || currentBatch.every(hasConsumedRequesterInput)) {
+    const settledDelivery = resolveRequesterDeliveryOutcome(currentBatch, delivery)!;
+    if (settledDelivery.delivered || currentBatch.every(hasConsumedRequesterInput)) {
       await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
-      return delivery.delivered;
+      return settledDelivery.delivered;
     }
     // The controller mailbox owns a queued handoff and settles it itself.
     if ((await settleRevokedBatch()) || delivery.disposition === "session_queued") {

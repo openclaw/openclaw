@@ -585,12 +585,14 @@ it.each(
     viewer: viewerRole,
     localAdmin: { ...viewerRole, scopes: ["operator.admin"] },
   });
-  setUserProfileRole(profile.id, "localAdmin");
+  setUserProfileRole(profile.id, "viewer");
   invalidateOperatorRolePolicy(profile.id);
+  const localProfile = ensureProfileForEmail("independent-media-admin@example.test");
+  setUserProfileRole(localProfile.id, "localAdmin");
   const localAuth = {
     authMethod: "trusted-proxy",
     operatorScopes: ["operator.admin"],
-    ...resolveHttpProfile(profile.id, cfg),
+    ...resolveHttpProfile(localProfile.id, cfg),
   };
   let principal: OpenClawIdTunnelPrincipal | undefined = {
     kind: "member",
@@ -602,7 +604,8 @@ it.each(
   setOpenClawIdTunnelPrincipalLookup(() => principal);
   setRuntimeConfigSnapshot(cfg);
   state.auth.mockResolvedValue({
-    ...localAuth,
+    ...resolveHttpProfile(profile.id, cfg),
+    authMethod: "trusted-proxy",
     operatorScopes: readScopes,
     operatorRolePolicy: viewerRole,
     openclawIdPrincipal: principal,

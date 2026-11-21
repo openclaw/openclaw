@@ -63,6 +63,8 @@ function runCorrectionReview(
   bindingOid,
   source,
   workflowBinding,
+  publishedReviewOid,
+  publishedFindings,
 ) {
   const forProof = command === "proof-publication" || command === "proof-publication-baseline";
   if (
@@ -118,6 +120,13 @@ function runCorrectionReview(
   }
   const review = JSON.parse(readRegular(jsonPath));
   readRegular(incomingJsonPath);
+  const pendingProofAcceptance = publishedReviewOid
+    ? {
+        record: JSON.parse(readRegular(".local/pending-proof-acceptance.json")),
+        publishedReviewOid,
+        publishedFindings,
+      }
+    : undefined;
   const proof = validateCorrectionReview({
     review,
     prMeta: candidate.metadata,
@@ -130,6 +139,7 @@ function runCorrectionReview(
     source,
     workflowBinding,
     reviewOid: git("hash-object", "--no-filters", jsonPath),
+    pendingProofAcceptance,
   });
   process.stdout.write(
     command.endsWith("publication-baseline")
@@ -145,7 +155,11 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     const [command, pr, incoming, head, jsonOid, anchor, bindingOid, ...extra] =
       process.argv.slice(2);
     const forProof = command === "proof-publication" || command === "proof-publication-baseline";
-    if (extra.length !== (forProof ? 2 : 0) || !jsonOid) {
+    const acceptingProof = command === "validate" || command === "validate-preflight";
+    if (
+      (extra.length !== (forProof ? 2 : 0) && !(acceptingProof && extra.length === 4)) ||
+      !jsonOid
+    ) {
       throw new Error(
         "Expected command, PR, incoming/candidate heads and incoming review JSON object ID.",
       );
