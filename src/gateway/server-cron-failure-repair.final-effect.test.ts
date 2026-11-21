@@ -194,6 +194,8 @@ it.for(
 const operatorOutcomes = {
   // A Control UI administrator's restored source keeps owner tools, as its in-session runs do.
   "control-ui-admin": { update: "ok", description: "fixed by repair" },
+  // Changing what runs re-captures the source from this same turn; the turn keeps going.
+  "control-ui-admin-edits-what-runs": { update: "ok, then ok", description: "fixed by repair" },
   // A restored source that was not a Control UI administrator is a non-owner requester.
   "non-admin-source": { update: "gated", description: "original" },
   // A refused restore is still this job's requester: no owner tools, no session fallback.
@@ -284,18 +286,36 @@ it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
         "operator repair admission",
         { includeOpenClawTools: true },
       );
-      update = await tools
-        .find((tool) => tool.name === "automations")!
+      const automations = tools.find((tool) => tool.name === "automations")!;
+      const outcome = (result: { details?: unknown }) =>
+        (result.details as { gated?: boolean } | undefined)?.gated ? "gated" : "ok";
+      const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
+      const editsWhatRuns = scenario === "control-ui-admin-edits-what-runs";
+      update = await automations
         .execute("operator-repair-update", {
           action: "update",
           jobId: job.id,
-          job: { description: "fixed by repair" },
+          job: {
+            description: "fixed by repair",
+            ...(editsWhatRuns
+              ? {
+                  payload: {
+                    kind: "agentTurn",
+                    message: "Check the dashboard again.",
+                    toolsAllow: ["read"],
+                  },
+                }
+              : {}),
+          },
         })
-        .then(
-          (result) => ((result.details as { gated?: boolean } | undefined)?.gated ? "gated" : "ok"),
-          (error: unknown) => (error instanceof Error ? error.message : String(error)),
-        )
-        .finally(close);
+        .then(outcome, failure);
+      if (editsWhatRuns) {
+        // The turn must still act after its own fix, for example to tell the user.
+        update += `, then ${await automations
+          .execute("operator-repair-read", { action: "get", jobId: job.id })
+          .then(outcome, failure)}`;
+      }
+      close();
       return { payloads: [{ text: "Repaired." }], meta: { durationMs: 1 } };
     });
 
