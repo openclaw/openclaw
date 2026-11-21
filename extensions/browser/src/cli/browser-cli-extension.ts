@@ -9,6 +9,7 @@ import {
   resolveFirstExtensionProfileName,
   resolveProfile,
 } from "../browser/config.js";
+import { ExtensionPathPermissionsError } from "../browser/extension-install-layout.js";
 import {
   FOUNDATION_CHROME_WEB_STORE_URL,
   NativeHostSetupContextError,
@@ -133,7 +134,8 @@ export function registerBrowserExtensionCommands(
         },
         (error: unknown) => {
           defaultRuntime.error(
-            error instanceof NativeHostSetupContextError
+            error instanceof NativeHostSetupContextError ||
+              error instanceof ExtensionPathPermissionsError
               ? error.message
               : "Chrome setup could not finish. Check the action, local profile, and native host installation. If automatic Windows selection is unverified, repair the intended existing profile with --browser-profile <name> --action install.",
           );

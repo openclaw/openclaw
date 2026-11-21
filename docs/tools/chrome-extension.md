@@ -701,6 +701,15 @@ openclaw doctor
   is expected for direct extension-only remote Gateway setups. On Windows, first
   check that the packaged native executable and matching local CLI are installed
   and that their private ACL/context checks succeed.
+- **Cannot verify Windows owner or ACL:** permission inspection is unavailable
+  or incomplete. This does not establish that the path is unsafe. Setup remains
+  blocked; collect the OpenClaw version and this diagnostic for the installation
+  maintainer. Do not loosen permissions to bypass verification.
+- **Refusing unsafe Windows owner or ACL:** the permission check identified an
+  untrusted owner or group/world write access. Have the installation maintainer
+  review ownership and write permissions before retrying. Both permission
+  failures exit nonzero; `--json` retains the standard `cli_error` failure envelope
+  with the same redacted diagnostic.
 - **Relay unavailable:** for `/browser/extension` pairings, confirm the target
   Gateway is running. For direct loopback `/extension` pairings, check native
   host registration, wake-up support in the extension build, automatic setup,
