@@ -1,6 +1,7 @@
 // Session-list title reads: bounded transcript probes plus a watermark-validated
 // cache so list rendering never rescans transcripts that have not changed.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import {
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
@@ -84,7 +85,9 @@ function findFirstTitleUserText(
       projected?.role === "user" &&
       (includeInterSession || !hasInterSessionUserProvenance(asOptionalRecord(message)))
     ) {
-      const source = resolveSessionTitleSource(projected.text, skillCommands);
+      const source = resolveSessionTitleSource(projected.text, skillCommands, {
+        isControlCommand: isControlCommandMessage,
+      });
       if (source) {
         return source;
       }

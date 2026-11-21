@@ -235,6 +235,17 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...entry })).toEqual({ displayName: "Release Planning" });
   });
 
+  it("feeds a leading-slash path message to title inference", async () => {
+    mockSessionUpdate(baseEntry);
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(baseEntry),
+        userMessage: "/tmp/notes.md summarise this file",
+      }),
+    ).resolves.toBe(true);
+    expect(mocks.generate.mock.calls[0]?.[0]?.userMessage).toBe("tmp/notes.md summarise this file");
+  });
+
   it("retries a historical session from the transcript's first user message", async () => {
     const entry = { ...baseEntry, systemSent: true };
     const transcript = createDeferredCore<{
