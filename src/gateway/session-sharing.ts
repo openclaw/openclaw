@@ -144,10 +144,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     participation.signal?.throwIfAborted();
     const error =
       (target && authorizesAgentRun
-        ? authorizeSessionAgentRun(
-            { cfg, client: params.client, target },
-            policy ? { policy: policy.policy } : undefined,
-          )
+        ? policy
+          ? policy.authorizeRun(target, participation.isBoundedMethod())
+          : authorizeSessionAgentRun({ cfg, client: params.client, target })
         : null) ??
       authorizeIncognitoSessionTarget({
         client: params.client,

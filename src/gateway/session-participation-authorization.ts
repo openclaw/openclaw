@@ -25,9 +25,16 @@ export function createSessionParticipationAuthorization(
 ) {
   // Later run assertions can execute inside a tool-caller context; keep the admitted person.
   const personalProfileId = resolveAuthenticatedPersonalGatewayProfileId(params.client);
+  const isBoundedMethod = () =>
+    requiresSessionParticipation(
+      params.method,
+      params.client?.connect.scopes ?? [],
+      params.requestParams,
+    );
   let ceiling: ParticipationCeiling | undefined;
   let lifetime: ReturnType<typeof retainSessionParticipation> | undefined;
   return {
+    isBoundedMethod,
     get ceiling() {
       return ceiling;
     },
@@ -63,11 +70,7 @@ export function createSessionParticipationAuthorization(
         params.method === "session.suggestions.add"
           ? access?.canSuggest
           : access?.access === "send";
-      const boundedMethod = requiresSessionParticipation(
-        params.method,
-        params.client?.connect.scopes ?? [],
-        params.requestParams,
-      );
+      const boundedMethod = isBoundedMethod();
       if (
         !params.participationRequired &&
         !(permitsMethod && access?.invitedAccessCeiling && boundedMethod)

@@ -1,0 +1,10 @@
+# Follow-on to the Participate UI repair: 285 further net regression lines.
+# Covers configurable permission intersection and retained-input non-widening,
+# real reviewer forwarding, recipient/owner mode distinction, sandbox-required
+# own-session versus invited admission, live member workspace reads/revocation,
+# and a production-composed get/download host-escape regression (red before fix).
+# Existing fixtures reused. The host-escape test uses a real outside sentinel,
+# projection and placement authority; a mocked helper cannot prove this boundary.
+# Astra independently verified the fixed P1 and reran seven admission/host-turn
+# cases plus four retained HTTP/owner cases. No assertion/baseline was weakened.
+285

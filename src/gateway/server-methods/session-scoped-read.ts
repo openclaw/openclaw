@@ -141,7 +141,26 @@ export async function retainSessionScopedRead(
       sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId });
     }
     assertCurrent();
-    return { assertCurrent, release, prepared: read };
+    return {
+      assertCurrent,
+      release,
+      prepared: read,
+      isInvitedWorkspaceTarget: (target: {
+        agentId: string;
+        canonicalKey: string;
+        entry?: { sessionId?: string };
+      }) => {
+        assertCurrent();
+        const facts = sharing?.readCurrent(getConfig());
+        return Boolean(
+          profileId &&
+          facts?.membership.has(profileId) &&
+          facts.target?.agentId === target.agentId &&
+          facts.target.canonicalKey === target.canonicalKey &&
+          facts.target.entry.sessionId === target.entry?.sessionId,
+        );
+      },
+    };
   } catch (error) {
     release();
     throw error;

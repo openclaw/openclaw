@@ -440,6 +440,13 @@ Human approvals remain creator/admin-only, and the participant cannot grant them
 Queued and recovered inputs retain the captured ceiling; policy changes may narrow
 it but never widen it. Stored inputs predating this field retain guarded authority.
 
+On a role with `maxInvitedAccess`, `sandbox: "required"` governs sessions the
+role creates or owns. Admitted send-level participation in another person's
+session uses that session's sandbox settings plus the captured participant
+ceiling. Invited members may read that session's workspace at their granted
+level. The role's own unsandboxed sessions remain blocked; roles without this
+opt-in keep the existing sandbox requirement for all sessions.
+
 Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the participant
 tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
 `read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `web_search`,

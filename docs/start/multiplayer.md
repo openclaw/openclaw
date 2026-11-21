@@ -90,6 +90,13 @@ human approval goes only to the session creator or an administrator, never the
 participant. File tools stay inside the session root even in full mode. This is
 not an OS sandbox for shell commands; use sandbox isolation for untrusted code.
 
+For opted-in roles with `maxInvitedAccess`, `sandbox: "required"` applies to the
+role's own sessions. An invited participant uses the other session's sandbox
+settings, with the permission, tool and file boundaries above; invited members
+can read its workspace at their granted level. This does not let them start an
+unsandboxed session of their own. Roles without `maxInvitedAccess` keep their
+sandbox requirement when opening other sessions too.
+
 `invitedTools` replaces the default list. Omit it for the standard file, shell,
 web, and tool-discovery tools, use `[]` for no tools, or explicitly add core names
 such as `sessions_list` to widen it. Agent tool policy can still deny any listed

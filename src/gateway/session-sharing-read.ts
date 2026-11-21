@@ -41,6 +41,7 @@ import {
 } from "./session-mutation-authorization-error.js";
 import {
   authorizeSessionSharingTarget,
+  authorizeSessionAgentRun,
   canManageSessionSharing,
   isGatewayAdmin,
   isSessionSharingOwnerEquivalent,
@@ -52,6 +53,7 @@ import {
   type withSessionSharingTarget,
 } from "./session-sharing-policy.js";
 import type { GatewaySessionStoreSelection } from "./session-utils-store-retained.js";
+import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 export function canReceiveSessionEvent(params: {
   cfg: OpenClawConfig;
@@ -184,6 +186,31 @@ export function prepareSessionSharing(
       policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined,
     invitedTools: policy?.sessions.invitedTools,
     invitedPermission: policy?.sessions.invitedPermission ?? "workspace",
+    authorizeRun: (target: SessionSharingTarget, participation = false) =>
+      authorizeSessionAgentRun(
+        {
+          ...params,
+          cfg: params.cfg ?? {},
+          target,
+          invitedSession: participation && accessForTarget(target).access === "send",
+        },
+        { policy: policy || undefined },
+      ),
+    authorizeWorkspaceRead: (target: SessionSharingTarget, unscopedHostRoot: boolean) => {
+      const access = accessForTarget(target);
+      return authorizeSessionWorkspaceRead(
+        {
+          ...params,
+          cfg: params.cfg ?? {},
+          target,
+          unscopedHostRoot,
+          invitedSession: Boolean(
+            access.invitedAccessCeiling && access.role === "member" && access.canRead,
+          ),
+        },
+        { policy: policy || undefined },
+      );
+    },
     authorizeTarget: (
       target: SessionSharingTarget,
       role = roleForTarget(target),

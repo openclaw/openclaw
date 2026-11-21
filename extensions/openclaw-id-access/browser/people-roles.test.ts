@@ -52,7 +52,7 @@ it.each([
       admin: false,
     };
     expect(roleOptions([role], "en-US")[0]?.description).toBe(
-      `Only sessions they’re invited to · Can be invited up to ${label}${maxInvitedAccess === "send" ? " · Participant permission: Workspace" : ""} · Sandbox required · No administrator access`,
+      `Only sessions they’re invited to · Can be invited up to ${label}${maxInvitedAccess === "send" ? " · Participant permission: Workspace" : ""} · Sandbox required for their own sessions · No administrator access`,
     );
   },
 );
