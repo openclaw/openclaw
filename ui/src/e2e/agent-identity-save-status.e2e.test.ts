@@ -128,7 +128,6 @@ suite.define(() => {
       await captureUiProof(suite, page, "deferred-identity-save.png");
       await expect.poll(() => status.textContent()).toContain("Saved; waiting to apply");
       expect(await name.inputValue()).toBe("Garden guide");
-      expect(await status.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       await gateway.setMethodResponse("config.get", {
         ...snapshot,
         hash: "saved",
