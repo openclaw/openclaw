@@ -1329,20 +1329,6 @@ div.shell.shell--onboarding {
   color: var(--text);
 }
 
-/* The section icon distinguishes personal sections from shared groups. */
-.personal-session-groups__icon {
-  display: inline-flex;
-  flex: none;
-  /* Sit closer to the label than the row's standard gap. */
-  margin-inline-end: -3px;
-  color: var(--muted);
-}
-
-.personal-session-groups__icon svg {
-  width: 12px;
-  height: 12px;
-}
-
 .sidebar-recent-sessions__head--draggable {
   cursor: grab;
 }

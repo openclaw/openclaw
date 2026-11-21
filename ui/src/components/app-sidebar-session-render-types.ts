@@ -12,7 +12,6 @@ import type {
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
@@ -184,10 +183,6 @@ export type SidebarSessionListHost = SessionListHost & {
       | "loadingMoreSessionCatalogIds"
     >;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
-  resolvePersonalGroupSession?(key: string): SidebarRecentSession | undefined;
-  readonly collapsedPersonalSessionGroups: ReadonlySet<string>;
-  togglePersonalSessionGroup(id: string): void;
-  personalGroupSessionRows(group: PersonalSessionGroup): SidebarRecentSession[];
   reconciledSidebarZone(): {
     entries: readonly SidebarZoneEntry[];
     sessionRows: ReadonlyMap<string, SidebarRecentSession>;
