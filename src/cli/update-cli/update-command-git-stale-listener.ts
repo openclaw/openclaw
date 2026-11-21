@@ -2,6 +2,7 @@ import { isGatewayServiceStateLive } from "../../daemon/service-runtime.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   terminateStaleGatewayPids,
   type GatewayRestartSnapshot,
@@ -74,7 +75,7 @@ export async function recoverStaleGitListener(
       assertCurrent();
       if (firstSignal && getFileLockProcessStartTime(pid, env) !== lock.startTime) {
         throw new Error(
-          "Refusing stale Gateway cleanup: the process start time could not be verified against the profile lock. Inspect `openclaw gateway status --deep` before retrying.",
+          `Refusing stale Gateway cleanup: the process start time could not be verified against the profile lock. Inspect \`${formatCliCommand("openclaw gateway status --deep", env)}\` before retrying.`,
         );
       }
       firstSignal = false;
