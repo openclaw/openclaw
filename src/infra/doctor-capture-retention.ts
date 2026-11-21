@@ -112,13 +112,14 @@ export function collectStandaloneDoctorCaptures(params: RetentionOptions) {
       );
     }
   }
-  // Each capture is a full copy of state, so only the newest sealed original is
-  // kept, however old it is. Every older sealed copy is superseded.
-  const [newest] = [...captures.values()].toSorted((a, b) => b.createdAt - a.createdAt);
-  if (newest) {
-    newest.eligible = false;
-    if (newest.reason !== "pending-update-recovery") {
-      newest.reason = "retained-doctor-capture";
+  // Each capture is a full copy of state. Keep the newest two sealed originals,
+  // however old: some repairs write rows without their own backup, so after a
+  // second Doctor run the older copy is the only one from before the first.
+  const retained = [...captures.values()].toSorted((a, b) => b.createdAt - a.createdAt).slice(0, 2);
+  for (const capture of retained) {
+    capture.eligible = false;
+    if (capture.reason !== "pending-update-recovery") {
+      capture.reason = "retained-doctor-capture";
     }
   }
   return { captures, warnings };
