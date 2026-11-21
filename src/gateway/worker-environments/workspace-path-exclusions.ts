@@ -11,6 +11,7 @@ const AGP_BUILD_OUTPUT_SEGMENTS = [
   "build/outputs/apk",
   "build/outputs/bundle",
 ] as const;
+export type LegacyDerivedEligibilitySubset = readonly ("agp" | "pnpm")[];
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "__pycache__",
   ".pytest_cache",
@@ -86,12 +87,10 @@ export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
 
 // Match a whole segment without splitting each inventory path. The negative
 // class ends at a slash or the actual end, unlike "$" before a final newline.
-function derivedWorkspaceSegmentPattern(includeLegacyDerivedPaths: boolean) {
+function derivedWorkspaceSegmentPattern(includeLegacyAgp: boolean) {
   return `(?:^|/)(?:${[
     ...DERIVED_WORKSPACE_DIRECTORY_NAMES.filter(
-      (name) =>
-        !includeLegacyDerivedPaths ||
-        !AGP_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name),
+      (name) => !includeLegacyAgp || !AGP_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name),
     ).map((name) => name.replaceAll(".", "\\.")),
     ...DERIVED_WORKSPACE_FILE_NAMES.map((name) => name.replaceAll(".", "\\.")),
     ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
@@ -148,7 +147,7 @@ function isRuntimeOwnedWorkspacePath(relativePath) {
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   );
 }
-function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false, includeLegacyDerivedPaths = false) {
+function isDerivedWorkspacePath(relativePath, retainedInput, excludeBuildCaches, legacyDerivedEligibilitySubset) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
   }
@@ -157,12 +156,12 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuil
   }
   if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
   if (DERIVED_WORKSPACE_ROOT_PATHS.some(
-    (root) => (!includeLegacyDerivedPaths || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+    (root) => (root !== PNPM_FALLBACK_STORE_ROOT_PATH || !legacyDerivedEligibilitySubset?.includes("pnpm")) &&
       (relativePath === root || relativePath.startsWith(root + "/")),
   )) {
     return true;
   }
-  return (includeLegacyDerivedPaths ? LEGACY_DERIVED_WORKSPACE_SEGMENT_RE : DERIVED_WORKSPACE_SEGMENT_RE).test(relativePath);
+  return (legacyDerivedEligibilitySubset?.includes("agp") ? LEGACY_DERIVED_WORKSPACE_SEGMENT_RE : DERIVED_WORKSPACE_SEGMENT_RE).test(relativePath);
 }
 function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();
@@ -194,7 +193,7 @@ export const {
     relativePath: string,
     retainedInput?: boolean,
     excludeBuildCaches?: boolean,
-    includeLegacyDerivedPaths?: boolean,
+    legacyDerivedEligibilitySubset?: LegacyDerivedEligibilitySubset,
   ) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
   buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;

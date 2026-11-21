@@ -221,14 +221,18 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
   },
 );
 
-async function repairFixture(historicalPaths: readonly string[] = []) {
+async function repairFixture(
+  historicalPaths: readonly string[] = [],
+  disposablePaths: readonly string[] = [],
+) {
   const root = await fs.realpath(dirs.make("workspace-baseline-repair-"));
   const projection = path.join(root, "projection");
   const canonical = path.join(root, "canonical");
   const files = ["nested/file.txt", ...historicalPaths];
+  const baselineFile = { type: "file" as const, mode: 0o644, size: 8, sha256: hash("baseline") };
   const directories = new Set(files.flatMap((file) => [...workspacePathAncestors(file)]));
   for (const directory of [projection, canonical]) {
-    for (const file of files) {
+    for (const file of new Set([...files, ...disposablePaths])) {
       await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true });
       await fs.writeFile(path.join(directory, file), "baseline");
     }
@@ -241,13 +245,7 @@ async function repairFixture(historicalPaths: readonly string[] = []) {
   await requireGit(canonical, ["add", "nested/file.txt"]);
   const records = createLocalWorkspaceManifestTree([
     ...[...directories].map((entryPath) => ({ path: entryPath, type: "directory" as const })),
-    ...files.map((entryPath) => ({
-      path: entryPath,
-      type: "file" as const,
-      mode: 0o644,
-      size: 8,
-      sha256: hash("baseline"),
-    })),
+    ...files.map((entryPath) => Object.assign({ path: entryPath }, baselineFile)),
   ]);
   const treeRoot = localWorkspaceDigestBytes(records.get("")!.treeRef);
   const snapshot = {
@@ -365,22 +363,26 @@ it.each(["probe", "scan"] as const)(
   },
 );
 
+const agpPaths = [
+  "m/build/intermediates/x",
+  "m/build/outputs/apk/x.apk",
+  "m/build/outputs/bundle/x.aab",
+];
+const pnpmPaths = [".openclaw/.pnpm-store/cache"];
 it.each([
   ...["projection", "canonical", "checkpoint"].map((matching) => [matching, []] as const),
-  ["projection", [".openclaw/.pnpm-store/cache"]],
-  ["checkpoint", [".openclaw/.pnpm-store/cache"]],
-  ...["projection", "canonical", "checkpoint"].map(
-    (matching) =>
-      [
-        matching,
-        ["m/build/intermediates/x", "m/build/outputs/apk/x.apk", "m/build/outputs/bundle/x.aab"],
-      ] as const,
-  ),
+  ...["projection", "checkpoint"].map((matching) => [matching, pnpmPaths] as const),
+  ...["projection", "canonical", "checkpoint"].map((matching) => [matching, agpPaths] as const),
+  ["projection", agpPaths, pnpmPaths],
+  ["projection", pnpmPaths, agpPaths],
+  ["projection", [...pnpmPaths, ...agpPaths]],
 ] as const)(
-  "reconstructs a collected baseline from the verified %s filesystem (historical paths: %s)",
-  async (matching, historicalPaths) => {
-    const { projection, canonical, snapshot, treeRoot, records } =
-      await repairFixture(historicalPaths);
+  "repairs the verified %s baseline (historical: %s, disposable: %s)",
+  async (matching, historicalPaths, disposablePaths = []) => {
+    const { projection, canonical, snapshot, treeRoot, records } = await repairFixture(
+      historicalPaths,
+      disposablePaths,
+    );
     if (matching === "checkpoint") {
       await fs.writeFile(path.join(canonical, "nested/file.txt"), "pending edit");
       const scan = await executeLocalWorkspaceManifestRead(
@@ -438,9 +440,7 @@ it.each([
 it.each(["different", "identical"] as const)(
   "preserves %s later edits when neither filesystem matches the exact missing baseline",
   async (edits) => {
-    const { projection, canonical, snapshot } = await repairFixture([
-      ".openclaw/.pnpm-store/cache",
-    ]);
+    const { projection, canonical, snapshot } = await repairFixture(pnpmPaths);
     await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
     const hostEdit = edits === "identical" ? "guest edit" : "host edit";
     await fs.writeFile(path.join(canonical, "nested/file.txt"), hostEdit);

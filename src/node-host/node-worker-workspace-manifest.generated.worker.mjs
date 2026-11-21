@@ -122,9 +122,9 @@ function isRuntimeOwnedWorkspacePath(relativePath) {
 }
 function isDerivedWorkspacePath(
   relativePath,
-  retainedInput = false,
-  excludeBuildCaches = false,
-  includeLegacyDerivedPaths = false,
+  retainedInput,
+  excludeBuildCaches,
+  legacyDerivedEligibilitySubset,
 ) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
@@ -136,14 +136,17 @@ function isDerivedWorkspacePath(
   if (
     DERIVED_WORKSPACE_ROOT_PATHS.some(
       (root) =>
-        (!includeLegacyDerivedPaths || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+        (root !== PNPM_FALLBACK_STORE_ROOT_PATH ||
+          !legacyDerivedEligibilitySubset?.includes("pnpm")) &&
         (relativePath === root || relativePath.startsWith(root + "/")),
     )
   ) {
     return true;
   }
   return (
-    includeLegacyDerivedPaths ? LEGACY_DERIVED_WORKSPACE_SEGMENT_RE : DERIVED_WORKSPACE_SEGMENT_RE
+    legacyDerivedEligibilitySubset?.includes("agp")
+      ? LEGACY_DERIVED_WORKSPACE_SEGMENT_RE
+      : DERIVED_WORKSPACE_SEGMENT_RE
   ).test(relativePath);
 }
 function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
