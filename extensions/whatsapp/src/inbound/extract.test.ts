@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { generateWAMessageFromContent, type proto } from "baileys";
 import { expect, it } from "vitest";
 import {
@@ -62,6 +65,28 @@ it("reads quoted polls encoded by Baileys", () => {
     body: "Lunch?\n- Pizza\n- Sushi",
     sender: { jid: SENDER },
   });
+});
+it("resolves @lid quoted sender labels when authDir has a reverse mapping", () => {
+  const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-reply-lid-"));
+  try {
+    fs.writeFileSync(
+      path.join(authDir, "lid-mapping-9876543210_reverse.json"),
+      JSON.stringify("15555550123"),
+    );
+    const msg = extended({
+      stanzaId: "quoted-lid-msg",
+      participant: "9876543210@lid",
+      quotedMessage: { conversation: "hello" },
+    });
+    expect(describeReplyContext(msg, { authDir })).toMatchObject({
+      sender: { lid: "9876543210@lid", label: "+15555550123" },
+    });
+    expect(describeReplyContext(msg)).toMatchObject({
+      sender: { lid: "9876543210@lid", label: "9876543210@lid" },
+    });
+  } finally {
+    fs.rmSync(authDir, { recursive: true, force: true });
+  }
 });
 it.each<[proto.IMessage, string]>([
   [
