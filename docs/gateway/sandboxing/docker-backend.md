@@ -189,6 +189,11 @@ Android Gradle Plugin output under `build/intermediates`, `build/outputs/apk`,
 and `build/outputs/bundle` is also omitted at any module depth. Other `build/`
 paths, including source files and reports, remain workspace data.
 
+.NET output under `bin/Debug`, `bin/Release`, `obj/Debug`, and `obj/Release` is
+also omitted at any project depth. Other `bin/` and `obj/` paths remain workspace
+data, including authored scripts, custom configurations such as `bin/Staging`,
+and platform layouts such as `bin/x64/Debug`.
+
 ### Docker daemon
 
 The Docker CLI inherits the Gateway process environment except `MALLOC_CONF` and
