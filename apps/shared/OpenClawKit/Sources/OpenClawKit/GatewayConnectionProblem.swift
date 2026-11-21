@@ -363,6 +363,15 @@ public enum GatewayConnectionProblemMapper {
             self.pairingProblem(for: authError)
         case .protocolMismatch:
             self.protocolMismatchProblem(for: authError)
+        case .authIdentityHeaderRequired:
+            AuthProblemDefaults(
+                kind: .unknown,
+                owner: .gateway,
+                title: "Trusted-proxy identity header missing",
+                message: "The gateway did not receive a required identity header from its trusted reverse proxy. "
+                    + "Use the configured proxy route or an explicitly authorized alternative connection.",
+                actionLabel: "Check trusted proxy",
+                docsURLString: "https://docs.openclaw.ai/gateway/trusted-proxy-auth")
         case .authTailscaleIdentityMissing, .authTailscaleProxyMissing,
              .authTailscaleWhoisFailed, .authTailscaleIdentityMismatch:
             self.tailscaleIdentityProblem(for: authError.detail)

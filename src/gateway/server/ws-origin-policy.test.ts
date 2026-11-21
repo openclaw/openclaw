@@ -4,7 +4,11 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "../auth-policy.js";
+import {
+  captureGatewayAuthPolicy,
+  isGatewayAuthGrantCurrent,
+  isGatewayAuthPolicyCurrent,
+} from "../auth-policy.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
@@ -32,6 +36,32 @@ function browserClient(origin: string, requestHost = "gateway.example.test") {
 function identityConfig(identityScopes: Record<string, OperatorScope[]>): OpenClawConfig {
   return { gateway: { auth: { identityScopes } } };
 }
+
+it("keeps a trusted-proxy Serve operator policy valid only while Tailscale is enabled", () => {
+  const initial: OpenClawConfig = {
+    gateway: {
+      tailscale: { mode: "serve" },
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: true,
+        trustedProxy: {
+          userHeader: "cf-access-authenticated-user-email",
+          requiredHeaders: ["cf-access-jwt-assertion"],
+        },
+      },
+    },
+  };
+  const policy = captureGatewayAuthPolicy(initial, {
+    role: "operator",
+    verifiedIdentity: "alice@github",
+    authMethod: "tailscale",
+  });
+  expect(policy.grantGeneration).toContain('"methodEnabled":true');
+  expect(isGatewayAuthPolicyCurrent(policy, initial)).toBe(true);
+  const revoked = structuredClone(initial);
+  revoked.gateway!.auth!.allowTailscale = false;
+  expect(isGatewayAuthPolicyCurrent(policy, revoked)).toBe(false);
+});
 
 describe("committed browser origin policy", () => {
   it("rechecks contextual ingress even when the config and policy objects are unchanged", () => {

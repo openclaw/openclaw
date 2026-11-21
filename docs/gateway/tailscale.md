@@ -113,6 +113,8 @@ When `tailscale.mode: "serve"` and `gateway.auth.allowTailscale` is `true`, Cont
 
 This tokenless flow assumes the gateway host is trusted. If untrusted local code may run on the same host, set `gateway.auth.allowTailscale: false` and require token/password auth instead.
 
+With `gateway.auth.mode: "trusted-proxy"`, `allowTailscale: true` explicitly permits verified identity from **OpenClaw-managed Serve** for browser and native-app operator UI connections. Ordinary proxy ingress continues to require the trusted-proxy identity header and every configured required header. This does not authorize native node-role connections: a paired node must still supply a supported device credential. The configuration wizard disables this mixed exposure; see [Stable HTTPS URL](/gateway/stable-https-url#cloudflare-access-and-native-macos-nodes) for manual setup constraints and the macOS onboarding workaround.
+
 Scope of the bypass:
 
 - Applies to the Control UI WebSocket auth surface and read-only `GET`/`HEAD` requests for Control UI profile avatars. Other HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth. They always follow the gateway's normal HTTP auth mode.

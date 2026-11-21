@@ -17,6 +17,8 @@ enum RemoteGatewayAuthIssue: Equatable {
     case setupCodeExpired
     case passwordRequired
     case pairingRequired
+    case trustedProxyIdentityRequired
+    case tailscaleIdentityUnavailable
 
     init?(error: Error) {
         guard let authError = error as? GatewayConnectAuthError else {
@@ -35,6 +37,11 @@ enum RemoteGatewayAuthIssue: Equatable {
             self = .passwordRequired
         case .pairingRequired:
             self = .pairingRequired
+        case .authIdentityHeaderRequired:
+            self = .trustedProxyIdentityRequired
+        case .authTailscaleIdentityMissing, .authTailscaleProxyMissing,
+             .authTailscaleWhoisFailed, .authTailscaleIdentityMismatch:
+            self = .tailscaleIdentityUnavailable
         default:
             return nil
         }
@@ -54,6 +61,10 @@ enum RemoteGatewayAuthIssue: Equatable {
             "Check this gateway's password"
         case .pairingRequired:
             "This device needs pairing approval"
+        case .trustedProxyIdentityRequired:
+            "Trusted-proxy identity was not received"
+        case .tailscaleIdentityUnavailable:
+            "Tailscale Serve identity could not be verified"
         }
     }
 
@@ -81,6 +92,19 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .pairingRequired:
             "Approve this device from an already-paired OpenClaw client. "
                 + "In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
+        case .trustedProxyIdentityRequired:
+            "The gateway did not receive the identity header required by its trusted proxy. "
+                + "Use the configured reverse-proxy route (such as a Cloudflare Access saved Gateway), "
+                + "or enable "
+                + "`gateway.auth.allowTailscale` for the managed Serve operator UI. "
+                + "The macOS primary node still requires a valid device token. "
+                + "If necessary, bootstrap it via the SSH tunnel transport with the gateway's "
+                + "configured local-direct password and approve pairing."
+        case .tailscaleIdentityUnavailable:
+            "The gateway could not verify this client through managed Tailscale Serve. "
+                + "Check the Serve URL, the tailnet sign-in, and the gateway's Tailscale setup. "
+                + "Tailscale identity authorizes operator UI only; the macOS node also needs "
+                + "a separately approved device credential."
         }
     }
 
@@ -94,8 +118,10 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .pairingRequired:
             "If you do not have another paired OpenClaw client yet, "
                 + "approve the pending request on the gateway host with `openclaw devices approve`."
-        case .tokenMismatch, .passwordRequired:
+        case .tokenMismatch, .passwordRequired, .tailscaleIdentityUnavailable:
             nil
+        case .trustedProxyIdentityRequired:
+            "Pairing approval alone does not replace a missing device token."
         }
     }
 
@@ -115,6 +141,12 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .pairingRequired:
             "Pairing required. In an already-paired OpenClaw client, "
                 + "run /pair approve, then check the connection again."
+        case .trustedProxyIdentityRequired:
+            "Trusted-proxy header missing. Use the authorized proxy route or managed Serve for UI; "
+                + "a macOS node needs a separate device token (SSH tunnel for initial pairing)."
+        case .tailscaleIdentityUnavailable:
+            "Tailscale Serve identity check failed. Verify the Serve URL and tailnet login. "
+                + "A macOS node also requires its own device token."
         }
     }
 }

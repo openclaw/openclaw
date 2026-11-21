@@ -109,6 +109,8 @@ With OpenClaw ID off, those headers do not change loopback locality.
 
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
+Managed Tailscale Serve has a separate, optional, verified operator-UI identity path when `gateway.auth.allowTailscale=true`; this does not weaken the Cloudflare/reverse-proxy header checks on ordinary ingress or authenticate native node connections. See [Tailscale Serve and mixed ingress](/gateway/stable-https-url#cloudflare-access-and-native-macos-nodes).
+
 Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.
 
 Browser OAuth sign-in can use the HTTPS origin from `gateway.publicOrigin` on a
