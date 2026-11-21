@@ -1289,6 +1289,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/pdf-tool.static-runtime.test.ts",
   "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+  "src/agents/prepared-model-catalog-worker.source-admission.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.registration-facts.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.restart.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
