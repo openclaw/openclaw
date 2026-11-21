@@ -105,17 +105,18 @@ inbound media through their reply model; see the full provider list in
 | Together          |       |   ✓   |       |     |     |                |                     |
 | Volcengine        |       |       |       |  ✓  |     |                |                     |
 | Vydra             |   ✓   |   ✓   |       |  ✓  |     |                |                     |
-| xAI               |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
+| xAI               |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
 | Xiaomi MiMo       |       |       |       |  ✓  |     |                |                     |
 
 <Note>
 **Realtime voice** here means provider-native bidirectional realtime (Talk
-`realtime` mode, e.g. Gemini Live or the OpenAI Realtime API) — only Google
-and OpenAI register it today. Deepgram, ElevenLabs, Mistral, OpenAI, and xAI
-separately register Voice Call streaming STT (one-way audio-to-text); see
+`realtime` mode, e.g. Gemini Live, the OpenAI Realtime API, or xAI's Grok
+Voice Agent API). Google, OpenAI, and xAI register it. xAI Talk uses
+`gateway-relay`, not browser-owned WebRTC or provider-WebSocket sessions;
+see [xAI realtime voice](/providers/xai#realtime-voice-talk).
+Deepgram, ElevenLabs, Mistral, OpenAI, and xAI separately register Voice Call
+streaming STT (one-way audio-to-text); see
 [Speech-to-text and Voice Call](#speech-to-text-and-voice-call) below.
-xAI Realtime voice is an upstream capability but is not registered in
-OpenClaw until the shared realtime-voice contract can represent it.
 </Note>
 
 ## Async vs synchronous
@@ -185,10 +186,8 @@ catalogs returned by the Gateway.
     categories yet, so this plugin does not register them.
   </Accordion>
   <Accordion title="xAI">
-    Image, video, search, code-execution, batch TTS, batch STT, and Voice
-    Call streaming STT. xAI Realtime voice is an upstream capability but is
-    not registered in OpenClaw until the shared realtime-voice contract can
-    represent it.
+    Image, video, search, code-execution, batch TTS, batch STT, Voice Call
+    streaming STT, and Grok Voice Agent realtime Talk through `gateway-relay`.
   </Accordion>
 </AccordionGroup>
 
