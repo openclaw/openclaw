@@ -2,21 +2,20 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as markdownCore from "../../../packages/markdown-core/src/reasoning-tags-batch.js";
 import * as finalTags from "./final-tags.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
-
 afterEach(() => vi.restoreAllMocks());
-
 it("skips canonical tag scans for ordinary markup and comparisons", () => {
   const source = "  <article>Array<string>: value < 100 and other > 0.</article>\n".repeat(64);
   const reasoning = vi.spyOn(markdownCore, "scanReasoningTags");
   const final = vi.spyOn(finalTags, "findFinalTagMatches");
+  const matchAll = vi.spyOn(String.prototype, "matchAll");
   expect(stripReasoningTagsFromText(source)).toBe(source);
   expect(reasoning).not.toHaveBeenCalled();
   expect(final).not.toHaveBeenCalled();
   expect(stripReasoningTagsFromText("<think>hidden</think>Answer")).toBe("Answer");
   expect(reasoning).toHaveBeenCalled();
   expect(final).toHaveBeenCalled();
+  expect(matchAll).not.toHaveBeenCalled();
 });
-
 it.each(markdownCore.REASONING_TAG_NAMES)("recognizes the %s provider tag", (name) => {
   expect(stripReasoningTagsFromText(`<${name}>hidden</${name}>Answer`)).toBe("Answer");
 });
