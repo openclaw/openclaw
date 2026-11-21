@@ -4,10 +4,7 @@ import type { PluginReplacementOutcome } from "../plugins/plugin-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { createPluginReloadChannels } from "./server-plugin-reload-channels.js";
 import type { createPluginReloadRecovery } from "./server-plugin-reload-recovery.js";
-import type { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
-
-type Generation = ReturnType<typeof createGatewayPluginRuntimeGeneration>;
-type Finish = Parameters<Generation["finishReload"]>;
+type FinishReloadKind = "applied" | "restored" | "failed" | "unchanged";
 type Facts = {
   phase: "prepare" | "drain" | "activate" | "dispose";
   committed: boolean;
@@ -27,21 +24,12 @@ export function createPluginReloadLifecycle(requestedOperationId?: string) {
     async run<T>(
       this: void,
       ports: {
-        previousReloadStatus: Finish[0];
         channels: Pick<ReturnType<typeof createPluginReloadChannels>, "release">;
         recovery: Pick<
           ReturnType<typeof createPluginReloadRecovery>,
           "dispose" | "unavailablePluginIds"
         >;
-        finishReloadInputs: {
-          changedPluginIds: Finish[2];
-          runtime: {
-            kernel: { pluginRuntimeGeneration: Pick<Generation, "finishReload"> };
-            pluginRuntime: { registry: Finish[3] };
-          };
-          restartDrainSignal: AbortSignal;
-          log: { error: NonNullable<Finish[5]> };
-        };
+        finishReload: (kind: FinishReloadKind) => void;
       },
       body: (facts: Facts) => Promise<T>,
     ): Promise<T> {
@@ -76,15 +64,7 @@ export function createPluginReloadLifecycle(requestedOperationId?: string) {
         // A completed operation never retains an in-progress channel pause. Failed
         // instances keep their own resource/admission fence until a later safe reload.
         ports.channels.release("failed");
-        const inputs = ports.finishReloadInputs;
-        inputs.runtime.kernel.pluginRuntimeGeneration.finishReload(
-          ports.previousReloadStatus,
-          kind,
-          inputs.changedPluginIds,
-          inputs.runtime.pluginRuntime.registry,
-          ports.recovery.unavailablePluginIds,
-          inputs.restartDrainSignal.aborted ? undefined : inputs.log.error,
-        );
+        ports.finishReload(kind);
       } catch (error) {
         failures.push(error);
         kind = "failed";
