@@ -11,6 +11,7 @@ import {
   buildOpenAIQuicksilverBackgroundContext,
   OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS,
 } from "./realtime-quicksilver-instructions.js";
+import { OpenAIChatGptVoiceStartError } from "./realtime-quicksilver-redaction.js";
 import {
   isOpenAIGptLiveModel,
   isOpenAIGptLiveApiModel,
@@ -424,16 +425,28 @@ export async function createOpenAIQuicksilverCall(
     ? { body: JSON.stringify(payload), contentType: "application/json" }
     : buildOpenAIQuicksilverMultipartBody(payload);
 
-  const response = await (params.fetchImpl ?? fetch)(callUrl, {
-    method: "POST",
-    headers: {
-      ...authHeaders,
-      "Content-Type": requestBody.contentType,
-    },
-    body: requestBody.body,
-    signal: params.signal,
-  });
+  let response: Response;
+  try {
+    response = await (params.fetchImpl ?? fetch)(callUrl, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": requestBody.contentType,
+      },
+      body: requestBody.body,
+      signal: params.signal,
+    });
+  } catch (error) {
+    if (chatGptCall && !params.signal?.aborted) {
+      throw new OpenAIChatGptVoiceStartError();
+    }
+    throw error;
+  }
   if (!response.ok) {
+    if (chatGptCall) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new OpenAIChatGptVoiceStartError(response.status);
+    }
     // Provider failures are untrusted streams. Bound and cancel unread overflow
     // before retaining the short diagnostic included in the user-facing error.
     // A truncated prefix can end inside an OAuth identifier. Exact redaction

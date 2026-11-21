@@ -5,7 +5,8 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 
 export const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
 
-export const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1", "gpt-live-1-codex"] as const;
+const OPENAI_GPT_LIVE_CODEX_MODELS = ["gpt-live-1-codex", "gpt-live-1.1-codex"] as const;
+export const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1", ...OPENAI_GPT_LIVE_CODEX_MODELS] as const;
 const OPENAI_GPT_LIVE_API_VOICES = [
   "alloy",
   "ash",
@@ -52,7 +53,8 @@ export function isOpenAIGptLiveApiModel(model: string | undefined): boolean {
 }
 
 export function isOpenAIGptLiveSubscriptionModel(model: string | undefined): boolean {
-  return model?.trim().toLowerCase() === "gpt-live-1-codex";
+  const normalized = model?.trim().toLowerCase();
+  return OPENAI_GPT_LIVE_CODEX_MODELS.some((codexModel) => codexModel === normalized);
 }
 
 export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolean {
