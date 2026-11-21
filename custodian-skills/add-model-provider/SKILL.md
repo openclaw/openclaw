@@ -51,16 +51,18 @@ openclaw doctor --lint
 
 ## Prove
 
-Roster-safe test (works in every setup; use your own agent id or any configured agent):
+Roster-safe test (works in every setup; use your own agent id or any configured agent). Use the
+provider/model-id you just configured (from the `openclaw models list` output in Gather); do not
+pin a specific model generation:
 
 ```
-openclaw agent --agent <agentId> --model openai/gpt-5.4 -m "Reply with exactly: PROVIDER-PROOF-OK"
+openclaw agent --agent <agentId> --model openai/<model-id> -m "Reply with exactly: PROVIDER-PROOF-OK"
 ```
 
 Single-agent installs can use the lighter completion test instead — it has no `--agent` flag and fails with "no explicit owner" on multi-agent rosters, so do not retry it there:
 
 ```
-openclaw infer model run --gateway --model openai/gpt-5.4 --prompt "Reply with exactly: PROVIDER-PROOF-OK"
+openclaw infer model run --gateway --model openai/<model-id> --prompt "Reply with exactly: PROVIDER-PROOF-OK"
 ```
 
 Expect the exact requested reply; record model id and wall time. Known dependency: OpenAI routes need the codex harness plugin at runtime — if the test reports the runtime unavailable, run `openclaw plugins install @openclaw/codex` and restart the gateway, then test again.
