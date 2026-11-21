@@ -29,12 +29,14 @@ export {
   type SessionWorkspaceRecoveryRequiredErrorDetails,
   type TaskWorktreeSourceRequiredErrorDetails,
   type ClawHubRiskAcknowledgementRequiredErrorDetails,
+  type TemplateNotFoundErrorDetails,
   type TemplateReviewRequiredErrorDetails,
   readClawHubRiskAcknowledgementRequiredError,
   readTemplateReviewRequiredError,
   readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
+  isTemplateNotFoundError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "../gateway-error-details.js";
@@ -113,6 +115,10 @@ export const ClawHubRiskAcknowledgementRequiredErrorDetailsSchema = closedObject
   warning: NonEmptyString,
 });
 
+export const TemplateNotFoundErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.TEMPLATE_NOT_FOUND),
+});
+
 export const TemplateReviewRequiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED),
   kind: stringLiteralUnion(["plugin", "skill"]),
@@ -138,6 +144,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   TaskWorktreeSourceRequiredErrorDetailsSchema,
   ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  TemplateNotFoundErrorDetailsSchema,
   TemplateReviewRequiredErrorDetailsSchema,
   PendingInputNotRetiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),

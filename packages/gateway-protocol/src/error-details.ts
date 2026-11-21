@@ -8,6 +8,7 @@ export {
   ErrorCodes,
   GatewayErrorDetailCodes,
   isMcpAppViewExpiredError,
+  isTemplateNotFoundError,
   readCronJobNotFoundError,
   readClawHubRiskAcknowledgementRequiredError,
   readTemplateReviewRequiredError,
@@ -27,6 +28,7 @@ export type {
   SetupAdmissionBusyErrorDetails,
   SessionWorkspaceRecoveryRequiredErrorDetails,
   ClawHubRiskAcknowledgementRequiredErrorDetails,
+  TemplateNotFoundErrorDetails,
   TemplateReviewRequiredErrorDetails,
 } from "./gateway-error-details.js";
 export {
@@ -40,6 +42,7 @@ export {
   SetupAdmissionBusyErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  TemplateNotFoundErrorDetailsSchema,
   TemplateReviewRequiredErrorDetailsSchema,
   buildMissingScopeErrorDetails,
   errorShape,
