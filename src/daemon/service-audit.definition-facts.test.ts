@@ -15,6 +15,7 @@ import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
   buildTaskScript,
   buildHiddenLauncherScript,
+  resolveStartupEntryPath,
   resolveTaskScriptPath,
   resolveTaskLauncherScriptPath,
 } from "./schtasks-layout.js";
@@ -30,7 +31,12 @@ import {
 } from "./test-helpers/service-audit-fixtures.js";
 import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
-const native = vi.hoisted(() => ({ task: vi.fn() }));
+const native = vi.hoisted(() => ({ task: vi.fn(), probe: vi.fn() }));
+// mock-isolation: Task Scheduler state comes from the synthetic probe, not host PowerShell.
+vi.mock("./schtasks-state-probe.js", async (original) => ({
+  ...(await original<typeof import("./schtasks-state-probe.js")>()),
+  probeScheduledTaskState: native.probe,
+}));
 // mock-isolation: Definition facts come from the synthetic scheduler, not host task mutations.
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: native.task,
@@ -48,6 +54,7 @@ let runtimePinStateDir: string;
 beforeEach(() => {
   resetServiceAuditMocks();
   native.task.mockReset();
+  native.probe.mockReset();
   runtimePinStateDir = dirs.make("definition-facts-runtime-pin-");
 });
 
@@ -411,6 +418,40 @@ it("reports failed native task inspection independently from legacy issues", asy
   expect(result.issues).toEqual([]);
   expect(result.definitionDriftError).toContain("inspection could not be completed");
   expect(JSON.stringify(result)).not.toContain("operator-secret");
+});
+
+async function auditStartupEntryInstall() {
+  // Non-elevated installs fall back to a login item; Task Scheduler then has no such task.
+  native.task.mockResolvedValue({ code: 1, stdout: "", stderr: "task not found" });
+  const env = {
+    USERPROFILE: dirs.make("definition-facts-startup-home-"),
+    APPDATA: dirs.make("definition-facts-startup-appdata-"),
+  };
+  const startupPath = resolveStartupEntryPath(env);
+  await fs.mkdir(path.dirname(startupPath), { recursive: true });
+  await fs.writeFile(startupPath, "@rem synthetic Startup entry; never executed\r\n");
+  return await auditGatewayServiceConfig({
+    env,
+    command: { programArguments: ["node", "C:\\openclaw\\index.js", "gateway"] },
+    platform: "win32",
+  });
+}
+
+it("does not report a Startup-folder login item as an unreadable task definition", async () => {
+  native.probe.mockReturnValue({ status: "missing" });
+  const result = await auditStartupEntryInstall();
+  expect(result.definitionDriftError).toBeUndefined();
+});
+
+it("keeps a failed Task Scheduler query visible when a Startup entry exists", async () => {
+  // Access denied: the task may exist, so the Startup file does not prove a login-item install.
+  native.probe.mockReturnValue({
+    status: "unknown",
+    detail: "Scheduled Task check failed (exit 2): -2147024891",
+    diagnostic: { kind: "native", exitCode: 2, hresult: -2147024891 },
+  });
+  const result = await auditStartupEntryInstall();
+  expect(result.definitionDriftError).toBe("Service definition inspection could not be completed.");
 });
 
 const discardedSettings: Array<[string, string[]?, string?, Record<string, string>?]> = [

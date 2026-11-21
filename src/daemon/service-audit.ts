@@ -520,7 +520,13 @@ export async function auditGatewayServiceConfig(params: {
         definitionDrift,
         params.timeoutMs,
         params.expectedCommand,
-      );
+      ).catch(async (error: unknown) => {
+        // A Startup-folder login item has no Task Scheduler definition to compare.
+        const { isConfirmedStartupEntryOnly } = await import("./schtasks-runtime.js");
+        if (!(await isConfirmedStartupEntryOnly(params.env, params.timeoutMs))) {
+          throw error;
+        }
+      });
     }
   } catch {
     definitionDriftError = "Service definition inspection could not be completed.";
