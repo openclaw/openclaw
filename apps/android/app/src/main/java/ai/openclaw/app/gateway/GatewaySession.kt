@@ -50,6 +50,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.Buffer
+import okio.utf8Size
 import java.io.IOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
@@ -136,6 +137,16 @@ sealed interface GatewayLoadedMedia {
     val retryPreparingPlayback: Boolean,
   ) : GatewayLoadedMedia
 }
+
+// Match the Gateway's default frame/send-buffer byte ceilings; also bound tiny-frame overhead.
+private const val MAX_INBOUND_FRAME_BYTES = 25L * 1024 * 1024
+private const val MAX_INBOUND_BYTES = 50L * 1024 * 1024
+private const val MAX_INBOUND_FRAMES = 256
+
+private data class InboundGatewayMessage(
+  val text: String,
+  val bytes: Long,
+)
 
 private const val GATEWAY_PLAYBACK_PREPARATION_TIMEOUT_MS = 120_000L
 
@@ -1137,7 +1148,11 @@ class GatewaySession(
     private var socketCreationPending = false
     private var transportFinished = false
     private val loggerTag = "OpenClawGateway"
-    private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private val incomingLock = Any()
+    private var incomingMessageCount = 0
+    private var incomingMessageBytes = 0L
+    private val incomingMessages =
+      Channel<InboundGatewayMessage>(MAX_INBOUND_FRAMES, onUndeliveredElement = ::releaseIncomingMessage)
     private var lastEventSequence: Long? = null
     private val liveTextProjection = GatewayLiveTextProjection()
 
@@ -1147,18 +1162,48 @@ class GatewaySession(
     private val pendingLock = Any()
     private val messagePumpJob =
       connectionScope.launch(Dispatchers.IO) {
-        for (text in incomingMessages) {
-          try {
-            handleMessage(text)
-          } catch (err: CancellationException) {
-            throw err
-          } catch (err: Throwable) {
-            Log.w(
-              loggerTag,
-              "gateway message handling failed: ${err.message ?: err::class.java.simpleName}",
-            )
+        try {
+          for (message in incomingMessages) {
+            try {
+              handleMessage(message.text)
+            } catch (err: CancellationException) {
+              throw err
+            } catch (err: Throwable) {
+              Log.w(
+                loggerTag,
+                "gateway message handling failed: ${err.message ?: err::class.java.simpleName}",
+              )
+            } finally {
+              releaseIncomingMessage(message)
+            }
           }
+        } finally {
+          incomingMessages.cancel()
         }
+      }
+
+    private fun releaseIncomingMessage(message: InboundGatewayMessage) {
+      synchronized(incomingLock) {
+        incomingMessageCount -= 1
+        incomingMessageBytes -= message.bytes
+      }
+    }
+
+    private fun admitIncomingMessage(text: String): Boolean =
+      synchronized(incomingLock) {
+        if (state.get() == ConnectionState.CLOSED) return@synchronized true
+        val message = InboundGatewayMessage(text, text.utf8Size())
+        if (message.bytes > MAX_INBOUND_FRAME_BYTES || incomingMessageCount >= MAX_INBOUND_FRAMES ||
+          incomingMessageBytes + message.bytes > MAX_INBOUND_BYTES
+        ) {
+          // Keep admitted responses FIFO, but stop ingress before initiating the overload close.
+          incomingMessages.close()
+          return@synchronized false
+        }
+        incomingMessageCount += 1
+        incomingMessageBytes += message.bytes
+        if (incomingMessages.trySend(message).isFailure) releaseIncomingMessage(message)
+        true
       }
 
     val remoteAddress: String = formatGatewayAuthority(target.endpoint.host, target.endpoint.port)
@@ -1567,11 +1612,15 @@ class GatewaySession(
     private fun finishTransport(
       message: String,
       connectError: Throwable,
+      overloadedSocket: WebSocket? = null,
     ) {
       if (!terminalCallbackClaimed.compareAndSet(false, true)) return
       val shouldNotify = state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED
       retireIngressRequests()
       incomingMessages.close()
+      if (overloadedSocket != null && !overloadedSocket.close(1013, "Gateway inbound backlog exceeded")) {
+        cancelSocket(overloadedSocket)
+      }
       // Completion handlers run synchronously and cannot own app-level disconnect cleanup.
       launchDrainingWork {
         try {
@@ -1585,6 +1634,8 @@ class GatewaySession(
             if (shouldNotify && currentConnection === this@Connection && desired === target) onDisconnected(message)
           }
         } finally {
+          // Overload is locally terminal: do not retain a peer that never acknowledges the close.
+          cancelSocket(overloadedSocket)
           connectDeferred.completeExceptionally(connectError)
           synchronized(lifecycleLock) {
             transportFinished = true
@@ -1700,7 +1751,10 @@ class GatewaySession(
         webSocket: WebSocket,
         text: String,
       ) {
-        incomingMessages.trySend(text)
+        if (!admitIncomingMessage(text)) {
+          val reason = "Gateway inbound backlog exceeded; reconnecting"
+          finishTransport(reason, IllegalStateException(reason), overloadedSocket = webSocket)
+        }
       }
 
       override fun onFailure(
