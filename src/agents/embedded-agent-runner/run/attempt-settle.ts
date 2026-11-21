@@ -153,10 +153,16 @@ export async function runEmbeddedAttemptSettledPhase(
             );
           }
           // Keep persistence append-only while excluding the rejected draft and
-          // every trailing descendant from the hidden retry's active branch.
+          // every trailing descendant from the hidden retry's active branch. The
+          // settled-turn finalizer's prompt and answer are one internal exchange:
+          // the retry continues from the settled tools, before that prompt.
+          const targetId =
+            attempt.operation === "settled-tool-finalization" && transcriptLeafId
+              ? transcriptLeafId
+              : rejectedEntry.parentId;
           await sessionManager.appendLeafControlAsync({
-            targetId: rejectedEntry.parentId,
-            appendParentId: rejectedEntry.parentId,
+            targetId,
+            appendParentId: targetId,
           });
           rewoundBeforeAgentFinalizeRevision = true;
         }),

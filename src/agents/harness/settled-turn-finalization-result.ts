@@ -23,6 +23,7 @@ const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "assistantTranscriptIdempotencyKey",
   "assistantMessageIndex",
   "diagnosticTrace",
+  "beforeAgentFinalizeRevisionReason",
 ]);
 
 function assistantContainsToolCall(
@@ -63,6 +64,12 @@ export function assertSettledTurnFinalizationResult(
   ) {
     throw new Error("Settled-turn finalization returned an invalid assistant message index");
   }
+  if (
+    result.beforeAgentFinalizeRevisionReason !== undefined &&
+    !result.beforeAgentFinalizeRevisionReason.trim()
+  ) {
+    throw new Error("Settled-turn finalization returned an empty revision reason");
+  }
   const preparedTerminalReply =
     result.preparedTerminalReply ??
     prepareAgentRunTerminalReply({
@@ -99,7 +106,6 @@ export function projectSettledTurnFinalizationAttemptResult(
     (result.compactionCount ?? 0) > 0 ||
     result.promptTimeoutOutcome ||
     result.preflightRecovery ||
-    result.beforeAgentFinalizeRevisionReason ||
     result.codexAppServerFailure ||
     result.cloudCodeAssistFormatError
   ) {
@@ -138,9 +144,13 @@ export function projectSettledTurnFinalizationAttemptResult(
   if (!assistant) {
     throw new Error("Settled-turn finalization attempt returned no completed assistant message");
   }
+  const revisionReason = result.beforeAgentFinalizeRevisionReason;
   return assertSettledTurnFinalizationResult({
     assistant,
-    preparedTerminalReply: result.preparedTerminalReply,
+    // A revised answer's delivery was suppressed: read its reply from the assistant itself.
+    ...(revisionReason
+      ? { beforeAgentFinalizeRevisionReason: revisionReason }
+      : { preparedTerminalReply: result.preparedTerminalReply }),
     ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
     ...(result.assistantTranscriptOwned
       ? {
