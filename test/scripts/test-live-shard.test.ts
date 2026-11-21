@@ -198,6 +198,8 @@ it("requires live shard report evidence for each selected file", () => {
 });
 
 it.each([
+  ["extensions/agentsapi/agentsapi-harness.live.test.ts", "OPENCLAW_LIVE_AGENTSAPI"],
+  ["extensions/comfy/comfy.live.test.ts", "COMFY_LIVE_TEST"],
   ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
   [
     "src/gateway/gateway-personal-native-child-abort.live.test.ts",
@@ -213,6 +215,12 @@ it.each([
   const expectedFiles = [REASONING_FILE, reviewFile];
 
   expectReport(payload, undefined, expectedFiles, {});
+  expectReport(
+    report(1, 2, reportFile(REASONING_FILE, "passed"), reportFile(reviewFile, "failed")),
+    `selected live test files had no passing assertions: ${reviewFile}`,
+    expectedFiles,
+    {},
+  );
   expectReport(
     payload,
     `selected live test files had no passing assertions: ${reviewFile}`,
