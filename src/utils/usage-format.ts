@@ -370,8 +370,13 @@ export function estimateAggregateUsageCost(
   }
   // Recorded totals own billing; discover fallback prices only for unpriced usage.
   const cost = params.cost ?? resolveModelCostConfig(params);
-  if (usage?.cost && cost) {
-    return usage.cost.total;
-  }
-  return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
+  // A placeholder zero yields to resolved pricing, including an authored free price.
+  // Below the second tier, every call necessarily used the first tier's rates.
+  const secondTierStart = cost?.tieredPricing
+    ?.map((tier) => tier.range[0])
+    .toSorted((a, b) => a - b)[1];
+  const promptTokens = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
+  return secondTierStart !== undefined && promptTokens >= secondTierStart
+    ? undefined
+    : estimateUsageCost({ usage, cost });
 }

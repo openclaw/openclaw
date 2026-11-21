@@ -15,7 +15,12 @@ import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fast-mode.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import { normalizeUsage, hasObservedModelUsage, toDiagnosticUsage } from "../../agents/usage.js";
+import {
+  hasObservedModelUsage,
+  hasRecordedUsageCost,
+  normalizeUsage,
+  toDiagnosticUsage,
+} from "../../agents/usage.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -308,16 +313,17 @@ export const executePreparedWorkerInference = async (
       if (!hasObservedModelUsage(usage)) {
         return;
       }
-      const costUsd =
-        usage.cost?.total ??
-        estimateUsageCost({
-          usage,
-          cost: resolveModelCostConfig({
-            provider: model.provider,
-            model: model.id,
-            config,
-          }),
-        });
+      // One call prices exactly in any tier; an all-zero transport cost is only a placeholder.
+      const costUsd = hasRecordedUsageCost(usage.cost)
+        ? usage.cost?.total
+        : estimateUsageCost({
+            usage,
+            cost: resolveModelCostConfig({
+              provider: model.provider,
+              model: model.id,
+              config,
+            }),
+          });
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         trace: freezeDiagnosticTraceContext(trace),

@@ -132,6 +132,7 @@ it.each([null, { input: 0, output: 0, usageReport: { state: "available" as const
 );
 it.each([
   ["different configured prices", undefined, undefined, 0.00252, undefined],
+  ["placeholder zeros with configured prices", { total: 0 }, { total: 0 }, 0.00252, undefined],
   ["provider-billed zero", billedZero, billedZero, 0, undefined],
   ["unknown price before known price", { total: 0 }, { total: 0.7 }, undefined, undefined],
   ["unknown price after known price", { total: 0.7 }, { total: 0 }, undefined, undefined],

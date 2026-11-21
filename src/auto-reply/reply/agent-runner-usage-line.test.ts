@@ -49,7 +49,8 @@ it("marks a standalone usage footer as non-terminal status", () => {
 const completeUsage = { input: 1_000_000, output: 0 };
 it.each<[name: string, usage: Usage, tiered: boolean, expected: string | undefined]>([
   ["costless flat-price runtime", completeUsage, false, "est $1.00"],
-  ["explicit zero total", { ...completeUsage, cost: { total: 0 } }, true, "est $0.0000"],
+  ["placeholder zero total", { ...completeUsage, cost: { total: 0 } }, false, "est $1.00"],
+  ["placeholder zero tiered total", { ...completeUsage, cost: { total: 0 } }, true, undefined],
   ["incomplete tiered cost", completeUsage, true, undefined],
   ["input-only usage without a price", { input: 1_000_000 }, false, undefined],
   ["output-only usage without a price", { output: 50 }, false, undefined],
@@ -60,7 +61,12 @@ it.each<[name: string, usage: Usage, tiered: boolean, expected: string | undefin
   const model = modelDefinition("priced", {
     cost: {
       ...cost,
-      tieredPricing: tiered ? [{ ...cost, input: 2, output: 0, range: [200_000] }] : undefined,
+      tieredPricing: tiered
+        ? [
+            { ...cost, range: [0, 200_000] },
+            { ...cost, input: 2, output: 0, range: [200_000] },
+          ]
+        : undefined,
     },
   });
   const line = resolveResponseUsageLine({

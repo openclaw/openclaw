@@ -804,16 +804,28 @@ describe("worker inference provider runtime", () => {
   );
 
   it.each([
-    { name: "positive cost-only", tokens: false, cost: 0.25, billed: false },
-    { name: "billed zero", tokens: false, cost: 0, billed: true },
-    { name: "empty snapshot", tokens: false, cost: undefined, billed: false },
+    { name: "positive cost-only", tokens: false, cost: 0.25, billed: false, expected: 0.25 },
+    { name: "billed zero", tokens: false, cost: 0, billed: true, expected: 0 },
+    { name: "empty snapshot", tokens: false, cost: undefined, billed: false, expected: undefined },
+    { name: "placeholder with tokens", tokens: true, cost: 0, billed: false, expected: 0.0000257 },
   ])(
     "accounts for $name before rejecting a dangling streamed tool call",
-    async ({ tokens, cost, billed }) => {
-      const runtime = setup();
+    async ({ tokens, cost, billed, expected }) => {
+      const runtime = setup(sessionEntry, {
+        config: {
+          ...config,
+          models: {
+            providers: {
+              [PROVIDER]: { baseUrl: BASE_URL, models: [logicalModel] },
+            },
+          },
+        },
+      });
       const terminal = finalMessage();
-      terminal.usage = structuredClone(tokens ? usage : makeZeroUsageSnapshot());
-      terminal.usage.cost.total = cost ?? 0;
+      terminal.usage = {
+        ...(tokens ? usage : makeZeroUsageSnapshot()),
+        cost: { ...makeZeroUsageSnapshot().cost, total: cost ?? 0 },
+      };
       if (billed) {
         terminal.usage.cost.totalOrigin = "provider-billed";
       }
@@ -837,7 +849,10 @@ describe("worker inference provider runtime", () => {
         type: "error",
         reason: "provider-error",
       });
-      const expectedEvents = cost === undefined ? [] : [expect.objectContaining({ costUsd: cost })];
+      const expectedEvents =
+        expected === undefined
+          ? []
+          : [expect.objectContaining({ costUsd: expect.closeTo(expected, 12) })];
       expect(usageEvents).toEqual(expectedEvents);
       if (cost !== undefined && !tokens) {
         expect(usageEvents[0]).not.toHaveProperty("context.used");

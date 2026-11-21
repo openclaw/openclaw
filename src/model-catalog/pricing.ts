@@ -147,7 +147,15 @@ function buildPricingContext(
   // Hosted aliases are policy-resolved against installed manifests. If that metadata is
   // unavailable, fail closed instead of treating every provider as policy-free.
   const remoteCatalog = snapshot ? getActiveRemoteModelCatalog(config) : undefined;
-  const hosted = remoteCatalog?.pricing ?? {};
+  // Providers without planned rows still own their hosted prices (for example, live gateways).
+  const plannedProviders = new Set([...rowKeys].map((key) => key.slice(0, key.indexOf("/"))));
+  const hosted = Object.fromEntries(
+    Object.entries(remoteCatalog?.pricing ?? {}).map(([key, price]) =>
+      price.explicit && !plannedProviders.has(key.slice(0, key.indexOf("/")))
+        ? [key, { ...price, explicit: false }]
+        : [key, price],
+    ),
+  );
   const upstream = remoteCatalog?.upstreamPricing ?? {};
   // Policy-free providers read both tables like v1's merged map; stable sort keeps hosted first.
   const policyFree: Array<[string, RemoteModelCatalogPrice]> = [

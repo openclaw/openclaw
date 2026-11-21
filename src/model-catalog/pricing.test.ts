@@ -803,6 +803,33 @@ describe("inline v2 pricing", () => {
     );
   });
 
+  it.each([
+    {
+      name: "hosted-only provider",
+      external: true,
+      baseUrl: hostedUrl,
+      expected: tokenRates(3, 4),
+    },
+    { name: "disabled external prices", external: false, baseUrl: hostedUrl, expected: undefined },
+    { name: "private endpoint", external: true, baseUrl: privateUrl, expected: undefined },
+  ])("resolves $name without static rows", async ({ external, baseUrl, expected }) => {
+    pricing = { ...known, input: 3, output: 4, source: "models.dev" };
+    vi.mocked(pluginMetadata.resolvePluginMetadataSnapshot).mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture",
+            providers: ["fixture"],
+            modelPricing: { providers: { fixture: { external } } },
+          },
+        ],
+      }),
+    );
+    await prepareRemoteModelCatalogStartupSnapshot();
+    const config = configFor(baseUrl, [], "fixture");
+    expect(costFor(config, "native/model", undefined, "fixture")).toEqual(expected);
+  });
+
   it("does not let known zero bypass disabled external pricing", async () => {
     await prepareRemoteModelCatalogStartupSnapshot();
     const config: OpenClawConfig = {};
