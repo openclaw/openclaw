@@ -11,7 +11,6 @@ const enPreferences = {
       thinking: "Effort",
       fastMode: "Speed",
       default: "Default",
-      modelPolicy: "Model policy",
       thinkingLevels: {
         off: "Off",
         minimal: "Minimal",
@@ -27,7 +26,6 @@ const enPreferences = {
         auto: "Auto",
         fast: "Fast",
         standard: "Standard",
-        on: "On",
         off: "Off",
       },
     },
@@ -46,11 +44,9 @@ const enPreferences = {
       lobsterSoundsOff: "Silent",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} visited",
-      lobsterdexFirstVisited: "{name} · first visited {date}",
       lobsterdexCardFirstVisited: "First visited {date}",
       lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
       lobsterdexCardCopyLink: "Copy link",
-      lobsterdexOpen: "Open Lobsterdex",
       lobsterdexThemeHidden:
         "This theme hides Lobsterdex. Your collection and preferences are preserved.",
     },

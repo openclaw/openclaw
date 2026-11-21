@@ -52,7 +52,6 @@ const enDevices = {
       showDetails: "Show details",
       requestedAccessLabel: "Requested access",
       approvedAccessLabel: "Approved access",
-      desktopOpenWindow: "Open this desktop in a new window",
       desktopOpenWindowTooltip: "Open in new window",
       desktopEnableHint:
         "Desktop sharing starts enabled on desktop devices. In the desktop app on that device, check the Desktop sharing switch under Settings. Approve any pending desktop access request here. If sharing still doesn’t work, ask an admin to check the desktop policy. The device needs Screen Sharing or an authenticated local VNC server.",
@@ -172,7 +171,6 @@ const enDevices = {
       allowlist: "Allowlist",
       allowlistHint: "Case-insensitive glob patterns.",
       addPattern: "Add pattern",
-      emptyAllowlist: "No allowlist entries yet.",
       newPattern: "New pattern",
       lastUsed: "Last used: {time}",
       pattern: "Pattern",
@@ -189,7 +187,6 @@ const enDevices = {
     },
     pairing: {
       subtitle: "Connect a mobile app or another device.",
-      noApp: "Don’t have the app yet?",
       getApps: "Get the apps",
       generating: "Creating a secure setup code…",
       accessTitle: "Setup type",
