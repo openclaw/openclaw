@@ -567,6 +567,47 @@ it("finishes a capture after more than two minutes without retiring its worker",
   }
 });
 
+it("bounds a capture whose worker never replies with a stage-naming error", async () => {
+  const root = fs.realpathSync(temp.make("plugin-generation-worker-capture-deadline-"));
+  const fixture = createFixture(path.join(root, "installed"), false);
+  const cache = createPluginCache();
+  const original = NativeWorker.prototype.postMessage;
+  const posts = vi.spyOn(NativeWorker.prototype, "postMessage").mockImplementation(function (
+    this: NativeWorker,
+    value: unknown,
+    transferList?: unknown[],
+  ) {
+    if (
+      isRecord(value) &&
+      isRecord((value as { input?: unknown }).input) &&
+      (value as { input: { operation?: string } }).input.operation === "capture"
+    ) {
+      // The worker never receives the capture and can never reply.
+      return;
+    }
+    return original.apply(this as never, [
+      value,
+      ...(transferList === undefined ? [] : [transferList]),
+    ]);
+  });
+  const previousDeadline = process.env.OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS;
+  process.env.OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS = "1000";
+  try {
+    await withInstalledCapture(root, cache, async () => {
+      preparePluginNativeAdmissions(fixture.index, cache);
+      await expect(prepare(fixture)).rejects.toThrow(/capture did not complete within 1\.0s/);
+    });
+  } finally {
+    posts.mockRestore();
+    if (previousDeadline === undefined) {
+      delete process.env.OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS;
+    } else {
+      process.env.OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS = previousDeadline;
+    }
+    await retirePluginCache(cache);
+  }
+});
+
 it("publishes native admission to pinned install roots while capture storage is redirected", async () => {
   await withOpenClawTestState({ label: "worker-pinned-admission" }, async (state) => {
     const fixture = createFixture(state.path("installed"), false);
