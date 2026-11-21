@@ -533,6 +533,12 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
       activeAgentId: "main",
       attempt: {
         sessionId: "session-123",
+        participationCeiling: {
+          kind: "send",
+          profileId: "guest",
+          sessionKey: "session-123",
+          permission: "read-only",
+        },
         sessionKey: "session-123",
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
@@ -557,6 +563,7 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
     });
     expect(context.activeProcessSessions).toHaveLength(1);
     expect(context).toMatchObject({
+      participationCeiling: { profileId: "guest", permission: "read-only" },
       activeProcessSessions: [{ sessionId: scopedId, command: "sleep 600", pid: 1234 }],
       transcriptStorage: { kind: "sqlite" },
       modelSelectionLocked: locked,

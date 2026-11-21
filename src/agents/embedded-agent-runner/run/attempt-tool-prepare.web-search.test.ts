@@ -16,6 +16,8 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { markCodeModePermissionChangeResult } from "../../code-mode-permission-change.js";
+import { prepareCoreToolPolicy } from "../../prepared-tool-surface.js";
+import { resolveParticipationSpawnError } from "../../subagents/spawn/subagent-spawn-participation.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -344,12 +346,37 @@ it.each(["full", null] as const)(
       sessionKey: dashboardSessionKey,
     };
     await using fixture = await createFixture({
+      config: {
+        tools: { exec: { mode: "deny" }, codeMode: false, toolSearch: { enabled: false } },
+      },
+      permissionMode: "full",
       participationCeiling,
       approvalReviewerDeviceId: "guest-device",
     });
+    // An active explicit mode must not replace the saved default overrides on reset.
+    fixture.attempt.execOverrides = { mode: "full" };
     await fixture.result.refreshPermissionMode(mode, () => {});
     const options = codingTools.mock.calls.at(-1)?.[0];
+    assert(options);
     expect(options).toMatchObject({ participationCeiling, approvalReviewerDeviceId: undefined });
     expect(fixture.attempt.participationCeiling).toBe(participationCeiling);
+    expect(prepareCoreToolPolicy(options).readOnly).toBe(mode === null);
+    expect(resolveParticipationSpawnError({}, options, "main")).toBeUndefined();
+    expect(options.sessionPermissionPolicy?.root).toBe("/tmp/workspace");
+    expect(resolveParticipationSpawnError({ cwd: "/elsewhere" }, options, "main")).toContain(
+      "original session root",
+    );
   },
 );
+
+it("keeps owner default permission refresh unrestricted", async () => {
+  await using fixture = await createFixture({
+    permissionMode: "full",
+    config: { tools: { exec: { mode: "deny" }, codeMode: false, toolSearch: { enabled: false } } },
+  });
+  await fixture.result.refreshPermissionMode(null, () => {});
+  const options = codingTools.mock.calls.at(-1)?.[0];
+  assert(options);
+  expect(options.sessionPermissionPolicy).toBeUndefined();
+  expect(prepareCoreToolPolicy(options).readOnly).toBe(false);
+});

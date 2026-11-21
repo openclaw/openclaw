@@ -198,6 +198,8 @@ export async function resolveSubagentSpawnRequest(
               requesterEntry,
               expectedParentSessionId: ctx.expectedParentSessionId,
               root: ctx.sessionPermissionPolicy?.root ?? "",
+              execPolicy: ctx.sessionPermissionPolicy?.execPolicy,
+              permission: ctx.sessionPermissionPolicy?.mode,
             })
           : undefined,
         completionRequesterSessionId: completionEntry?.sessionId,

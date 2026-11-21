@@ -167,6 +167,7 @@ it("carries a real invitee's native child and grandchild ceiling through private
           profileId: carol.id,
           sessionKey: parent.key,
           permission: "workspace",
+          execPolicy: { security: "allowlist", ask: "on-miss" },
           tools: participantTools,
           source: {
             agentId: "main",

@@ -3295,7 +3295,12 @@ lookup for each new participant child turn or completion admission.
 
 The session entry owns a sticky child-only `participationCeiling`: the original
 invitation key and participant, source agent/incarnation/creator/root, and captured
-tool and permission limits. Reset and entry replacement preserve it. The original
+tool and permission limits. The optional `execPolicy` retains exact security/ask
+floors for child execution, including allowlist-miss denial and mandatory approval
+that a permission label cannot represent. Its optional `denyMisses` constraint
+keeps denied misses closed when current policy also requires approval for every
+allowed command. It uses the same private JSON payload;
+no schema version or backfill is added. Reset and entry replacement preserve it. The original
 invited parent remains turn-local. Native spawn also captures that constraint in
 the existing host-owned subagent run record. This retained record and the private
 completion capability survive loss of the child row; they require a matching child

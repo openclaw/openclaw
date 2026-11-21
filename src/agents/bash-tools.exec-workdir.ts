@@ -346,13 +346,30 @@ export async function resolveExecWorkdir(params: {
   defaultCwd?: string;
   nodeCwd?: string;
   sandbox?: BashSandboxConfig;
+  participationRoot?: string;
 }): Promise<ExecWorkdirResolution> {
+  const confined = async (workdir: string) => {
+    if (params.participationRoot) {
+      const root = await fs.realpath(params.participationRoot);
+      const actual = await fs.realpath(workdir);
+      if (!isPathInside(root, actual)) {
+        throw new Error(
+          `exec workdir is outside the participation root (${root}). Use a directory within that root.`,
+        );
+      }
+    }
+  };
   const explicitWorkdir = normalizeOptionalString(params.workdir);
   if (params.workdir !== undefined && params.workdir !== "" && !explicitWorkdir) {
     return unavailable(params.workdir);
   }
 
   if (params.host === "node") {
+    if (params.participationRoot) {
+      throw new Error(
+        "Participating exec must stay on its host to enforce the participation root.",
+      );
+    }
     const remoteCwd = readNonBlankString(params.workdir) ?? readNonBlankString(params.nodeCwd);
     // Node-host cwd is forwarded verbatim; preserve whitespace (unlike local/sandbox).
     return remoteCwd ? { kind: "node", remoteCwd } : { kind: "node" };
@@ -366,6 +383,23 @@ export async function resolveExecWorkdir(params: {
     }
     const requestedCwd = explicitWorkdir ?? defaultCwd ?? sandbox.containerWorkdir;
     const resolved = await resolveSandboxWorkdir({ workdir: requestedCwd, sandbox });
+    if (resolved) {
+      await confined(resolved.hostCwd);
+      if (params.participationRoot) {
+        const relativeRoot = path.relative(
+          await fs.realpath(sandbox.workspaceDir),
+          await fs.realpath(params.participationRoot),
+        );
+        const containerRoot = path.posix.resolve(
+          sandbox.containerWorkdir,
+          ...relativeRoot.split(path.sep),
+        );
+        const relative = path.posix.relative(containerRoot, resolved.containerCwd);
+        if (relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative)) {
+          throw new Error("exec workdir is outside the participation root in the sandbox.");
+        }
+      }
+    }
     return resolved ? { kind: "sandbox", ...resolved } : unavailable(requestedCwd);
   }
 
@@ -383,5 +417,8 @@ export async function resolveExecWorkdir(params: {
     hostPath = `${baseCwd}${path.sep}${requestedCwd}`;
   }
   const resolved = resolveExistingHostWorkdir(hostPath);
+  if (resolved) {
+    await confined(resolved);
+  }
   return resolved ? { kind: "local", hostCwd: resolved } : unavailable(requestedCwd);
 }

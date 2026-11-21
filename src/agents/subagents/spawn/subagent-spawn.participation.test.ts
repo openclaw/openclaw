@@ -11,11 +11,14 @@ import {
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { readInProcessParticipationRun } from "../../../gateway/in-process-session-run.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { projectAgentToolsExecPolicy } from "../../agent-tools.execution-policy.js";
 import { testing as cliBackendsTesting } from "../../cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../cli-runner.test-helpers.js";
+import { resolveExecToolConfig } from "../../lazy-exec-tool.js";
 import { harnessRegistry } from "../../model-catalog-fixtures.test-support.js";
 import type { ParticipationCeiling } from "../../participation-ceiling.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -48,7 +51,7 @@ async function prepareParent() {
 }
 
 function useInProcessSpawns() {
-  const dispatch = vi.fn(async <T>(method: string, params: Record<string, unknown>) => {
+  const dispatch = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method !== "agent") {
       throw new Error(`Unexpected spawn RPC ${method}`);
     }
@@ -58,12 +61,13 @@ function useInProcessSpawns() {
     });
     expect(readInProcessParticipationRun(method, params)).toEqual(child?.participationCeiling);
     expect(params.participationCeiling).toBeUndefined();
-    return { runId: params.idempotencyKey, status: "accepted" } as T;
+    return { runId: params.idempotencyKey, status: "accepted" };
   });
   spawnTesting.setDepsForTest({
     hasInProcessGatewayContext: () => true,
     resolveContextEngine: async () => new LegacyContextEngine(),
-    dispatchGatewayMethodInProcess: dispatch,
+    dispatchGatewayMethodInProcess: async <T>(method: string, params: Record<string, unknown>) =>
+      (await dispatch(method, params)) as T,
   });
   return dispatch;
 }
@@ -134,52 +138,100 @@ it("rejects a foreign swarm default and a resolved CLI before admission effects"
   }
 });
 
-it("stamps the current cap at initial creation and keeps the original source on nested spawn", async () => {
-  const context = await prepareParent();
-  const dispatch = useInProcessSpawns();
-  const tool = createSessionsSpawnTool({ ...context, config: getRuntimeConfig() });
-  const first = await tool.execute("local-child", {
-    task: "bounded helper",
-    placement: { kind: "local" },
-    context: "isolated",
-    lightContext: true,
-  });
-  expect(first.details).toMatchObject({ status: "accepted" });
-  const firstKey = (first.details as { childSessionKey: string }).childSessionKey;
-  const child = loadSessionEntryReadOnly({ agentId: "main", sessionKey: firstKey });
-  const source = {
-    agentId: "main",
-    sessionId: "source-session",
-    lifecycleRevision: "source-life",
-    creatorProfileId: "source-creator",
-    root: fixture.stateDir,
-  };
-  expect(child).toMatchObject({
-    inheritedToolPolicySource: "participant",
-    sessionRoot: fixture.stateDir,
-    spawnedCwd: fixture.stateDir,
-    participationCeiling: { ...ceiling, source },
-  });
-  expect(child?.participationCeiling).toEqual({ ...ceiling, source });
-  const nestedCeiling: ParticipationCeiling = { ...ceiling, source, tools: [] };
-  const nested = await spawnSubagentDirect(
-    { task: "narrower nested helper", context: "isolated", lightContext: true },
-    {
+it.each(["ask", "allowlist"] as const)(
+  "retains %s execution policy after default reset and nested spawn",
+  async (mode) => {
+    const context = await prepareParent();
+    const dispatch = useInProcessSpawns();
+    await fixture.configure({ ...getRuntimeConfig(), tools: { exec: { mode } } });
+    const currentCeiling = { ...ceiling, permission: "workspace" as const };
+    using workspace = await resolveAttemptWorkspaceSandbox({
+      workspaceDir: fixture.stateDir,
+      sessionRoot: fixture.stateDir,
+      sessionId: "source-session",
+      sessionKey: fixture.parentSessionKey,
+      config: getRuntimeConfig(),
+      participationCeiling: currentCeiling,
+    });
+    const tool = createSessionsSpawnTool({
       ...context,
-      agentSessionKey: firstKey,
-      expectedParentSessionId: child?.sessionId,
-      participationCeiling: nestedCeiling,
-    },
-  );
-  expect(nested).toMatchObject({ status: "accepted" });
-  const grandchild = loadSessionEntryReadOnly({
-    agentId: "main",
-    sessionKey: nested.childSessionKey!,
-  });
-  expect(grandchild?.participationCeiling).toEqual(nestedCeiling);
-  expect(grandchild?.sessionRoot).toBe(fixture.stateDir);
-  expect(dispatch).toHaveBeenCalledTimes(2);
-});
+      participationCeiling: currentCeiling,
+      sessionPermissionPolicy: workspace.sessionPermissionPolicy,
+      config: getRuntimeConfig(),
+    });
+    const first = await tool.execute("local-child", {
+      task: "bounded helper",
+      placement: { kind: "local" },
+      context: "isolated",
+      lightContext: true,
+    });
+    expect(first.details).toMatchObject({ status: "accepted" });
+    const firstKey = (first.details as { childSessionKey: string }).childSessionKey;
+    const child = loadSessionEntryReadOnly({ agentId: "main", sessionKey: firstKey });
+    const source = {
+      agentId: "main",
+      sessionId: "source-session",
+      lifecycleRevision: "source-life",
+      creatorProfileId: "source-creator",
+      root: fixture.stateDir,
+    };
+    expect(child).toMatchObject({
+      inheritedToolPolicySource: "participant",
+      sessionRoot: fixture.stateDir,
+      spawnedCwd: fixture.stateDir,
+    });
+    expect(child?.participationCeiling).toEqual({
+      ...currentCeiling,
+      permission: "guarded",
+      source,
+      execPolicy: { security: "allowlist", ask: mode === "ask" ? "on-miss" : "off" },
+    });
+    await fixture.configure({ ...getRuntimeConfig(), tools: { exec: { mode: "auto" } } });
+    using reopened = await resolveAttemptWorkspaceSandbox({
+      workspaceDir: fixture.stateDir,
+      sessionRoot: child?.sessionRoot,
+      sessionId: child!.sessionId,
+      sessionKey: firstKey,
+      permissionMode: undefined,
+      participationCeiling: child?.participationCeiling,
+      config: getRuntimeConfig(),
+    });
+    expect(
+      projectAgentToolsExecPolicy({
+        options: {
+          participationCeiling: child?.participationCeiling,
+          sessionPermissionPolicy: reopened.sessionPermissionPolicy,
+        },
+        execConfig: resolveExecToolConfig({}),
+        model: {},
+      }),
+    ).toMatchObject({
+      mode: mode === "ask" ? "ask" : undefined,
+      security: "allowlist",
+      ask: mode === "ask" ? "on-miss" : "off",
+      participationDenyMisses: mode === "allowlist",
+    });
+    const nestedCeiling: ParticipationCeiling = { ...child!.participationCeiling!, tools: [] };
+    const nested = await spawnSubagentDirect(
+      { task: "narrower nested helper", context: "isolated", lightContext: true },
+      {
+        ...context,
+        agentSessionKey: firstKey,
+        expectedParentSessionId: child?.sessionId,
+        participationCeiling: nestedCeiling,
+        sessionPermissionPolicy: reopened.sessionPermissionPolicy,
+      },
+    );
+    expect(nested).toMatchObject({ status: "accepted" });
+    const grandchild = loadSessionEntryReadOnly({
+      agentId: "main",
+      sessionKey: nested.childSessionKey!,
+    });
+    expect(grandchild?.participationCeiling).toEqual(nestedCeiling);
+    expect(grandchild?.sessionRoot).toBe(fixture.stateDir);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  },
+);
 
 it("rejects a resolved native harness before any child admission", async () => {
   const context = await prepareParent();

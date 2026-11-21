@@ -353,7 +353,7 @@ test("validates invited tools as exact core names only with an invitation ceilin
   for (const invitedTools of [
     [],
     ["read"],
-    ["read", "web_fetch", "exec", "sessions_spawn"],
+    ["read", "web_fetch", "exec", "sessions_spawn", "skills_read", "skills_search"],
     ["tool_search", "tool_describe", "dispatch_action"],
     [" read ", "read"],
   ]) {

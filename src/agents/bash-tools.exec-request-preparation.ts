@@ -260,6 +260,7 @@ export function createExecRequestPreparation(params: {
       host,
       workdir: execParams.workdir,
       defaultCwd: params.defaults?.cwd,
+      participationRoot: params.defaults?.participationRoot,
       nodeCwd: params.defaults?.nodeCwd,
       sandbox: params.defaults?.sandbox,
     });
