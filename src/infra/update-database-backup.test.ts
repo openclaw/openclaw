@@ -1087,5 +1087,5 @@ it("bounds concurrent payload fsync before sealing the recovery capture", async 
   expect(active).toBe(0);
   expect(peak).toBeGreaterThan(1);
   expect(peak).toBeLessThanOrEqual(32);
-  expect((await readManifest(capture)).entries.length).toBeGreaterThan(40);
+  expect((await readManifest(capture.ref)).entries.length).toBeGreaterThan(40);
 });
