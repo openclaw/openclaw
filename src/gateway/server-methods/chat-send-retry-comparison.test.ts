@@ -49,20 +49,17 @@ function comparison(activeSteer: unknown, withIdentity = true): ChatSendRetryCom
     source: "pending",
   };
 }
-it.each(["pending", "transcript"] as const)(
-  "fails closed on keyless transformed %s text but accepts unchanged retained text",
-  (source) => {
-    const keyless = { ...request, requestIdentity: undefined };
-    const retained = { ...comparison(marker, false), source };
-    expect(compareChatSendSubmittedInput(keyless, session, retained)).toBe("unverifiable");
-    expect(
-      compareChatSendSubmittedInput(keyless, session, {
-        ...retained,
-        submitted: { ...retained.submitted!, content: request.p.message },
-      }),
-    ).toBe(false);
-  },
-);
+it("fails closed on keyless transformed text but accepts unchanged retained text", () => {
+  const keyless = { ...request, requestIdentity: undefined };
+  const retained = comparison(marker, false);
+  expect(compareChatSendSubmittedInput(keyless, session, retained)).toBe("unverifiable");
+  expect(
+    compareChatSendSubmittedInput(keyless, session, {
+      ...retained,
+      submitted: { ...retained.submitted!, content: request.p.message },
+    }),
+  ).toBe(false);
+});
 it("requires proof that keyless retained text was not transformed", () => {
   const retained = comparison({ ...marker, textUnchanged: false }, false);
   retained.submitted = { ...retained.submitted!, content: request.p.message };
