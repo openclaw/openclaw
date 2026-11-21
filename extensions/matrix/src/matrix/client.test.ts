@@ -9,6 +9,7 @@ import * as credentialsReadModule from "./credentials-read.js";
 
 const mocks = vi.hoisted(() => ({
   save: vi.fn(),
+  clear: vi.fn(),
   backfill: vi.fn(async () => "saved"),
   repair: vi.fn(),
   secret: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("./credentials-read.js", () => ({
 
 vi.mock("./credentials.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./credentials.js")>()),
+  clearMatrixCredentials: mocks.clear,
   saveBackfilledMatrixDeviceId: mocks.backfill,
   saveMatrixCredentials: mocks.save,
 }));
@@ -157,6 +159,7 @@ describe("resolveMatrixAuth", () => {
     loadCredentials.mockReset().mockResolvedValue(null);
     credentialsMatch.mockReset().mockReturnValue(false);
     mocks.save.mockReset();
+    mocks.clear.mockReset();
     mocks.backfill.mockReset().mockResolvedValue("saved");
     mocks.repair.mockReset().mockReturnValue(true);
     mocks.secret.mockReset().mockResolvedValue({});
@@ -184,7 +187,7 @@ describe("resolveMatrixAuth", () => {
 
   it("rejects embedded credentials in Matrix homeserver URLs", async () => {
     await expect(
-      resolveAuth({ ...tokenConfig, homeserver: "https://user:pass@matrix.example.org" }),
+      resolveAuth({ ...tokenConfig, homeserver: "https://user:pass@matrix.example.org" }), // trufflehog:ignore
     ).rejects.toThrow("Matrix homeserver URL must not include embedded credentials");
   });
 
@@ -211,6 +214,64 @@ describe("resolveMatrixAuth", () => {
 
     expect(mocks.request).not.toHaveBeenCalled();
     expect(auth).toMatchObject({ ...authFixture, deviceId: undefined, encryption: true });
+  });
+
+  it("replaces a revoked cached token with a fresh password login (#186011)", async () => {
+    loadCredentials.mockResolvedValue({ ...cachedCredentials, accessToken: "revoked-token" }); // pragma: allowlist secret
+    credentialsMatch.mockReturnValue(true);
+    mocks.request
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Invalid access token passed."), {
+          statusCode: 401,
+          body: { errcode: "M_UNKNOWN_TOKEN", soft_logout: false },
+        }),
+      )
+      .mockResolvedValueOnce({
+        user_id: identity.user_id,
+        device_id: "FRESHDEVICE",
+        access_token: "fresh-token", // pragma: allowlist secret
+      });
+
+    const auth = await resolveAuth(passwordConfig);
+
+    expectWhoami();
+    expect(mocks.clear).toHaveBeenCalledWith(expect.any(Object), "default");
+    expect(mocks.request).toHaveBeenLastCalledWith(
+      expect.objectContaining({ method: "POST", endpoint: "/_matrix/client/v3/login" }),
+    );
+    expect(auth).toMatchObject({ accessToken: "fresh-token", deviceId: "FRESHDEVICE" }); // pragma: allowlist secret
+    expectSavedCredentials(mocks.save, "default", {
+      ...tokenConfig,
+      accessToken: "fresh-token", // pragma: allowlist secret
+      deviceId: "FRESHDEVICE",
+    });
+  });
+
+  it("keeps the cached token when whoami fails for reasons other than revocation", async () => {
+    loadCredentials.mockResolvedValue({ ...cachedCredentials, accessToken: "flaky-token" }); // pragma: allowlist secret
+    credentialsMatch.mockReturnValue(true);
+    mocks.request.mockRejectedValue(
+      Object.assign(new Error("Internal server error"), { statusCode: 500 }),
+    );
+
+    const auth = await resolveAuth(passwordConfig);
+
+    expect(auth).toMatchObject({ accessToken: "flaky-token" }); // pragma: allowlist secret
+    expect(mocks.clear).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
+  it("verifies a cached token once per process when password login is available", async () => {
+    loadCredentials.mockResolvedValue({ ...cachedCredentials, accessToken: "live-token" }); // pragma: allowlist secret
+    credentialsMatch.mockReturnValue(true);
+    mocks.request.mockResolvedValue(identity);
+
+    await expect(resolveAuth(passwordConfig)).resolves.toMatchObject({ accessToken: "live-token" }); // pragma: allowlist secret
+    await expect(resolveAuth(passwordConfig)).resolves.toMatchObject({ accessToken: "live-token" }); // pragma: allowlist secret
+
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+    expectWhoami();
+    expect(mocks.clear).not.toHaveBeenCalled();
   });
 
   it("retries password login when startup auth hits a transient network error", async () => {
