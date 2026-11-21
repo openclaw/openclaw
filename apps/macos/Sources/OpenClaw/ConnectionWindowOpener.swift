@@ -25,7 +25,7 @@ final class ConnectionWindowOpener {
         if self.backgroundWindow == nil {
             let window = NSWindow(contentViewController: NSHostingController(
                 rootView: ConnectionWindow(state: state).environment(TailscaleService.shared)))
-            window.title = "Connection"
+            window.title = String(localized: "Connection")
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
             window.center()
