@@ -23,10 +23,12 @@ async function readQueueHealth<T>(
   message: string,
   read: () => T | Promise<T>,
   fallback: T,
+  onFailure: () => void,
 ): Promise<T> {
   try {
     return await read();
   } catch (error) {
+    onFailure();
     logQueueHealthReadFailure(message, error);
     return fallback;
   }
@@ -49,6 +51,7 @@ export async function buildDeliveryQueueHealthSummary(
   // Queue health reads are diagnostic; a storage failure must not take the
   // gateway health endpoint down with it.
   const stateContext = "stateContext" in context ? context.stateContext : undefined;
+  const unavailable = new Set<"outbound" | "ingressFailed" | "ingressPressure">();
   const [failed, ingress] = await Promise.all([
     readQueueHealth(
       "outbound delivery queue health read failed",
@@ -59,20 +62,34 @@ export async function buildDeliveryQueueHealthSummary(
         return countFailedDeliveryQueueEntries(undefined, context.stateContext);
       },
       [],
+      () => {
+        unavailable.add("outbound");
+      },
     ),
     readQueueHealth<ChannelIngressQueueHealth>(
       "channel ingress queue health read failed",
-      () => countChannelIngressQueueHealth(stateContext?.stateDir, stateContext?.workerContext),
+      () => {
+        if ("error" in context) {
+          throw context.error;
+        }
+        return countChannelIngressQueueHealth(stateContext?.stateDir, stateContext?.workerContext);
+      },
       { failed: [], pressure: [] },
+      () => {
+        unavailable.add("ingressFailed");
+        unavailable.add("ingressPressure");
+      },
     ),
   ]);
-  if (ingress.errors?.failed) {
+  if (ingress.errors?.failed !== undefined) {
+    unavailable.add("ingressFailed");
     logQueueHealthReadFailure(
       "channel ingress failed queue health read failed",
       ingress.errors.failed,
     );
   }
-  if (ingress.errors?.pressure) {
+  if (ingress.errors?.pressure !== undefined) {
+    unavailable.add("ingressPressure");
     logQueueHealthReadFailure(
       "channel ingress pressure health read failed",
       ingress.errors.pressure,
@@ -80,11 +97,17 @@ export async function buildDeliveryQueueHealthSummary(
   }
   const { failed: ingressFailed, pressure: ingressPressure } = ingress;
 
-  if (failed.length === 0 && ingressFailed.length === 0 && ingressPressure.length === 0) {
+  if (
+    failed.length === 0 &&
+    ingressFailed.length === 0 &&
+    ingressPressure.length === 0 &&
+    unavailable.size === 0
+  ) {
     return undefined;
   }
   return {
     failed,
+    ...(unavailable.size > 0 ? { unavailable: [...unavailable].toSorted() } : {}),
     ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
     ...(ingressPressure.length > 0 ? { ingressPressure } : {}),
   };

@@ -339,6 +339,17 @@ export function formatDeliveryQueueHealthLine(
   const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
   const ingressPressure = summary.deliveryQueues?.ingressPressure ?? [];
   const warnings: string[] = [];
+  const unavailable = summary.deliveryQueues?.unavailable ?? [];
+  if (unavailable.length > 0) {
+    const readNames = {
+      outbound: "outbound delivery checks",
+      ingressFailed: "inbound failure checks",
+      ingressPressure: "inbound backlog checks",
+    };
+    warnings.push(
+      `health unavailable — ${unavailable.map((read) => readNames[read]).join(", ")}; retry with openclaw health --verbose`,
+    );
+  }
   const deadLetterCounts = [
     ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
     ...ingressFailed.map(

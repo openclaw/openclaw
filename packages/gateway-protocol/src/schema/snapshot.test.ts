@@ -12,6 +12,25 @@ function snapshotWithPresence(presence: Record<string, unknown>) {
 }
 
 describe("SnapshotSchema", () => {
+  it("accepts bounded queue-read unavailability without exposing raw errors", () => {
+    const snapshot = snapshotWithPresence({ ts: 1 });
+    const withQueues = (deliveryQueues: Record<string, unknown>) => ({
+      ...snapshot,
+      health: { deliveryQueues },
+    });
+    expect(Value.Check(SnapshotSchema, withQueues({ failed: [], unavailable: ["outbound"] }))).toBe(
+      true,
+    );
+    expect(
+      Value.Check(SnapshotSchema, withQueues({ failed: [], unavailable: ["private-error"] })),
+    ).toBe(false);
+    expect(
+      Value.Check(
+        SnapshotSchema,
+        withQueues({ failed: [], unavailable: ["outbound"], error: "private-error" }),
+      ),
+    ).toBe(false);
+  });
   it("keeps the running Gateway's exposure optional for older Gateways", () => {
     const snapshot = snapshotWithPresence({ ts: 1 });
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
