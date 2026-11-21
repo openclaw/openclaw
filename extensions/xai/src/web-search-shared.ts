@@ -1,42 +1,10 @@
-import { wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import { requireResponsesSearchTextCitationsAndInline } from "openclaw/plugin-sdk/provider-web-search";
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
-  requireXaiResponseTextCitationsAndInline,
 } from "./responses-tool-shared.js";
-import type { XaiWebSearchResponse } from "./web-search-response.types.js";
-export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_WEB_SEARCH_MAX_CONTENT_CHARS = 20_000;
-
-export function buildXaiWebSearchPayload(params: {
-  query: string;
-  provider: string;
-  model: string;
-  tookMs: number;
-  content: string;
-  citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
-  truncated?: boolean;
-  source?: "web_search" | "x_search";
-}): Record<string, unknown> {
-  return {
-    query: params.query,
-    provider: params.provider,
-    model: params.model,
-    tookMs: params.tookMs,
-    externalContent: {
-      untrusted: true,
-      source: params.source ?? "web_search",
-      provider: params.provider,
-      wrapped: true,
-    },
-    content: wrapWebContent(params.content, "web_search"),
-    citations: params.citations,
-    ...(params.inlineCitations ? { inlineCitations: params.inlineCitations } : {}),
-    ...(params.truncated ? { truncated: true } : {}),
-  };
-}
 
 /** Typed deadline the web_search boundary reports as a timeout. */
 class XaiWebSearchTimeoutError extends Error {
@@ -85,7 +53,7 @@ export async function requestXaiWebSearch(params: {
       errorLabel: "xAI web search failed",
     },
     (data) =>
-      requireXaiResponseTextCitationsAndInline(
+      requireResponsesSearchTextCitationsAndInline(
         data,
         "xAI web search failed",
         params.inlineCitations,

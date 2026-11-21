@@ -21,12 +21,18 @@ import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
 } from "./capability-offers.js";
+import {
+  isClawRouterXaiSearchOffer,
+  prepareClawRouterXaiSearch,
+  readClawRouterXaiSearch,
+} from "./responses-search.js";
 
 export async function searchClawRouter(
   ctx: Parameters<WebSearchProviderPlugin["createTool"]>[0],
   args: Record<string, unknown>,
   execution?: WebSearchProviderToolExecutionContext,
 ): Promise<Record<string, unknown>> {
+  const startedAt = Date.now();
   const query = readStringParam(args, "query", { required: true });
   if (!query.trim() || query.length > 4_000) {
     throw new Error("ClawRouter search requires 1-4000 query characters");
@@ -55,6 +61,9 @@ export async function searchClawRouter(
     signal: execution?.signal,
   });
   const offer = offers.find((candidate) => {
+    if (isClawRouterXaiSearchOffer(candidate)) {
+      return true;
+    }
     const codec = searchCodec(candidate.requestFormat);
     return (
       codec &&
@@ -67,13 +76,19 @@ export async function searchClawRouter(
     );
   });
   const codec = offer && searchCodec(offer.requestFormat);
-  if (!offer || !codec) {
+  const xaiSearch = offer?.requestFormat === "openai.responses";
+  if (!offer || (!codec && !xaiSearch)) {
     throw new Error("ClawRouter has no eligible search offer with a supported wire format");
   }
   if (offer.requestFormat === "parallel.search" && query.length > 200) {
     throw new Error("ClawRouter Parallel search accepts at most 200 query characters");
   }
-  const request = codec.request(offer.url, query, count);
+  const request = xaiSearch
+    ? prepareClawRouterXaiSearch(offer, query)
+    : codec?.request(offer.url, query, count);
+  if (!request) {
+    throw new Error("ClawRouter search has no supported request codec");
+  }
   execution?.signal?.throwIfAborted();
   execution?.assertCurrent?.();
   const headers = new Headers(context.headers);
@@ -84,7 +99,7 @@ export async function searchClawRouter(
   const { response, release } = await fetchWithTimeoutGuarded(
     request.url,
     {
-      method: codec.method,
+      method: xaiSearch ? "POST" : codec?.method,
       headers,
       body:
         "body" in request
@@ -101,11 +116,15 @@ export async function searchClawRouter(
       ),
       dispatcherPolicy: context.dispatcherPolicy,
       auditContext: "clawrouter.web-search",
+      maxRedirects: xaiSearch ? 0 : undefined,
     },
   );
   try {
     if (!response.ok) {
       throw new Error(`ClawRouter search failed (HTTP ${response.status})`);
+    }
+    if (xaiSearch && (response.status !== 200 || response.headers.has("content-range"))) {
+      throw new Error("ClawRouter xAI web search requires a complete HTTP 200 response");
     }
     const payload = asOptionalRecord(
       await readProviderJsonResponse(response, "clawrouter.web-search", {
@@ -116,12 +135,15 @@ export async function searchClawRouter(
     timeoutMs();
     execution?.signal?.throwIfAborted();
     execution?.assertCurrent?.();
+    if (xaiSearch) {
+      return readClawRouterXaiSearch(payload, query, Date.now() - startedAt);
+    }
     const envelope =
       offer.requestFormat === "brave.search" ? asOptionalRecord(payload?.web) : payload;
     if (!Array.isArray(envelope?.results)) {
       throw new Error("ClawRouter search returned a malformed result");
     }
-    const results = codec.results(payload, count).flatMap((row) => {
+    const results = (codec?.results(payload, count) ?? []).flatMap((row) => {
       let url: URL;
       try {
         url = new URL(row.url);

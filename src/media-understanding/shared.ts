@@ -444,6 +444,7 @@ export async function fetchWithTimeoutGuarded(
     pinDns?: boolean;
     dispatcherPolicy?: PinnedDispatcherPolicy;
     auditContext?: string;
+    maxRedirects?: number;
     mode?: GuardedFetchMode;
   },
 ): Promise<GuardedFetchResult> {
@@ -466,6 +467,7 @@ export async function fetchWithTimeoutGuarded(
     pinDns: options?.pinDns,
     dispatcherPolicy: options?.dispatcherPolicy,
     auditContext: sanitizeAuditContext(options?.auditContext),
+    maxRedirects: options?.maxRedirects,
     ...(resolvedMode ? { mode: resolvedMode } : {}),
   });
 }

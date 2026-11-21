@@ -9,6 +9,7 @@ import {
   resolveApiKeyForProvider,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  buildResponsesSearchPayload,
   formatCliCommand,
   getScopedCredentialValue,
   mergeScopedSearchConfig,
@@ -26,11 +27,7 @@ import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import { resolveXaiResponsesEndpoint } from "./responses-tool-shared.js";
 import { resolveNormalizedXaiToolModel } from "./tool-config-shared.js";
-import {
-  buildXaiWebSearchPayload,
-  requestXaiWebSearch,
-  wrapXaiWebSearchError,
-} from "./web-search-shared.js";
+import { requestXaiWebSearch, wrapXaiWebSearchError } from "./web-search-shared.js";
 import { resolveEffectiveXSearchConfig, setPluginXSearchConfigValue } from "./x-search-config.js";
 import { XAI_DEFAULT_X_SEARCH_MODEL } from "./x-search-shared.js";
 
@@ -139,7 +136,7 @@ async function runXaiWebSearch(params: {
   const startedAt = Date.now();
   const result = await requestXaiWebSearch(params);
   params.signal?.throwIfAborted();
-  const payload = buildXaiWebSearchPayload({
+  const payload = buildResponsesSearchPayload({
     query: params.query,
     provider: "grok",
     model: params.model,

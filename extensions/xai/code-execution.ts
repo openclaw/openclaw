@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readStringParam,
+  requireResponsesSearchTextAndCitations,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   buildMissingCodeExecutionApiKeyPayload,
@@ -13,7 +17,6 @@ import {
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
-  requireXaiResponseTextAndCitations,
   XAI_RESPONSES_ENDPOINT,
 } from "./src/responses-tool-shared.js";
 import { resolveXaiToolApiKeyWithAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
@@ -78,7 +81,7 @@ export function createCodeExecutionTool(options?: {
           errorLabel: "xAI code execution failed",
         },
         (data) => {
-          const { content, citations } = requireXaiResponseTextAndCitations(
+          const { content, citations } = requireResponsesSearchTextAndCitations(
             data,
             "xAI code execution failed",
           );
