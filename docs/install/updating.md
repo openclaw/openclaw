@@ -1865,6 +1865,12 @@ files or changed database or journal bytes still require recovery by their owner
 Snapshot publication uses the same checks, including on older Linux kernels where
 reported file creation time changes after ordinary writes or hard-link removal.
 
+Before replacing SQLite files, rollback also drains local agent handles opened
+through directory aliases that were not present during snapshot capture. Cleanup
+follows each handle’s captured file identity, not a retargeted alias’s new
+destination. The runtime performing rollback must contain this fix; it changes
+no schemas, stored data, or rollback eligibility rules.
+
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The
 current updater only inspects these journals; use their original helper to

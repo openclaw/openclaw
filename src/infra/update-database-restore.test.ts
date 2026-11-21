@@ -13,7 +13,10 @@ import {
 } from "../daemon/runtime-pin-store.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -399,6 +402,64 @@ it("restores aliased databases through timestamp drift without rewinding update 
     ]);
   }, true);
 });
+
+it.each([false, true])(
+  "drains an unlisted alias before restore (retargeted=%s)",
+  async (retargeted) => {
+    await withFixture(async (fixture) => {
+      const aliasDirectory = fixture.state.path("late-agent-alias");
+      await fs.symlink(path.dirname(fixture.agent.path), aliasDirectory, "junction");
+      const aliasPath = path.join(aliasDirectory, "openclaw-agent.sqlite");
+      const alias = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: aliasPath,
+        env: fixture.state.env,
+      });
+      const successorPath = fixture.state.path("unrelated-agent", "openclaw-agent.sqlite");
+      const successor = openOpenClawAgentDatabase({
+        agentId: "other",
+        path: successorPath,
+        env: fixture.state.env,
+      });
+      successor.db.exec(
+        "CREATE TABLE successor_witness(value TEXT); INSERT INTO successor_witness VALUES ('unrelated');",
+      );
+      if (retargeted) {
+        await fs.unlink(aliasDirectory);
+        await fs.symlink(path.dirname(successorPath), aliasDirectory, "junction");
+      }
+      expect(fixture.backup.sourcePaths).not.toContain(aliasPath);
+      const history = fixture.shared.db
+        .prepare("SELECT rowid,* FROM update_runs ORDER BY run_id")
+        .all();
+      try {
+        await fixture.restore();
+        expect(alias.db.isOpen).toBe(false);
+        expect(successor.db.isOpen).toBe(true);
+        expect(successor.db.prepare("SELECT value FROM successor_witness").all()).toEqual([
+          { value: "unrelated" },
+        ]);
+        const restored = openOpenClawAgentDatabase({
+          agentId: "main",
+          path: fixture.agent.path,
+          env: fixture.state.env,
+        });
+        expect(restored.db.prepare("SELECT value FROM restore_witness").all()).toEqual([
+          { value: "baseline" },
+        ]);
+        expect(
+          openOpenClawStateDatabase({ env: fixture.state.env })
+            .db.prepare("SELECT rowid,* FROM update_runs ORDER BY run_id")
+            .all(),
+        ).toEqual(history);
+      } finally {
+        await closeOpenClawAgentDatabaseByPathAsync(aliasPath);
+        await closeOpenClawAgentDatabaseByPathAsync(successorPath);
+        await fixture.close();
+      }
+    });
+  },
+);
 
 it.each([
   { failureAt: 1, cleanupFails: false },

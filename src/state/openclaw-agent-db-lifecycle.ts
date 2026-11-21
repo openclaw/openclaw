@@ -11,6 +11,10 @@ import {
 } from "../infra/sqlite-post-commit.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
+import {
+  inspectDatabasePathIdentitySync,
+  normalizeDatabasePath,
+} from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -21,6 +25,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
+import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
   hasAgentDatabaseMaintenanceAuthority,
   readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
@@ -494,6 +499,38 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
     }
     return closeOpenClawAgentDatabaseByPath(selection.path, expectedAgentId);
   });
+}
+
+/** Drain physical aliases through their captured lexical close owners before rollback. */
+export async function closeOpenClawAgentDatabaseAliasesByPathAsync(
+  pathname: string,
+): Promise<void> {
+  const resolvedPath = path.resolve(pathname);
+  const selected = cache.databases.get(resolvedPath);
+  const owned = selected && findOpenClawAgentDatabaseIdentity(selected);
+  // A retargeted locator selects its admitted owner, never its current destination.
+  // Without that owner, only a canonical path can discover an unlisted local alias.
+  const observed = owned ? undefined : inspectDatabasePathIdentitySync(resolvedPath);
+  const identity =
+    typeof owned?.identity === "string"
+      ? { key: `file:${owned.identity}`, birthtime: owned.birthtime }
+      : observed?.canonicalPath === normalizeDatabasePath(resolvedPath)
+        ? observed
+        : undefined;
+  const paths = new Set([resolvedPath]);
+  for (const database of cache.databases.values()) {
+    const captured = findOpenClawAgentDatabaseIdentity(database);
+    if (
+      typeof captured?.identity === "string" &&
+      identity?.key === `file:${captured.identity}` &&
+      identity.birthtime === captured.birthtime
+    ) {
+      paths.add(database.path);
+    }
+  }
+  for (const capturedPath of paths) {
+    await closeOpenClawAgentDatabaseByPathAsync(capturedPath);
+  }
 }
 
 export { cache as agentDatabaseLifecycle };
