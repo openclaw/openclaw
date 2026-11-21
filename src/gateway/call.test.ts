@@ -15,7 +15,11 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/e
 import { GATEWAY_CLIENT_MODES } from "../utils/message-channel.js";
 import { registerGatewayCallDeadlineTests } from "./call-deadline.test-support.js";
 import { registerGatewayCallDispatchPreparationTests } from "./call-dispatch-preparation.test-support.js";
-import { registerGatewayCallLocalBackendAuthTests } from "./call-local-backend-auth.test-support.js";
+import {
+  deviceAuth,
+  makeRemotePasswordGatewayConfig,
+  registerGatewayCallLocalBackendAuthTests,
+} from "./call-local-backend-auth.test-support.js";
 import type { GatewayClientOptions, GatewayClientRequestOptions } from "./client.js";
 import { waitForFast } from "./client.test-support.js";
 import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
@@ -102,6 +106,14 @@ vi.mock("../config/gateway-dispatch-config.js", async (importOriginal) => {
 
 vi.mock("../config/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
+  };
+});
+
+vi.mock("../config/gateway-port.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/gateway-port.js")>();
   return {
     ...actual,
     resolveGatewayPort: gatewayConfigMocks.resolveGatewayPort,
@@ -273,10 +285,6 @@ const {
   isGatewayTransportError,
 } = await import("./call.js");
 
-function deviceAuth(token = "paired-device-token", scopes = ["operator.read"]): DeviceAuthEntry {
-  return { token, role: "operator", scopes, updatedAtMs: 123 };
-}
-
 function resetGatewayCallMocks() {
   getRuntimeConfig.mockReset().mockReturnValue({});
   resolveGatewayPort.mockReset().mockReturnValue(18789);
@@ -338,16 +346,6 @@ function setEnvSecretGatewayConfig(gateway: NonNullable<OpenClawConfig["gateway"
 function setLocalLoopbackGatewayConfig(port = 18789) {
   setGatewayConfig({ mode: "local", bind: "loopback" });
   setGatewayNetworkDefaults(port);
-}
-
-function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword = "from-config") {
-  return {
-    gateway: {
-      mode: "remote",
-      remote: { url: "wss://remote.example:18789", password: remotePassword },
-      auth: { password: localPassword },
-    },
-  };
 }
 
 const envKeys = [

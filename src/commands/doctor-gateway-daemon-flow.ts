@@ -1,6 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

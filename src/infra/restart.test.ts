@@ -44,6 +44,11 @@ vi.mock("../config/paths.js", () => ({
     env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
 }));
 
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: (await import("../config/paths.js")).resolveGatewayPort,
+}));
+
 const {
   consumeGatewayRestartAuthorization,
   hasPendingGatewayRestart,

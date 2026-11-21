@@ -90,6 +90,11 @@ vi.mock("../../agents/exec-defaults.js", async (importOriginal) => ({
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  resolveGatewayPort: (await import("../../config/gateway-port.js")).resolveGatewayPort,
+}));
+
+vi.mock("../../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/gateway-port.js")>()),
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../daemon/diagnostics.js", async (importOriginal) => ({

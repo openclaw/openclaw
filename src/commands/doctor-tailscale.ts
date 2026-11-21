@@ -1,4 +1,4 @@
-import { resolveGatewayPort } from "../config/paths.js";
+import { resolveGatewayPort } from "../config/gateway-port.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {

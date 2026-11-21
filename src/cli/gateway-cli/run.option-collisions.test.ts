@@ -43,7 +43,11 @@ import {
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
 import { registerGatewayLockFailureTests } from "./run-lock-failure.test-support.js";
-import { registerGatewayRunStartupRecoveryTests } from "./run-startup-recovery.test-support.js";
+import {
+  bootDecision,
+  callArg,
+  registerGatewayRunStartupRecoveryTests,
+} from "./run-startup-recovery.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -124,15 +128,6 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.hoisted(() =>
     path: "/tmp/openclaw-stability.json",
   })),
 );
-function bootDecision(tripped = false, recovered = false) {
-  return {
-    tripped,
-    uncleanBoots: tripped ? 3 : 0,
-    windowMs: 300_000,
-    shouldWriteStabilityBundle: tripped,
-    recovered,
-  };
-}
 const bootLifecycle = vi.hoisted(() => ({
   manualChannelStartHint: `Start a channel manually with: openclaw gateway call channels.start --params '{"channel":"<id>"}'`,
   decisions: [] as ReturnType<typeof bootDecision>[],
@@ -202,6 +197,11 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
+  resolveGatewayPort: (await import("../../config/gateway-port.js")).resolveGatewayPort,
+}));
+
+vi.mock("../../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/gateway-port.js")>()),
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 
@@ -499,14 +499,6 @@ describe("gateway run option collisions", () => {
   }
 
   registerInvalidConfigResetTests(configState);
-  function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
-    const call = mock.mock.calls[index];
-    if (!call) {
-      throw new Error(`Expected mock call ${index}`);
-    }
-    return call[argIndex];
-  }
-
   function gatewayStartOptions(index = 0) {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;

@@ -106,8 +106,13 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 vi.mock("../commands/onboard-skills.js", () => ({ setupSkills: mocks.setupSkills }));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
-  resolveGatewayPort: () => 18789,
+  resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
   readConfigFileSnapshot: mocks.readSnapshot,
+}));
+
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: () => 18789,
 }));
 vi.mock("../config/logging.js", () => ({ logConfigUpdated: vi.fn() }));
 vi.mock("../plugins/status.js", () => ({

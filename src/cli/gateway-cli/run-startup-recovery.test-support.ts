@@ -11,6 +11,24 @@ type BootDecision = Pick<
   "tripped" | "uncleanBoots" | "windowMs" | "shouldWriteStabilityBundle" | "recovered"
 >;
 
+export function bootDecision(tripped = false, recovered = false) {
+  return {
+    tripped,
+    uncleanBoots: tripped ? 3 : 0,
+    windowMs: 300_000,
+    shouldWriteStabilityBundle: tripped,
+    recovered,
+  };
+}
+
+export function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[argIndex];
+}
+
 export function registerGatewayRunStartupRecoveryTests({
   bootLifecycle,
   bootDecision,

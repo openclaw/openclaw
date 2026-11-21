@@ -1,5 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveGatewayPort } from "../../config/paths.js";
+import { resolveGatewayPort } from "../../config/gateway-port.js";
 import type { GatewayBindMode, OpenClawConfig } from "../../config/types.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";

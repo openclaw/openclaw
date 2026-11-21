@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { forceFreePortAndWait } from "../src/cli/ports.js";
-import { resolveGatewayPort } from "../src/config/paths.js";
+import { resolveGatewayPort } from "../src/config/gateway-port.js";
 
 type PortProcess = Awaited<ReturnType<typeof forceFreePortAndWait>>["killed"][number];
 

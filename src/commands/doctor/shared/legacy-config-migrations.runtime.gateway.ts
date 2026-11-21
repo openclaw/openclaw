@@ -5,8 +5,8 @@ import {
   isGatewayNonLoopbackBindMode,
   resolveGatewayPortWithDefault,
 } from "../../../config/gateway-control-ui-origins.js";
+import { DEFAULT_GATEWAY_PORT } from "../../../config/gateway-port.js";
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
-import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([

@@ -138,9 +138,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ) => actual.transformConfigFileWithRetry({ ...params, io }),
     writeConfigFile: wizardTestMocks.writeConfigFile,
     replaceConfigFile: wizardTestMocks.replaceConfigFile,
-    resolveGatewayPort: wizardTestMocks.resolveGatewayPort,
+    resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
   };
 });
+
+vi.mock("../config/gateway-port.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+  resolveGatewayPort: wizardTestMocks.resolveGatewayPort,
+}));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall: wizardTestMocks.inspectWindowsGatewayFirewall,

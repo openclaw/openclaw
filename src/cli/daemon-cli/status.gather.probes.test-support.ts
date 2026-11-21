@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { assert, vi } from "vitest";
 import type { GatewayServiceInventory } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
@@ -8,6 +8,14 @@ import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { probeGatewayStatus } from "./probe.js";
 import { printDaemonStatus } from "./status.print.js";
+
+export function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
+}
 
 export function capturePrintedDaemonStatus(...args: Parameters<typeof printDaemonStatus>) {
   const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -39,6 +47,12 @@ export const callGatewayStatusProbe = vi.fn<
   error: null,
   server: { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
 }));
+
+export function probeInput() {
+  const input = callGatewayStatusProbe.mock.calls[0]?.[0];
+  assert(input, "expected status probe");
+  return input;
+}
 
 export type PortUsageTestSummary = Omit<PortUsage, "errors">;
 export type PortUsageInspectionOptions = { probeHosts?: readonly string[] };

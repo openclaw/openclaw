@@ -272,7 +272,7 @@ export async function collectStatusScanOverview(params: {
       ? await import("../gateway/control-ui-links.js").then(
           async ({ resolveAdvertisedControlUiLinks }) =>
             resolveAdvertisedControlUiLinks({
-              port: (await import("../config/config.js")).resolveGatewayPort(cfg),
+              port: (await import("../config/gateway-port.js")).resolveGatewayPort(cfg),
               bind: cfg.gateway?.bind,
               customBindHost: cfg.gateway?.customBindHost,
               basePath: cfg.gateway?.controlUi?.basePath,

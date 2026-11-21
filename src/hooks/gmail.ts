@@ -1,12 +1,8 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import {
-  type OpenClawConfig,
-  DEFAULT_GATEWAY_PORT,
-  type HooksGmailTailscaleMode,
-  resolveGatewayPort,
-} from "../config/config.js";
+import type { HooksGmailTailscaleMode, OpenClawConfig } from "../config/config.js";
+import { DEFAULT_GATEWAY_PORT, resolveGatewayPort } from "../config/gateway-port.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,

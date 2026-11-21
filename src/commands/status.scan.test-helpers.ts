@@ -237,6 +237,10 @@ export async function loadStatusScanModuleForTest(
     readConfigFileSnapshotWithPluginMetadata: mocks.readConfigFileSnapshotWithPluginMetadata,
     resolveGatewayPort: mocks.resolveGatewayPort,
   }));
+  vi.doMock("../config/gateway-port.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
+    resolveGatewayPort: mocks.resolveGatewayPort,
+  }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
     getStatusCommandSecretTargetIds,
   }));
