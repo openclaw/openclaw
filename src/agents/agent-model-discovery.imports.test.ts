@@ -5,20 +5,38 @@ import { findSourceImportBackedges } from "../../test/helpers/source-import-clos
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const configOwners = ["src/config/io.runtime.ts", "src/config/zod-schema.ts"];
+const toolValidationOwners = [
+  "packages/llm-core/src/index.ts",
+  "packages/llm-core/src/validation.ts",
+];
 it.each(
   Object.entries({
     "src/agents/prepared-model-catalog.worker.ts": [
       ...configOwners,
+      ...toolValidationOwners,
       "src/agents/ai-transport-runtime-host.ts",
       "packages/ai/src/transports.ts",
     ],
-    "src/agents/prepared-model-runtime.full-catalog.ts": configOwners,
-    "src/agents/prepared-model-runtime.scoped-catalog.ts": configOwners,
+    "src/agents/model-catalog.ts": toolValidationOwners,
+    "src/agents/model-catalog.runtime.ts": [
+      "src/agents/workspace.ts",
+      "src/config/config.ts",
+      "src/config/validation.ts",
+      ...configOwners,
+      ...toolValidationOwners,
+    ],
+    "src/agents/prepared-model-runtime.full-catalog.ts": [...configOwners, ...toolValidationOwners],
+    "src/agents/prepared-model-runtime.scoped-catalog.ts": [
+      ...configOwners,
+      ...toolValidationOwners,
+    ],
+    "packages/ai/src/internal/runtime.ts": toolValidationOwners,
     "src/agents/models-config.providers.discovery-auth.runtime.ts": configOwners,
     "src/agents/agent-model-discovery.ts": ["src/agents/sessions/agent-session.ts"],
   }),
 )("keeps %s independent of unrelated runtime owners", (entry, forbidden) => {
-  expect(findSourceImportBackedges(entry, forbidden)).toEqual([]);
+  const backedges = findSourceImportBackedges(entry, forbidden);
+  expect(backedges, backedges.join("\n")).toEqual([]);
 });
 
 it("discovers an API-key catalog without full plugin, OAuth, or config runtimes", async () => {

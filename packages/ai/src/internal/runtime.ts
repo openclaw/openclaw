@@ -1,4 +1,6 @@
 export { getEventStreamCompletion } from "@openclaw/llm-core/event-stream";
+export { createApiRegistry, type ApiRegistry } from "../api-registry.js";
+export { createLlmRuntime, type LlmRuntime } from "../stream.js";
 export * from "./default-runtime.js";
 export * from "../env-api-keys.js";
 export * from "../model-utils.js";
