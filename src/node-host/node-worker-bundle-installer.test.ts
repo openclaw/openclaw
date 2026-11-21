@@ -505,7 +505,14 @@ describe("node worker bundle installer", () => {
       } else {
         await fs.rename(archivePath, `${archivePath}.original`);
         if (kind === "symlink") {
-          await fs.symlink(`${archivePath}.original`, archivePath);
+          try {
+            await fs.symlink(`${archivePath}.original`, archivePath);
+          } catch (e: unknown) {
+            if ((e as NodeJS.ErrnoException).code === "EPERM" && process.platform === "win32") {
+              return; // symlinks require Developer Mode on Windows; skip if unavailable
+            }
+            throw e;
+          }
         } else if (kind === "hardlink") {
           await fs.link(`${archivePath}.original`, archivePath);
         } else {
