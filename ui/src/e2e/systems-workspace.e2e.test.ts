@@ -89,6 +89,56 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each(["gateway", "node:studio"])(
+    "keeps keyboard focus on %s across a background device refresh",
+    async (id) => {
+      await suite.withPage(
+        { locale: "en-US", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const machines = (online: boolean) => ({
+            environments: [
+              { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
+              {
+                id: "node:studio",
+                type: "node",
+                label: "Studio Mac",
+                platform: "darwin",
+                status: online ? "available" : "unavailable",
+              },
+            ],
+          });
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": machines(true),
+          });
+          await page.goto(suite.server.baseUrl + "systems");
+          const list = page.locator(".systems-sidebar");
+          const node = list.getByRole("button", { name: /Studio Mac/ });
+          const target =
+            id === "gateway" ? list.getByRole("button", { name: /Gateway machine/ }) : node;
+          await target.focus();
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          expect(await target.evaluate((el) => el === document.activeElement)).toBe(true);
+          const original = await target.evaluateHandle((el) => el);
+          await gateway.setMethodResponse("environments.list", machines(false));
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
+          await expect.poll(() => node.getAttribute("data-status")).toBe("unavailable");
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1")
+            await page.screenshot({
+              path:
+                suite.artifactDir +
+                "/system-focus-" +
+                (id === "gateway" ? "host" : "node") +
+                ".png",
+              animations: "disabled",
+            });
+          expect(await original.evaluate((el) => el === document.activeElement)).toBe(true);
+          await page.keyboard.press("Enter");
+          await expect.poll(() => target.getAttribute("aria-pressed")).toBe("true");
+        },
+      );
+    },
+  );
   it.each([390, 1280])(
     "keeps one useful Systems recovery message while reconnecting at %ipx",
     async (width) => {

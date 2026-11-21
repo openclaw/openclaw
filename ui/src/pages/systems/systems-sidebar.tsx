@@ -189,29 +189,29 @@ function SystemsInventory(props: { controller: Systems }) {
       filterItem("status", option, controller().state.statusFilter === option.value),
     ),
   ]);
-  const renderRow = (row: SystemsInventoryRow) => {
-    const online = row.environment.status === "available";
-    const platform = systemPlatform(row);
-    const status = () => systemStatus(row);
+  const renderRow = (row: () => SystemsInventoryRow) => {
+    const online = () => row().environment.status === "available";
+    const platform = createMemo(() => systemPlatform(row()));
+    const status = () => systemStatus(row());
     return (
       <button
         class="systems-machine"
         type="button"
-        data-status={row.environment.status}
-        aria-pressed={row.environment.id === controller().state.selectedId ? "true" : "false"}
-        aria-description={platform ? `${status()} · ${platform}` : status()}
-        onClick={() => controller().select(row.environment.id)}
+        data-status={row().environment.status}
+        aria-pressed={row().environment.id === controller().state.selectedId ? "true" : "false"}
+        aria-description={platform() ? `${status()} · ${platform()}` : status()}
+        onClick={() => controller().select(row().environment.id)}
       >
         <i class="systems-machine__dot" aria-hidden="true" />
-        <span class="systems-machine__name">{systemName(row)}</span>
+        <span class="systems-machine__name">{systemName(row())}</span>
         <span class="systems-machine__meta">
-          {!online
+          {!online()
             ? status()
-            : row.environment.worker
-              ? shortId(row.environment.id)
-              : (platform ?? null)}
+            : row().environment.worker
+              ? shortId(row().environment.id)
+              : (platform() ?? null)}
         </span>
-        {row.environment.desktop ? (
+        {row().environment.desktop ? (
           <span class="systems-machine__desktop">
             <Icon name="monitor" />
             <span class="sr-only">{t("systems.desktop")}</span>
@@ -280,7 +280,12 @@ function SystemsInventory(props: { controller: Systems }) {
             {t("systems.loading")}
           </p>
         ) : null}
-        <For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>
+        <For
+          each={rows().filter((row) => systemKind(row) === "host")}
+          keyed={(row) => row.environment.id}
+        >
+          {renderRow}
+        </For>
         <For each={["node", "worker", "device"] as const}>
           {(kind) => {
             const group = createMemo(() => rows().filter((row) => systemKind(row) === kind));
@@ -299,7 +304,9 @@ function SystemsInventory(props: { controller: Systems }) {
                     </span>
                     <span class="systems-group__count">{group().length}</span>
                   </h3>
-                  <For each={group()}>{renderRow}</For>
+                  <For each={group()} keyed={(row) => row.environment.id}>
+                    {renderRow}
+                  </For>
                 </section>
               </Show>
             );
