@@ -273,6 +273,18 @@ export function isTelegramRateLimitError(err: unknown): boolean {
   );
 }
 
+const MESSAGE_DELETE_NOOP_RE =
+  /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
+
+export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
+  return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
+}
+
+// Only absence proves the requested end state; the other no-op refusals leave the message visible.
+export function isTelegramMessageAlreadyDeletedError(err: unknown): boolean {
+  return /message to delete not found/i.test(formatErrorMessage(err));
+}
+
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;

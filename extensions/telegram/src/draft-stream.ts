@@ -26,6 +26,8 @@ import {
   isRetryableTelegramApiError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
+  isTelegramMessageAlreadyDeletedError,
+  isTelegramMessageDeleteNoopError,
   isTelegramMessageNotModifiedError,
   isTelegramRateLimitError,
 } from "./network-errors.js";
@@ -50,6 +52,7 @@ const MAX_CONSECUTIVE_PREVIEW_FAILURES = 3;
 // the first verbose commentary). The delete is scheduled DETACHED so the turn is
 // never stalled waiting on the dwell.
 const MIN_PREVIEW_DWELL_MS = 4_000;
+const PREVIEW_DELETE_RETRY_DELAY_MS = 1_000;
 
 export type TelegramDraftStream = ReturnType<typeof createTelegramDraftStream>;
 
@@ -631,20 +634,36 @@ export function createTelegramDraftStream(params: {
     visibleSince: number | undefined,
     minDelayMs = 0,
   ) => {
-    const runDelete = async () => {
+    const runDelete = async (canRetry = true) => {
+      let deleted: boolean;
       try {
-        const deleted = await params.api.deleteMessage(chatId, messageId);
+        deleted = await params.api.deleteMessage(chatId, messageId);
         if (!deleted) {
           params.warn?.(
             `telegram stream preview cleanup was not confirmed (chat=${chatId}, message=${messageId})`,
           );
-          return;
         }
+      } catch (err) {
+        deleted = isTelegramMessageAlreadyDeletedError(err);
+        if (!deleted) {
+          params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+          // Do not reopen the account throttler's 429/retry_after budget.
+          if (
+            isTelegramClientRejection(err) ||
+            isTelegramRateLimitError(err) ||
+            isTelegramMessageDeleteNoopError(err)
+          ) {
+            return;
+          }
+        }
+      }
+      if (deleted) {
         if (replyTargetState.kind === "retained" && replyTargetState.messageId === messageId) {
           replyTargetState = { kind: "available" };
         }
-      } catch (err) {
-        params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+      } else if (canRetry) {
+        // The response may have been lost. Only retry the captured, already detached ID.
+        setTimeout(() => void runDelete(false), PREVIEW_DELETE_RETRY_DELAY_MS).unref();
       }
     };
     const elapsedMs =
