@@ -454,6 +454,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
             if (result.error) {
               return result;
             }
+            // A participant turn never lends the owner's unrestricted host-file authority.
+            if (result.authorization?.participationCeiling) {
+              return { error: errorShape(ErrorCodes.FORBIDDEN, "outside session boundary") };
+            }
             const { target, consume } = params.consumeSessionTurn!;
             const admitted = result.authorization?.admittedTarget;
             const row =

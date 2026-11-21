@@ -577,8 +577,10 @@ export function authorizeSessionAgentRun(
     client: GatewayClient | null;
     /** File readers reuse the admission policy with read-specific recovery guidance. */
     sandboxRequiredMessage?: string;
+    /** Host-resolved invitation to another person's session; never request data. */
+    invitedSession?: boolean;
     target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
-      entry?: Pick<SessionEntry, "sandbox">;
+      entry?: Pick<SessionEntry, "sandbox" | "createdActor">;
     };
   },
   prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
@@ -590,10 +592,20 @@ export function authorizeSessionAgentRun(
   if (agentError) {
     return agentError;
   }
+  const policy = prepared ? prepared.policy : resolveOperatorRolePolicy(params.client, params.cfg);
+  const invitedSession =
+    params.invitedSession === true &&
+    policy?.sessions.others === "invited" &&
+    policy.sessions.maxInvitedAccess !== undefined &&
+    Boolean(sessionCreatorProfileId(params.target.entry?.createdActor)) &&
+    !isSessionCreatorProfile(
+      params.target.entry?.createdActor,
+      sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+    );
   if (
     params.target.entry?.sandbox !== "required" &&
-    (prepared ? prepared.policy : resolveOperatorRolePolicy(params.client, params.cfg))?.sandbox ===
-      "required"
+    policy?.sandbox === "required" &&
+    !invitedSession
   ) {
     return errorShape(
       ErrorCodes.FORBIDDEN,

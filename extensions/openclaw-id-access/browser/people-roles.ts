@@ -60,7 +60,9 @@ export function roleOptions(roles: Role[], locale: string) {
             role.sandbox?.ready === false
               ? "sandboxNotReady"
               : role.requiresSandbox
-                ? "sandboxRequired"
+                ? role.maxInvitedAccess
+                  ? "ownSandboxRequired"
+                  : "sandboxRequired"
                 : "sandboxInherited",
           ),
           roleText(locale, role.admin ? "administrator" : "noAdministrator"),

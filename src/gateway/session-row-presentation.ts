@@ -54,7 +54,6 @@ import {
 } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -66,7 +65,6 @@ import {
   projectGatewaySessionActiveRun,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
-import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 type PresentationOptions = Readonly<
   Omit<
@@ -331,10 +329,7 @@ export function prepareProjectedSessionPresentation(
     viewerFacts.sendDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionAgentRun(
-            { cfg: policyConfig, client: client ?? null, target: value },
-            { policy: sharing.policy },
-          )?.message ??
+        : (sharing.authorizeRun(value, true)?.message ??
           sharing.authorizeTarget(value, sharingRole, true)?.message ??
           (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
             ? "send blocked by session policy"
@@ -342,10 +337,7 @@ export function prepareProjectedSessionPresentation(
     viewerFacts.workspaceReadDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionWorkspaceRead(
-            { cfg: policyConfig, client: client ?? null, target: value, unscopedHostRoot },
-            { policy: sharing.policy },
-          )?.message ?? null);
+        : (sharing.authorizeWorkspaceRead(value, unscopedHostRoot)?.message ?? null);
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>

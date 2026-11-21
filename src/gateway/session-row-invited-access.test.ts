@@ -31,6 +31,7 @@ it("projects and invalidates recipient-local invited access without contaminatin
             guest: {
               scopes: ["operator.sessions.read"],
               agents: "*",
+              sandbox: "required",
               sessions: { others: "invited", maxInvitedAccess: "send" },
             },
           },
@@ -70,6 +71,8 @@ it("projects and invalidates recipient-local invited access without contaminatin
       undefined,
       "workspace",
     ]);
+    expect(before[1]?.workspaceReadDisabledReason).toBeNull();
+    expect(before[2]?.sendDisabledReason).toBeNull();
     expect(before.map((row) => row?.sharingRole)).toEqual(["owner", "member", "member"]);
     await setSessionMemberAccess(scope, {
       identityId: sender.id,

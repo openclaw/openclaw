@@ -10,6 +10,7 @@ import {
 import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { resolveSandboxedSessionCreation } from "./operator-session-run.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
@@ -281,5 +282,60 @@ it("preserves invitation levels in prepared writer assertions without granting s
         }
       }
     }
+  });
+});
+
+it("uses the owner's sandbox for opted-in participation but still requires it for own sessions", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const role = cfg.gateway!.roles!.definitions.invited!;
+    role.sessions.maxInvitedAccess = "send";
+    role.sessions.invitedPermission = "full";
+    role.sandbox = "required";
+    role.scopes = ["operator.sessions.read", "operator.sessions.write"];
+    setRuntimeConfigSnapshot(cfg);
+    const client = roleClient("invited", "sandbox-participant");
+    client.internal = { authenticatedOperator: true };
+    client.connect.scopes = role.scopes;
+    const profileId = client.authenticatedUserProfile!.profileId;
+    expect(resolveSandboxedSessionCreation(client, cfg)?.sandbox).toBe("required");
+    const scope = { agentId: "main", sessionKey: "agent:main:invited-unsandboxed" };
+    const entry = {
+      sessionId: "invited-unsandboxed",
+      updatedAt: 1,
+      permissionMode: "read-only" as const,
+      createdActor: { type: "human" as const, source: "profile" as const, id: "creator" },
+    };
+    await upsertSessionEntryCore(scope, entry);
+    addSessionMember(scope, { identityId: profileId, addedBy: "creator", access: "send" });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const authorize = () =>
+      resolveSessionMutationAuthorizationAsync({
+        client,
+        context,
+        method: "chat.send",
+        requestParams: scope,
+      });
+    const admitted = await authorize();
+    expect(admitted.error).toBeNull();
+    expect(admitted.authorization?.participationCeiling).toMatchObject({
+      profileId,
+      permission: "read-only",
+    });
+    admitted.authorization?.release?.();
+    delete role.sessions.maxInvitedAccess;
+    const stock = await authorize();
+    expect(stock.error?.message).toContain("requires a sandboxed session");
+    stock.authorization?.release?.();
+    role.sessions.maxInvitedAccess = "send";
+    scope.sessionKey = "agent:main:own-unsandboxed";
+    await upsertSessionEntryCore(scope, {
+      ...entry,
+      sessionId: "own-unsandboxed",
+      createdActor: { ...entry.createdActor, id: profileId },
+    });
+    const own = await authorize();
+    expect(own.error?.message).toContain("requires a sandboxed session");
+    own.authorization?.release?.();
   });
 });

@@ -23,6 +23,7 @@ const en = {
     write: "Read and change other people's sessions",
   },
   sandboxRequired: "Sandbox required",
+  ownSandboxRequired: "Sandbox required for their own sessions",
   sandboxInherited: "Sandbox follows agent settings",
   sandboxNotReady: "Sandbox required · not set up yet",
   sandboxNeeded: "The {role} role needs a sandbox.",
