@@ -8,8 +8,10 @@ import {
   bindUnlinkedChannelRequester,
 } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { bindWhatsAppAutomationInput } from "../../cron/whatsapp-automation-turn.js";
 import { captureChannelOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
+import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import {
   bindHostChannelContextAdmissionEvidence,
@@ -132,6 +134,41 @@ export function createHostChannelInboundEventContextBuilder<
           const gateway = owner.resolveGatewayContext?.();
           if (!gateway) {
             return;
+          }
+          const peer = batch.length === 1 ? batch[0]?.whatsappAutomationPeer : undefined;
+          if (
+            peer &&
+            binding.inboundEventKind === "user_request" &&
+            built.ChatType === "direct" &&
+            built.SenderId === peer &&
+            built.OriginatingChannel === "whatsapp" &&
+            built.OriginatingTo === peer &&
+            (built.AccountId ?? DEFAULT_ACCOUNT_ID) === (params.accountId ?? DEFAULT_ACCOUNT_ID)
+          ) {
+            const destination = { peer, accountId: params.accountId ?? DEFAULT_ACCOUNT_ID };
+            if (
+              binding.sessionKey ===
+              buildAgentPeerSessionKey({
+                agentId: binding.agentId,
+                channel: "whatsapp",
+                accountId: destination.accountId,
+                peerId: peer,
+                dmScope: "per-account-channel-peer",
+              })
+            ) {
+              bindWhatsAppAutomationInput(built, {
+                ...destination,
+                cron: gateway.cron,
+                agentId: binding.agentId,
+                sessionKey: binding.sessionKey,
+                getConfig: () => gateway.getRuntimeConfig(),
+                assertCurrent() {
+                  if (!owner.isLive() || owner.resolveGatewayContext?.() !== gateway) {
+                    throw new Error("Private reminder permission ended.");
+                  }
+                },
+              });
+            }
           }
           const requester = batch.at(-1)?.requesterProfile;
           // Retain an actual absent linkage result, not the later absence of a live grant.

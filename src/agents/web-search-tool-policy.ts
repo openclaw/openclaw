@@ -4,6 +4,7 @@ import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tool
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
+  senderPolicyMode,
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
@@ -99,7 +100,7 @@ export function resolveWebSearchToolPolicy(
     groupSpace: params.groupSpace,
     accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
     requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
-    senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
+    senderPolicyMode: senderPolicyMode(params.scheduledToolPolicy),
   };
   const senderPolicyParams = {
     config: params.config,
@@ -121,7 +122,7 @@ export function resolveWebSearchToolPolicy(
       sessionId: params.sessionId,
       modelProvider: params.modelProvider,
       modelId: params.modelId,
-      senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
+      senderPolicyMode: senderPolicyMode(params.scheduledToolPolicy),
       groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
       requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
     });

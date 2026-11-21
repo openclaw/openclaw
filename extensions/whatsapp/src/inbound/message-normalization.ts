@@ -124,6 +124,13 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     const conversationId = group ? remoteJid : from;
     const accessSenderId = group ? senderE164 : from;
     const admissionSenderId = group ? (senderE164 ?? participantJid ?? from) : from;
+    const reminderPeer =
+      !group &&
+      !isFromMe &&
+      id &&
+      (await socketSession.isReminderPeer(remoteJid, msg.key?.remoteJidAlt, from))
+        ? from
+        : undefined;
     const resolveChannelIngress = async (
       contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
     ) =>
@@ -133,6 +140,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
         isGroup: group,
         conversationId,
         senderId: accessSenderId,
+        reminderPeer,
         contextBinding,
       });
     const ingressAccess = await resolveChannelIngress();

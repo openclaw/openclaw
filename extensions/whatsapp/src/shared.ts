@@ -195,6 +195,28 @@ export function createWhatsAppPluginBase() {
     security: {
       applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
+      async isDirectSenderAdmitted({ cfg, account, accountId, senderId }) {
+        const { readWebSelfIdentityForDecision } = await import("./auth-store.js");
+        const { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } =
+          await import("./inbound-policy.js");
+        const self = await readWebSelfIdentityForDecision(account.authDir);
+        if (self.outcome !== "stable" || !self.identity.e164) {
+          return false;
+        }
+        const policy = resolveWhatsAppInboundPolicy({
+          cfg,
+          accountId,
+          selfE164: self.identity.e164,
+        });
+        const { senderAccess } = await resolveWhatsAppIngressAccess({
+          cfg,
+          policy,
+          isGroup: false,
+          conversationId: senderId,
+          senderId,
+        });
+        return senderAccess.decision === "allow";
+      },
       collectWarnings: collectWhatsAppOpenGroupFindings,
     },
     doctor: whatsappDoctor,

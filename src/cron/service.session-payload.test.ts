@@ -211,6 +211,36 @@ describe("ordinary session agent turns", () => {
 });
 
 describe("unstarted scheduled admission", () => {
+  it.each(["activeHours", "idleOnly"] as const)(
+    "applies %s before personal WhatsApp delivery",
+    async (restriction) => {
+      let idle = false;
+      const deliver = vi.fn(async () => ({ status: "ok" as const, delivered: true }));
+      const { cron, tick } = await service(
+        { deliverWhatsAppAutomation: deliver, isExecutionIdle: () => idle },
+        Date.parse("2026-10-20T08:59:00Z"),
+      );
+      const job = await cron.add(
+        jobInput({
+          sessionTarget: "isolated",
+          name: "Read a book",
+          failureAlert: false,
+          payload: { kind: "whatsappAutomation", accountId: "default", peer: "+15550000001" },
+          schedule: { kind: "every", everyMs: 60_000 },
+          ...(restriction === "idleOnly"
+            ? { idleOnly: true }
+            : { activeHours: { start: "10:00", end: "17:00", timezone: "UTC" } }),
+        }),
+      );
+      await cron.start();
+      await tick(cron.getJob(job.id)!.state.nextRunAtMs!);
+      expect(deliver).not.toHaveBeenCalled();
+      idle = true;
+      await tick(Date.parse("2026-10-20T10:00:00Z"));
+      expect(deliver).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["at", "every", "cron"] as const)(
     "retains only one-shot occurrences outside active hours (%s)",
     async (scheduleKind) => {

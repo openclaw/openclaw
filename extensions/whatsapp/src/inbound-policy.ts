@@ -86,6 +86,7 @@ export async function resolveWhatsAppIngressAccess(params: {
   senderId?: string | null;
   includeCommand?: boolean;
   contextBinding?: ChannelIngressContextBinding;
+  reminderPeer?: string;
 }) {
   return await getWhatsAppRuntime().channel.inbound.ingress.resolveStable({
     channelId: "whatsapp",
@@ -105,6 +106,7 @@ export async function resolveWhatsAppIngressAccess(params: {
       id: params.conversationId,
     },
     contextBinding: params.contextBinding,
+    whatsappAutomationPeer: params.reminderPeer,
     dmPolicy: params.policy.dmPolicy,
     groupPolicy: params.policy.groupPolicy,
     policy: {

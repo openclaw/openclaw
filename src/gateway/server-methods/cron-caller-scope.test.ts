@@ -227,3 +227,21 @@ it("uses a scoped session key before the configured default", () => {
     });
   expect([matches("main"), matches("ops")]).toEqual([false, true]);
 });
+
+it("reserves private WhatsApp schedules for their personal tool and the operator", () => {
+  const job = createCronJob({
+    agentId: "main",
+    payload: { kind: "whatsappAutomation", accountId: "default", peer: "+15550000001" },
+  });
+  expect(cronJobMatchesCallerScope({ job, callerScope: undefined })).toBe(true);
+  expect(
+    cronJobMatchesCallerScope({
+      job,
+      callerScope: {
+        kind: "agentTool",
+        agentId: "main",
+        accountId: "default",
+      },
+    }),
+  ).toBe(false);
+});

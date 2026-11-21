@@ -45,6 +45,26 @@ retired `cron.webhook` fallback URL is gone: runtime delivery uses per-job
 when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 `cron.webhook` from existing config files.
 
+### Personal WhatsApp automations
+
+In a private WhatsApp conversation with account-and-peer-isolated sessions
+(`session.dmScope: "per-account-channel-peer"`), an admitted sender can add,
+list, change, pause, and remove their own schedules. The same WhatsApp DM
+access policy applies when a schedule runs. With an explicit tool allowlist,
+include `whatsapp_automations` for the agent handling the DM.
+
+For a literal reminder, ask “Remind me to bring my book tomorrow.” For an
+agent task, ask “Every morning, check my orders and summarize them here.”
+A task runs on the OpenClaw agent runtime. It can call tools
+that were callable when the task was created and that the sender can still
+use without a new interactive approval. A connector that reads orders needs
+access to the sender’s account. For requester-scoped MCP servers, OpenClaw
+resolves that connection again at run time. A disconnected account or a tool
+requiring an interactive approval cannot perform the scheduled action.
+Client-only tools and interactive execution grants require a fresh turn.
+The Gateway sends the result from the same WhatsApp account to the same
+private chat. Gateway operators retain administrative access to the schedules.
+
 ### `cron.delivery`, `cron.agents`, and `cron.creators`
 
 ```json5

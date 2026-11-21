@@ -236,6 +236,16 @@ export type CronServiceDeps = {
     agentId?: string;
     sessionKey?: string;
   };
+  deliverWhatsAppAutomation?: (
+    job: CronStoredJob,
+    signal: AbortSignal,
+    fence: CronCompletionDeliveryFence,
+    runTask: (
+      job: CronStoredJob,
+      message: string,
+      personal: NonNullable<ScheduledOccurrence["personalRequester"]>,
+    ) => ReturnType<CronServiceDeps["runIsolatedAgentJob"]>,
+  ) => Promise<import("../types.js").CronJobExecutionResult>;
   runIsolatedAgentJob: (params: {
     occurrence: ScheduledOccurrence;
     waitForIdle?: CronIdleAdmissionWait;

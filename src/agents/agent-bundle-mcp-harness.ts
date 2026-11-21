@@ -162,6 +162,8 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   /** Builds a capability profile when conversationCapabilityProfile is omitted. */
   policyContext?: Omit<ConversationCapabilityProfileParams, "runtimeToolAllowlist">;
+  /** Scheduled personal runs can use only live tools that need no interactive consent. */
+  unattendedRequester?: boolean;
   /** Exact established Codex yolo predicate; no other profile bypasses approval metadata. */
   autoApproveCodexAppServerApprovals?: boolean;
   /** Interactive turns request approval before the original MCP executor runs. */
@@ -435,6 +437,15 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
         requesterConnect?.createExecute(tool.serverName) ??
         (async () => notConnectedToolResult(tool.serverName, tool.toolName, hasRequester)),
     });
+    if (params.unattendedRequester) {
+      const live = (liveRuntime?.tools ?? []).filter(
+        (tool) => !getPluginToolMeta(tool)?.mcp?.oauthConnectBootstrap,
+      );
+      const tools = applyConfiguredMcpApproval(applyHarnessToolPolicy(live, policyParams), {
+        fullPermission: false,
+      });
+      return { tools, advertisedTools: tools, dispose: liveRuntime?.dispose ?? (async () => {}) };
+    }
     const liveByName = new Map((liveRuntime?.tools ?? []).map((tool) => [tool.name, tool]));
     // Live tools supply execution; advertised catalog supplies the stable name/schema surface.
     const tools = advertisedTools.map((tool) => liveByName.get(tool.name) ?? tool);

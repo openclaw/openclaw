@@ -30,6 +30,7 @@ import {
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
 import {
+  isWhatsAppAutomationPeer,
   resolveEquivalentWhatsAppDirectChatJids,
   resolveJidToE164,
   toWhatsappJid,
@@ -438,6 +439,8 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     getCurrentSock,
     resolveInboundJid,
     resolveReactionTargetJids,
+    isReminderPeer: (jid: string, alternate: string | null | undefined, peer: string) =>
+      isWhatsAppAutomationPeer(jid, alternate, peer, lidLookup),
     rememberBaileysMessage,
     assertCanSendToJid,
     assertSendReady,

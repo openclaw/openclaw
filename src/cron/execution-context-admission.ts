@@ -5,6 +5,7 @@
  * failure here never fails the run.
  */
 import { access } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
@@ -281,6 +282,7 @@ export async function admitScheduledOccurrence(
   let requesterOwner: RequesterOwnerCheck | undefined;
   let generation: TranscriptLease | undefined;
   let pause: CronParentUnavailable | undefined;
+  let parentPermissions: ScheduledOccurrence["parentPermissions"];
   let childParent: ScheduledOccurrence["childParent"];
   let parentWatch: ParentResetWatch | undefined;
   try {
@@ -313,6 +315,21 @@ export async function admitScheduledOccurrence(
         job.sessionTarget !== "main" && !resolveCronSessionTargetSessionKey(job.sessionTarget);
       if (typeof live !== "string" && !pause && childPlacement && parent.entry) {
         const entry = parent.entry;
+        parentPermissions = {
+          toolOverrides: entry.toolOverrides,
+          permissionMode: entry.permissionMode,
+          sessionRoot: entry.sessionRoot,
+          assertCurrent() {
+            const settings = generation?.readSessionSettings();
+            if (
+              !settings ||
+              settings.permissionMode !== entry.permissionMode ||
+              !isDeepStrictEqual(settings.toolOverrides, entry.toolOverrides)
+            ) {
+              throw new Error("The originating conversation's permissions changed.");
+            }
+          },
+        };
         childParent = {
           ...(live.workspaceDir || live.cwd || live.worktree
             ? { binding: { sessionKey: parentSessionKey, entry } }
@@ -354,7 +371,7 @@ export async function admitScheduledOccurrence(
     params.trigger === "cron" && !("error" in principal) && job.operatorSource !== undefined;
   return {
     ...(pause ? { pause } : {}),
-    ...(childParent ? { childParent } : {}),
+    ...(childParent ? { childParent, parentPermissions } : {}),
     mint(run) {
       let result: ScheduledExecutionContextResult;
       try {

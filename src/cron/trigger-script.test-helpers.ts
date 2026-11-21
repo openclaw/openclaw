@@ -23,7 +23,10 @@ type ScriptFixture = Omit<
 /** Builds scheduler-owned jobs while keeping individual runtime cases focused on their inputs. */
 export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
   const runtime = createCronScriptRuntime(deps);
-  const job = (params: ScriptFixture, payload: CronStoredJob["payload"]): CronStoredJob => ({
+  const job = (
+    params: ScriptFixture,
+    payload: Extract<CronStoredJob["payload"], { kind: "agentTurn" | "script" }>,
+  ): CronStoredJob => ({
     ...makeCronJob({
       id: params.jobId,
       agentId: params.agentId,

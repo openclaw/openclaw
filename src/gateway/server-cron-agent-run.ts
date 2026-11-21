@@ -21,8 +21,13 @@ type GatewayCronAgentParams = {
  */
 export function createGatewayCronAgentDeps(
   params: GatewayCronAgentParams,
-): Pick<CronServiceDeps, "runIsolatedAgentJob" | "resolvePluginCommandScheduleHosts"> {
+): Pick<
+  CronServiceDeps,
+  "runIsolatedAgentJob" | "resolvePluginCommandScheduleHosts" | "deliverWhatsAppAutomation"
+> {
   return {
+    deliverWhatsAppAutomation: async (...args) =>
+      (await import("./whatsapp-scheduled-run.js")).runWhatsAppAutomation(...args),
     runIsolatedAgentJob: createGatewayCronAgentJobRunner(params),
     resolvePluginCommandScheduleHosts: () =>
       listPluginCommandScheduleHosts(params.resolvePluginRegistry?.()),

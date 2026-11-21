@@ -59,6 +59,7 @@ export type FollowupRunPayload = {
   /** Original admitted source; queued execution must not replace it with a backend run ID. */
   sourceTurnId?: string;
   /** Fresh channel ingress only; queued execution supplies its admitted owner check. */
+  runWithWhatsAppAutomation?: import("../../../cron/whatsapp-automation-turn.js").RunWithWhatsAppAutomation;
   createChannelCronAuthority?: (
     runId: string,
     isCurrentOwner?: () => boolean,

@@ -1,3 +1,4 @@
+import { appendFile, readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
@@ -60,6 +61,67 @@ export const qaLabGatewayDefinition = {
       },
       { name: "qa_restart_wait" },
     );
+    const ordersFile = process.env.OPENCLAW_QA_PERSONAL_ORDERS_FILE;
+    if (ordersFile) {
+      api.registerTool(
+        {
+          contextVersion: 2,
+          create(ctx) {
+            return {
+              name: "qa_my_orders",
+              label: "My orders",
+              description: "Read the current orders for the requesting private WhatsApp contact.",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  action: { type: "string", enum: ["list", "mark_reviewed"] },
+                },
+              },
+              async execute(_id, args: { action?: string }) {
+                ctx.assertInvocationCurrent();
+                if (
+                  ctx.messageChannel !== "whatsapp" ||
+                  !ctx.agentAccountId ||
+                  !ctx.requesterSenderId ||
+                  ctx.senderIsOwner === true
+                ) {
+                  throw new Error(
+                    `Invalid synthetic orders caller (channel=${ctx.messageChannel}, hasAccount=${Boolean(ctx.agentAccountId)}, hasSender=${Boolean(ctx.requesterSenderId)}, owner=${ctx.senderIsOwner}).`,
+                  );
+                }
+                await appendFile(
+                  ordersFile + ".accesses",
+                  JSON.stringify({
+                    account: ctx.agentAccountId,
+                    peer: ctx.requesterSenderId,
+                    action: args.action,
+                  }) + "\n",
+                );
+                const ledger: Record<string, Record<string, number[]>> = JSON.parse(
+                  await readFile(ordersFile, "utf8"),
+                );
+                ctx.assertInvocationCurrent();
+                const quantities = ledger[ctx.agentAccountId]?.[ctx.requesterSenderId] ?? [];
+                if (args.action === "mark_reviewed") {
+                  await appendFile(
+                    ordersFile + ".reviews",
+                    JSON.stringify({
+                      account: ctx.agentAccountId,
+                      peer: ctx.requesterSenderId,
+                      quantities,
+                    }) + "\n",
+                  );
+                  return jsonResult({ reviewed: quantities.length });
+                }
+                return jsonResult({ quantities });
+              },
+            };
+          },
+        },
+        { name: "qa_my_orders", workspaceAccess: false },
+      );
+    }
     api.registerWorkerProvider(createStaticSshWorkerProvider());
     api.registerWebSearchProvider(createQaLabWebSearchProvider());
   },

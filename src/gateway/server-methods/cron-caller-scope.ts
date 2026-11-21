@@ -424,7 +424,7 @@ export function cronJobMatchesCallerScope(params: {
   // Command cron is an operator-admin automation surface, not a model-visible
   // agent tool capability. Hide it before owner/routing fallback can expose
   // payload env, watched commands, or manual force-run controls.
-  if (isOperatorCommandCronJob(params.job)) {
+  if (isOperatorCommandCronJob(params.job) || params.job.payload.kind === "whatsappAutomation") {
     return false;
   }
   const effectiveAgentId = tryResolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
@@ -539,7 +539,7 @@ export function applyCronCreateCallerScopeDefault(
 }
 
 export function cronPatchSessionRefsMatchCaller(
-  patch: CronJobPatch,
+  patch: Pick<CronJobPatch, "sessionTarget" | "sessionKey">,
   callerScope: CronCallerScope | undefined,
 ): boolean {
   if (!callerScope || callerScope.manageAll) {

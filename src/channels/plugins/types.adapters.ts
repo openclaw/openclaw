@@ -693,6 +693,10 @@ type ChannelSecurityDmRouteContext<ResolvedAccount> = ChannelSecurityContext<Res
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
+  /** Re-evaluate the same DM access decision used on ingress, without generating a message. */
+  isDirectSenderAdmitted?: (
+    ctx: ChannelSecurityContext<ResolvedAccount> & { accountId: string; senderId: string },
+  ) => Promise<boolean>;
   /** Resolve configured direct-conversation permissions once per new execution admission. */
   resolveDirectToolPolicy?: (
     ctx: ChannelDirectToolPolicyContext,

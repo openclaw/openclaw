@@ -650,6 +650,30 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     await result!.dispose();
   });
 
+  it("uses only the requester’s live, unattended MCP grants on a scheduled turn", async () => {
+    const sessionId = "scheduled-requester";
+    const runtime = makeRuntime({ sessionId, requesterSenderId: "alice" });
+    const catalog = runtime.peekCatalog()!;
+    catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
+    catalog.servers["orders"] = {
+      serverName: "orders",
+      launchSummary: "orders",
+      toolCount: 1,
+      codexApprovalMode: "approve",
+    };
+    catalog.tools.push(catalogTool("orders", "mark_reviewed"));
+    const call = vi.spyOn(runtime, "callTool");
+    mocks.resolveRuntime.mockImplementation(async () => runtime);
+    const scheduled = await requesterTools(sessionId, {
+      requesterSenderId: "alice",
+      unattendedRequester: true,
+    });
+    expect(toolNames(scheduled!.tools)).toEqual(["orders__mark_reviewed"]);
+    await scheduled!.tools[0]!.execute("review", {});
+    expect(call).toHaveBeenCalledExactlyOnceWith("orders", "mark_reviewed", {});
+    await scheduled!.dispose();
+  });
+
   it("exempts only trusted OAuth bootstrap tools, not real server tools named connect", async () => {
     const runtime = makeRuntime({
       sessionId: "session-connect-provenance",

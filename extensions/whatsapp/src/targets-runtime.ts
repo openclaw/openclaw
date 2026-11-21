@@ -130,6 +130,35 @@ function addEquivalentDirectChatCandidate(target: string[], jid: string | null |
   }
 }
 
+/** Bind a private reminder to the socket's reply peer. LID addressing also needs its inverse. */
+export async function isWhatsAppAutomationPeer(
+  remoteJid: string,
+  alternateJid: string | null | undefined,
+  peer: string,
+  mapping?: LidLookup,
+): Promise<boolean> {
+  if (!/^\+[1-9]\d{1,14}$/u.test(peer)) {
+    return false;
+  }
+  const pn = toWhatsappJid(peer);
+  if (remoteJid === pn && (!alternateJid || alternateJid === pn)) {
+    return true;
+  }
+  const lid = remoteJid === pn ? alternateJid : remoteJid;
+  if (
+    !lid ||
+    !/^\d+@lid$/u.test(lid) ||
+    (remoteJid !== pn && alternateJid && alternateJid !== pn)
+  ) {
+    return false;
+  }
+  const [phoneForLid, lidForPhone] = await Promise.all([
+    tryLookupMappedJid(() => mapping?.getPNForLID?.(lid)),
+    tryLookupMappedJid(() => mapping?.getLIDForPN?.(pn)),
+  ]);
+  return phoneForLid === pn && lidForPhone === lid;
+}
+
 export async function resolveEquivalentWhatsAppDirectChatJids(
   jid: string | null | undefined,
   opts?: JidToE164Options & { lidLookup?: LidLookup },

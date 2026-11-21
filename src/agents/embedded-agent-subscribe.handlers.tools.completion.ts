@@ -78,7 +78,7 @@ import {
   readAsyncStartedTaskIds,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
-import { isCronAddAction } from "./harness/tool-result-facts.js";
+import { isCronAddAction, isPersonalScheduleAdd } from "./harness/tool-result-facts.js";
 import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
@@ -407,6 +407,7 @@ export async function prepareToolExecutionEnd(
   if (
     !isToolError &&
     ((isAutomationsToolName(toolName) && isCronAddAction(startArgs)) ||
+      isPersonalScheduleAdd(toolName, startArgs, result) ||
       (isExecToolName(toolName) && didShellCronAddSucceed(startArgs, result)))
   ) {
     ctx.state.successfulCronAdds += 1;

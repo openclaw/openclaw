@@ -21,6 +21,7 @@ import { isInternalOwnerRequester, resolveRequesterToolPolicies } from "./reques
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
+  senderPolicyMode,
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
@@ -161,7 +162,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,
     accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
+    senderPolicyMode: senderPolicyMode(params.scheduledToolPolicy, isOwnerInternalSession),
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
     conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),

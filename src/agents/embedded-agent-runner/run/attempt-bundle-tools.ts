@@ -89,7 +89,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     !params.isRawModelRun &&
     runtimeCapabilityProfile.policy.globalPolicy?.deny?.some((name) => name.trim() === "*") !==
       true;
-  let clientTools = auxiliaryToolsEnabled ? params.attempt.clientTools : undefined;
+  let clientTools =
+    auxiliaryToolsEnabled && !params.attempt.scheduledToolPolicy?.personalRequester
+      ? params.attempt.clientTools
+      : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
   if (clientTools && effectiveToolsAllow) {
@@ -132,23 +135,25 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     },
   });
   phases.mark("attempt.bundle-tools.mcp-acquire");
-  const bundleMcpAcquisition = bundleMcpEnabled
-    ? await acquireSessionMcpRuntime({
-        ...mcpConfig,
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.attempt.sessionKey,
-        agentId: params.setup.sessionAgentId,
-        agentDir: params.agentDir,
-        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent runs
-        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
-        requesterSenderId: params.attempt.senderId,
-        agentAccountId: params.attempt.agentAccountId,
-        messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
-      })
-    : undefined;
+  const personal = params.attempt.scheduledToolPolicy?.personalRequester;
+  const bundleMcpAcquisition =
+    bundleMcpEnabled && !personal
+      ? await acquireSessionMcpRuntime({
+          ...mcpConfig,
+          sessionId: params.attempt.sessionId,
+          sessionKey: params.attempt.sessionKey,
+          agentId: params.setup.sessionAgentId,
+          agentDir: params.agentDir,
+          // senderId is only set from the verified inbound sender (sessionCtx.SenderId
+          // or the triggering run's sender on follow-ups). Cron/subagent runs
+          // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
+          requesterSenderId: params.attempt.senderId,
+          agentAccountId: params.attempt.agentAccountId,
+          messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+        })
+      : undefined;
   phases.mark("attempt.bundle-tools.mcp-materialize");
-  const bundleMcpRuntime = bundleMcpAcquisition
+  const standardMcp = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
         agentId: params.setup.sessionAgentId,
@@ -169,6 +174,30 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ],
       })
     : undefined;
+  const requesterMcp =
+    bundleMcpEnabled && personal
+      ? await (
+          await import("../../agent-bundle-mcp-harness.js")
+        ).materializeRequesterScopedMcpToolsForHarnessRunCore({
+          ...mcpConfig,
+          sessionId: params.attempt.sessionId,
+          sessionKey: params.attempt.sessionKey,
+          agentId: params.setup.sessionAgentId,
+          agentDir: params.agentDir,
+          requesterSenderId: personal.senderId,
+          agentAccountId: params.attempt.agentAccountId,
+          messageChannel: params.attempt.messageChannel,
+          reservedToolNames: tools.map((tool) => tool.name),
+          toolsAllow: params.attempt.toolsAllow,
+          conversationCapabilityProfile: runtimeCapabilityProfile,
+          unattendedRequester: true,
+        })
+      : undefined;
+  const bundleMcpRuntime =
+    standardMcp ??
+    (requesterMcp
+      ? { ...requesterMcp, restrictAppTools: undefined, appTools: undefined }
+      : undefined);
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
     phases.mark("attempt.bundle-tools.lsp");
@@ -235,7 +264,19 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         agentId: params.setup.sessionAgentId,
         preserveToolNames: localModelLeanPreserveToolNames,
       });
-      const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+      const scopedTools = personal
+        ? projectedTools.filter((tool) => {
+            const meta = getPluginToolMeta(tool);
+            return (
+              !meta?.ownerUnverified &&
+              isAgentToolExecutionAvailable(tool) &&
+              personal.tools.some(
+                (grant) => grant.name === tool.name && grant.pluginId === meta?.pluginId,
+              )
+            );
+          })
+        : projectedTools;
+      const schemaProjection = filterRuntimeCompatibleTools(scopedTools);
       // Listed tools this turn refuses are never delegated or captured as authority.
       const executable = schemaProjection.tools.filter(isAgentToolExecutionAvailable);
       // Cron is constructed before bundled tools; capture only the executable

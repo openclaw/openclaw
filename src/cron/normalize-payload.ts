@@ -68,6 +68,8 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
+  } else if (kindRaw === "whatsappautomation") {
+    next.kind = "whatsappAutomation";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
   } else if (kindRaw) {

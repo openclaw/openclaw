@@ -1,5 +1,4 @@
 /** Executes one isolated cron prompt with model fallback candidates. */
-import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -25,7 +24,6 @@ import {
   prepareModelRunCapabilities,
 } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
-import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveDeferredLifecycleTerminal } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
@@ -39,7 +37,6 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
 import { resolveScheduledRunMemoryReceipt } from "../execution-context-registry.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
@@ -53,6 +50,7 @@ import {
   resolveCronSandboxPlacement,
   type CronSandboxPlacement,
 } from "./run-admission.js";
+import { prepareCronCaller } from "./run-caller.js";
 import {
   createCronCandidateExecutionResolver,
   createCronRuntimeOverrideResolver,
@@ -85,6 +83,7 @@ function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
 }
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
+
 export function createCronPromptExecutor(
   params: Omit<
     CronRunExecutionParams,
@@ -111,23 +110,8 @@ export function createCronPromptExecutor(
     isCommandStyleCronMessage(params.agentPayload?.message ?? ""))
       ? "lightweight"
       : undefined;
-  const scheduledToolPolicy = resolveCronJobToolPolicyContext(
-    params.job,
-    params.agentPayload?.toolsAllow,
-  );
   const { sourceDelivery, runId } = params;
-  const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
-  if (scheduledToolPolicy?.mode === "account") {
-    const callerContext = resolveScheduledToolCallerContext({ scheduledToolPolicy });
-    resolveGroupToolPolicy({
-      config: params.cfgWithAgentDefaults,
-      sessionKey: scheduledToolPolicy.ownerSessionKey,
-      messageProvider: callerContext.local ? messageChannel : (callerContext.channel ?? undefined),
-      accountId: scheduledToolPolicy.ownerAccountId,
-      requireConfiguredAccount: true,
-      senderPolicyMode: "never",
-    });
-  }
+  const { personal, messageChannel, scheduledToolPolicy } = prepareCronCaller(params);
   const finalizePromptForResolvedTools = ({
     prompt,
     messageToolAvailable,
@@ -207,6 +191,7 @@ export function createCronPromptExecutor(
       toolsAllow: params.agentPayload?.toolsAllow,
       operatorAuthority: params.operatorAuthority,
     });
+    personal?.requireParent(scheduledExecution);
     const cronAdmission = prepareCronRunAdmission({
       scheduledExecution,
       operatorAuthority: params.operatorAuthority,
@@ -215,6 +200,7 @@ export function createCronPromptExecutor(
       ...(params.occurrence.childParent?.binding
         ? { assertSourceCurrent: params.occurrence.childParent.assertCurrent }
         : {}),
+      ...(personal ? { assertSourceCurrent: personal.assertCurrent } : {}),
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
@@ -329,6 +315,7 @@ export function createCronPromptExecutor(
           modelOverride,
           runOptions.agentHarnessRuntimeOverride,
         );
+        personal?.checkRuntime(!cliExecution && candidateRuntime === "openclaw");
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
@@ -433,6 +420,7 @@ export function createCronPromptExecutor(
             // Embedded, Codex and CLI candidates share this one sender bit for the run;
             // the CLI loopback reads the same decision from the run's context.
             ...cronAdmission.scheduledSender,
+            ...personal?.runParams,
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
@@ -449,7 +437,7 @@ export function createCronPromptExecutor(
             terminalReplyExpectation: "optional",
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
-            agentAccountId: params.resolvedDelivery.accountId,
+            agentAccountId: personal?.runParams.agentAccountId ?? params.resolvedDelivery.accountId,
             extraSystemPrompt: params.deliverySystemPrompt,
             extraSystemPromptTurnContext: params.deliverySystemPrompt
               ? { start: 0, text: params.deliverySystemPrompt }

@@ -260,6 +260,39 @@ export function getInvalidPersistedCronJobReason(
     return "missing-payload";
   }
   const payloadRecord = payload as Record<string, unknown>;
+  if (payloadRecord.kind === "whatsappAutomation") {
+    const task = payloadRecord.task;
+    const taskFields = asRecord(task);
+    const validTask =
+      task === undefined ||
+      (typeof taskFields.sessionId === "string" &&
+        taskFields.sessionId.trim() &&
+        Array.isArray(taskFields.tools) &&
+        taskFields.tools.every((value) => {
+          const tool = asRecord(value);
+          return (
+            typeof tool.name === "string" &&
+            /^[A-Za-z0-9_-]+$/u.test(tool.name) &&
+            (tool.pluginId === undefined ||
+              (typeof tool.pluginId === "string" && Boolean(tool.pluginId.trim())))
+          );
+        }) &&
+        Object.keys(taskFields).every((key) => ["sessionId", "tools"].includes(key)));
+    return validTask &&
+      candidate.sessionTarget === "isolated" &&
+      candidate.pluginCommand === undefined &&
+      candidate.failureAlert === false &&
+      asRecord(candidate.delivery).mode === "none" &&
+      (scheduleKind === "at" || scheduleKind === "every" || scheduleKind === "cron") &&
+      candidate.trigger === undefined &&
+      typeof payloadRecord.accountId === "string" &&
+      payloadRecord.accountId.trim() &&
+      typeof payloadRecord.peer === "string" &&
+      /^\+[1-9]\d{1,14}$/u.test(payloadRecord.peer) &&
+      Object.keys(payloadRecord).every((key) => ["kind", "peer", "accountId", "task"].includes(key))
+      ? null
+      : "invalid-payload";
+  }
   if (payloadRecord.kind === "accessAgentTurn" && candidate.cyberAccessProgram === undefined) {
     return "invalid-execution-policy";
   }

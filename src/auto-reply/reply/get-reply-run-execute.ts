@@ -25,6 +25,7 @@ import { copyChildSessionPublication } from "../../channels/message-access/child
 import type { OpenClawConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { prepareWhatsAppAutomationRun } from "../../cron/whatsapp-automation-turn.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import {
   isSessionPersonalBootstrapTurn,
@@ -420,7 +421,12 @@ export async function executePreparedReplyRun(
       accountId: ctx.AccountId ?? sessionCtx.AccountId,
     });
   }
+  const runWithWhatsAppAutomation =
+    freshChannelCronAuthorityTurn && sessionKey
+      ? prepareWhatsAppAutomationRun(sessionCtx, sessionKey)
+      : undefined;
   const followupRun = {
+    runWithWhatsAppAutomation,
     createChannelCronAuthority,
     prompt: queuedBody,
     readAdmissionConfig,
@@ -676,7 +682,10 @@ export async function executePreparedReplyRun(
     : undefined;
   const cronCreatorAuthorityCapability =
     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;
-  const execute = () =>
+  const runId =
+    authorityRunId ??
+    (runWithWhatsAppAutomation ? (opts?.runId ?? crypto.randomUUID()) : undefined);
+  const run = () =>
     runReplyAgent({
       ...params,
       steeringIntent: resolveReplySteeringIntent({
@@ -694,10 +703,10 @@ export async function executePreparedReplyRun(
       isActive,
       isRunActive,
       opts:
-        authorityRunId || cronCreatorAuthorityCapability
+        runId || cronCreatorAuthorityCapability
           ? {
               ...opts,
-              ...(authorityRunId ? { runId: authorityRunId } : {}),
+              ...(runId ? { runId } : {}),
               ...(cronCreatorAuthorityCapability ? { cronCreatorAuthorityCapability } : {}),
             }
           : opts,
@@ -712,8 +721,10 @@ export async function executePreparedReplyRun(
       replyThreadingOverride,
       replyOperation: providedReplyOperation,
     });
-  // The scope surrounds the whole immediate turn, including provider fallbacks.
-  // If runReplyAgent queues this input, the scope settles before later drain/replay.
+  const execute =
+    runWithWhatsAppAutomation && runId
+      ? () => runWithWhatsAppAutomation(runId, sessionKey, run)
+      : run;
   return createdCronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(
         createdCronCreatorAuthorityCapability,

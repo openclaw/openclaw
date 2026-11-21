@@ -43,6 +43,7 @@ export function normalizeTestWhatsAppMessage(params: {
     listen: () => () => {},
     getCurrentSock: () => null,
     resolveInboundJid: async () => (params.group ? (senderE164 ?? null) : from),
+    isReminderPeer: async () => false,
     resolveReactionTargetJids: async (jid) => [jid],
     rememberBaileysMessage: () => {},
     assertCanSendToJid: async () => {},

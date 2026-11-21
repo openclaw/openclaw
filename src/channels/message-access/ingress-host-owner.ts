@@ -22,6 +22,7 @@ export type ChannelParticipantInput = {
   promptedAt: number;
   owner: ChannelIngressHostOwner;
   gatewayContext: ReturnType<GatewayContextResolver>;
+  whatsappAutomationPeer?: string;
   verifiedPrincipal?: UserChannelIdentity;
   requesterProfile?: PreparedRequesterProfile;
   operatorAuthority?: Awaited<ReturnType<typeof prepareChannelOperatorAuthority>>;

@@ -639,8 +639,11 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
               createdActor: cronExecutionActor(input.job),
               sandbox,
               thinkingLevel: requestedThinkLevel,
-              toolsAllow: agentPayload?.toolsAllow,
-              toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
+              // A later direct continuation has no live WhatsApp requester. The scheduler
+              // rebuilds personal tool authority when it admits the next occurrence.
+              toolsAllow: input.occurrence.personalRequester ? [] : agentPayload?.toolsAllow,
+              toolsAllowIsDefault:
+                !input.occurrence.personalRequester && agentPayload?.toolsAllowIsDefault,
               scheduledToolPolicy: resolveCronScheduledToolPolicy({
                 toolsAllow: agentPayload?.toolsAllow,
                 scheduledToolPolicy: input.job.scheduledToolPolicy,

@@ -82,6 +82,7 @@ function createChannelIngressResolverForOwner(
         conversation: input.conversation,
         contextBinding: input.contextBinding,
         childSessionPublication: input.childSessionPublication,
+        whatsappAutomationPeer: input.whatsappAutomationPeer,
         event: {
           kind: event.kind ?? "message",
           authMode: event.authMode ?? "inbound",
@@ -439,6 +440,15 @@ async function resolveChannelMessageIngressForOwner(
       // Tools run later, often inside the provider plugin's stream consumer.
       // Retained channel callbacks must re-enter their own plugin instance.
       childSessionPublication: wrapCurrentPluginInstance(params.childSessionPublication),
+      whatsappAutomationPeer:
+        participantOwner.channelId === "whatsapp" &&
+        channelId === "whatsapp" &&
+        params.conversation.kind === "direct" &&
+        !params.conversation.threadId &&
+        params.whatsappAutomationPeer === senderId &&
+        params.conversation.id === senderId
+          ? senderId
+          : undefined,
       verifiedPrincipal,
       requesterProfile: requester
         ? {

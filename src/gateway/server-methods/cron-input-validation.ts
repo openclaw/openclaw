@@ -149,7 +149,7 @@ export function requiresExplicitAgentRuntimeToolsAllow(params: {
 }
 
 // Published clients send "deliver"; translate only the already-snapshotted request.
-function normalizeCronRequestDeliveryMode(input: CronJobPatch | null): void {
+function normalizeCronRequestDeliveryMode(input: Pick<CronJobPatch, "delivery"> | null): void {
   const delivery = input?.delivery;
   if (typeof delivery?.mode === "string" && delivery.mode.trim().toLowerCase() === "deliver") {
     delivery.mode = "announce";

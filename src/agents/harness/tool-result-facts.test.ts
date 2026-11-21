@@ -3,7 +3,10 @@ import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
 } from "../embedded-agent-tool-media.js";
-import { resolveAgentHarnessToolResultPresentation } from "./tool-result-facts.js";
+import {
+  isPersonalScheduleAdd,
+  resolveAgentHarnessToolResultPresentation,
+} from "./tool-result-facts.js";
 import { recordTelemetry, textToolResult } from "./tool-result-facts.test-support.js";
 
 it.each(["rejected", "plugin-defined-outcome"])(
@@ -91,4 +94,20 @@ it("records messaging tool side effects", () => {
       mediaUrls: ["/tmp/reply.png"],
     },
   ]);
+});
+
+it("records only a saved personal schedule as a scheduler effect", () => {
+  const saved = textToolResult("scheduled", { id: "saved-id" });
+  expect(
+    recordTelemetry({ toolName: "whatsapp_automations", args: { action: "add" }, result: saved })
+      .successfulCronAdds,
+  ).toBe(1);
+  expect(isPersonalScheduleAdd("whatsapp_automations", { action: "list" }, saved)).toBe(false);
+  expect(
+    isPersonalScheduleAdd(
+      "whatsapp_automations",
+      { action: "add" },
+      textToolResult("denied", { status: "error" }),
+    ),
+  ).toBe(false);
 });

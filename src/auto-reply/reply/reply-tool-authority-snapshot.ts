@@ -11,6 +11,8 @@ export function captureReplyToolAuthorityInput(
   run: ReplyToolAuthorityInput,
 ): ReplyToolAuthorityInput {
   const handoff = run.run.trustedInternalHandoff;
+  const scheduled = run.run.scheduledToolPolicy;
+  const personal = scheduled?.personalRequester;
   const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
   const intersection = run.toolsAllow
     ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
@@ -63,7 +65,12 @@ export function captureReplyToolAuthorityInput(
       config: run.run.config ? captureRuntimeConfig(run.run.config) : undefined,
       conversationToolPolicy: structuredClone(run.run.conversationToolPolicy),
       inputProvenance: structuredClone(run.run.inputProvenance),
-      scheduledToolPolicy: structuredClone(run.run.scheduledToolPolicy),
+      scheduledToolPolicy: scheduled && {
+        ...structuredClone({ ...scheduled, personalRequester: undefined }),
+        ...(personal
+          ? { personalRequester: { ...personal, tools: structuredClone(personal.tools) } }
+          : {}),
+      },
       runtimePluginToolGrant: structuredClone(run.run.runtimePluginToolGrant),
       // Copy policy facts while retaining the settle owner's live revocation check.
       trustedInternalHandoff: handoff

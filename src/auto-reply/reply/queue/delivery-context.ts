@@ -77,6 +77,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
     execution.senderE164 ?? "",
     execution.senderIsOwner === true,
     Boolean(run.createChannelCronAuthority),
+    Boolean(run.runWithWhatsAppAutomation),
     execution.execOverrides?.host ?? "",
     execution.execOverrides?.security ?? "",
     execution.execOverrides?.ask ?? "",
@@ -353,6 +354,7 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
   ];
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
+    runWithWhatsAppAutomation: authoritySource?.runWithWhatsAppAutomation,
     createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
     readAdmissionConfig: authoritySource?.readAdmissionConfig,
     operatorAuthority: authoritySource?.operatorAuthority,
@@ -422,6 +424,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
+    runWithWhatsAppAutomation: source.runWithWhatsAppAutomation,
     createChannelCronAuthority: source.createChannelCronAuthority,
     readAdmissionConfig: source.readAdmissionConfig,
     admissionSessionId: source.admissionSessionId,

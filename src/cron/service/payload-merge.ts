@@ -117,7 +117,11 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
   }
 
   applyToolsAllowPatch(next, patch, existing);
-  if ("timeoutSeconds" in patch && next.kind !== "systemEvent") {
+  if (
+    "timeoutSeconds" in patch &&
+    next.kind !== "systemEvent" &&
+    next.kind !== "whatsappAutomation"
+  ) {
     if (typeof patch.timeoutSeconds === "number") {
       next.timeoutSeconds = patch.timeoutSeconds;
     } else if (patch.timeoutSeconds === null) {

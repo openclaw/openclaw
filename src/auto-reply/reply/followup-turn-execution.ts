@@ -440,23 +440,32 @@ export async function executeFollowupTurn(params: {
       // Only the original fresh ingress can recreate authority for this new run.
       // Maintenance copies and synthetic turns must not reuse the source factory.
       const run = turn.queued.run;
+      const fresh = isFreshChannelCronAuthorityTurn({
+        messageProvider: run.messageProvider,
+        senderId: run.senderId,
+        isRoomEvent: roomEvent,
+        inputProvenance: run.inputProvenance,
+        spawnedBy: run.spawnedBy,
+        suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+      });
       const capability =
-        run.senderIsOwner &&
-        isFreshChannelCronAuthorityTurn({
-          messageProvider: run.messageProvider,
-          senderId: run.senderId,
-          isRoomEvent: roomEvent,
-          inputProvenance: run.inputProvenance,
-          spawnedBy: run.spawnedBy,
-          suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
-        })
+        run.senderIsOwner && fresh
           ? turn.queued.createChannelCronAuthority?.(
               turn.runId,
               getCommandOwnerAuthority(run)?.isCurrent,
             )
           : undefined;
       progressOpts.cronCreatorAuthorityCapability = capability;
-      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      const runWithInput = () =>
+        withCurrentUserTurnInput(recorder, () =>
+          fresh && turn.queued.runWithWhatsAppAutomation
+            ? turn.queued.runWithWhatsAppAutomation(
+                turn.runId,
+                turn.session.kind === "session" ? turn.session.key : run.sessionKey,
+                execute,
+              )
+            : execute(),
+        );
       execution = capability
         ? await runWithCronCreatorAuthorityCapability(
             capability,

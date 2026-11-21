@@ -22,7 +22,7 @@ import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "../sandbox/runtime-status.js";
-import { resolveScheduledToolCallerContext } from "../scheduled-tool-policy.js";
+import { resolveScheduledToolCallerContext, senderPolicyMode } from "../scheduled-tool-policy.js";
 import {
   withPreparedSessionCapabilityRead,
   type PreparedSessionCapabilityEntry,
@@ -603,7 +603,7 @@ export function resolvePluginHarnessToolPolicies(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
-    senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
+    senderPolicyMode: senderPolicyMode(params.scheduledToolPolicy),
   };
   const { policy } = capabilityProfile;
   // Runtime allowlists treat [] as deny-all; config allow: [] means unrestricted.

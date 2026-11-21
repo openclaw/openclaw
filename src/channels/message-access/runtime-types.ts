@@ -181,6 +181,8 @@ export type ResolveChannelMessageIngressParams = {
   event: ChannelIngressEventInput;
   /** Exact finalized host context this result may enter; omit for decision-only checks. */
   contextBinding?: ChannelIngressContextBinding;
+  /** Private reply address from the bundled WhatsApp socket. */
+  whatsappAutomationPeer?: string;
   /** Run-admission source renewal for any ingress. `audience: "public"` additionally
    * grants child-session publication after explicit opt-in and public-context proof.
    * Without that audience, a started ordinary request may finish after revocation.

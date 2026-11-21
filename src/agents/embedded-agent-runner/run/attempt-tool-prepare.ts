@@ -487,6 +487,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         getRunAbortDeadlineAtMs = source;
       },
       toolHookContext: {
+        trigger: attempt.trigger,
         getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         awaitSessionDiffBaseline,
         watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,

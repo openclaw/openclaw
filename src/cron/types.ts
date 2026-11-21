@@ -317,7 +317,11 @@ export type CronFailureAlertPatch = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | Exclude<CronJobWire["payload"], { kind: "agentTurn" }>
+  | Exclude<CronJobWire["payload"], { kind: "agentTurn" | "whatsappAutomation" }>
+  | (Extract<CronJobWire["payload"], { kind: "whatsappAutomation" }> & {
+      toolsAllow?: never;
+      toolsAllowIsDefault?: never;
+    })
   | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent);
 
 /** Partial payload update shape used by cron patch/edit flows. */

@@ -308,6 +308,7 @@ export function* assembleOpenClawCodingTools(
               approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
               // A hidden fork has nobody to ask; a command that needs approval is denied.
               nonInteractiveApproval:
+                Boolean(options?.scheduledToolPolicy?.personalRequester) ||
                 options?.swarmCollector ||
                 readSessionForkSource(options?.inputProvenance) !== undefined,
               backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,

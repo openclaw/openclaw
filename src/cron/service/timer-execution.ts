@@ -177,6 +177,51 @@ export async function executeJobCore(
       };
     }
   }
+  if (job.payload.kind === "whatsappAutomation") {
+    assertCurrent();
+    const fence = options?.deliveryAttemptFence;
+    if (
+      !state.deps.deliverWhatsAppAutomation ||
+      !abortSignal ||
+      !fence ||
+      job.trigger ||
+      job.sessionTarget !== "isolated" ||
+      !["at", "cron", "every"].includes(job.schedule.kind) ||
+      job.delivery?.mode !== "none" ||
+      job.failureAlert !== false
+    ) {
+      return { status: "skipped", error: "Private reminder delivery is unavailable." };
+    }
+    return await state.deps.deliverWhatsAppAutomation(
+      job,
+      abortSignal,
+      fence,
+      async (projected, message, personal) => {
+        const occurrence = await admitCronOccurrence(state, projected, projected.agentId);
+        try {
+          if (occurrence.pause) {
+            return {
+              status: "skipped",
+              delivered: false,
+              error: "The originating conversation is unavailable.",
+            };
+          }
+          return await state.deps.runIsolatedAgentJob({
+            occurrence: { ...occurrence, personalRequester: personal },
+            job: projected,
+            message,
+            abortSignal,
+            admissionSource: "requester-schedule",
+            deliveryAttemptFence: fence,
+            onExecutionStarted: options?.onExecutionStarted,
+            onExecutionPhase: options?.onExecutionPhase,
+          });
+        } finally {
+          occurrence.release();
+        }
+      },
+    );
+  }
   let sessionPreparation: CronSessionRunPreparation | undefined;
   let occurrence: ScheduledOccurrence | undefined;
   try {

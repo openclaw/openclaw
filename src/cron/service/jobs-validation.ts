@@ -129,6 +129,7 @@ export function assertSupportedJobSpec(
   }
   if (
     job.sessionTarget === "isolated" &&
+    job.payload.kind !== "whatsappAutomation" &&
     job.payload.kind !== "agentTurn" &&
     job.payload.kind !== "command" &&
     job.payload.kind !== "script"

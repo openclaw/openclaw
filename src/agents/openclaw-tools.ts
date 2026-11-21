@@ -97,6 +97,7 @@ import { createThemeTool } from "./tools/theme-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import { createWhatsAppAutomationTool } from "./tools/whatsapp-automation-tool.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export async function createOpenClawToolsAsync(
@@ -504,6 +505,16 @@ function* createOpenClawToolsSteps(
                 idempotencyScope: options?.runId,
                 contextEpoch: options?.computerContextEpoch,
               }),
+          createWhatsAppAutomationTool(
+            resolvedConfig ?? getRuntimeConfig(),
+            options?.runId,
+            sessionKey,
+            {
+              agentSessionId: options?.sessionId,
+              creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+              creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
+            },
+          ),
           createCronTool({
             ...options,
             requireCreationPlan: options?.requireCronCreationPlan,

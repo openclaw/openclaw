@@ -13,8 +13,10 @@ import {
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
 
-export async function startAutomationProvider() {
+export async function startAutomationProvider(toolName = "automations") {
   const requests = new Map<string, Record<string, unknown>>();
+  const requestedTools = new Map<string, string>();
+  const surfaces = new Map<string, string[]>();
   const results = new Map<string, string>();
   const toolAvailability = new Map<string, boolean>();
   const observedRequests: { marker: string | null; inputTypes: unknown[]; hasOutput: boolean }[] =
@@ -25,6 +27,9 @@ export async function startAutomationProvider() {
     marker: string | null;
     error: unknown;
   }> = [];
+  let hold:
+    | { marker: string; reached: boolean; release: () => void; gate: Promise<void> }
+    | undefined;
   let restartHold: { marker: string; recovering: boolean; reached: boolean } | undefined;
   const server = createServer((request, response) => {
     let marker: string | undefined;
@@ -44,6 +49,10 @@ export async function startAutomationProvider() {
         (restartHold && JSON.stringify(input).includes(`[automation-proof:${restartHold.marker}]`)
           ? restartHold.marker
           : undefined);
+      if (hold && marker === hold.marker) {
+        hold.reached = true;
+        await hold.gate;
+      }
       if (restartHold && marker === restartHold.marker && !restartHold.recovering) {
         restartHold.reached = true;
         // The original request remains effect-free until its owned Gateway dies.
@@ -56,7 +65,16 @@ export async function startAutomationProvider() {
       const args = marker ? requests.get(marker) : undefined;
       const output = extractToolOutput(input);
       const hasOutput = hasToolOutput(input);
-      const toolAvailable = hasToolDefinition(body, "automations");
+      const selectedTool = (marker && requestedTools.get(marker)) || toolName;
+      const toolAvailable = hasToolDefinition(body, selectedTool);
+      if (marker && !hasOutput) {
+        surfaces.set(
+          marker,
+          Array.isArray(body.tools)
+            ? body.tools.filter(isRecord).map((tool) => String(tool.name))
+            : [],
+        );
+      }
       const inputTypes = input.map((item) => item.type ?? item.role);
       observedRequests.push({ marker: marker ?? null, inputTypes, hasOutput });
       if (marker && args && !hasOutput) {
@@ -67,13 +85,25 @@ export async function startAutomationProvider() {
         results.set(marker, output);
       }
       const reply =
-        marker && args
-          ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\``
-          : "Scheduled reminder completed.";
+        selectedTool === "qa_my_orders" && hasOutput && marker?.startsWith("due-")
+          ? (() => {
+              const value = JSON.parse(output) as { quantities?: number[]; reviewed?: number };
+              if (!Array.isArray(value.quantities) && value.reviewed === undefined) {
+                return `Orders tool did not complete: ${output}`;
+              }
+              if (value.reviewed !== undefined) {
+                return `Marked ${value.reviewed} orders reviewed.`;
+              }
+              const quantities = value.quantities ?? [];
+              return `You have ${quantities.length} orders for ${quantities.reduce((sum, quantity) => sum + quantity, 0)} units.`;
+            })()
+          : marker && args
+            ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\``
+            : "Scheduled reminder completed.";
       const events =
         args && !hasOutput
           ? toolAvailable
-            ? buildToolCallEventsWithArgs("automations", args)
+            ? buildToolCallEventsWithArgs(selectedTool, args)
             : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
           : buildAssistantEvents(reply);
       const streaming = body.stream === true;
@@ -91,6 +121,8 @@ export async function startAutomationProvider() {
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
+    requestedTools,
+    surfaces,
     results,
     toolAvailability,
     diagnostics: (marker: string) => ({
@@ -103,9 +135,14 @@ export async function startAutomationProvider() {
         Object.assign({}, failure, { error: redactQaGatewayDebugText(inspect(failure.error)) }),
       ),
     }),
+    holdRequest(marker: string) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      return (hold = { marker, reached: false, release: resolve, gate: promise });
+    },
     holdInitialRequestForRestart: (marker: string): NonNullable<typeof restartHold> =>
       (restartHold = { marker, recovering: false, reached: false }),
     async stop() {
+      hold?.release();
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

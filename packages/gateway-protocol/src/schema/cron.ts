@@ -541,7 +541,22 @@ export const CronJobSchema = closedObject({
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
-  payload: CronPayloadSchema,
+  payload: Type.Union([
+    ...CronPayloadSchema.anyOf,
+    closedObject({
+      kind: Type.Literal("whatsappAutomation"),
+      task: Type.Optional(
+        closedObject({
+          sessionId: NonBlankString,
+          tools: Type.Array(
+            closedObject({ name: NonBlankString, pluginId: Type.Optional(NonBlankString) }),
+          ),
+        }),
+      ),
+      accountId: NonBlankString,
+      peer: Type.String({ pattern: "^\\+[1-9][0-9]{1,14}$" }),
+    }),
+  ]),
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   state: CronJobStateSchema,

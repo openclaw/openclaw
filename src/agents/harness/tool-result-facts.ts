@@ -31,7 +31,11 @@ export function recordAgentHarnessToolResultTelemetry(params: {
   sourceReplyFinal?: boolean;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
-  if (!params.isError && params.toolName === "cron" && isCronAddAction(params.args)) {
+  if (
+    !params.isError &&
+    ((params.toolName === "cron" && isCronAddAction(params.args)) ||
+      isPersonalScheduleAdd(params.toolName, params.args, params.result))
+  ) {
     params.telemetry.successfulCronAdds = (params.telemetry.successfulCronAdds ?? 0) + 1;
   }
   // Only a live invocation may accept new media; committed effects remain evidence.
@@ -255,6 +259,20 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
     }
   }
   return undefined;
+}
+
+export function isPersonalScheduleAdd(
+  toolName: string,
+  args: Record<string, unknown>,
+  result: unknown,
+): boolean {
+  const details = asOptionalRecord(asOptionalRecord(result)?.details);
+  return (
+    toolName === "whatsapp_automations" &&
+    isCronAddAction(args) &&
+    typeof details?.id === "string" &&
+    details.id.length > 0
+  );
 }
 
 export function isCronAddAction(args: Record<string, unknown>): boolean {

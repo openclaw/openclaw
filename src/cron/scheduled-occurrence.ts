@@ -47,8 +47,13 @@ export type MintedScheduledExecution = Readonly<{
 
 /** One admitted occurrence. Every scheduled agent run mints its context from it. */
 export type ScheduledOccurrence = Readonly<{
+  personalRequester?: import("../agents/scheduled-tool-policy.js").ScheduledToolPolicyContext["personalRequester"];
   /** Set when the exact parent is removed or archived, or its bound worktree is gone. */
   pause?: CronParentUnavailable;
+  /** Live policy of the retained parent for a caller-bound agent turn. */
+  parentPermissions?: Pick<SessionEntry, "permissionMode" | "sessionRoot" | "toolOverrides"> & {
+    assertCurrent(): void;
+  };
   /** A child run's parent row, read once by the admission. */
   childParent?: Readonly<{
     /** Set when the parent row persists a workspace binding; it selects the child's workspace. */

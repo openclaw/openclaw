@@ -14,9 +14,22 @@ export type ScheduledToolPolicyContext = (
       ownerOrigin?: CronScheduledToolCallerOrigin;
     })
 ) & {
+  /** Present only during a Gateway-admitted personal task. */
+  personalRequester?: {
+    accountId: string;
+    senderId: string;
+    assertCurrent(): void;
+    tools: readonly { name: string; pluginId?: string }[];
+  };
   /** Restrict-only policy for the rebuilt exec tool; absence keeps baseline exec. */
   execTarget?: { host: "gateway"; ask?: "always" };
 };
+
+export function senderPolicyMode(policy?: ScheduledToolPolicyContext, internal = false) {
+  return !policy?.personalRequester && (policy || internal)
+    ? ("never" as const)
+    : ("always" as const);
+}
 
 /** Separates a scheduled creator's authorization identity from its delivery route. */
 export function resolveScheduledToolCallerContext(params: {
