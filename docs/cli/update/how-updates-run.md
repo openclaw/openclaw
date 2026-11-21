@@ -2030,6 +2030,8 @@ the update keeps the new package and exits 0. It records a
 `package-backup-retention` warning that names the link and any launcher backups
 or database snapshots left beside it, because cleanup stops at the link.
 Historical package backups from earlier updates also wait for a later update.
+A database snapshot left this way is removed by update cleanup after a later
+update is verified successful.
 The link still names your checkout, which the updater does not modify. After
 checking the installation, remove the link itself and not what it names: use
 `rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a
