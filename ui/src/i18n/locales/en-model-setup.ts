@@ -9,9 +9,7 @@ const enModelSetup = {
         "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
       useForAgent: "Test & use for this agent",
       connectForAgent: "Add account for this agent",
-      connectProvider: "Add account",
       returnToModels: "Back to Models",
-      otherSoftware: "Other detected software",
     },
     heading: "Set up a model",
     intro:
@@ -35,7 +33,6 @@ const enModelSetup = {
       checking: "Asking {modelRef} for a quick reply…",
       ready: "Ready",
       readyIn: "Ready · {latencyMs} ms",
-      providerUnavailable: "{provider} isn’t responding.",
     },
     access: {
       adminRequired: "You need admin access to set up models.",
@@ -63,7 +60,6 @@ const enModelSetup = {
       choose: "Choose a model",
       use: "Use",
       saving: "Saving…",
-      loading: "Loading installed agents…",
       empty:
         "No models from installed agents yet. Check the installed app, then open the picker again.",
       unconfirmed: "Availability not confirmed",
@@ -86,10 +82,6 @@ const enModelSetup = {
       intro:
         "Use a local model service or set up a private GGUF model on the computer running OpenClaw.",
       ollamaButton: "Check & set up",
-      ollamaLabel: "Ollama",
-      ollamaHint:
-        "Use Ollama on the computer running OpenClaw to set up a model that supports tools",
-      llamaCppLabel: "llama.cpp",
       providerNotReady:
         "Couldn’t find a usable local model from {provider}. Review the setup result, then try again.",
     },
@@ -113,7 +105,6 @@ const enModelSetup = {
       openChat: "Start chatting",
       continueSetup: "Continue setup",
       stayHere: "Stay in settings",
-      configuredModel: "Configured model",
     },
     utility: {
       role: "Setup & utility",
