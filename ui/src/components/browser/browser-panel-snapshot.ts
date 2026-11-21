@@ -54,15 +54,17 @@ interface BrowserPanelSnapshotHost extends BrowserPanelStateWriter<
 
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
 export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost) {
-  function scheduleRefresh(epoch: number, current: () => boolean): void {
+  /** Time the action already took counts toward the settle delay. */
+  function scheduleRefresh(epoch: number, current: () => boolean, elapsedMs: number): void {
     controller.pendingInput.scheduleRefresh(
-      ACTION_REFRESH_DELAY_MS,
+      Math.max(0, ACTION_REFRESH_DELAY_MS - elapsedMs),
       () => {
         if (current() && controller.activeTargetId) {
           void capture(controller.activeTargetId, epoch);
         }
       },
       () => !controller.operations.hasPendingCapture,
+      ACTION_REFRESH_DELAY_MS,
     );
   }
 

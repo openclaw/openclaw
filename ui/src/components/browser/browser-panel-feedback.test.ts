@@ -14,12 +14,20 @@ beforeEach(() => vi.useFakeTimers());
 const latestUrl = "https://example.test/latest";
 const latestCapture = { path: "/latest.png", targetId: "raw-a", url: latestUrl };
 
-function setupFeedback() {
+function setupFeedback(pressMs = 0) {
   stubScreenshotMedia();
   const screenshot = vi.fn(async () => latestCapture);
-  const { client } = createBrowserClient(async (envelope) =>
-    envelope.path === "/screenshot" ? screenshot() : metrics(latestUrl, "Latest"),
-  );
+  const { client } = createBrowserClient(async (envelope) => {
+    if (envelope.path === "/screenshot") {
+      return screenshot();
+    }
+    if (envelope.body?.kind === "press") {
+      await new Promise((resolve) => {
+        setTimeout(resolve, pressMs);
+      });
+    }
+    return metrics(latestUrl, "Latest");
+  });
   const controller = createBrowserPanelTestController(client, "tab-a");
   async function type(key: string, count = 1, delay = 350) {
     for (let index = 0; index < count; index += 1) {
@@ -54,6 +62,21 @@ it("keeps a slow fallback capture and delivers trailing input feedback", async (
   await vi.advanceTimersByTimeAsync(350);
   expect(screenshot).toHaveBeenCalledTimes(2);
   expect(controller.view?.url).toBe(latestUrl);
+  controller.suspendView();
+});
+
+it("counts a slow action toward the settle delay and keeps retries paced behind a pending capture", async () => {
+  const capture = createDeferred<typeof latestCapture>();
+  const { controller, screenshot, type } = setupFeedback(400);
+  screenshot.mockImplementationOnce(() => capture.promise);
+  await type("a", 1, 401);
+  expect(screenshot).toHaveBeenCalledTimes(1);
+  await type("b", 1, 450);
+  capture.resolve(latestCapture);
+  await vi.advanceTimersByTimeAsync(299);
+  expect(screenshot).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(2);
+  expect(screenshot).toHaveBeenCalledTimes(2);
   controller.suspendView();
 });
 
