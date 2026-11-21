@@ -124,6 +124,7 @@ export async function handleTelegramAction(
     mediaAccess?: ChannelMessageActionContext["mediaAccess"];
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    agentId?: string;
     sessionKey?: string | null;
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
@@ -449,6 +450,7 @@ export async function handleTelegramAction(
         : undefined);
     const outboundSession = buildOutboundSessionContext({
       cfg,
+      agentId: options?.agentId,
       sessionKey: options?.sessionKey,
       requesterAccountId: accountId,
     });
