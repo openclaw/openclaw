@@ -136,6 +136,9 @@ jobs:
     concurrency:
       group: security-review-${{ matrix.head }}
       cancel-in-progress: false
+      # Preserve every review event; the default single pending slot can discard
+      # an unstarted review and leave its canceled check blocking this head.
+      queue: max
     permissions:
       contents: read
       pull-requests: write
