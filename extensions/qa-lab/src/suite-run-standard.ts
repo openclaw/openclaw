@@ -17,6 +17,7 @@ import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suit
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import { applyQaSuiteGatewayConfigPatches, scenarioRequiresControlUi } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import { captureQaMockProviderRequests } from "./suite-provider-artifacts.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { createQaSuiteRunResources } from "./suite-run-resources.js";
@@ -412,6 +413,14 @@ export async function runQaFlowSuiteStandard(
           beforeTempCleanup: transport.captureBeforeGatewayCleanup,
         }),
       disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
+      captureProviderArtifacts: activeMock
+        ? () =>
+            captureQaMockProviderRequests({
+              outputDir,
+              providerMode,
+              provider: activeMock,
+            })
+        : undefined,
       stopProvider: activeMock ? () => activeMock.stop() : undefined,
       finishLab: ownsLab
         ? () => lab.stop()
