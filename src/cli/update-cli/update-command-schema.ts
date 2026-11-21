@@ -599,7 +599,7 @@ export async function captureUpdateActivationSchemas(params: {
 export async function assertPendingMigrationsAdmitted(params: {
   pendingMigrations: ReadonlyArray<{ path: string; expected: number; found: number | null }>;
   env: NodeJS.ProcessEnv;
-  timeoutMs: number;
+  timeoutMs?: number;
 }): Promise<void> {
   if (params.pendingMigrations.length === 0) {
     return;
