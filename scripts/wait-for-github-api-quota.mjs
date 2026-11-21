@@ -56,22 +56,45 @@ export async function waitForGithubApiQuota({
   }
   const deadline = now() + maxWaitMs;
   const endpoint = `${apiUrl.replace(/\/$/u, "")}/rate_limit`;
+  const timeoutError = new Error(
+    "GitHub installation quota check exceeded the candidate-acquisition wait budget.",
+  );
 
   for (;;) {
-    const response = await fetchImpl(endpoint, {
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${token}`,
-        "x-github-api-version": "2022-11-28",
-      },
-    });
-    const id = requestId(response);
-    if (!response.ok) {
-      throw new Error(
-        `Could not inspect GitHub installation quota (HTTP ${response.status}; request ID ${id}).`,
-      );
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      throw timeoutError;
     }
-    const body = await response.json();
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => {
+        controller.abort(timeoutError);
+      },
+      Math.min(remainingMs, 2_147_483_647),
+    );
+    let response;
+    let body;
+    try {
+      response = await fetchImpl(endpoint, {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${token}`,
+          "x-github-api-version": "2022-11-28",
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(
+          `Could not inspect GitHub installation quota (HTTP ${response.status}; request ID ${requestId(response)}).`,
+        );
+      }
+      body = await response.json();
+    } finally {
+      clearTimeout(timer);
+      // Release unread error responses too, without waiting for their body to finish.
+      controller.abort();
+    }
+    const id = requestId(response);
     const quota = body?.resources?.core;
     const remaining = quota?.remaining;
     const limit = quota?.limit;
