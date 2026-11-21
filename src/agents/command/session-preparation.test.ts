@@ -431,3 +431,26 @@ it.each([
     );
   }
 });
+
+it("does not offer NO_REPLY to a result-required sessions_send turn into WebChat", async () => {
+  const { opts } = await prepare({
+    opts: {
+      message: "Run the check and report back.",
+      channel: "webchat",
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    },
+    sessionKey: "agent:main:dashboard:target",
+    sessionEntry: {
+      sessionId: "conversation-id",
+      updatedAt: 1,
+      chatType: "direct",
+      delivery: { kind: "internal" },
+    },
+  });
+  const turn = splitExtraSystemPrompt(opts).turn ?? "";
+  expect(turn).toContain("You are in a WebChat direct conversation.");
+  expect(turn).toContain(
+    "This turn owes its sender a result, so end with a brief final answer, not NO_REPLY.",
+  );
+  expect(turn).not.toContain('reply with exactly "NO_REPLY"');
+});

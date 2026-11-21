@@ -375,3 +375,35 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["webchat", { kind: "inter_session", sourceTool: "sessions_spawn" }, true],
+  ["webchat", { kind: "external_user" }, false],
+  ["telegram", { kind: "external_user" }, false],
+] as const)(
+  "offers NO_REPLY to a %s direct turn only when silence is accepted (%j)",
+  async (Provider, InputProvenance, resultRequired) => {
+    const sessionCtx = context("Check the build.", {
+      Provider,
+      Surface: Provider,
+      OriginatingChannel: Provider,
+      ChatType: "direct",
+      InputProvenance,
+    });
+    const prepared = await prepareReadyReply({
+      ctx: sessionCtx,
+      sessionCtx,
+      sessionKey: "agent:main:dashboard:target",
+    });
+    const turnContext = prepared.extraSystemPromptTurnContext?.text ?? "";
+    expect(turnContext).toContain(
+      `You are in a ${Provider === "webchat" ? "WebChat" : "Telegram"} direct conversation.`,
+    );
+    for (const prompt of [turnContext, prepared.extraSystemPromptParts.join("\n\n")]) {
+      expect(prompt.includes('reply with exactly "NO_REPLY"')).toBe(!resultRequired);
+      expect(prompt.includes("This turn owes its sender a result")).toBe(resultRequired);
+    }
+    // The CLI binding keeps the session-stable copy.
+    expect(prepared.extraSystemPromptStatic).toContain('reply with exactly "NO_REPLY"');
+  },
+);
