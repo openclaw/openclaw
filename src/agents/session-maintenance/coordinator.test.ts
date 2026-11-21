@@ -49,9 +49,13 @@ function mark(name: string) {
 }
 const check = (expected: string) => expect(events).toEqual(expected ? expected.split(" ") : []);
 const read = () => waitForSessionMaintenance(sessionKey);
-function makeOwner(options: OwnerOptions = {}) {
+function rawOwner(options: OwnerOptions = {}) {
   const current = createSessionMaintenanceOwner({ sessionKey, ...options });
   owners.push(current);
+  return current;
+}
+function makeOwner(options: OwnerOptions = {}) {
+  const current = rawOwner(options);
   return {
     ...current,
     run: <T>(...work: Parameters<typeof current.run<T>>) => current.track(current.run<T>(...work)),
@@ -118,16 +122,22 @@ it.each([false, true])("detaches retired authority (optional=%s)", async (preemp
     withCaller(identity, async () => {
       const caller = callerIdentity();
       expect(caller?.receiptAuthority?.()).toBe(true);
-      const owner = makeOwner({ preemptible });
+      const owner = rawOwner({ preemptible });
       const assertDetached = () =>
         expect([callerIdentity(), operatorAuthority()]).toEqual([undefined, undefined]);
-      const work = owner.run(async () => {
-        assertDetached();
-        await Promise.resolve();
-        owner.assertCurrent();
-        assertDetached();
-        return "maintenance completed";
-      });
+      const work = owner.track(
+        (async () => {
+          const result = await owner.run(async () => {
+            assertDetached();
+            await Promise.resolve();
+            owner.assertCurrent();
+            assertDetached();
+            return "maintenance completed";
+          });
+          await owner.runCleanup(async () => assertDetached());
+          return result;
+        })(),
+      );
       source.abort();
       await expect(work).resolves.toBe("maintenance completed");
       expect(owner.assertCurrent).toThrow();
@@ -175,6 +185,34 @@ it.each(["foreground", "close", "restart"] as const)(
     expect(owner.assertCurrent).toThrow();
   },
 );
+
+it("lets aborted cleanup re-enter ownership without reopening publication authority", async () => {
+  const owner = rawOwner({ preemptible: true });
+  const work = owner.track(
+    (async () => {
+      await owner.run(async () => {
+        mark("optional:start");
+        await wait("aborted");
+      });
+      await owner.runCleanup(async () => {
+        await read();
+        expect(owner.assertCurrent).toThrow();
+        await expect(owner.run(async () => {})).rejects.toMatchObject({ name: "AbortError" });
+        mark("cleanup:start");
+        await wait("finishCleanup");
+      });
+    })(),
+  );
+  owner.signal.addEventListener("abort", () => release("aborted"), { once: true });
+  await wait("optional:start");
+  const admission = foreground(sessionKey, "foreground:admit");
+  await wait("cleanup:start");
+  check("optional:start cleanup:start");
+  release("finishCleanup");
+  await admission;
+  await work;
+  check("optional:start cleanup:start foreground:admit");
+});
 
 it("keeps optional work pending until every foreground reservation releases without blocking reads", async () => {
   const releaseFirst = await foreground();
