@@ -11,7 +11,7 @@ import {
 import { admitAttachmentFiles, chatAttachmentBatchBytes } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments } from "./chat-attachment-draft.ts";
-import { dataImageClipboardFile } from "./chat-attachment-image.ts";
+import { canResizeChatAttachment, dataImageClipboardFile } from "./chat-attachment-image.ts";
 import { ChatAttachmentReadLifecycle, readChatAttachmentFile } from "./chat-attachment-reads.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 
@@ -227,7 +227,9 @@ export function handleChatAttachmentPaste(
   e.preventDefault();
   if (
     pasted &&
-    (!props.attachmentLimits || pasted.file.size <= props.attachmentLimits.maxImageBytes)
+    (!props.attachmentLimits ||
+      (!canResizeChatAttachment(pasted.file) &&
+        pasted.file.size <= props.attachmentLimits.maxImageBytes))
   ) {
     const stagedBytes = stagedAttachmentBytes(props);
     if (admitAttachmentFiles([pasted.file], props.attachmentLimits, stagedBytes).length === 0) {

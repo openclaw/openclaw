@@ -192,13 +192,14 @@ function previewFixture(
   return Object.assign(h, { container: preview.container, previewProps: props });
 }
 
-function imageFile(name: string, bytes: string, type = "image/png") {
+// Lifecycle fixtures use a non-prepared image format; PNG preparation uses resizePngFixture.
+function imageFile(name: string, bytes: string, type = "image/gif") {
   return new File([bytes], name, { type });
 }
 
 class ResizeWorker extends EventTarget {
   terminate = vi.fn();
-  complete(data: File | null = imageFile("large.png", "ok")) {
+  complete(data: File | null = imageFile("large.png", "ok", "image/png")) {
     this.dispatchEvent(new MessageEvent("message", { data }));
   }
 }
