@@ -72,6 +72,14 @@ function pruneAllExpired(now: number): void {
   }
 }
 
+/** Auth failures are remembered; a saved-login refusal reflects current config, so each turn rechecks it. */
+export function cachesAuthFailureSkip(error: { reason: string; code?: string }): boolean {
+  return (
+    (error.reason === "auth" || error.reason === "auth_permanent") &&
+    error.code !== "selected_auth_profile_unavailable"
+  );
+}
+
 export function markFallbackCandidateSkipped(params: {
   sessionId: string | undefined;
   provider: string;
