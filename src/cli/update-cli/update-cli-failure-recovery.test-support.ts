@@ -113,6 +113,8 @@ export function registerForegroundFailureRecoveryTests(deps: {
             ],
           }),
           expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
+          // The fresh post-core process runs Doctor repair, so the run copied its
+          // originals first; the failed run's cleanup then retires that copy.
           ...(handoff === undefined ? [recoveryCleanupStep()] : []),
         ],
       });

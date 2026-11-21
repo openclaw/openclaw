@@ -109,6 +109,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
   cohort?: { runId: string; env: NodeJS.ProcessEnv; fence: UpdateRecoveryFence };
+  beforeRecordPublication?: () => Promise<void>;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     params.assertCurrent?.();
@@ -552,7 +553,9 @@ async function updatePluginsAfterCoreUpdateWithLease(
       ? restoreDoctorConfigEnvRefs(baselineSource, baselineReferences)
       : baselineSource;
     const changedPaths = collectChangedConfigPaths(baseline, nextConfig).paths;
+    // Both publication paths below call this first; an unchanged core copies its originals here.
     const beforeCommit = async () => {
+      await params.beforeRecordPublication?.();
       assertCurrent();
       await params.configWriteOptions.beforeCommit?.();
       assertCurrent();

@@ -196,6 +196,17 @@ export async function convergeUpdatePlugins(params: {
         let retiredWarnings: ReadonlySet<string> = new Set();
         let targetRuntimeConverged = false;
         let maintenanceDeferred = false;
+        // Known state changes ahead: a fresh process always runs Doctor repair and cannot
+        // copy itself, and a changed channel is written to config. Copy the originals first.
+        if (
+          shouldResumePostCoreInFreshProcess ||
+          (params.requestedChannel &&
+            params.configSnapshot.valid &&
+            params.requestedChannel !== params.storedChannel)
+        ) {
+          await params.opts.run?.captureOriginal?.();
+          assertCurrent?.();
+        }
         if (shouldResumePostCoreInFreshProcess) {
           if (retainedDifferentRuntime && params.opts.run?.completionOwner === "gateway-restart") {
             await params.beforeDoctor?.();
@@ -317,7 +328,13 @@ export async function convergeUpdatePlugins(params: {
                 }
               : {}),
             pluginUpdate: producedPluginUpdate,
-            beforeDoctor: params.beforeDoctor,
+            beforeDoctor: async () => {
+              // Fresh Doctor can migrate core and plugin state. An already-current core
+              // copies its originals only here, once it knows Doctor will run.
+              await params.opts.run?.captureOriginal?.();
+              assertCurrent?.();
+              await params.beforeDoctor?.();
+            },
             assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,

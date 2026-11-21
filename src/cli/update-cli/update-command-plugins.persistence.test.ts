@@ -729,6 +729,41 @@ it.each([1, 5])("bounds publication retries after %s late writes", async (writes
   );
 });
 
+it.each([true, false])(
+  "runs the original-state copy before plugin records publish, and never without a change (changed=%s)",
+  async (changed) => {
+    await withOpenClawTestState({ label: "updater-plugin-copy-first" }, async (state) => {
+      const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+      const order: string[] = [];
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+        ...convergenceResult(cfg),
+        ...(changed
+          ? {
+              changes: ["Installed fixture next."],
+              installRecords: { next: { source: "archive" } },
+            }
+          : {}),
+      }));
+      await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configChanged: false,
+        configWriteOptions: {
+          beforeCommit: async () => {
+            order.push("commit");
+          },
+        },
+        beforeRecordPublication: async () => {
+          order.push("copy");
+        },
+      });
+      expect(order).toEqual(changed ? ["copy", "commit"] : []);
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(changed ? { next: { source: "archive" } } : {});
+    });
+  },
+);
+
 it("prints each skipped plugin and its reason after the update counts", async () => {
   await withOpenClawTestState({ label: "updater-plugin-skip-reasons" }, async (state) => {
     const prepared = await prepareUpdate(state, { plugins: { enabled: false } });

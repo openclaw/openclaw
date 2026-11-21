@@ -181,7 +181,8 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     return { slot: gitReleaseSlot(prefix), running: await fs.realpath(running) };
   }
 
-  const convert = (gitRoot: string) =>
+  // The updater copies its originals in `beforeGitMutation`, right before activation.
+  const convert = (gitRoot: string, beforeGitMutation = async (): Promise<void> => {}) =>
     updateGitRelease({
       gitRoot,
       runCommand: (argv, options) =>
@@ -195,7 +196,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         channel: "dev",
         inspectGitTarget: async () => {},
         validateCandidate: async () => [],
-        beforeGitMutation: async () => {},
+        beforeGitMutation,
         runGitDoctor: async () => null,
       },
     });
@@ -203,25 +204,30 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it("rebuilds a same-commit release whose runtime artifacts do not verify", async () => {
     const { slot, running } = await singleReleaseInstall();
     target.runningRoot = running;
+    const beforeGitMutation = vi.fn(async () => {});
 
-    const result = await convert(slot);
+    const result = await convert(slot, beforeGitMutation);
 
     expect(target.beforeRuntimeVerified).toEqual([false]);
     expect(result.status, JSON.stringify(result.steps)).toBe("ok");
     // The successful result carries the new release's verdict, not the incomplete one's.
     expect(result.recovery).toMatchObject({ serviceRestartSafe: true });
     expect(await fs.realpath(slot)).not.toBe(running);
+    expect(beforeGitMutation).toHaveBeenCalledOnce();
   });
 
   it("reports a current release as prepared so finalization never regenerates it", async () => {
     target.runtimeVerified = true;
     const { slot } = await singleReleaseInstall();
+    const beforeGitMutation = vi.fn(async () => {});
 
-    const result = await convert(slot);
+    const result = await convert(slot, beforeGitMutation);
 
     expect(target.beforeRuntimeVerified).toEqual([true]);
     // Post-core finalization would otherwise run build scripts inside the release.
     expect(result).toMatchObject({ status: "skipped", sourceRuntimePrepared: true });
+    // A release that equals the running one changes nothing, so nothing is copied.
+    expect(beforeGitMutation).not.toHaveBeenCalled();
   });
 
   async function checkoutWithTwoCommits() {
