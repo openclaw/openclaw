@@ -287,6 +287,11 @@ it.each([
       if (change === "grant") {
         fixture.grant.abort(new Error("original grant revoked"));
       } else if (change === "role") {
+        fixture.config.gateway!.roles!.definitions.changed = {
+          scopes: ["operator.read"],
+          agents: "*",
+          sessions: { others: "none" },
+        };
         await setCanonicalUserProfileRole(fixture.profileId, "changed");
         invalidateOperatorRolePolicy(fixture.profileId);
       } else if (change === "email binding") {

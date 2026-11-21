@@ -1,4 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import {
   getGatewayToolCallerIdentity,
@@ -10,7 +12,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   decodeGitHubPublicationRequester,
-  encodeGitHubPublicationRequester,
   type GitHubPublicationOrigin,
   type GitHubPublicationRequesterSnapshot,
 } from "../state/github-publication-requester.js";
@@ -280,6 +281,8 @@ function prepareRequesterPolicy(
         lifecycleRevision: target.origin
           ? target.origin.lifecycleRevision
           : (facts.target.entry.lifecycleRevision ?? null),
+        createdActor: facts.target.entry.createdActor,
+        owner: facts.target.entry.owner,
       },
     ];
   });
@@ -288,7 +291,9 @@ function prepareRequesterPolicy(
       const entry = target.prepared.readCurrent(getCommittedRuntimeConfig()).target.entry;
       if (
         entry.sessionId !== target.sessionId ||
-        (entry.lifecycleRevision ?? null) !== target.lifecycleRevision
+        (entry.lifecycleRevision ?? null) !== target.lifecycleRevision ||
+        !isDeepStrictEqual(entry.createdActor, target.createdActor) ||
+        !isDeepStrictEqual(entry.owner, target.owner)
       ) {
         throw new GitHubPublicationRequesterUnavailableError();
       }
@@ -330,7 +335,11 @@ export async function prepareGitHubPublicationRequesterV2(
   options: Parameters<typeof prepareGatewayOperatorRunAuthority>[0] &
     Pick<GatewayRequestHandlerOptions, "signal" | "sessionMutationAuthorization">,
   session: PublicationSession,
-): Promise<{ requester: GitHubPublicationRequesterV2; release: () => void }> {
+): Promise<{
+  requester: GitHubPublicationRequesterV2;
+  release: () => void;
+  authority: AdmittedRunOperatorAuthority | undefined;
+}> {
   options.signal?.throwIfAborted();
   options.sessionMutationAuthorization?.assertCurrent();
   if (options.hasCurrentClientAuthority?.() === false) {
@@ -468,7 +477,7 @@ export async function prepareGitHubPublicationRequesterV2(
     });
     workerRequesters.set(requester, Object.freeze({ ...session }));
     requester.assertCurrent();
-    return { requester, release };
+    return { requester, release, authority: source?.authority };
   } catch (error) {
     release();
     throw error;
@@ -492,22 +501,90 @@ export async function prepareGitHubPublicationTaskRequester(
   ) {
     throw new GitHubPublicationRequesterUnavailableError();
   }
-  const restored = await restoreGitHubPublicationRequester(
-    encodeGitHubPublicationRequester({ ...original.snapshot, origin }),
-    sourceSession,
-    getCommittedRuntimeConfig,
-    original,
-  );
-  const requester: GitHubPublicationRequesterV2 = Object.freeze({
-    version: 2,
-    snapshot: restored.snapshot,
-    signal: restored.signal,
-    assertInvocationCurrent: original.assertInvocationCurrent,
-    assertCurrent: restored.assertCurrent,
-    prepareSource: restored.prepareSource,
-  });
-  workerRequesters.set(requester, Object.freeze({ ...sourceSession }));
-  return { requester, release: restored.release };
+  const snapshot = Object.freeze({ ...original.snapshot, origin });
+  let identity: PreparedProfileIdentity | undefined;
+  let sessionFacts: PreparedPublicationSession | undefined;
+  const lifetime = new AbortController();
+  const release = () => {
+    lifetime.abort(new GitHubPublicationRequesterUnavailableError());
+    sessionFacts?.release();
+    identity?.release();
+  };
+  try {
+    if (snapshot.actor.kind === "operator") {
+      assertPublicationIncognitoAccess(
+        snapshot.actor.profileId,
+        snapshot.scopes,
+        sourceSession.sessionKey,
+      );
+      identity = await prepareUserProfileIdentity(snapshot.actor.profileId);
+    }
+    const preparedSession = await preparePublicationSession(
+      sourceSession,
+      getCommittedRuntimeConfig(),
+    );
+    sessionFacts = preparedSession;
+    original.assertCurrent();
+    const current = identity?.readCurrentFacts(snapshot.grant?.aliasBindingIds);
+    const entry = preparedSession.readCurrent(getCommittedRuntimeConfig()).target.entry;
+    if (
+      entry.archivedAt !== undefined ||
+      (current &&
+        snapshot.actor.kind === "operator" &&
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.write"],
+          allowedScopes: snapshot.scopes,
+        }) &&
+        !prepareSessionCreatorProfile(
+          snapshot.actor.profileId,
+          current.aliases,
+        )(entry.createdActor))
+    ) {
+      throw new GitHubPublicationRequesterUnavailableError();
+    }
+    // Transfer the admitted publication, not a new role admission. Bind the task's
+    // exact recipient and generation while the original request finishes.
+    const signal = AbortSignal.any([lifetime.signal, original.signal]);
+    const requester: GitHubPublicationRequesterV2 = Object.freeze({
+      version: 2,
+      snapshot,
+      signal,
+      assertInvocationCurrent: original.assertInvocationCurrent,
+      assertCurrent() {
+        signal.throwIfAborted();
+        original.assertCurrent();
+        identity?.readCurrentFacts(snapshot.grant?.aliasBindingIds);
+        const target = preparedSession.readCurrent(getCommittedRuntimeConfig()).target.entry;
+        if (
+          target.sessionId !== entry.sessionId ||
+          (target.lifecycleRevision ?? null) !== (entry.lifecycleRevision ?? null) ||
+          target.archivedAt !== undefined ||
+          !isDeepStrictEqual(target.createdActor, entry.createdActor) ||
+          !isDeepStrictEqual(target.owner, entry.owner)
+        ) {
+          throw new GitHubPublicationRequesterUnavailableError();
+        }
+      },
+      async prepareSource(selector: GitHubPublicationSourceSelector) {
+        requester.assertCurrent();
+        if (
+          selector.agentId !== sourceSession.agentId ||
+          selector.sessionKey !== sourceSession.sessionKey
+        ) {
+          throw new GitHubPublicationRequesterUnavailableError();
+        }
+        const { sourcePath } = preparedSession.readCurrent(getCommittedRuntimeConfig());
+        return await prepareRequesterSource(requester, selector, sourcePath);
+      },
+    });
+    workerRequesters.set(requester, Object.freeze({ ...sourceSession }));
+    requester.assertCurrent();
+    return { requester, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 /** Restoration rechecks the original immutable basis; a new role or invitation cannot replace it. */

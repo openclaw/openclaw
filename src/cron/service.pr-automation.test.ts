@@ -527,9 +527,9 @@ it.each([
       }),
       "native request receipt",
     );
-    expect(receipt.status).not.toBe("published");
-    expect(publication?.status).not.toBe("published");
-    await assertUnpublished();
+    expect(receipt.status).toBe("published");
+    expect(publication).toMatchObject({ status: "published", headCommit: pr.head.sha });
+    expect(writes.length).toBeGreaterThan(0);
     return;
   }
   expect(firstEvent).toMatchObject({ status: "ok" });

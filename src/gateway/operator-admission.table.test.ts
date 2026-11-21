@@ -2,13 +2,9 @@
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
 import { afterAll, beforeAll, describe, it } from "vitest";
-import type { LiveAdmissionKind } from "./operator-admission.live.test-support.js";
-import {
-  createFixture,
-  type AdmissionFixture,
-  type Mode,
-  type Row,
-} from "./operator-admission.table.test-support.js";
+import type { LiveAdmissionKind, Mode, Row } from "./operator-admission.contracts.test-support.js";
+import { createFixture, runCase } from "./operator-admission.fixture.test-support.js";
+import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import type {
   OperatorRunRecoverySnapshot,
   QueuedOperatorRecoverySource,
@@ -77,6 +73,7 @@ const rows: Record<Kind, Row> = {
   "live-ingress": { credential: "live-ingress", ingress: "live" },
   "live-remote-ingress": { credential: "live-remote-ingress", ingress: "live" },
   "live-grant": { credential: "live-grant", ingress: "live" },
+  "live-role": { credential: "live-role", ingress: "live" },
   "live-token": { credential: "live-token", ingress: "live" },
   "live-fallback": { credential: "live-fallback", ingress: "live" },
   "live-device-revoked": { credential: "live-device-revoked", ingress: "live" },
@@ -91,6 +88,7 @@ const modeFor = (row: Row): Mode =>
     "live-device",
     "live-proxy",
     "live-grant",
+    "live-role",
     "live-fallback",
     "live-device-revoked",
     "live-device-key-changed",
@@ -120,14 +118,16 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["trusted-proxy:internal", "widened-grant"],
       ["trusted-proxy:internal", "narrowed-role"],
       ["trusted-proxy:internal", "empty-after-role"],
+      ["trusted-proxy:control-ui", "goal-agent-excluded"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
-      await fixture.run(rows[kind], scenario, signal);
+      await runCase(fixture, rows[kind], scenario, signal);
     });
   }
   if (mode === "token") {
     it.for([
       ["ocid-owner", "owner-unavailable"],
       ["ocid-owner", "owner-disabled"],
+      ["ocid-member", "live-ocid-grant"],
       ["token:internal", "generation-unavailable"],
       ["device-token:internal", "narrowed-token"],
       ["principal", "narrowed-ingress"],
@@ -139,7 +139,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["tailscale-device:internal", "narrowed-grant"],
       ["tailscale-device:internal", "widened-grant"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
-      await fixture.run(rows[kind], scenario, signal);
+      await runCase(fixture, rows[kind], scenario, signal);
     });
   }
   describe.each(Object.entries(rows).filter(([, row]) => modeFor(row) === mode))(
@@ -147,7 +147,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
     (_kind, row) => {
       for (const scenario of ["before-start", "after-start", "stop"] as const) {
         it(scenario, { timeout: 90_000 }, async ({ signal }) => {
-          await fixture.run(row, scenario, signal);
+          await runCase(fixture, row, scenario, signal);
         });
       }
     },
@@ -158,7 +158,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       "refuses a disabled proxy method after replaying accepted input through a real token-mode restart",
       { timeout: 90_000 },
       async ({ signal }) => {
-        await fixture.run(rows["trusted-proxy:internal"], "method-disabled", signal, true);
+        await runCase(fixture, rows["trusted-proxy:internal"], "method-disabled", signal, true);
       },
     );
   }

@@ -26,10 +26,13 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import type {
   SqliteWorkerOperations,
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
+import { captureGatewayOperatorContinuation } from "../operator-run-recovery.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -497,19 +500,15 @@ export async function proveStoppedSandboxAuthority(
                 data: "finished guest edit\n",
               });
               await expectSource(owner.worktree.path, "finished guest edit\n");
-              const next = prepareSystemAgentRunAdmission(
-                config,
-                randomUUID(),
-                owner.agentId,
-                "workspace-checkpoint-test",
-                undefined,
-                captured.authority,
-              );
-              try {
-                await expect(next.admit("embedded")).rejects.toThrow(/operator role changed/);
-              } finally {
-                next.close();
-              }
+              await expect(
+                captureGatewayOperatorContinuation({
+                  context,
+                  client: createSyntheticPluginRuntimeClient({
+                    operatorRunAuthority: captured.authority,
+                    scopes: captured.authority.scopes,
+                  }),
+                }).then((next) => next?.release()),
+              ).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
             } else {
               // A late receipt cannot revive explicitly cancelled source authority.
               await expect(

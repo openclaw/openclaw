@@ -57,6 +57,7 @@ export function createActivitySummaryAuthority({
       const source = captureResidentUserProfileAccess(profileId);
       authority = captureChannelOperatorRunAuthority({
         profileId: canonicalProfileId,
+        canonicalIdentity: { profileId: canonicalProfileId, aliasBindingIds: [] },
         assignedRole,
         githubLogin,
         openclawIdAccountIds: original.openclawIdAccountIds,

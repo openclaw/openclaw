@@ -3921,82 +3921,11 @@ production services. Stop your own Gateway, then remove your sandbox after
 recording results. Local validation is limited to changed-file format/lint and
 focused tests; PR CI owns broad gates.
 
-## Operator authority allocations
+## Operator authority measurements
 
-`operator-authority-measure.ts` isolates six real synchronous authority owners:
-`auth-policy`, `retained-grant`, `recovery-source`, `model-execution`,
-`admitted-run`, and `transcript-guard`. Its synthetic non-owner operator has an explicitly required
-access-policy plugin, registered
-through `createApi(...).registerGatewayAccessPolicy(...)` with the normal plugin
-instance invocation wrappers. Setup authorizes and resumes the grant once;
-rechecks use the retained authority, as the recovery owner does. The fixture
-exposes no other plugin runtime capabilities and starts no Gateway or services.
-`recovery-source` creates one synthetic profile in a private temporary SQLite
-store, decodes the persisted source shape, and calls `restoreGatewayOperatorSource`.
-Its measured check is the restored authority's `assertCurrent`, including the real
-profile, source-auth policy, and retained plugin-grant owners. Setup creates and
-warms the profile; teardown releases it and removes only the generated state directory.
-Set `TMPDIR` to the approved sandbox before running this scenario or `all`.
-
-```sh
-node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
-  --scenario model-execution --iterations 20000 --warmup 5000 \
-  --revision <commit-sha> --output /path/to/authority.json
-```
-
-The JSON records estimated allocated bytes per check, elapsed and main-thread CPU
-nanoseconds per check, and auth-policy, resume-owner, plugin-authorize,
-plugin-resume, and plugin-assert counts. Setup and warmup are excluded. Allocation
-uses V8 sampling at 32 KiB with both collected-object flags enabled; the report
-is allocation churn, not retained-heap delta. Raw profiles accompany `--output`,
-and the report includes the fifteen largest allocation sites with eight-frame
-stacks. `estimatedAuthPolicyStringifyBytesPerCheck` separately totals sampled
-allocations beneath `captureGatewayAuthPolicy` → the stable-stringify serializer,
-including recursive serializer frames when V8 inlines the public wrapper and
-collected objects; zero samples are an estimate, not an exact invocation count. A post-capture positive control requires grant revocation to fail the
-very next retained-authority check. The recovery scenario also removes its
-allowed browser origin on a fresh config and requires the next source check to
-reject, outside the measured window.
-
-Use at least five simultaneous baseline/candidate pairs on the approved
-benchmark host, with one `--scenario` and the same future `--start-at <epoch-ms>`
-per pair. Alternate the assigned interleaved even/odd CPU sets under the exclusive
-measurement lock. Compare the mean paired differences with spread; warm both sides identically.
-Builds belong outside the measurement window. The source can also be bundled
-with esbuild for the host, preserving Node built-ins and installed dependencies;
-use the same bundler options and dependency tree for both revisions.
-
-These are owner-check denominators. `model-execution` calls the real bound model
-assertion; `admitted-run` uses `prepareSystemAgentRunAdmission`, admission, and the
-real admitted-run active assertion. `transcript-guard` captures the real owned
-transcript assertion with that admitted run as its commit guard, without writing
-storage. None is a model turn, tool step, transcript append, or measured production
-frequency. Derive those counts from an instrumented
-Gateway turn separately. The recovery scenario prepares profile-database access
-outside capture and measures only the warm resident owner. This probe does not
-include other access policies, contextual-ingress callbacks, or transport allocation.
-
-Use `--timing-only` for an untraced CPU/time pass without allocation sampling.
-Keep its CPU results separate from the default allocation pass. Timing mode
-reports observed GC count, total, maximum, and p95/p99 per kind, filtered to the
-synchronous workload window; every percentile includes its collection count.
-It does not report promotion or event-loop delay. Allocation mode does not
-report GC acceptance statistics.
-
-For a separate recovery owner count pass, generate the same source observer used
-by the Gateway driver and load it before the probe. The output reports exact
-`assertPolicy`, `readCurrentFacts`, profile-owner `assertCurrent` (including
-revision reads), and GitHub fact projections under `host.counts`, with instrumented
-sites under `host.installed`.
-These counts exclude warmup and do not provide timing or allocation evidence.
-
-```sh
-node --import ./scripts/tsx.mjs --input-type=module -e \
-  'import { writeGatewayAuthorityCountsPreload } from "./scripts/lib/gateway-bench-runtime.ts"; writeGatewayAuthorityCountsPreload("/path/to/authority-counts-preload.mjs");'
-node --import /path/to/authority-counts-preload.mjs --import ./scripts/tsx.mjs \
-  scripts/perf/operator-authority-measure.ts --scenario recovery-source \
-  --counts-only --iterations 20000 --warmup 5000 --output /path/to/counts.json
-```
+Operator authority is decided once at run start. The retired synchronous
+authority-check allocation probe measured midflight permission checks that no
+longer exist; use real Gateway start and recovery workloads instead.
 
 To count actual restarted operator runs, use the existing crash/restart workload:
 

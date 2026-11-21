@@ -231,7 +231,7 @@ describe("gateway agent caller authority custody", () => {
     },
   );
 
-  it("revokes only the accepted guest run after both callers disconnect from the same session", async () => {
+  it("finishes admitted guest and staff runs after both callers disconnect and guest access ends", async () => {
     prime();
     const context = makeContext();
     context.resolveGatewayContext = () => context;
@@ -340,8 +340,8 @@ describe("gateway agent caller authority custody", () => {
 
       source.abort(new Error("Guest invitation ended"));
 
-      expect(guest.input.abortSignal.aborted).toBe(true);
-      expect(() => guestAuthority.assertCurrent()).toThrow();
+      expect(guest.input.abortSignal.aborted).toBe(false);
+      expect(() => guestAuthority.assertCurrent()).not.toThrow();
       expect(staff.input.abortSignal.aborted).toBe(false);
       expect(rpcSourceTesting.get(staffRunId)).toBe(staff);
       finishCommands.resolve();
@@ -356,7 +356,7 @@ describe("gateway agent caller authority custody", () => {
         expect(rpcSourceTesting.size).toBe(0);
         expect(context.dedupe.get(`agent:${guestRunId}`)).toMatchObject({
           ok: true,
-          payload: { runId: guestRunId, status: "timeout", summary: "aborted", stopReason: "rpc" },
+          payload: { runId: guestRunId, status: "ok" },
         });
         expect(context.dedupe.get(`agent:${staffRunId}`)).toMatchObject({
           ok: true,

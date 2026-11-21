@@ -277,6 +277,7 @@ export function createPluginServiceSessionWork(params: {
         restored = await restoreGatewayOperatorSource({
           snapshot: accepted.snapshot,
           context: owner,
+          agentId: accepted.target.agentId,
           assertCurrent: assertOwner,
           prepareCurrent: async () => {
             const current = await durable.lookup(id);

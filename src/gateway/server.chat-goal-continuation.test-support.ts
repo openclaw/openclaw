@@ -13,7 +13,6 @@ import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createCreateGoalTool, createUpdateGoalTool } from "../agents/tools/goal-tools.js";
-import { CommandOwnerRevokedError } from "../auto-reply/command-owner-authority.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -278,7 +277,7 @@ export function registerGoalAutomaticContinuationCases(
       expect.stringContaining("Advance"),
       expect.stringContaining("Advance"),
     ]);
-    // Successors keep only the requester's live owner check and the completion's delivery policy.
+    // Successors readmit the requester's owner authority and retain the delivery policy.
     const expected = { owner: testCase.owner, delivery: testCase.silent ? false : undefined };
     expect(seen.slice(1).map(({ owner, delivery }) => ({ owner, delivery }))).toEqual(
       Array.from({ length: 3 }, () => expected),
@@ -310,10 +309,9 @@ export function registerGoalAutomaticContinuationCases(
     expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
   });
 
-  it("refuses an admitted owner Goal successor's tool effect once ownership is revoked", async () => {
+  it("lets an admitted owner Goal successor's tool effect finish after ownership is revoked", async () => {
     let restore = withOwnerPolicy();
     const effects: string[] = [];
-    let refusal: unknown;
     runEmbeddedAgent.mockImplementation(async (params) => {
       const calls = runEmbeddedAgent.mock.calls.length;
       if (calls === 1) {
@@ -336,11 +334,8 @@ export function registerGoalAutomaticContinuationCases(
         ownerEffect("while owner");
         restore();
         restore = withOwnerPolicy(true);
-        try {
-          ownerEffect("after revocation");
-        } catch (error) {
-          refusal = error;
-        }
+        ownerEffect("after revocation");
+        await setGoalStatus("complete");
       }
       return result(params.sessionId);
     });
@@ -350,9 +345,7 @@ export function registerGoalAutomaticContinuationCases(
     } finally {
       restore();
     }
-    expect(effects).toEqual(["while owner"]);
-    // Refused at the admitted run's tool gate because the requester is no longer an owner.
-    expect(refusal).toMatchObject({ cause: expect.any(CommandOwnerRevokedError) });
+    expect(effects).toEqual(["while owner", "after revocation"]);
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
   });
 

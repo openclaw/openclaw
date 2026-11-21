@@ -269,9 +269,9 @@ it("runs hosted ask_user through the real router with its original narrow operat
       ]);
       fixture.revoke();
       expect(await fixture.read(record.id)).toMatchObject([
-        false,
+        true,
+        { question: { status: "answered" } },
         undefined,
-        { details: { reason: "QUESTION_NOT_FOUND" } },
       ]);
       expect(fixture.manager.get(record.id)?.status).toBe("answered");
     } finally {
@@ -281,18 +281,12 @@ it("runs hosted ask_user through the real router with its original narrow operat
   });
 });
 
-it.each([
-  [true, "session is shared for this connection"],
-  [false, "original question source revoked"],
-] as const)("rejects hosted creation (foreign session: %s) with %s", async (foreign, error) => {
+it("rejects hosted creation for another person's shared session", async () => {
   await withHostedQuestion(async (fixture) => {
-    if (!foreign) {
-      fixture.revoke();
-    }
-    await expect(fixture.ask()).rejects.toThrow(error);
-    expect(fixture.request).toHaveBeenCalledTimes(foreign ? 1 : 0);
+    await expect(fixture.ask()).rejects.toThrow("session is shared for this connection");
+    expect(fixture.request).toHaveBeenCalledOnce();
     expect(fixture.manager.list()).toEqual([]);
-  }, foreign);
+  }, true);
 });
 
 it.each(["write", "view", "none"] as const)(

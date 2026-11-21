@@ -146,6 +146,7 @@ export function intersectOperatorRunModelPolicy(
 /** Admits a linked channel requester once while retaining explicit lifecycle cancellation. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
+  canonicalIdentity?: AdmittedRunOperatorAuthority["canonicalIdentity"];
   openclawIdAccountIds?: readonly string[];
   recoveryReference?: UserChannelAuthorizationReference;
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
@@ -179,6 +180,7 @@ export function captureChannelOperatorRunAuthority(input: {
   });
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
+    canonicalIdentity: params.canonicalIdentity,
     openclawIdPrincipal: params.openclawIdPrincipal,
     channelRecoverySource: params.recoveryReference
       ? { reference: params.recoveryReference, modelPolicy }
@@ -200,6 +202,7 @@ export function captureChannelOperatorRunAuthority(input: {
 
 export type GatewayOperatorRunAdmissionInput = {
   client: GatewayClient | null;
+  agentId?: string;
   context: Pick<
     GatewayRequestContext,
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
@@ -497,6 +500,10 @@ export async function prepareGatewayOperatorRunAuthority(
     assertAdmissionCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
+      canonicalIdentity: {
+        profileId: capturedProfile.profileId,
+        aliasBindingIds: preparedProfile.emailBindingIds,
+      },
       recoverySnapshot,
       recoverySnapshotUnavailableReason,
       device,

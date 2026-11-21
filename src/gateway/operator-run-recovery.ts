@@ -2,9 +2,12 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
-import { decideOperatorAdmission, prepareOperatorAdmission } from "./operator-admission.js";
+import {
+  decideOperatorAdmission,
+  prepareOperatorAdmission,
+  type OperatorAdmissionContext,
+} from "./operator-admission.js";
 import {
   prepareGatewayOperatorRunAuthority,
   type GatewayOperatorRunAdmissionInput,
@@ -16,7 +19,6 @@ import {
   type RestartRecoveryOperatorSource,
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
-import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
 export type RestoredGatewayOperatorAuthority = {
@@ -31,18 +33,25 @@ export type RestoredGatewayOperatorAuthority = {
 export async function restoreGatewayOperatorSource(params: {
   snapshot: OperatorRunRecoverySnapshot;
   source?: RestartRecoveryOperatorSource;
-  context: GatewayRequestContext;
+  agentId?: string;
+  context: OperatorAdmissionContext;
   assertCurrent: () => void;
   prepareCurrent?: () => Promise<void>;
 }): Promise<RestoredGatewayOperatorAuthority> {
   await params.prepareCurrent?.();
-  const facts = { kind: "gateway", snapshot: params.snapshot, source: params.source } as const;
+  const facts = {
+    kind: "gateway",
+    snapshot: params.snapshot,
+    source: params.source,
+    agentId: params.agentId,
+  } as const;
   const prepared = await prepareOperatorAdmission(facts, params.context);
   try {
+    // This producer's custody fence checks the claim/occurrence, not requester policy.
     params.assertCurrent();
   } catch (error) {
     prepared.ingress?.release();
-    prepared.identity.release();
+    prepared.identity?.release();
     throw error;
   }
   return decideOperatorAdmission(facts, prepared);
@@ -53,7 +62,8 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   source: unknown;
   liveAuthority?: AdmittedRunOperatorAuthority;
   operatorSource?: RestartRecoveryOperatorSource;
-  context: GatewayRequestContext;
+  agentId?: string;
+  context: OperatorAdmissionContext;
   assertCurrent: () => void;
 }): Promise<
   Pick<
@@ -66,21 +76,23 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
 > {
   params.assertCurrent();
   const captured = decodeQueuedOperatorRecoverySource(params.source);
-  const facts =
+  const capturedFacts =
     captured.kind === "unavailable" && params.liveAuthority
       ? ({ kind: "live", authority: params.liveAuthority } as const)
       : captured.kind === "gateway" && params.operatorSource
         ? { ...captured, source: params.operatorSource }
         : captured;
-  if (facts.kind === "unavailable") {
+  if (capturedFacts.kind === "unavailable") {
     throw new Error("Queued operator authority cannot be recovered; submit a new request.");
   }
+  const facts = { ...capturedFacts, agentId: params.agentId };
   const prepared = await prepareOperatorAdmission(facts, params.context);
   try {
+    // This producer's custody fence checks the claim/occurrence, not requester policy.
     params.assertCurrent();
   } catch (error) {
     prepared.ingress?.release();
-    prepared.identity.release();
+    prepared.identity?.release();
     throw error;
   }
   return decideOperatorAdmission(facts, prepared);
@@ -95,13 +107,11 @@ export async function captureGatewayOperatorContinuation(
     return prepareGatewayOperatorRunAuthority(input);
   }
   const facts = captureQueuedOperatorRecoverySource(inherited) ?? { kind: "unavailable" };
-  const context = input.context.resolveGatewayContext?.();
-  if (!context) {
-    throw new GatewayOperatorAccessUnavailableError();
-  }
+  const context = input.context.resolveGatewayContext?.() ?? input.context;
   const restored = await restoreGatewayQueuedOperatorRecovery({
     source: facts,
     liveAuthority: inherited,
+    agentId: input.agentId,
     context,
     assertCurrent: () => {},
   });

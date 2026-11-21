@@ -281,6 +281,7 @@ export async function runPluginCommandScheduledTurn(params: {
       // Every scheduled effect separately composes assertParent below; accepted children
       // retain the native operator lease without inheriting a closed occurrence callback.
       restored = await restoreGatewayQueuedOperatorRecovery({
+        agentId: params.agentId,
         source: schedule.operatorSource,
         operatorSource:
           job.operatorSource && decodeGatewayOperatorRecoverySource(job.operatorSource.source),

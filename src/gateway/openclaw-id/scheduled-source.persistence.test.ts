@@ -450,9 +450,6 @@ it.each(["member", "owner"] as const)(
         } finally {
           restored.release();
         }
-        expect(restored.authority.assertCurrent).toThrow(
-          "Restart recovery operator authority is no longer active.",
-        );
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
       }

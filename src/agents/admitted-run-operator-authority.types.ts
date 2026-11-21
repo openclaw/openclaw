@@ -5,8 +5,17 @@ import type { RemoteIngressPrincipalIdentity } from "../gateway/server/client-id
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
+export type AdmittedRunOperatorRoleFacts = Readonly<{
+  openclawIdAccountIds?: readonly string[];
+  assignedRole: string | null;
+  githubLogin?: string | null;
+  policy?: GatewayOperatorRoleDefinition;
+}>;
+
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Present only when the source was bound by the canonical profile owner. */
+  canonicalIdentity?: Readonly<{ profileId: string; aliasBindingIds: readonly string[] }>;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Plain source evidence for another same-process start; never a lifetime check. */
@@ -43,13 +52,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Retains the original source independently of a foreground run or request. */
   retain?: () => () => void;
   /** Assignment and verified login from one check of the original live profile authority. */
-  readCurrentRoleFacts?: (this: void) => Readonly<{
-    openclawIdAccountIds?: readonly string[];
-    assignedRole: string | null;
-    githubLogin?: string | null;
-    /** Non-named source policy, checked by the original authority before each read. */
-    policy?: GatewayOperatorRoleDefinition;
-  }>;
+  readCurrentRoleFacts?: (this: void) => AdmittedRunOperatorRoleFacts;
   /** Prepared role permissions; source-policy changes revoke the owning authority. */
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];

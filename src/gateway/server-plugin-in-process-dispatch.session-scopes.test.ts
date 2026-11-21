@@ -470,7 +470,7 @@ describe("hosted session tool narrow scope projection", () => {
     }, "unidentified"));
 
   it.each(["operator", "scheduled"] as const)(
-    "retains the original %s source after admission until the creation COMMIT",
+    "cancels %s session creation when its invocation ends before COMMIT",
     (source) =>
       withHostedCreation(async (fixture) => {
         const entered = createDeferred();
@@ -481,9 +481,7 @@ describe("hosted session tool narrow scope projection", () => {
         });
         const request = fixture.create({}, { inheritedPermissionMode: "full" });
         const rejected = expect(request).rejects.toThrow(
-          source === "operator"
-            ? "original native source revoked"
-            : "agent tool caller authority is no longer active",
+          "agent tool caller authority is no longer active",
         );
         try {
           await Promise.race([entered.promise, request]);

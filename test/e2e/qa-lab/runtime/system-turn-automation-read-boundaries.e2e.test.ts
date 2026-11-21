@@ -619,12 +619,14 @@ it(
           expect(outputs.get(id)).toContain("Other actions need the owner's authority");
         }
         expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
-        // Removal can revoke the job source before runtime retirement; neither discloses history.
-        expect(removedOutcome).toEqual({
+        // The admitted read survives removal, but the deleted job's history stays undisclosed.
+        expect(removedOutcome).toMatchObject({
           id: jobs.owned.id,
-          threw: expect.stringMatching(
-            /^(Error: Automation operator source changed|TypeError: agent runtime authority is no longer active)$/,
-          ),
+          ok: false,
+          payload: {
+            code: "INVALID_REQUEST",
+            details: { code: "CRON_JOB_NOT_FOUND", jobId: jobs.owned.id },
+          },
         });
         // Ending the run doesn't revoke an admitted read or let the stopped notice consume it.
         expect(closedOutcome).toMatchObject({

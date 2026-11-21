@@ -91,6 +91,7 @@ export async function restoreCronOperatorSource(params: {
     };
     assertCurrent();
     operator = await restoreGatewayOperatorSource({
+      agentId: target?.agentId ?? source.agentId,
       snapshot: source.snapshot,
       source,
       context,

@@ -3,7 +3,6 @@ import type { IncomingMessage } from "node:http";
 import https from "node:https";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { assert, expect, vi } from "vitest";
-import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import * as attemptTools from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
 import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
@@ -35,7 +34,6 @@ import {
   changeCanonicalUserChannelIdentity,
   publishCanonicalUserChannelPolicy,
 } from "../state/user-channel-identity-operations.js";
-import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
@@ -45,30 +43,22 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
-import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import {
-  setOpenClawIdMemberAccountLookup,
-  setOpenClawIdTunnelPrincipalLookup,
-  setOpenClawIdTunnelPrincipalResolver,
-} from "./openclaw-id/tunnel-principal.js";
+  ADMIN,
+  ADMIN_USER,
+  ORIGIN,
+  PROXY_USER,
+  WRITER,
+  proxyHeaders,
+} from "./operator-admission.contracts.test-support.js";
 import * as admission from "./operator-admission.js";
+import { prepareAdmissionOcidPeer } from "./operator-admission.live.test-support.js";
 import type { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
-import type { OperatorScope } from "./operator-scopes.js";
 import * as queuedInputs from "./queued-chat-inputs.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
-
-export const ORIGIN = "https://admission.example.test";
-export const WRITER: OperatorScope[] = ["operator.read", "operator.write"];
-export const ADMIN: OperatorScope[] = ["operator.admin"];
-export const PROXY_USER = "operator@example.test";
-export const ADMIN_USER = "administrator@example.test";
-export const proxyHeaders = (user: string) => ({
-  "x-forwarded-user": user,
-  "x-forwarded-for": "203.0.113.50",
-  "x-forwarded-proto": "https",
-});
 
 export function observeAdmissionFixture(fixture: AdmissionFixture) {
   const enqueue = queueLifecycle.markFollowupRunEnqueued;
@@ -78,7 +68,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
     if (accepted && c && !c.original && run.prompt.includes(c.queuedText)) {
       c.original = run;
       const source = run.operatorAuthority;
-      if (c.row.ingress === "live") {
+      if (c.row.ingress === "live" || c.scenario === "live-ocid-grant") {
         c.enqueued.resolve();
         return accepted;
       }
@@ -147,6 +137,12 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       const facts = await prepare(...args);
       const c = fixture.current;
       const followup = fixture.preparingFollowup.getStore();
+      if (c?.scenario === "live-ocid-grant" && followup?.prompt.includes(c.queuedText)) {
+        expect(args[0].kind).toBe("live");
+        assert(args[0].kind === "live");
+        expect(args[0].authority.deviceScopeCeiling).toEqual(WRITER);
+        expect(args[0].authority.authPolicy?.verifiedIdentity).toBe(`openclaw-id:${c.id}`);
+      }
       if (
         c?.original &&
         c.scenario === "before-start" &&
@@ -218,6 +214,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       if (
         c?.original &&
         (c.row.credential === "live-grant" ||
+          c.row.credential === "live-role" ||
           [
             "narrowed-grant",
             "narrowed-token",
@@ -226,6 +223,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
             "narrowed-role",
             "legacy-tailscale",
             "legacy-tailscale-narrowed",
+            "live-ocid-grant",
           ].includes(c.scenario)) &&
         params.attempt.sessionKey === c.sessionKey
       ) {
@@ -294,9 +292,28 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
   const initialScopes = [...WRITER];
   if (
     legacyTailscale ||
-    ["narrowed-token", "narrowed-ingress", "narrowed-grant", "narrowed-role"].includes(c.scenario)
+    [
+      "narrowed-token",
+      "narrowed-ingress",
+      "narrowed-grant",
+      "narrowed-role",
+      "live-ocid-grant",
+    ].includes(c.scenario)
   ) {
     initialScopes.push("operator.approvals");
+  }
+  if (c.scenario === "live-ocid-grant") {
+    initialScopes.push("operator.questions");
+    const next = structuredClone(fixture.config);
+    assert(next.gateway?.roles?.definitions.operator && next.gateway.auth?.identityScopes);
+    next.gateway.auth.identityScopes[`openclaw-id:${c.id}`] = [
+      "operator.approvals",
+      "operator.questions",
+    ];
+    next.gateway.roles.definitions.operator.modelPolicy = {
+      deny: Array.from({ length: 257 }, (_, index) => `unrelated-${index}/*`),
+    };
+    await fixture.publish(next, c.signal);
   }
   if (legacyTailscale || ["narrowed-grant", "narrowed-role"].includes(c.scenario)) {
     const next = structuredClone(fixture.config);
@@ -339,7 +356,8 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
   }
   const device = credential !== "trusted-proxy";
   // Identity-only approvals must disappear when the identity grant narrows.
-  const deviceScopes = credential === "tailscale-device" ? WRITER : initialScopes;
+  const deviceScopes =
+    credential === "tailscale-device" || c.scenario === "live-ocid-grant" ? WRITER : initialScopes;
   if (device) {
     const pending = await requestDevicePairing({
       deviceId: c.identity.deviceId,
@@ -382,30 +400,7 @@ export async function prepareAdmissionOperator(fixture: AdmissionFixture, c: Adm
     };
   }
   if (credential.startsWith("ocid-")) {
-    c.claw = await linkedClaw();
-    c.peerKey = c.claw.w1;
-    if (credential === "ocid-member") {
-      c.peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(173));
-      expect(
-        await c.claw.authority.submit(
-          await c.claw.sign({
-            op: "add",
-            account_id: c.id,
-            role: "operator",
-            peer_keys: [c.peerKey],
-            invite_id: null,
-          }),
-          "tunnel",
-        ),
-      ).toMatchObject({ ok: true });
-      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: c.id });
-      await setCanonicalUserProfileRole(profile.id, "operator");
-    }
-    const authority = c.claw.authority;
-    setOpenClawIdTunnelPrincipalResolver((key) => authority.resolvePeer(key));
-    setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
-    setOpenClawIdMemberAccountLookup((id) => id === c.id);
-    options.edgeAuthHeaders = { "x-admission-peer": c.peerKey };
+    options.edgeAuthHeaders = { "x-admission-peer": await prepareAdmissionOcidPeer(c) };
   }
   if (credential === "device-token") {
     const bootstrap = await fixture.connect(options, c.signal);

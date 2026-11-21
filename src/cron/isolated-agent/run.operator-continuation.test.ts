@@ -169,7 +169,7 @@ it.each([
   const unavailableSource =
     scenario === "principal owner unavailable" || scenario === "principal store unavailable";
   const personPolicySource = isPrincipalPolicyScenario(scenario);
-  const personPolicyRemoved = personPolicySource && scenario !== "principal allowlist allowed";
+  const personPolicyRemoved = personPolicySource && scenario.endsWith("before restore");
   const realPrincipal = principalSource;
   let restoreIngressOwner: (() => void) | undefined;
   let releaseIngressOwner: (() => void) | undefined;
@@ -543,7 +543,6 @@ it.each([
         expect(argv).toContain("repos/fixture/repository/pulls/7");
         reads++;
         if (reads === 2) {
-          // Commit authority loss during preflight: this write finishes; fresh admission refuses.
           if (
             scenario === "role revoked during merge" ||
             scenario === "self removal then role revoked during merge"
@@ -608,7 +607,6 @@ it.each([
         sessionId: params.sessionId,
       },
       async () => {
-        // Stable schemas list actions; execution checks this admitted caller's authority.
         expectDefined(getGatewayToolCallerIdentity(), "scheduled caller");
         const tools = applyEmbeddedAttemptToolsAllow(
           await createOpenClawCodingToolsAsync({
@@ -710,7 +708,6 @@ it.each([
   context.cron = execution;
   try {
     await execution.start();
-    expect(entered).toBe(0);
     const reloaded = expectDefined(execution.getJob(job.id), "reloaded scheduled job");
     if (recurring) {
       // Stored before upgrade: main's hash was captured while enabled, then the runtime disabled it.
@@ -894,6 +891,7 @@ it.each([
         unavailableSource ||
         scenario === "restart before scheduling" ||
         scenario === "principal allowlist allowed" ||
+        scenario.endsWith("before effect") ||
         scenario === "principal reload" ||
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
@@ -949,6 +947,7 @@ it.each([
       scenario !== "restart before scheduling" &&
       scenario !== "principal reload" &&
       scenario !== "principal allowlist allowed" &&
+      !scenario.endsWith("before effect") &&
       scenario !== "operator" &&
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&

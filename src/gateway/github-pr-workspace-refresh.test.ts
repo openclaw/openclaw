@@ -606,14 +606,10 @@ describe("imported PR source refresh", () => {
         f.pr.base.repo.private = true;
       }
       const publication = f.coordinator.requestForSessionV2(f.request("continue-pr", f.guest));
-      if (change === "private repository") {
-        await expect(publication).resolves.toMatchObject({
-          status: "failed",
-          code: "identity_changed",
-        });
-      } else {
-        await expect(publication).rejects.toThrow("no longer authorized");
-      }
+      await expect(publication).resolves.toMatchObject({
+        status: "failed",
+        code: "identity_changed",
+      });
       expect(pushes).toEqual([]);
       expect(await upstreamGit("rev-parse", `refs/heads/${published.branch}`)).toBe(advanced);
     },

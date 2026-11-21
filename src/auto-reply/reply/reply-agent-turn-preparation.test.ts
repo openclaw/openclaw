@@ -348,28 +348,40 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "readmits a queued event's command-owner reference once (allowed=%s)",
-  async (allowed) => {
+it.each([
+  { previousOwner: false, allowed: false },
+  { previousOwner: false, allowed: true },
+  { previousOwner: true, allowed: false },
+  { previousOwner: true, allowed: true },
+])(
+  "readmits a queued event's command-owner reference once (previous=$previousOwner, allowed=$allowed)",
+  async ({ previousOwner, allowed }) => {
     const queued = createRun();
-    queued.run.senderIsOwner = true;
+    queued.run.senderIsOwner = previousOwner;
     const recoveryReference = { version: 2 as const, id: "11111111-1111-4111-8111-111111111111" };
     bindCommandOwnerAuthority(queued.run, {
       recoveryReference,
       isCurrent: () => true,
     });
-    let current = allowed;
+    const generation = new Int32Array(new SharedArrayBuffer(8));
+    Atomics.store(generation, 0, Number(allowed));
     using _ = vi
       .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
       .mockResolvedValue({
         recoveryReference,
-        isCurrent: () => current,
+        isCurrent: Object.assign(() => Atomics.load(generation, 0) === 1, {
+          transferable: {
+            generation: generation.buffer,
+            lifetime: { revision: new SharedArrayBuffer(8), epoch: 0n },
+            entries: [],
+          },
+        }),
       });
     const turn = await admitted(prepare(queued));
     const effect = vi.fn();
     const assertOwner = captureCommandOwnerAssertion(turn.queued.run);
     if (allowed) {
-      current = false;
+      Atomics.store(generation, 0, 0);
       assertOwner?.();
       effect();
     } else {

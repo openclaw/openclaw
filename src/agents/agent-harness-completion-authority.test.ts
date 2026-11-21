@@ -190,7 +190,7 @@ it.each(["current", "requester-replaced", "preparation-failed"] as const)(
 );
 
 it.each(["release", "revoke", "gateway-close"] as const)(
-  "retains the original operator ceiling until %s",
+  "retains the admitted operator ceiling with %s",
   (ending) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { context, resolver, client, scope, capture } = operatorFixture("completion-owner");
@@ -235,6 +235,13 @@ it.each(["release", "revoke", "gateway-close"] as const)(
           custody.release();
         } else if (ending === "revoke") {
           revoked.abort(new Error("operator revoked"));
+          runWithCustody(custody, scope, () => {
+            const authority =
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+            expect(authority?.source).toBe(source.authority.source);
+            expect(authority?.scopes).toEqual(["operator.write"]);
+          });
+          custody.release();
         } else {
           getGatewayContextLifetime(resolver).abort();
         }

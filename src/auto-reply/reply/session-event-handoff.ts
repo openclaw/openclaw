@@ -16,7 +16,6 @@ import { SessionWorkStartError } from "../../config/sessions/session-work-start.
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
-import { cronRunAcceptance } from "../../infra/agent-run-registry.automation.js";
 import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -86,7 +85,7 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
  */
 export function enqueueSessionEventForHost(
   text: string,
-  { assertAcceptanceCurrent, ...options }: SessionEventOptions,
+  options: SessionEventOptions,
   retry: SessionEventReadmission = createSessionEventReadmission(),
 ): SessionEventReceipt {
   const input = prepareSessionEventOccurrence(text, options);
@@ -101,7 +100,7 @@ export function enqueueSessionEventForHost(
   let operatorAuthority = capturedOperatorAuthority;
   const { signal } = input;
   const occurrenceId = input.claim.occurrenceId;
-  let acceptanceAssertion = cronRunAcceptance(sessionKey, assertAcceptanceCurrent);
+  let acceptanceAssertion = input.acceptanceAssertion;
   const cleanupContinuation = prepareCronRunContinuationCleanup(sessionKey, storePath, env);
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;

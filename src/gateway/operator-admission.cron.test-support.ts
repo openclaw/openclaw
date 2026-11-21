@@ -22,7 +22,7 @@ import {
   revokeCronCreatorAuthorityRunScope,
 } from "./cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityRunScope } from "./cron-creator-authority-grant.types.js";
-import { ORIGIN, WRITER } from "./operator-admission.credentials.test-support.js";
+import { ORIGIN, WRITER } from "./operator-admission.contracts.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import {
@@ -239,8 +239,10 @@ export async function runCronAdmissionCase(
         entries: Array<{ status: string; error?: string; summary?: string }>;
       }>("cron.runs", { id: job.id, runId: run.runId, limit: 1 });
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ status: "error" });
-      expect(`${history.entries[0].error ?? ""} ${history.entries[0].summary ?? ""}`).toMatch(
+      const entry = history.entries[0];
+      assert(entry);
+      expect(entry).toMatchObject({ status: "error" });
+      expect(`${entry.error ?? ""} ${entry.summary ?? ""}`).toMatch(
         /operator|authority|revok|grant/i,
       );
       expect((await context.cron.readJob(job.id))?.payload).toEqual(job.payload);

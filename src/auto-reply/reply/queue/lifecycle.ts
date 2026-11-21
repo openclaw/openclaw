@@ -167,6 +167,7 @@ export async function prepareFollowupRunOperatorAuthority(run: FollowupRun): Pro
     const operatorSource = run.run.scheduledAutomation?.job.operatorSource;
     const restored = await restoreGatewayQueuedOperatorRecovery({
       context,
+      agentId: run.run.agentId,
       source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
       liveAuthority: run.operatorAuthority,
       operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),

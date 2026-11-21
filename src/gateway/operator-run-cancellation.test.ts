@@ -396,9 +396,7 @@ describe("operator access cancellation", () => {
         const retained = await target.retain(undefined, client);
         retained.armCancellation();
         occurrence.retire();
-        expect(restored.authority.assertCurrent).toThrow();
-        // Ending the occurrence revokes only that captured lifetime, not its accepted turn.
-        expect(restored.authority.signal?.aborted).toBe(true);
+        // Retiring the source claim does not cancel the separately accepted turn.
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();

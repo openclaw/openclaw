@@ -209,6 +209,7 @@ export async function createOperatorRecoveryFixture(params: {
     entry,
     sourceAuthority,
     snapshot,
+    assertCurrent,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },

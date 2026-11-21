@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -28,8 +29,13 @@ const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence
 const { sessionChanges } = await import("../sessions/session-row-changes.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
-// The admission reads only the restored authority's live assertion.
-const RESTORED_OPERATOR = { assertCurrent: vi.fn() } as unknown as AdmittedRunOperatorAuthority;
+// Restored admission carries the owner decision, not a permission-currentness closure.
+const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
+  profileId: "requester",
+  scopes: ["operator.admin"],
+  requesterOwner: true,
+  assertCurrent: vi.fn(),
+};
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
   return {
@@ -114,6 +120,7 @@ describe("admitScheduledOccurrence", () => {
       ["100000000000000002", false],
     ] as const) {
       const cfg = { commands: { ownerAllowFrom: [`discord:${senderId}`] } };
+      setRuntimeConfigSnapshot(cfg);
       const occurrence = await admitScheduledOccurrence({
         cfg,
         job: stored,

@@ -136,6 +136,7 @@ export async function restoreSessionOperatorSource(
     return undefined;
   }
   return restoreGatewayQueuedOperatorRecovery({
+    agentId: params.agentId,
     source: { kind: "gateway", snapshot },
     context: params.context,
     assertCurrent: params.assertCurrent,

@@ -4,6 +4,8 @@ import {
   setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
 } from "../../gateway/openclaw-id/tunnel-principal.js";
+import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
 import {
@@ -18,6 +20,7 @@ import {
   setupCronServiceSuite,
   writeCronStoreSnapshot,
 } from "../service.test-harness.js";
+import { resolveCronOperatorExecutionRevision } from "../service/jobs-tool-policy.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { onTimer } from "../service/timer.test-support.js";
 import type { CronStoredJob } from "../types.js";
@@ -199,6 +202,9 @@ describe("undecodable scheduled authority", () => {
           source: { version: 1, snapshot: null },
         },
       });
+      if (job.operatorSource) {
+        job.operatorSource.executionRevision = resolveCronOperatorExecutionRevision(job);
+      }
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>((request) =>
         runAgent(
@@ -213,6 +219,8 @@ describe("undecodable scheduled authority", () => {
       const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
         async () => {},
       );
+      const context = createContext([], () => scenario?.cfg ?? {});
+      context.resolveGatewayContext = () => context;
       const { cron, state } = createCronServiceWithStateForTest({
         scheduler: createTestGatewayScheduler(clock.clock),
         nowMs: clock.clock.now,
@@ -222,8 +230,10 @@ describe("undecodable scheduled authority", () => {
         log: logger,
         enqueueSystemEvent,
         sendCronFailureAlert,
+        runSchedulerOwned: createScheduledGatewayRunner(() => context),
         runIsolatedAgentJob,
       });
+      context.cron = cron;
       try {
         await cron.start();
         clock.setTime(nowMs + 60_001);
@@ -263,14 +273,21 @@ describe("undecodable scheduled authority", () => {
             executionStarted: false,
             admissionDisposition: "rejected",
           });
-          if (scenario) {
+          if (
+            scenario &&
+            !["changed role", "deleted role definition", "unknown role", "lost scope"].includes(
+              name,
+            )
+          ) {
             expect(result).toMatchObject({
               error: new CronOperatorSourceError(new Error(scenario.refusal)).message,
             });
           }
           expect(history.entries[0]).toMatchObject({
             status: "error",
-            error: expect.stringContaining(scenario?.refusal ?? "Restart recovery operator source"),
+            error: expect.stringContaining(
+              "operator authority that created this automation was refused",
+            ),
           });
         }
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);

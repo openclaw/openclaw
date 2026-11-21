@@ -555,14 +555,13 @@ describe("local checkout publication", () => {
     }
     if (outcome.startsWith("before")) {
       expect(result).toMatchObject([
-        false,
-        undefined,
-        { code: "UNAVAILABLE", message: expect.stringContaining("no longer authorized") },
+        true,
+        { status: "published", url: expect.stringContaining("/pull/") },
       ]);
-      expect(source.effects).toEqual(outcome === "before PR" ? ["push"] : []);
-      if (outcome === "before binding") {
-        expect(loadSessionEntryReadOnly(scope)?.worktree).toBeUndefined();
-      }
+      expect(source.effects).toEqual(["push", "pull_request"]);
+      const tasks = await listSessionChildEntriesReadOnly(scope);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.entry.worktree?.canonicalWorkspaceDir).toBe(publicationSource);
       return;
     }
     expect(result).toMatchObject([
@@ -681,11 +680,7 @@ describe("local checkout publication", () => {
       expect(revoked).toBe(true);
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);
-      expect(revokedResult).toMatchObject([
-        false,
-        undefined,
-        { message: expect.stringContaining("session authorization is unavailable") },
-      ]);
+      expect(revokedResult).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
       return;
     }
 

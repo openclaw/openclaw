@@ -293,7 +293,7 @@ describe("HTTP gateway owner profiles", () => {
   );
 
   it(
-    "binds revocation to an active response and releases completed keep-alive responses",
+    "ends active HTTP responses on revocation without cancelling retained admitted work",
     inState(async () => {
       const { cfg, email, person, access } = await registerPersonAccessFixture();
       setRuntimeConfigSnapshot(cfg);
@@ -361,7 +361,8 @@ describe("HTTP gateway owner profiles", () => {
         await linkCanonicalUserProfileEmail(email, replacement.id);
         await linkCanonicalUserProfileEmail(email, person.id);
         expect(aliasStreaming.res.destroyed).toBe(true);
-        expect(captured.authority.signal?.aborted).toBe(true);
+        expect(captured.authority.signal?.aborted).toBe(false);
+        expect(captured.authority.assertCurrent).not.toThrow();
         expect(nextAuthority.signal.aborted).toBe(true);
         expect(access.grant.signal.aborted).toBe(false);
         expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);

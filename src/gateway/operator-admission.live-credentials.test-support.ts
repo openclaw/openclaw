@@ -21,24 +21,17 @@ import {
   PROXY_USER,
   WRITER,
   proxyHeaders,
-} from "./operator-admission.credentials.test-support.js";
-import type { LiveAdmissionProducer } from "./operator-admission.live.test-support.js";
+  type LiveAdmissionProducer,
+  type LiveCredentialKind,
+} from "./operator-admission.contracts.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
-
-export type LiveCredentialKind =
-  | "live-device"
-  | "live-proxy"
-  | "live-grant"
-  | "live-token"
-  | "live-fallback"
-  | "live-device-revoked"
-  | "live-device-key-changed";
 
 export function isLiveCredentialKind(kind: string): kind is LiveCredentialKind {
   switch (kind) {
     case "live-device":
     case "live-proxy":
     case "live-grant":
+    case "live-role":
     case "live-token":
     case "live-fallback":
     case "live-device-revoked":
@@ -66,7 +59,7 @@ export async function prepareLiveCredentialProducer(
   assert(c && fixture.kernel);
   const proxyCredential = kind !== "live-token" && kind !== "live-fallback";
   const next = structuredClone(fixture.config);
-  assert(next.gateway?.roles && next.gateway.auth);
+  assert(next.gateway?.roles?.definitions.operator && next.gateway.auth);
   if (proxyCredential) {
     assert(
       next.gateway.auth.mode === "trusted-proxy",
@@ -77,9 +70,15 @@ export async function prepareLiveCredentialProducer(
     next.gateway.roles.definitions.operator.modelPolicy = {
       deny: Array.from({ length: 257 }, (_, index) => `unrelated-${index}/*`),
     };
-    if (kind === "live-grant") {
+    if (kind === "live-grant" || kind === "live-role") {
       assert(next.gateway.auth.identityScopes);
       next.gateway.auth.identityScopes[PROXY_USER] = [...WRITER, "operator.approvals"];
+    }
+    if (kind === "live-role") {
+      next.gateway.roles.definitions["live-role-narrowed"] = {
+        ...next.gateway.roles.definitions.operator,
+        scopes: [...WRITER],
+      };
     }
   } else {
     assert(
@@ -93,7 +92,7 @@ export async function prepareLiveCredentialProducer(
   }
   await fixture.publish(next, c.signal);
 
-  if (kind !== "live-grant") {
+  if (kind !== "live-grant" && kind !== "live-role") {
     const pending = await requestDevicePairing({
       deviceId: c.identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem),
@@ -116,13 +115,14 @@ export async function prepareLiveCredentialProducer(
     }
   }
 
-  const browser = !proxyCredential || kind === "live-grant";
+  const browser = !proxyCredential || kind === "live-grant" || kind === "live-role";
   const options: Omit<GatewayClientOptions, "url"> = {
-    deviceIdentity: kind === "live-grant" ? null : c.identity,
+    deviceIdentity: kind === "live-grant" || kind === "live-role" ? null : c.identity,
     clientName: browser ? GATEWAY_CLIENT_NAMES.CONTROL_UI : GATEWAY_CLIENT_NAMES.TEST,
     mode: browser ? GATEWAY_CLIENT_MODES.WEBCHAT : GATEWAY_CLIENT_MODES.TEST,
     origin: browser ? (proxyCredential ? ORIGIN : LIVE_ONLY_ORIGIN) : undefined,
-    scopes: kind === "live-grant" ? [...WRITER, "operator.approvals"] : WRITER,
+    scopes:
+      kind === "live-grant" || kind === "live-role" ? [...WRITER, "operator.approvals"] : WRITER,
   };
   if (proxyCredential) {
     options.edgeAuthHeaders = proxyHeaders(PROXY_USER);
@@ -151,6 +151,9 @@ export async function prepareLiveCredentialProducer(
     send: (params) => operator.request("chat.send", params),
     revoke: async () => {
       switch (kind) {
+        case "live-role":
+          await setCanonicalUserProfileRole(self.profile.id, "live-role-narrowed");
+          return;
         case "live-grant": {
           const narrowed = structuredClone(fixture.config);
           assert(narrowed.gateway?.auth?.identityScopes);
@@ -228,6 +231,9 @@ export async function prepareLiveCredentialProducer(
         await operator.stopAndWait();
       } finally {
         fallbackEnv?.restore();
+        if (kind === "live-role") {
+          await setCanonicalUserProfileRole(self.profile.id, "operator");
+        }
       }
     },
   };

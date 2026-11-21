@@ -189,7 +189,7 @@ describe("session notification authority", () => {
   );
 
   it.each(["source revoked", "role changed", "target deleted"] as const)(
-    "keeps admitted policy but honors source and target fences (%s)",
+    "keeps admitted policy but honors target deletion (%s)",
     async (change) => {
       await withNotification(
         "operator.sessions.write",
@@ -227,14 +227,10 @@ describe("session notification authority", () => {
               await deleteTarget();
             }
             resume.resolve();
-            if (change === "role changed") {
+            if (change !== "target deleted") {
               await expect(pending).resolves.toMatchObject({ details: { status: "queued" } });
             } else {
-              await expect(pending).rejects.toThrow(
-                change === "source revoked"
-                  ? /notification source revoked/
-                  : /session target is unavailable/i,
-              );
+              await expect(pending).rejects.toThrow(/session target is unavailable/i);
             }
           } finally {
             resume.resolve();
@@ -243,7 +239,7 @@ describe("session notification authority", () => {
             spy.mockRestore();
           }
           expect(drainSystemEvents(TARGET)).toEqual(
-            change === "role changed"
+            change !== "target deleted"
               ? [expect.stringContaining("Inspect the prepared change.")]
               : [],
           );

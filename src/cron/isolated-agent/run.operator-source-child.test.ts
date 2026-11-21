@@ -107,7 +107,8 @@ it.each([
       roles: {
         default: "writer",
         definitions: {
-          writer: { scopes: ["operator.admin"], agents: "*", sessions: { others: "edit" } },
+          writer: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+          blocked: { scopes: [], agents: [], sessions: { others: "none" } },
         },
       },
     };

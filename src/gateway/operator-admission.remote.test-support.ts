@@ -3,8 +3,7 @@ import { assert } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayControlUiIngressV2 } from "../plugins/gateway-ingress.types.js";
-import { WRITER } from "./operator-admission.credentials.test-support.js";
-import type { LiveAdmissionProducer } from "./operator-admission.live.test-support.js";
+import { WRITER, type LiveAdmissionProducer } from "./operator-admission.contracts.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import {
@@ -15,8 +14,6 @@ import {
   type Peer,
 } from "./remote-control-ui-ingress.integration.test-support.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
-
-export type RemoteLiveKind = "live-remote-ingress";
 
 export async function prepareRemoteIngressProducer(
   fixture: AdmissionFixture,

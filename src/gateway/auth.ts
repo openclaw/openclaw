@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayIngressPrincipal } from "../plugins/gateway-ingress.types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { delegatedProfileAuthority } from "../state/user-profile-delegation.js";
+import type { GatewayAuthMethod } from "./auth-policy.types.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import { getHeader } from "./http-header-value.js";
@@ -54,15 +55,7 @@ const LEGACY_OPENCLAW_ENV_NOTE =
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?:
-    | "none"
-    | "token"
-    | "password"
-    | "tailscale"
-    | "device-token"
-    | "bootstrap-token"
-    | "trusted-proxy"
-    | "remote-ingress";
+  method?: GatewayAuthMethod;
   user?: string;
   delegation?: GatewayDelegation;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */

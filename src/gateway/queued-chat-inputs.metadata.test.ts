@@ -437,7 +437,10 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
   demoted.finish("interrupted", "restart-unrecoverable");
   await demoted.settled?.();
   setUserProfileRole(profile.id, "writer");
-  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
+  await continueSessionQueuedInputs(fixture.context, retained.target, {
+    ...retained,
+    queuedInputIds: secondCapture.queuedInputIds,
+  });
   await fixture.finishDispatch();
   expect(dispatched).toHaveLength(2);
   expect(dispatched[1]?.replyOptions?.operatorAuthority?.scopes).toEqual(["operator.write"]);

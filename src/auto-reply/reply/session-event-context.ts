@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readCronOperatorSnapshot } from "../../cron/operator-source-snapshot.js";
 import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
+import { cronRunAcceptance } from "../../infra/agent-run-registry.automation.js";
 import {
   execRequestAbortSignal,
   readExecRequestOwners,
@@ -79,6 +80,10 @@ export function prepareSessionEventOccurrence(text: string, options: SessionEven
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
   const context = prepareSessionEventInput(text, options);
+  const acceptanceAssertion = cronRunAcceptance(
+    context.sessionKey,
+    options.assertAcceptanceCurrent,
+  );
   const controller = new AbortController();
   const execRequestOwners = resolveSessionEventExecRequestOwners(options);
   const requestSignal = execRequestAbortSignal(execRequestOwners, options.abortSignal);
@@ -107,6 +112,7 @@ export function prepareSessionEventOccurrence(text: string, options: SessionEven
   }
   return {
     context,
+    acceptanceAssertion,
     controller,
     execRequestOwners,
     signal,

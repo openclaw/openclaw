@@ -447,7 +447,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       );
       if (!sessionOnly) {
         releases.push(onUserProfilesChanged(check), onOperatorRolePolicyChanged(check));
-        const sourceSignal = captured?.authority.signal ?? originalGrant?.signal;
+        const sourceSignal = originalGrant?.signal ?? captured?.authority.signal;
         if (sourceSignal) {
           sourceSignal.addEventListener("abort", check, { once: true });
           releases.push(() => sourceSignal.removeEventListener("abort", check));

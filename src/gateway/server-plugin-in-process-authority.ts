@@ -235,9 +235,10 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         release,
         run: runInScope,
         /** Re-enter only the requester selected before transfer, under this retained source. */
-        async runWithRequester<T>(run: () => Promise<T>): Promise<T> {
+        async runWithRequester<T>(run: () => Promise<T>, agentId?: string): Promise<T> {
           assertCurrent();
           const admitted = await captureGatewayOperatorContinuation({
+            agentId: agentId ?? target?.agentId,
             client: continuationScope.client ?? null,
             context: resolved.context,
           });
@@ -301,6 +302,7 @@ export function captureOperatorToolGatewayContinuationContext(
 /** Holds the original operator source until an accepted asynchronous follow-up settles. */
 export async function runWithOperatorToolGatewayContinuationContext<T>(
   run: () => Promise<T>,
+  agentId?: string,
 ): Promise<T> {
   const preparation = captureOperatorToolGatewayContinuationContext();
   if (!preparation) {
@@ -308,7 +310,7 @@ export async function runWithOperatorToolGatewayContinuationContext<T>(
   }
   const captured = await preparation;
   try {
-    return await captured.runWithRequester(run);
+    return await captured.runWithRequester(run, agentId);
   } finally {
     captured.release();
   }

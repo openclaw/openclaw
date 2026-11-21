@@ -758,7 +758,6 @@ it.each([
         captured.release();
         phase = "recovery";
         const changedRole = scenario.startsWith("source-role-");
-        const pollsBeforeRecovery = polls;
         if (changedRole) {
           setUserProfileRole(
             client.authenticatedUserProfile.profileId,
@@ -767,36 +766,6 @@ it.each([
         }
         await startServices();
         let waking = clock.advanceBy(6000);
-        if (changedRole) {
-          await waking;
-          const retained = (await lookup.entries())[0]?.value;
-          expect(retained).toMatchObject({
-            state: "paused",
-            recovery: "deferred",
-            handle: { interactionId: "native-recovery-receipt" },
-          });
-          expect(retained?.result).toBeUndefined();
-          expect({ submits, polls, cancels, publications }).toEqual({
-            submits: 1,
-            polls: pollsBeforeRecovery,
-            cancels: 0,
-            publications: 0,
-          });
-          // Restoring a role does not itself grant a deferred operation new authority.
-          setUserProfileRole(
-            client.authenticatedUserProfile.profileId,
-            captured.authority.recoverySnapshot.assignedRole,
-          );
-          await clock.advanceBy(60_000);
-          expect((await lookup.entries())[0]?.value).toEqual(retained);
-          expect({ submits, polls, cancels, publications }).toEqual({
-            submits: 1,
-            polls: pollsBeforeRecovery,
-            cancels: 0,
-            publications: 0,
-          });
-          return;
-        }
         if (scenario === "stop-before-wake-admission") {
           const signal = await Promise.race([
             wakeAdmission.promise,

@@ -1,3 +1,4 @@
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { ownsStreamSource } from "../cron/stream-schedule.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
@@ -62,6 +63,7 @@ export async function prepareCronStreamSourceAuthority(params: {
     };
     const { restoreGatewayOperatorSource } = await import("./operator-run-recovery.js");
     restored = await restoreGatewayOperatorSource({
+      agentId: tryResolveCronJobEffectiveAgentId(job, context.cron.getDefaultAgentId()),
       snapshot,
       source: job.operatorSource && decodeGatewayOperatorRecoverySource(job.operatorSource.source),
       context,

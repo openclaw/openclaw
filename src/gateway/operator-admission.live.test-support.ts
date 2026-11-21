@@ -28,25 +28,25 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
 } from "./openclaw-id/tunnel-principal.js";
-import { PROXY_USER, WRITER } from "./operator-admission.credentials.test-support.js";
+import {
+  PROXY_USER,
+  WRITER,
+  type LiveAdmissionKind,
+  type LiveAdmissionProducer,
+} from "./operator-admission.contracts.test-support.js";
 import { runCronAdmissionCase } from "./operator-admission.cron.test-support.js";
 import * as admission from "./operator-admission.js";
 import {
   isLiveCredentialKind,
   prepareLiveCredentialProducer,
-  type LiveCredentialKind,
 } from "./operator-admission.live-credentials.test-support.js";
-import {
-  prepareRemoteIngressProducer,
-  type RemoteLiveKind,
-} from "./operator-admission.remote.test-support.js";
-import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
+import { prepareRemoteIngressProducer } from "./operator-admission.remote.test-support.js";
+import type { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
 import * as operatorRun from "./operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
-import type { GatewayClient } from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   dispatchGatewayMethodInProcess,
@@ -55,22 +55,6 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-export type LiveAdmissionKind =
-  // Shared HTTP bearer authenticates a system actor, not an admitted operator.
-  | "http-bearer"
-  | "http-ocid"
-  | "openai-compatible"
-  | "plugin-in-process"
-  | "recorded-person"
-  | "recorded-system-turn"
-  | LiveCredentialKind
-  | RemoteLiveKind
-  | "live-ingress"
-  // These are separate run/receipt capabilities, not operator admission.
-  | "cron-standing-grant"
-  | "cron-management-grant"
-  | "cron-operator-source";
-
 type Scenario = "before-start" | "after-start" | "stop";
 type History = {
   messages: unknown[];
@@ -78,15 +62,33 @@ type History = {
     items: Array<{ runId: string; state: string; endCause?: string; message: unknown }>;
   };
 };
-export type LiveAdmissionProducer = {
-  client?: GatewayClient;
-  send?: (params: Record<string, unknown>) => Promise<{ runId: string }>;
-  authority?: AdmittedRunOperatorAuthority;
-  hasCurrentClientAuthority?: () => boolean;
-  predecessor?: { runId: string; completion: Promise<unknown> };
-  revoke: () => Promise<void>;
-  release: () => void | Promise<void>;
-};
+
+export async function prepareAdmissionOcidPeer(c: AdmissionCase) {
+  c.claw = await linkedClaw();
+  c.peerKey = c.claw.w1;
+  if (c.row.credential !== "ocid-owner") {
+    c.peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(173));
+    expect(
+      await c.claw.authority.submit(
+        await c.claw.sign({
+          op: "add",
+          account_id: c.id,
+          role: "operator",
+          peer_keys: [c.peerKey],
+          invite_id: null,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: c.id });
+    await setCanonicalUserProfileRole(profile.id, "operator");
+  }
+  const authority = c.claw.authority;
+  setOpenClawIdTunnelPrincipalResolver((key) => authority.resolvePeer(key));
+  setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
+  setOpenClawIdMemberAccountLookup((id) => id === c.id);
+  return c.peerKey;
+}
 
 async function prepareLiveProducer(
   kind: Exclude<
@@ -173,27 +175,10 @@ async function prepareLiveProducer(
     } else {
       // Real tunnel membership, host transport attribution, and HTTP auth; no
       // caller-supplied profile or manufactured operator recovery snapshot.
-      c.claw = await linkedClaw();
-      c.peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(181));
-      expect(
-        await c.claw.authority.submit(
-          await c.claw.sign({
-            op: "add",
-            account_id: c.id,
-            role: "operator",
-            peer_keys: [c.peerKey],
-            invite_id: null,
-          }),
-          "tunnel",
-        ),
-      ).toMatchObject({ ok: true });
-      const membership = c.claw.authority;
-      setOpenClawIdTunnelPrincipalResolver((key) => membership.resolvePeer(key));
-      setOpenClawIdTunnelPrincipalLookup((key) => membership.currentPeer(key));
-      setOpenClawIdMemberAccountLookup((id) => id === c.id);
+      const peerKey = await prepareAdmissionOcidPeer(c);
       markGatewayIngressTransport(req, {
         kind: "openclaw-id-tunnel",
-        peerKey: c.peerKey,
+        peerKey,
         clientIp: "fd69:726f:6800::1",
       });
     }
@@ -487,9 +472,11 @@ export async function runLiveAdmissionCase(
         );
     c.queuedRunId = accepted.runId;
     await c.wait(c.enqueued.promise);
-    assert(c.original?.controllerInput, "Real chat acceptance must own its queue receipt");
+    const original = c.original;
+    assert(original?.controllerInput, "Real chat acceptance must own its queue receipt");
+    const controllerInput = original.controllerInput;
     if (liveCredential) {
-      const authority = c.original.operatorAuthority;
+      const authority = original.operatorAuthority;
       assert(authority, "The real transport must queue its actual operator authority");
       expect(authority.recoverySnapshot).toBeUndefined();
       expect(authority.signal?.aborted).not.toBe(true);
@@ -510,7 +497,7 @@ export async function runLiveAdmissionCase(
           ...(proxyCredential ? { verifiedIdentity: PROXY_USER } : {}),
         });
         expect(authority.sharedGeneration).toEqual(expect.any(String));
-        if (kind === "live-grant") {
+        if (kind === "live-grant" || kind === "live-role") {
           expect(authority.device).toBeUndefined();
         } else {
           expect(authority.device).toEqual({
@@ -550,9 +537,9 @@ export async function runLiveAdmissionCase(
     }
     if (
       scenario === "before-start" &&
-      !["http-bearer", "live-grant", "live-remote-ingress"].includes(kind)
+      !["http-bearer", "live-grant", "live-role", "live-remote-ingress"].includes(kind)
     ) {
-      await expect(c.wait(c.original.controllerInput.settlement.promise)).rejects.toBeInstanceOf(
+      await expect(c.wait(controllerInput.settlement.promise)).rejects.toBeInstanceOf(
         GatewayOperatorRecoveryAuthorizationError,
       );
       const observer = await fixture.admin(c.signal);
@@ -564,7 +551,7 @@ export async function runLiveAdmissionCase(
     } else {
       await c.wait(c.recoveredReached.promise);
       assert(c.latestRunId);
-      if (kind === "live-grant") {
+      if (kind === "live-grant" || kind === "live-role") {
         expect(c.observedRunScopes.length).toBeGreaterThan(0);
         for (const scopes of c.observedRunScopes) {
           expect(scopes.toSorted()).toEqual(

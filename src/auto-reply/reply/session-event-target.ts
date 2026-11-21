@@ -398,6 +398,7 @@ export async function prepareSessionEventTargetForHost(
         throw new GatewayOperatorAccessUnavailableError();
       }
       restored = await restoreGatewayOperatorSource({
+        agentId: target.agentId,
         snapshot: scope.operatorSource.snapshot,
         source: scope.operatorSource,
         context,

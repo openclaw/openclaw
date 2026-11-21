@@ -14,7 +14,7 @@ type Owner = {
   assertCurrent(): void;
 };
 // Routing only: the plugin's canonical grant owner makes every authorization decision.
-const owners = new WeakMap<GatewayRequestContext, Map<string, Owner>>();
+const owners = new WeakMap<object, Map<string, Owner>>();
 
 export function registerIngressPrincipalRecovery(
   context: GatewayRequestContext,
@@ -65,7 +65,7 @@ export async function captureIngressPrincipalRecovery(
 }
 
 export async function restoreIngressPrincipalRecovery(
-  context: GatewayRequestContext,
+  context: object,
   source: { pluginId: string; audienceId: string; recoveryId?: string },
   profileId: string,
   scopes: readonly string[],

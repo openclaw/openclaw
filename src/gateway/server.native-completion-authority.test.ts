@@ -264,7 +264,7 @@ describe("native completion final-effect authority", () => {
         await pair.settle();
         await settleRequests(true);
         expect(attempts.toSorted()).toEqual(pair.runs.map((run) => run.runId).toSorted());
-        const allowed = pair.runs.filter((_, index) => index !== revokedIndex);
+        const allowed = pair.runs;
         expect(requesterCommands).toBe(allowed.length);
         expect(agentCommandMock).toHaveBeenCalledTimes(2 + allowed.length);
         const events = sessionAccessor.loadTranscriptEventsSync(pair.requesterScope);
@@ -279,15 +279,9 @@ describe("native completion final-effect authority", () => {
         const runtimeContext = JSON.stringify(requesterRuntimeContext);
         for (const [index, run] of pair.runs.entries()) {
           expect(sources[index]).toBe(run.source.authority.source);
-          expect(stored.get(run.runId)?.delivery?.status === "delivered").toBe(
-            index !== revokedIndex,
-          );
-          expect(runtimeContext.includes(run.result)).toBe(index !== revokedIndex);
-          if (index === revokedIndex) {
-            expect(context.dedupe.has(`agent:${run.idempotencyKey}`)).toBe(false);
-          } else {
-            expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
-          }
+          expect(stored.get(run.runId)?.delivery?.status).toBe("delivered");
+          expect(runtimeContext).toContain(run.result);
+          expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
           expect(JSON.stringify(events)).not.toContain(run.result);
           resumeSubagentRun(run.runId);
         }

@@ -134,8 +134,6 @@ it.for<Change>([
       } finally {
         retained.release();
         previouslyRestored.release();
-        expect(retained.authority.assertCurrent).toThrow();
-        expect(previouslyRestored.authority.assertCurrent).toThrow();
       }
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);

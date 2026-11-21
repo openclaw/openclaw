@@ -1,4 +1,3 @@
-import { runWithOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-authority.js";
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -601,22 +600,22 @@ export const startSubagentAnnounceCleanupFlow = (
         )?.protocolRunId;
         await commit((draft) => recordRequesterHandoff(draft, blockingRunId));
       }
+      // The registry already owns this completion's admitted source. Starting
+      // the requester turn inside the announce flow owns its next admission.
       announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        runWithOperatorToolGatewayContinuationContext(() =>
-          params.runSubagentAnnounceFlow({
-            ...announceParams,
-            controllerInput,
-            childAgentId: entry.childAgentId,
-            childSessionIdentity: entry.childSessionIdentity,
-            signal: deadline.signal,
-            onAccepted: releasePreparation,
-            // Delivery expiry bounds admission; the requester owns its execution budget.
-            onExecutionStarted: () => {
-              releasePreparation();
-              clearTimeout(deadlineTimer);
-            },
-          }),
-        ),
+        params.runSubagentAnnounceFlow({
+          ...announceParams,
+          controllerInput,
+          childAgentId: entry.childAgentId,
+          childSessionIdentity: entry.childSessionIdentity,
+          signal: deadline.signal,
+          onAccepted: releasePreparation,
+          // Delivery expiry bounds admission; the requester owns its execution budget.
+          onExecutionStarted: () => {
+            releasePreparation();
+            clearTimeout(deadlineTimer);
+          },
+        }),
       );
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {

@@ -840,10 +840,11 @@ const ownerRequesterOutcomes = {
   owner: { owner: true, restart: { ok: true }, requester: "456", scheduled: 1 },
   guest: { owner: false, restart: { gated: true }, requester: undefined, scheduled: 0 },
   "revoked-before-admission": { owner: false, restart: { gated: true }, scheduled: 0 },
-  // Revoking publishes config, which retires the admitted turn's tool host before the call.
+  // The tool host survives publication; the maintenance RPC is a new request.
   "revoked-after-admission": {
     owner: true,
-    restart: "agent harness host capability is no longer active",
+    requester: "456",
+    restart: "Gateway maintenance requires a current owner principal.",
     scheduled: 0,
   },
 };

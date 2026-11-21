@@ -187,11 +187,16 @@ describe("typed in-process agent continuation authorization", () => {
         );
         try {
           const pending = inScope({ client, context, resolveGatewayContext: () => context }, () =>
-            callAgent({
-              agentId: "main",
-              sessionKey: childKey,
-              message: "Continue independently",
-              idempotencyKey: "accepted-recovered-facade-child",
+            callAgentToolGatewayRequest({
+              method: "agent",
+              params: {
+                agentId: "main",
+                sessionKey: childKey,
+                message: "Continue independently",
+                idempotencyKey: "accepted-recovered-facade-child",
+              },
+              // The occurrence owns this dispatch, not the child's admitted operator policy.
+              sessionMutationCommitGuard: fixture.assertCurrent,
             }),
           );
           if (boundary === "parent retired before acceptance") {
@@ -204,7 +209,6 @@ describe("typed in-process agent continuation authorization", () => {
           assert(child?.authority, "Expected independently retained child policy");
           fixture.retire();
           restored.release();
-          expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
           expect(child.authority.assertCurrent).not.toThrow();
           resume.resolve();
           expect(await outcome.promise).toBeUndefined();
@@ -571,7 +575,7 @@ describe("typed in-process agent continuation authorization", () => {
   );
 
   it.each(["finished invocation", "revoked source", "provenance only"] as const)(
-    "checks %s for a settle wake after the spawning tool ends",
+    "retains admitted policy and checks provenance after the spawning tool ends: %s",
     async (state) => {
       const { runAnnounceAgentCall } =
         await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
@@ -639,13 +643,10 @@ describe("typed in-process agent continuation authorization", () => {
             },
           ),
         );
-        if (state === "finished invocation") {
+        if (state !== "provenance only") {
           await expect(dispatch).resolves.toEqual(result);
         } else {
-          const error = {
-            "revoked source": "original operator source revoked",
-            "provenance only": "agent tool caller authority is no longer active",
-          }[state];
+          const error = "agent tool caller authority is no longer active";
           await expect(dispatch).rejects.toThrow(error);
           expect(startTurn).not.toHaveBeenCalled();
         }

@@ -139,7 +139,6 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
       scopes: ["operator.read"],
       assertCurrent: vi.fn(() => {}),
     },
-    assertPolicyCurrent: vi.fn(),
     authenticatedUserProfile: {
       profileId: "requester",
       displayName: null,

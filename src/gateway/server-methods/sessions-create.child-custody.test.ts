@@ -604,7 +604,7 @@ describe("hosted creation transfers accepted child input", () => {
     { system: false, toolInvocation: true },
     { system: true, toolInvocation: true },
   ])(
-    "continues after parent closure (system=$system, inherited invocation=$toolInvocation)",
+    "continues after parent closure and source permission changes (system=$system, inherited invocation=$toolInvocation)",
     async (options) => {
       await using fixture = await createHostedChildFixture(options);
       const accepted = await fixture.send();
@@ -613,6 +613,7 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.closeInvocation();
       }
       fixture.closeParent();
+      fixture.revoke.source();
       await fixture.finish();
       expect(fixture.provider).toHaveBeenCalledOnce();
       expect(userMessages(fixture.scope())).toHaveLength(1);
@@ -659,7 +660,7 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each(["source", "host", "signal", "gateway", "replacement"] as const)(
+  it.each(["host", "signal", "gateway", "replacement"] as const)(
     "retains the original %s boundary after child ACK and parent closure",
     async (change) => {
       await using fixture = await createHostedChildFixture();

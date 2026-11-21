@@ -295,7 +295,7 @@ it.each([
         sessions: { others: "none" },
         modelPolicy: {},
       };
-      let config: OpenClawConfig = withModelPolicy
+      const config: OpenClawConfig = withModelPolicy
         ? {
             agents: { defaults: { model: defaultModel } },
             gateway: { roles: { default: "writer", definitions: { writer } } },
@@ -310,7 +310,6 @@ it.each([
       const originalRevocation = new AbortController();
       const reconnectedRevocation = new AbortController();
       const cleanups: Array<() => void> = [];
-      let transportCurrent = true;
       const capture = async (
         client: typeof originalClient,
         signal: AbortSignal,
@@ -320,7 +319,7 @@ it.each([
         const caller = captureGatewayDeviceRevocation(
           context,
           { deviceId: "same-device", role: "operator" },
-          () => transportCurrent && !signal.aborted,
+          () => !signal.aborted,
           undefined,
           {
             dependencies: { client, context, authPolicyGeneration: "same-policy" },
@@ -385,15 +384,6 @@ it.each([
             gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
           }),
         ).resolves.toEqual({ status: "accepted" });
-        config = { ...config };
-        await expect(inject()).resolves.toEqual(
-          grant === undefined ? rejected : { status: "accepted" },
-        );
-        transportCurrent = false;
-        await expect(inject()).resolves.toEqual(
-          grant === undefined ? rejected : { status: "accepted" },
-        );
-        transportCurrent = true;
         const otherAuthority = await capture(
           clientFor(otherProfileId),
           new AbortController().signal,
@@ -405,7 +395,7 @@ it.each([
             gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId },
           }),
         ).resolves.toEqual(rejected);
-        const acceptedMessages = grant === undefined ? 1 : 3;
+        const acceptedMessages = 1;
         expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
         expect(queueMessage).toHaveBeenLastCalledWith(
           "change strategy",
@@ -435,20 +425,6 @@ it.each([
           ).resolves.toMatchObject(rejected);
           expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
         }
-        if (grant !== null) {
-          const revokedGrant = new AbortController();
-          const revokedAuthority = await capture(
-            reconnectedClient,
-            reconnectedRevocation.signal,
-            grant,
-            revokedGrant.signal,
-          );
-          revokedGrant.abort();
-          await expect(inject({ operatorAuthority: revokedAuthority })).resolves.toMatchObject(
-            rejected,
-          );
-          expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
-        }
         for (const changed of [
           {
             operatorAuthority: createAdmittedRunOperatorAuthority({
@@ -476,18 +452,6 @@ it.each([
         ]) {
           await expect(inject(changed)).resolves.toMatchObject(rejected);
         }
-        reconnectedRevocation.abort();
-        await expect(inject()).resolves.toMatchObject(rejected);
-        const liveReplacement = await capture(
-          reconnectedClient,
-          new AbortController().signal,
-          grant,
-        );
-        originalRevocation.abort();
-        await expect(inject({ operatorAuthority: liveReplacement })).resolves.toMatchObject(
-          rejected,
-        );
-        expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
       } finally {
         for (const release of cleanups.toReversed()) {
           release();

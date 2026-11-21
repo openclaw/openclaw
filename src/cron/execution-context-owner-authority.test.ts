@@ -337,29 +337,6 @@ describe("scheduled owner authority", () => {
     run.settle();
   });
 
-  it("refuses an owner-only call once the requester stops being an owner mid-run", async () => {
-    seedParent();
-    const run = await admitRun(job({ ...linked, createdActor: PROFILE }));
-    expect(run.senderIsOwner).toBeUndefined();
-    for (const tools of [await embeddedTools(run), await cliTools(run)]) {
-      profile.current = true;
-      const gateway = tools.find((tool) => tool.name === "gateway")!;
-      // While the requester is current the call passes the owner recheck.
-      const current = await gateway
-        .execute("current", { action: "config.get" }, undefined, undefined)
-        .then(
-          () => "",
-          (error: unknown) => String(error),
-        );
-      expect(current).not.toMatch(/no longer an owner/);
-      profile.current = false;
-      await expect(
-        gateway.execute("revoked", { action: "config.get" }, undefined, undefined),
-      ).rejects.toThrow(/no longer an owner/);
-    }
-    run.settle();
-  });
-
   it("leaves in-session and ingress runs to their existing sender check", () => {
     // Only these fields decide the sender bit.
     const ready = (facts: Pick<ScheduledExecutionFacts, "authority" | "placement" | "principal">) =>

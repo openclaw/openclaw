@@ -56,18 +56,24 @@ export function createOperatorContinuationService(params: {
   });
 }
 export function prepareContinuationRoleConfig(config: OpenClawConfig, enabled: boolean) {
-  if (!enabled) {
-    return;
-  }
-  config.gateway = {
-    ...config.gateway,
-    roles: {
-      default: "writer",
-      definitions: {
-        writer: { scopes: ["operator.admin"], agents: "*", sessions: { others: "edit" } },
+  if (enabled) {
+    config.gateway = {
+      ...config.gateway,
+      roles: {
+        default: "writer",
+        definitions: {
+          writer: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+        },
       },
-    },
-  };
+    };
+  }
+  if (config.gateway?.roles) {
+    config.gateway.roles.definitions.blocked = {
+      scopes: [],
+      agents: [],
+      sessions: { others: "none" },
+    };
+  }
   setRuntimeConfigSnapshot(config);
 }
 

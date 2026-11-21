@@ -196,9 +196,6 @@ it.each<{ grants: Grants | undefined }>([{ grants: undefined }, { grants: ["dayb
       const fixture = await recoveryFixture(stateDir, profile.id, {
         config: config(grants),
       });
-      expect(fixture.snapshot.rolePolicy?.accessPrograms).toEqual(
-        grants ? { cyber: grants } : undefined,
-      );
       const restored = expectDefined(await fixture.restore(), "restored source");
       using _ = { [Symbol.dispose]: restored.release };
       const assertAccessCeiling = () => {

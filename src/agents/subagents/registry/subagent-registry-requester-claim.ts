@@ -121,7 +121,7 @@ export async function reconcileRequesterTurnClaimForRun(params: {
             })),
             assertCurrent: () => assertCurrent?.(),
           });
-        return custody ? custody.runWithRequester(settle) : settle();
+        return custody ? custody.runWithRequester(settle, params.requesterAgentId) : settle();
       });
     } finally {
       custody?.release();

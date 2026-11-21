@@ -91,7 +91,7 @@ export async function deliverAgentHarnessCompletion(params: {
     );
   return params.completionCustody
     ? runWithAgentHarnessCompletionCustody(params.completionCustody, scope, () =>
-        runWithOperatorToolGatewayContinuationContext(run),
+        runWithOperatorToolGatewayContinuationContext(run, scope.requesterAgentId),
       )
     : run();
 }

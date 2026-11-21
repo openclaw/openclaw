@@ -271,7 +271,7 @@ export async function prepareReplyCommandOwnerAuthority(params: {
         },
     );
     params.assertCurrent();
-    const senderIsOwner = run.senderIsOwner === true && owner.isCurrent(config);
+    const senderIsOwner = owner.isCurrent(config);
     run.senderIsOwner = senderIsOwner;
     run.traceAuthorized = senderIsOwner;
     bindCommandOwnerAuthority(run, {

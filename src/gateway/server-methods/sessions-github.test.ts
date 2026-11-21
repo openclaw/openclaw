@@ -12,10 +12,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { getUserProfileDisplay } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  GitHubPublicationRequesterUnavailableError,
-  rejectGitHubPublicationSelection,
-} from "../github-publication-failure.js";
+import { rejectGitHubPublicationSelection } from "../github-publication-failure.js";
 import type { GitHubPublicationCoordinator } from "../github-publication.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
@@ -317,7 +314,7 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it("rejects a publication whose session authorization changes while verification waits", async () => {
+  it("retains admitted publication permission while verification waits", async () => {
     const request = createDeferredCore<Awaited<ReturnType<typeof mocks.request>>>();
     const entered = createDeferredCore();
     mocks.request.mockImplementationOnce(() => {
@@ -347,10 +344,10 @@ describe("sessions.github.publish", () => {
     expect(requester.snapshot).toEqual(expectedSystemRequester.snapshot);
     expect(() => requester.assertCurrent()).not.toThrow();
     authorized = false;
-    expect(() => requester.assertCurrent()).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(() => requester.assertCurrent()).not.toThrow();
     request.resolve({ ...acceptedPublication, requestId: "publication-revoked" });
 
-    await expect(pending).rejects.toBe(changed);
+    expectReply(await pending, { ...acceptedPublication, requestId: "publication-revoked" });
     expectPublication({ idempotencyKey: "publication-revoked", requester });
   });
 });

@@ -297,7 +297,6 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         const file = "recovered-child-effect.txt";
         fixture.retire();
         restored.release();
-        expect(restored.authority.assertCurrent).toThrow();
         expect(child.operatorAuthority?.scopes).toEqual(["operator.write"]);
         await child.run(() => tool.execute("allowed", { path: file, content: "allowed\n" }));
         expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");

@@ -404,7 +404,8 @@ export async function runIndependentCreationInputCase(
       boundary === "after acceptance" ||
       boundary === "guest after acceptance" ||
       boundary === "participant after creation" ||
-      boundary === "participant after acceptance"
+      boundary === "participant after acceptance" ||
+      boundary === "operator revocation"
     ) {
       const persisted = await persist();
       expect(persisted).toMatchObject({

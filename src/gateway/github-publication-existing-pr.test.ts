@@ -519,7 +519,7 @@ describe("shared publication to a prepared original PR", () => {
   );
 
   it.each(["closed", "revoked"])(
-    "preserves an accepted request without returning a receipt to a %s requester",
+    "retains an accepted request when its requester is %s after push",
     async (change) => {
       const f = await fixture(true);
       f.loseResponse();
@@ -530,7 +530,12 @@ describe("shared publication to a prepared original PR", () => {
           await f.revoke();
         }
       });
-      await expect(f.publish("unavailable-after-push")).rejects.toThrow(/authoriz|authority/);
+      const publication = f.publish("unavailable-after-push");
+      if (change === "closed") {
+        await expect(publication).rejects.toThrow(/authoriz|authority/);
+      } else {
+        await expect(publication).resolves.toMatchObject({ status: "publishing" });
+      }
       f.expectWrites(1);
     },
   );

@@ -98,7 +98,6 @@ export async function prepareSessionsSendFollowup(params: {
       assertInvocation?.();
       captured.assertCurrent();
     }
-    const admittedTargets = facts.map((read) => read.readCurrent(cfg).target.entry);
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (released) {
@@ -106,15 +105,9 @@ export async function prepareSessionsSendFollowup(params: {
       }
       captured.assertCurrent();
       // The prepared reader owns canonical routing, physical store and incarnation fencing.
-      for (const [index, read] of facts.entries()) {
-        const currentFacts = read.readCurrent(getRuntimeConfig());
-        const current = currentFacts.target;
-        if (
-          !current?.entry ||
-          current.entry.archivedAt !== undefined ||
-          current.entry.sessionId !== admittedTargets[index]?.sessionId ||
-          current.entry.lifecycleRevision !== admittedTargets[index]?.lifecycleRevision
-        ) {
+      for (const read of facts) {
+        const current = read.readCurrent(getRuntimeConfig()).target;
+        if (!current?.entry || current.entry.archivedAt !== undefined) {
           throw new FollowupAccessChangedError("Followup conversation changed.");
         }
       }
