@@ -61,7 +61,7 @@ export async function gatewayAuthTokenCommand(
   });
   if (resolvedAuth.mode !== "token" || !resolvedAuth.token) {
     throw new Error(
-      "No configured Gateway token is available. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then try again.",
+      "No configured Gateway token is available. Set gateway.auth.token from its secret source, then try again. Do not generate a new token: that disconnects other sessions.",
     );
   }
 

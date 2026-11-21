@@ -356,7 +356,7 @@ describe("doctor gateway auth placeholder token", () => {
         severity: "error",
         path: "gateway.auth.token",
         message: expect.stringContaining("not a usable secret"),
-        fixHint: expect.stringContaining("--generate-gateway-token"),
+        fixHint: expect.stringContaining("gateway.auth.token from its secret source"),
       }),
     ]);
   });
