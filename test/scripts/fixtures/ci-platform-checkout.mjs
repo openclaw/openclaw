@@ -505,9 +505,25 @@ function insideOwnedPath(target) {
 
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 const shellPath = (value) => value.replaceAll("\\", "/");
-// GitHub's macOS runners use the system Bash. Homebrew Bash 5.3 can block while
-// writing a workflow policy heredoc before the Python consumer starts.
-const workflowShell = process.platform === "darwin" ? "/bin/bash" : "bash";
+function findWindowsBash() {
+  for (const p of [
+    "C:\\Program Files\\Git\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+  ]) {
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return p;
+    } catch {}
+  }
+  return "bash";
+}
+// GitHub's Windows runners have Git for Windows (cygpath); WSL bash does not.
+const workflowShell =
+  process.platform === "darwin"
+    ? "/bin/bash"
+    : process.platform === "win32"
+      ? findWindowsBash()
+      : "bash";
 
 function writeConsumer(target, tool) {
   const argv = [process.execPath, fixture, tool, root, policyScenario].map((value) =>
