@@ -3,9 +3,12 @@ import { tempWorkspace, withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 
+let warnedMp3CafFallback = false;
+const CAF_OPUS_SAMPLE_RATE_HZ = 24_000;
 const DEFAULT_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DEFAULT_OPUS_BITRATE = "64k";
 const DEFAULT_OPUS_CHANNELS = 1;
@@ -146,22 +149,145 @@ export async function transcodeAudioBuffer(params: {
     prefix: "tts-transcode-",
   });
   try {
+    const deadline = performance.now() + (params.timeoutMs ?? 5000);
+    const remaining = () => {
+      const ms = Math.floor(deadline - performance.now());
+      if (!Number.isFinite(ms) || ms <= 0) {
+        throw new Error("audio transcode timeout budget exhausted");
+      }
+      return ms;
+    };
     const inPath = await tmp.store.write(`in.${source}`, params.audioBuffer, { durable: false });
+    let encoderInput = inPath;
+    let expectedFrames: number | undefined;
+    if (source === "mp3") {
+      // afconvert can silently truncate compressed MP3 input. Decode first, then
+      // give Apple's Messages-compatible Opus-in-CAF encoder uncompressed PCM.
+      encoderInput = tmp.path("decoded.wav");
+      await runFfmpeg(
+        [
+          "-nostdin",
+          "-v",
+          "error",
+          "-y",
+          "-i",
+          inPath,
+          "-vn",
+          "-sn",
+          "-dn",
+          "-ac",
+          "1",
+          "-ar",
+          String(CAF_OPUS_SAMPLE_RATE_HZ),
+          "-c:a",
+          "pcm_s16le",
+          encoderInput,
+        ],
+        { timeoutMs: remaining() },
+      );
+      expectedFrames = readPcmWavFrames(await tmp.read("decoded.wav"));
+      if (expectedFrames <= 0) {
+        throw new Error("decoded PCM has no frames");
+      }
+    }
     const outPath = tmp.path(`out.${target}`);
     const failure = await runAfconvert(
       // Opus-in-CAF matches native Messages voice memo attachments.
-      ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
-      params.timeoutMs ?? 5000,
+      ["-f", "caff", "-d", "opus@24000", "-c", "1", encoderInput, outPath],
+      remaining(),
     );
     if (failure !== undefined) {
-      return { ok: false, reason: "transcoder-failed", detail: failure };
+      throw new Error(failure);
     }
-    return { ok: true, buffer: await tmp.read(`out.${target}`) };
+    if (expectedFrames !== undefined) {
+      const result = await runCommandWithTimeout(["/usr/bin/afinfo", outPath], {
+        timeoutMs: remaining(),
+        maxOutputBytes: 8192,
+        env: { LC_ALL: "C", LANG: "C" },
+      });
+      const actualFrames = Number(result.stdout.match(/audio (\d+) valid frames/)?.[1]);
+      if (
+        result.code !== 0 ||
+        result.termination === "timeout" ||
+        !/Data format:\s+1 ch,\s+24000 Hz/.test(result.stdout) ||
+        !Number.isSafeInteger(actualFrames) ||
+        actualFrames <= 0 ||
+        Math.abs(actualFrames - expectedFrames) > Math.max(2, Math.ceil(expectedFrames * 0.001))
+      ) {
+        throw new Error("CAF frame validation failed");
+      }
+    }
+    const buffer = await tmp.read(`out.${target}`);
+    remaining();
+    return { ok: true, buffer };
   } catch (err) {
+    if (source === "mp3" && !warnedMp3CafFallback) {
+      warnedMp3CafFallback = true;
+      logWarn("MP3-to-CAF conversion failed; keeping the original audio attachment.");
+    }
     return { ok: false, reason: "transcoder-failed", detail: (err as Error).message };
   } finally {
     await tmp.cleanup();
   }
+}
+
+// Parse bounded RIFF chunks rather than platform-dependent afinfo LPCM wording.
+function readPcmWavFrames(buffer: Buffer): number {
+  function invalid(): never {
+    throw new Error("invalid decoded PCM WAV header");
+  }
+  if (
+    buffer.length < 12 ||
+    buffer.toString("latin1", 0, 4) !== "RIFF" ||
+    buffer.toString("latin1", 8, 12) !== "WAVE"
+  ) {
+    invalid();
+  }
+  const end = buffer.readUInt32LE(4) + 8;
+  if (end !== buffer.length) {
+    invalid();
+  }
+  let fmtSeen = false;
+  let dataBytes: number | undefined;
+  let offset = 12;
+  while (offset < end) {
+    if (offset + 8 > end) {
+      invalid();
+    }
+    const id = buffer.toString("latin1", offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    const next = start + size + (size & 1);
+    if (next > end) {
+      invalid();
+    }
+    if (id === "fmt ") {
+      if (fmtSeen || size < 16) {
+        invalid();
+      }
+      if (
+        buffer.readUInt16LE(start) !== 1 ||
+        buffer.readUInt16LE(start + 2) !== 1 ||
+        buffer.readUInt32LE(start + 4) !== CAF_OPUS_SAMPLE_RATE_HZ ||
+        buffer.readUInt32LE(start + 8) !== CAF_OPUS_SAMPLE_RATE_HZ * 2 ||
+        buffer.readUInt16LE(start + 12) !== 2 ||
+        buffer.readUInt16LE(start + 14) !== 16
+      ) {
+        invalid();
+      }
+      fmtSeen = true;
+    } else if (id === "data") {
+      if (dataBytes !== void 0 || size % 2 !== 0) {
+        invalid();
+      }
+      dataBytes = size;
+    }
+    offset = next;
+  }
+  if (!fmtSeen || dataBytes === void 0) {
+    invalid();
+  }
+  return dataBytes / 2;
 }
 
 function normalizeContainerExt(ext: string): string | undefined {
