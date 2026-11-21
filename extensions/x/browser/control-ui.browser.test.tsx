@@ -249,7 +249,9 @@ it("keeps serial admission, redacted failures, and the draft through a held retr
   failed.reject(new Error("Rejected synthetic-private-token"));
   await vi.waitFor(() => {
     flush();
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Rejected [REDACTED]");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "Couldn’t add this account. Check the handle and try again. Rejected [REDACTED]",
+    );
   });
   expect(container.textContent).not.toContain("synthetic-private-token");
   expect(input.value).toBe("new_user");
@@ -295,7 +297,7 @@ it("retires hidden and disposed reads while restoring only fresh administrator d
   f.notify();
   flush();
   await vi.waitFor(() =>
-    expect(f.container.textContent).toContain("Administrator access is required"),
+    expect(f.container.textContent).toContain("You need admin access to manage X replies."),
   );
   expect(f.container.textContent).not.toContain("@maintainer");
   const disposed = Promise.withResolvers<XAllowlistSnapshot>();
