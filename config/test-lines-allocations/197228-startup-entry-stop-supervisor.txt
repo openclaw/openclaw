@@ -1,0 +1,2 @@
+18
+# Regression test for the Windows login-item stop that left the task supervisor alive (issue 197228).
