@@ -11,6 +11,8 @@ const enAgentsHome = {
     deleteAgentDetails:
       "Its workspace, agent state, and chat history move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
+    filterSessionsByAgent: "Filter sessions by agent",
+    noSessionsForAgent: "No matching sessions for this agent.",
     working: "Working now",
   },
   templatesDraft: {

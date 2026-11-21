@@ -17,6 +17,33 @@ import {
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
 
+/** Preserve matching descendants without showing a non-matching parent. */
+export function filterSidebarSessionTree(
+  rows: readonly SidebarRecentSession[],
+  matches: (row: SidebarRecentSession) => boolean,
+): SidebarRecentSession[] {
+  const filtered: SidebarRecentSession[] = [];
+  for (const row of rows) {
+    const children = filterSidebarSessionTree(row.children, matches);
+    if (matches(row)) {
+      // Retain unloaded links for discovery, but count only visible loaded children.
+      const childSessionKeys = new Set(row.childSessionKeys);
+      for (const child of row.children) {
+        childSessionKeys.delete(child.key);
+      }
+      for (const child of children) {
+        childSessionKeys.add(child.key);
+      }
+      filtered.push({ ...row, children, childSessionKeys: [...childSessionKeys] });
+    } else {
+      for (const child of children) {
+        filtered.push({ ...child, isChild: false });
+      }
+    }
+  }
+  return filtered;
+}
+
 function summarizeChildren(
   children: readonly SidebarRecentSession[],
   unloadedAttention: readonly SidebarSessionAttention[],

@@ -548,7 +548,9 @@ available assistant reply appears beneath the name, and an activity ring
 surrounds the avatar while the agent or one of its sessions is working. Select
 an agent to open its main chat. The collapsible **Sessions** section below the
 roster lists recent conversations across agents, with the conversation agent’s
-avatar on the left. Sidebar filters and sorting still apply. Main chats stay
+avatar on the left. Use the filter in the **Sessions** heading to show one
+agent’s conversations, or choose **All agents** to clear it. This only changes
+the list below the heading; sidebar filters and sorting still apply. Main chats stay
 on the agent rows, and personal pins stay in **Pinned** without a second copy
 in **Sessions**. The agent menu offers **Pin/Unpin**, **Sessions**,
 **Settings**, and a confirmed **Delete** action when permitted. **Sessions**

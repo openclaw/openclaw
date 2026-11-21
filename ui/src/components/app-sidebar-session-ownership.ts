@@ -2,6 +2,7 @@ import type { SessionsListResult } from "../api/types.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 import { findSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
+import { filterSidebarSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 function hasMultipleSidebarSessionIdentities(
@@ -75,35 +76,18 @@ export function applySidebarSessionOwnerFilter(input: {
   // A complete facet may omit an owner with no rows. That means an empty
   // filtered list, never permission to broaden the selected owner to everyone.
   const activeOwnerId = input.selectedOwnerId?.trim() || null;
-  const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
-    const filtered: SidebarRecentSession[] = [];
-    for (const row of treeRows) {
-      const children = filterTree(row.children);
-      const ownerId = row.owner?.actor.id;
-      const profileMatches =
-        !input.selectedProfileId ||
-        (row.owner?.actor.type === "human" && ownerId === input.selectedProfileId);
-      if (ownerId === activeOwnerId && profileMatches) {
-        // Retain unloaded links for discovery, but count only visible loaded children.
-        const childSessionKeys = new Set(row.childSessionKeys);
-        for (const child of row.children) {
-          childSessionKeys.delete(child.key);
-        }
-        for (const child of children) {
-          childSessionKeys.add(child.key);
-        }
-        filtered.push({ ...row, children, childSessionKeys: [...childSessionKeys] });
-      } else {
-        for (const child of children) {
-          filtered.push({ ...child, isChild: false });
-        }
-      }
-    }
-    return filtered;
-  };
   return {
     // Involving-me membership is Gateway-owned; only an explicit owner filters this tree.
-    rows: activeOwnerId ? filterTree(input.projected) : input.projected,
+    rows: activeOwnerId
+      ? filterSidebarSessionTree(input.projected, (row) => {
+          const actor = row.owner?.actor;
+          return (
+            actor?.id === activeOwnerId &&
+            (!input.selectedProfileId ||
+              (actor.type === "human" && actor.id === input.selectedProfileId))
+          );
+        })
+      : input.projected,
     ownerOptions,
     ownershipVisibility,
     activeOwnerId,

@@ -76,6 +76,45 @@ describe("AppSidebar agent roster", () => {
     expect(sessionKeys(sidebar).toSorted()).toEqual(["agent:main:notes", "agent:working:project"]);
   });
 
+  it("filters the Sessions section before pagination without changing agent rows or pins", async () => {
+    const forge = "agent:working:notes";
+    const pin = "agent:main:pin";
+    const { sidebar, context } = await mountRoster(roster, [
+      ...Array.from({ length: 16 }, (_, index) =>
+        session("main", 100 + index, { key: "agent:main:task-" + index, isMain: false }),
+      ),
+      session("working", 10, { key: forge, isMain: false, spawnedBy: "agent:main:task-0" }),
+      session("main", 200, { key: pin, isMain: false }),
+    ]);
+    sidebar.sidebarEntries = ["session:" + pin];
+    sidebar.sidebarAgentsMode = "roster";
+    await vi.waitFor(() => expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]));
+    const section = sidebar.querySelector('[data-session-section="roster-sessions"]')!;
+    const trigger = section.querySelector<HTMLButtonElement>(
+      'button[aria-label="Filter sessions by agent"]',
+    )!;
+    const select = async (id: string) => {
+      trigger.click();
+      await vi.waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+      section
+        .querySelector<HTMLButtonElement>('[role="menuitemradio"][data-value="' + id + '"]')!
+        .click();
+      await settleRoster(sidebar);
+    };
+    expect(sessionKeys(sidebar)).not.toContain(forge);
+    await select("agent:working");
+    expect(sessionKeys(sidebar)).toEqual([pin, forge]);
+    expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
+    expect(context.agentSelection.state.selectedId).toBe("main");
+    expect(trigger.textContent).toBe("Forge");
+    await select("agent:recent");
+    expect(sessionKeys(sidebar)).toEqual([pin]);
+    expect(section.textContent).toContain("No matching sessions for this agent.");
+    await select("all");
+    expect(sessionKeys(sidebar)).toHaveLength(16);
+    expect(sessionKeys(sidebar)).not.toContain(forge);
+  });
+
   it("offers a counted sessions route without a nested-session or create action", async () => {
     const { sidebar, context } = await mountRoster();
     const onNavigate = vi.fn();

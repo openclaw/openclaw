@@ -14,6 +14,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { templateCreatorAction } from "../pages/templates/creator-owner.ts";
 import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
+import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -34,7 +35,9 @@ import {
 import "../styles/sidebar-agent-roster.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
-type RosterHost = AppSidebarRenderHost & SessionListHost;
+type RosterHost = AppSidebarRenderHost &
+  SessionListHost &
+  Pick<AppSidebarOwner, "rosterSessionAgentFilterId" | "setRosterSessionAgentFilter">;
 type AgentMenuCard = { id: string; name: string };
 type AgentContextMenu = { id: string; x: number; y: number; anchor: HTMLElement | null };
 
@@ -115,6 +118,23 @@ export function SidebarAgentRoster(props: {
     parkedSections().find((section) => section.id === "roster-sessions"),
   );
   const cardsById = createMemo(() => new Map(cards().map((card) => [card.id, card])));
+  const sessionAgentFilterId = () => host().rosterSessionAgentFilterId;
+  const sessionAgentFilterName = () => cardsById().get(sessionAgentFilterId() ?? "")?.name;
+  const sessionAgentFilterItems = createMemo<MenuEntry[]>(() => [
+    {
+      id: "all",
+      label: t("agentScope.allAgents"),
+      type: "radio",
+      checked: sessionAgentFilterId() === null,
+    },
+    ...cards().map((card) => ({
+      id: "agent:" + card.id,
+      label: card.name,
+      type: "radio" as const,
+      checked: sessionAgentFilterId() === card.id,
+      icon: <AgentIdentityAvatar agent={card} class="sidebar-roster-session-avatar" />,
+    })),
+  ]);
   const sectionsByAgent = createMemo(() => {
     const indexed = new Map<string, SidebarVisibleSections["sections"]>();
     for (const section of parkedSections()) {
@@ -276,6 +296,43 @@ export function SidebarAgentRoster(props: {
                 host={host()}
                 section={section()}
                 personHeaders={undefined}
+                headerAction={
+                  <Show when={!host().sidebarSnapshot && cards().length > 1}>
+                    <Menu
+                      id="sidebar-roster-session-agent-filter"
+                      label={t("agentsHome.filterSessionsByAgent")}
+                      triggerAttributes={{
+                        title: t("agentsHome.filterSessionsByAgent"),
+                        "aria-description": sessionAgentFilterName(),
+                      }}
+                      class="sidebar-roster-session-filter"
+                      triggerClass={[
+                        "sidebar-session-group-actions sidebar-roster-session-filter__trigger",
+                        {
+                          "sidebar-roster-session-filter__trigger--active":
+                            sessionAgentFilterId() !== null,
+                        },
+                      ]}
+                      trigger={
+                        <>
+                          <span class="sidebar-roster-session-filter__name">
+                            {sessionAgentFilterName()}
+                          </span>
+                          <Icon name="listFilter" />
+                        </>
+                      }
+                      placement="bottom-end"
+                      lazy
+                      items={sessionAgentFilterItems()}
+                      onBeforeShow={() => host().dismissTransientMenus()}
+                      onSelect={(item) =>
+                        host().setRosterSessionAgentFilter(
+                          item.id === "all" ? null : item.id.slice("agent:".length),
+                        )
+                      }
+                    />
+                  </Show>
+                }
                 renderAgentAvatar={(session) => {
                   const id = createMemo(() => host().sessionNavigationAgentId(session()));
                   return (
@@ -289,7 +346,9 @@ export function SidebarAgentRoster(props: {
                 empty={
                   snapshot().membershipReady && !error() ? (
                     <span class="sidebar-session-empty-hint">
-                      {t("presence.card.noRecentSessions")}
+                      {sessionAgentFilterId()
+                        ? t("agentsHome.noSessionsForAgent")
+                        : t("presence.card.noRecentSessions")}
                     </span>
                   ) : undefined
                 }

@@ -199,6 +199,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   captureSidebarSnapshot(): SidebarSnapshotModel | null {
+    // Do not save a narrowed section as the next reload’s unfiltered first paint.
+    if (this.rosterSessionAgentFilterId) {
+      return null;
+    }
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     return captureSidebarSnapshotModel(
       this,
@@ -365,6 +369,31 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       this.sessionProjection.resetMembership(sectionId);
     }
     this.sessionOrganizer.toggleSection(sectionId);
+  }
+
+  private rosterSessionAgentFilter: {
+    context: AppSidebarOwner["context"];
+    agentId: string;
+  } | null = null;
+
+  get rosterSessionAgentFilterId(): string | null {
+    const filter = this.rosterSessionAgentFilter;
+    return filter?.context === this.context &&
+      this.rosterSessionSource?.agentIds.includes(filter.agentId)
+      ? filter.agentId
+      : null;
+  }
+
+  setRosterSessionAgentFilter(agentId: string | null): void {
+    if (agentId !== this.rosterSessionAgentFilterId) {
+      this.rosterSessionAgentFilter = agentId ? { context: this.context, agentId } : null;
+      this.sessionProjection.resetMembership("roster-sessions");
+      if (this.collapsedSessionSections.has("roster-sessions")) {
+        this.sessionOrganizer.toggleSection("roster-sessions");
+      } else {
+        this.invalidate();
+      }
+    }
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {

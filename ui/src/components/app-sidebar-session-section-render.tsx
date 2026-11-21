@@ -27,6 +27,7 @@ export function renderSessionSection(params: {
   section: RenderableSessionSection;
   personHeaders: PersonHeaders | undefined;
   renderAgentAvatar?: (session: () => SidebarRecentSession) => JSX.Element;
+  headerAction?: JSX.Element;
   empty?: JSX.Element;
 }) {
   const host = createMemo(() => params.host),
@@ -338,6 +339,7 @@ export function renderSessionSection(params: {
                   {labelText()}
                 </button>
               )}
+              {params.headerAction}
               {group() || section().id === "ungrouped" ? (
                 <NewSessionLink
                   basePath={host().basePath}
