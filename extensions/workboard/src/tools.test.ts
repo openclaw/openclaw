@@ -547,7 +547,7 @@ describe("workboard tools", () => {
     expect(promoted[0]?.metadata?.claim?.token).toBe("[redacted]");
   });
 
-  it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
+  it("validates board appearance resets and exposes lifecycle tools", async () => {
     const store = createWorkboardSqliteTestStore();
     const tools = toolsByName(
       createWorkboardTools({
@@ -586,14 +586,13 @@ describe("workboard tools", () => {
       "workboard board create tool",
     );
     expect(
-      Value.Check(boardCreate.parameters, {
-        id: "planning",
-        automationJobId: "job-categorize-planning",
-      }),
-    ).toBe(true);
-    expect(Value.Check(boardCreate.parameters, { id: "planning", automationJobId: "" })).toBe(
-      false,
-    );
+      [
+        { id: "planning", automationJobId: "job-categorize-planning" },
+        { id: "planning", clearAppearance: ["icon", "color"] },
+        { id: "planning", automationJobId: "" },
+        { id: "planning", clearAppearance: ["name"] },
+      ].map((input) => Value.Check(boardCreate.parameters, input)),
+    ).toEqual([true, true, false, false]);
 
     const parent = await store.create({
       title: "Rough",
