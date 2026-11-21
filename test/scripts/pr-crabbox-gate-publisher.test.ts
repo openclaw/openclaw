@@ -870,7 +870,7 @@ it("pins proof to protected main and publishes with fresh membership authority",
   expect(fresh).toMatchObject({
     id: "publish-app-token",
     if: "success() && steps.proof.outcome == 'success'",
-    uses: "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+    uses: "actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc",
     "continue-on-error": true,
     with: { "app-id": "2729701", "permission-members": "read" },
   });
