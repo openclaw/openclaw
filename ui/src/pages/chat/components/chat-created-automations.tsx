@@ -64,14 +64,16 @@ function LiveAutomation(props: { jobId: string; name: string }) {
               <strong>{props.name}</strong>
               <small>
                 {t(
-                  state().loading
-                    ? "chat.sessionAutomation.created"
-                    : "chat.sessionAutomation.unavailable",
+                  state().readFailure === "not-found"
+                    ? "chat.sessionAutomation.removed"
+                    : state().loading
+                      ? "chat.sessionAutomation.created"
+                      : "chat.sessionAutomation.unavailable",
                 )}
               </small>
             </div>
             <span class="chat-created-automations__action">
-              <Show when={state().retryable && !state().loading}>
+              <Show when={state().readFailure === "retryable" && !state().loading}>
                 <button
                   type="button"
                   class="chat-created-automations__retry"

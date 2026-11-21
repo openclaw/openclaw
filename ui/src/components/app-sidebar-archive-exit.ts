@@ -28,7 +28,7 @@ export function startSidebarArchiveExit(row: HTMLElement) {
     typeof tree.animate !== "function" ||
     view.matchMedia("(prefers-reduced-motion: reduce)").matches
   ) {
-    return;
+    return undefined;
   }
   const height = tree.getBoundingClientRect().height;
   let snapshot: HTMLElement | undefined;
@@ -65,6 +65,10 @@ function insertSnapshot(tree: HTMLElement, height: number, list: HTMLElement, ne
   snapshot.inert = true;
   snapshot.setAttribute("aria-hidden", "true");
   snapshot.style.overflow = "hidden";
+  // The next mounted row now owns the omitted prefix; keep only its visual offset.
+  snapshot.style.position = "relative";
+  snapshot.style.top = snapshot.style.marginBlockStart;
+  snapshot.style.marginBlockStart = "0";
   list.insertBefore(snapshot, next?.parentNode === list ? next : null);
   const fade = { opacity: 0, translate: "-10px 0", scale: "0.98", filter: "blur(1.5px)" };
   const shown = { opacity: 1, translate: "0 0", scale: "1", filter: "blur(0)" };

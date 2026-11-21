@@ -1,12 +1,13 @@
 import { createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { visibleSessionChildren, type SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SidebarScrollContext } from "./sidebar-context-controller.ts";
 
 type WindowItem = { row: SidebarRecentSession; index: number; top: number; height: number };
-type GeometrySignature = [boolean] | [boolean, GeometrySignature[], boolean, string[]];
+type GeometrySignature = [boolean] | [boolean, GeometrySignature[], string[]];
 
 /** Bounded sidebar pages need only a prefix-height pass. The transcript's
  * general virtualizer stays out of the eager sidebar/New Session graph. */
@@ -41,7 +42,6 @@ export function createSidebarSessionWindow(
       session: row,
       fullyShown: host().isSessionChildrenFullyShown(row.key),
     }).map(describe);
-    const loading = row.loadingChildren && children.length === 0;
     const errors = (row.childLoadParentKeys ?? [row.key]).map(
       (key) => host().sessionData.childSessionErrorsByParent.get(key) ?? "",
     );
@@ -49,9 +49,8 @@ export function createSidebarSessionWindow(
       height:
         ownHeight +
         children.reduce((height, child) => height + child.height, 0) +
-        (children.length < row.children.length ? 28 : 0) +
-        (loading ? 32 : 0),
-      signature: [preview, children.map((child) => child.signature), loading, errors],
+        (children.length < row.children.length ? 28 : 0),
+      signature: [preview, children.map((child) => child.signature), errors],
     };
   };
   const inputs = createMemo(() => {
@@ -78,6 +77,24 @@ export function createSidebarSessionWindow(
       rowRef: (_key: () => string) => (_element: HTMLDivElement) => {},
     };
   }
+  // A keyed move keeps the control but the browser can blur it during insertion.
+  createPendingFocus(
+    () => {
+      rows();
+      const active = list?.ownerDocument.activeElement;
+      return active instanceof HTMLElement && list.contains(active) ? { active } : null;
+    },
+    {
+      requested: (request) =>
+        Boolean(
+          request &&
+          request.active.isConnected &&
+          list.contains(request.active) &&
+          request.active.ownerDocument.activeElement === request.active.ownerDocument.body,
+        ),
+      focus: (request) => request?.active.focus({ preventScroll: true }),
+    },
+  );
   const measured = new Map<string, { signature: string; height: number }>();
   const mounted = new Map<string, HTMLDivElement>();
   const [mountRevision, setMountRevision] = createSignal(0);
@@ -291,7 +308,9 @@ export function createSidebarSessionWindow(
     let gap = 0;
     for (const input of inputs()) {
       if (visible.has(input.row.key)) {
-        if (gap) before.set(input.row.key, gap);
+        if (gap) {
+          before.set(input.row.key, gap);
+        }
         gap = 0;
       } else {
         const known = measured.get(input.row.key);

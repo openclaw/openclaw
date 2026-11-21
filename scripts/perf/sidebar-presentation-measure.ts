@@ -1,5 +1,13 @@
 /**
- * Warm sessions.list owner benchmark, with real persisted synthetic rows and
+ * --surge runs a rate-paced synthetic session event mix at 470 logical events/s,
+ * with eight live child sessions, their parents, and list subscribers polling at 10 Hz.
+ * Use --sessions 15000 --page-size 100 --clients 6 --operations 4700.
+ * --surge-detail instruments present/child/select/freeze/share using the churn probe;
+ * run separately from uninstrumented timing and allocation. This uses real prepared
+ * event and list owners and loopback WebSockets, without a Gateway process or model.
+ * The mix is explicit and synthetic: aggregate production stacks do not supply ratios.
+ *
+ * Default: warm sessions.list owner benchmark with persisted synthetic rows and
  * recipient policy. No socket, model, or end-to-end Gateway latency claim.
  * Optional projection backfill remains enabled throughout, including warmup.
  *
@@ -34,6 +42,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -45,6 +54,8 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
 import { transformSync } from "esbuild";
+import WebSocket, { WebSocketServer } from "ws";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -53,6 +64,7 @@ import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-be
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { sessionRowChurnProbe } from "./session-row-churn-probe.ts";
 
 const { values } = parseArgs({
   options: {
@@ -68,6 +80,8 @@ const { values } = parseArgs({
     "page-size": { type: "string", default: "100" },
     "row-mode": { type: "string", default: "sidebar" },
     "sandbox-required": { type: "boolean", default: false },
+    surge: { type: "boolean", default: false },
+    "surge-detail": { type: "boolean", default: false },
     churn: { type: "boolean", default: false },
     clients: { type: "string", default: "10" },
     "background-processes": { type: "string", default: "0" },
@@ -130,20 +144,80 @@ for (const file of values["source-file"] ?? []) {
   sources.set(path.basename(file), readFileSync(path.resolve(file), "utf8"));
 }
 const replaced = new Set<string>();
-if (sources.size) {
+if (sources.size || values["surge-detail"]) {
   registerHooks({
     load(url, context, next) {
       const loaded = next(url, context);
-      for (const [name, source] of sources) {
-        if (url.endsWith(`/src/gateway/${name}`) || url.endsWith(`/src/agents/${name}`)) {
-          replaced.add(name);
-          return {
+      const name = path.basename(url);
+      const override =
+        url.includes("/src/gateway/") || url.includes("/src/agents/") || url.includes("/src/infra/")
+          ? sources.get(name)
+          : undefined;
+      if (override) {
+        replaced.add(name);
+      }
+      let source = override;
+      const instrument =
+        values["surge-detail"] &&
+        url.includes("/src/gateway/") &&
+        [
+          "session-row-presentation.ts",
+          "session-row-identity.ts",
+          "session-utils-list.ts",
+          "session-row-child-activity.ts",
+        ].includes(name);
+      if (instrument) {
+        source ??= readFileSync(new URL(url), "utf8");
+        const replace = (before: string, after: string) => {
+          assert(source!.includes(before), `Missing instrumentation anchor in ${name}`);
+          source = source!.replace(before, after);
+        };
+        source =
+          'import { r2Task, sessionRowChurnProbe } from "../../scripts/perf/session-row-churn-probe.js";\n' +
+          source;
+        if (name === "session-row-identity.ts") {
+          replace("export function freezeSessionRow(", "function measuredFreezeSessionRow(");
+          source +=
+            '\nexport const freezeSessionRow = (...args: Parameters<typeof measuredFreezeSessionRow>) => r2Task("freeze", () => measuredFreezeSessionRow(...args));\n';
+        } else if (name === "session-utils-list.ts") {
+          replace("const selectPage = () => {", "const measuredSelectPage = () => {");
+          replace(
+            "    let page: ReturnType<typeof selectPage>;",
+            '    const selectPage = () => r2Task("select", measuredSelectPage);\n    let page: ReturnType<typeof selectPage>;',
+          );
+        } else if (name === "session-row-child-activity.ts") {
+          replace(
+            '  ): Omit<Contribution, "link"> {',
+            '  ): Omit<Contribution, "link"> {\n    sessionRowChurnProbe.count("childContributions");',
+          );
+        } else {
+          replace("  const present = (", "  const measuredPresent = (");
+          replace(
+            "    const childActivity = projection.readChildActivity(",
+            '    const childActivity = r2Task("child", () => projection.readChildActivity(',
+          );
+          replace(
+            "      options.excludedChildKeys ? {} : visibility?.revision,\n    );",
+            "      options.excludedChildKeys ? {} : visibility?.revision,\n    ));",
+          );
+          replace(
+            "  return {\n    rowContext: preparedRowContext,",
+            '  const present = (...args: Parameters<typeof measuredPresent>) => r2Task("present", () => measuredPresent(...args));\n  return {\n    rowContext: preparedRowContext,',
+          );
+          replace(
+            "export function shareSidebarSessionRows(",
+            "function measuredShareSidebarSessionRows(",
+          );
+          source +=
+            '\nexport const shareSidebarSessionRows = (...args: Parameters<typeof measuredShareSidebarSessionRows>) => r2Task("share", () => measuredShareSidebarSessionRows(...args));\n';
+        }
+      }
+      return source === undefined
+        ? loaded
+        : {
             ...loaded,
             source: transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
           };
-        }
-      }
-      return loaded;
     },
   });
 }
@@ -195,6 +269,10 @@ const [
   { createEmptyPluginRegistry },
   { setActivePluginRegistry },
   { addSession, createProcessSession, deleteSession },
+  { registerAgentRunContext, recordAgentRunModel, clearAgentRunContext, getAgentRunContext },
+  { sessionChanges },
+  { withPreparedEventRow },
+  { prepareSessionRowPublication },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
@@ -210,6 +288,10 @@ const [
   import("../../src/plugins/registry-empty.js"),
   import("../../src/plugins/runtime.js"),
   import("../../src/agents/bash-process-registry.js"),
+  import("../../src/infra/agent-run-registry.js"),
+  import("../../src/sessions/session-row-changes.js"),
+  import("../../src/gateway/session-event-prepared-row.js"),
+  import("../../src/gateway/session-row-presentation.js"),
 ]);
 assert.equal(replaced.size, sources.size, "source substitution did not run");
 setActivePluginRegistry(createEmptyPluginRegistry());
@@ -245,6 +327,59 @@ const recipients: GatewayClient[] = Array.from({ length: clients }, (_, index) =
   prepareGatewayRecipientProfile(recipient);
   return recipient;
 });
+const sockets: WebSocket[] = [];
+const receivers: WebSocket[] = [];
+const receivedSequences: number[] = [];
+let eventDigests = Array.from({ length: clients }, () => createHash("sha256"));
+const server = values.surge ? new WebSocketServer({ host: "127.0.0.1", port: 0 }) : undefined;
+if (server) {
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address === "object");
+  for (let index = 0; index < clients; index++) {
+    const accepted = once(server, "connection");
+    const receiver = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    receivedSequences[index] = -1;
+    receiver.on("message", (bytes) => {
+      const frame = JSON.parse(rawDataToString(bytes));
+      if (frame.type === "event") {
+        assert.equal(frame.payload.sequence, receivedSequences[index]! + 1, "event FIFO");
+        receivedSequences[index] = frame.payload.sequence;
+        let normalized = JSON.stringify(frame, (key, value) =>
+          key === "snapshotAt" ? 1_800_000_000_000 : value,
+        );
+        for (const [slot, profile] of profiles.entries()) {
+          normalized = normalized.replaceAll(
+            `/api/users/${profile.id}/avatar?v=${profile.updatedAt}`,
+            `/api/users/${profile.id}/avatar?v=1800000000000`,
+          );
+          normalized = normalized.replaceAll(profile.id, `synthetic-profile-${slot}`);
+        }
+        eventDigests[index]!.update(normalized);
+      }
+    });
+    await once(receiver, "open");
+    const [socket] = await accepted;
+    sockets.push(socket);
+    receivers.push(receiver);
+  }
+}
+const actualNow = Date.now;
+let longestSyncMs = 0;
+let longestSyncCpuMs = 0;
+let cpuAtLongestSyncMs: number;
+function recordSyncSlice(at: number, cpu: NodeJS.CpuUsage) {
+  const elapsed = performance.now() - at;
+  const used = process.threadCpuUsage(cpu);
+  const cpuMs = (used.user + used.system) / 1000;
+  longestSyncCpuMs = Math.max(longestSyncCpuMs, cpuMs);
+  if (elapsed > longestSyncMs) {
+    longestSyncMs = elapsed;
+    cpuAtLongestSyncMs = cpuMs;
+  }
+}
+let listCalls = 0;
+let unchangedReplies = 0;
 let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
 const inspector = new Session();
 let connected = false;
@@ -294,7 +429,17 @@ try {
       for (let index = 0; index < sessions; index++) {
         writeSessionEntry(database, keyFor(index), {
           sessionId: `sidebar-${index}`,
-          updatedAt: 1_800_000_000_000 + index,
+          updatedAt:
+            1_800_000_000_000 + (values.surge && index % 150 === 0 ? sessions + index : index),
+          ...(values.surge && index % 150 !== 0
+            ? {
+                parentSessionKey: keyFor(index - (index % 150)),
+                spawnedBy: keyFor(index - (index % 150)),
+                spawnDepth: 1,
+                status: "done" as const,
+                archivedAt: 1_800_000_000_000,
+              }
+            : {}),
           label: `Synthetic sidebar row ${index}`,
           visibility: "shared",
           createdActor: {
@@ -317,6 +462,24 @@ try {
     elapsedMs: performance.now() - coldStart,
     cpuMs: (coldUsedCpu.user + coldUsedCpu.system) / 1000,
   };
+  if (values.surge) {
+    const prepared = projection.withPreparedExactRows.bind(projection);
+    const measure = <T>(run: () => T): T => {
+      const at = performance.now();
+      const cpu = process.threadCpuUsage();
+      try {
+        return run();
+      } finally {
+        recordSyncSlice(at, cpu);
+      }
+    };
+    projection.withPreparedExactRows = (queries, consume, options) =>
+      prepared(
+        (config) => measure(() => queries(config)),
+        (read) => measure(() => consume(read)),
+        options,
+      );
+  }
   const revisions: (string | undefined)[] = Array.from({ length: clients });
   const opts: SessionsListParams = {
     rowMode,
@@ -324,6 +487,25 @@ try {
     limit: pageSize,
     archived: "all" as const,
   };
+  const hotKeys = Array.from({ length: 8 }, (_, index) => keyFor(index * 150 + 1));
+  if (values.surge) {
+    assert(sessions >= 1200 && pageSize >= sessions / 150);
+    for (const [index, key] of hotKeys.entries()) {
+      registerAgentRunContext(`surge-${index}`, {
+        sessionKey: key,
+        agentId: "main",
+        sessionId: `sidebar-${index * 150 + 1}`,
+        projectSessionActive: true,
+        registeredAt: 1_800_000_000_000,
+      });
+    }
+  }
+  if (values.surge) {
+    await projection.withPreparedExactRows(
+      () => hotKeys.map((key) => ({ key, agentId: "main" })),
+      () => {},
+    );
+  }
   async function list(index: number, conditional = true) {
     const slot = index % clients;
     const result = await listProjectedSessions({
@@ -337,8 +519,13 @@ try {
     if (result.rowsRevision !== undefined) {
       revisions[slot] = result.rowsRevision;
     }
-    // Exercise the real response encoder without a socket or a retained response backlog.
-    serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result });
+    // The surge also delivers encoded responses over loopback WebSockets.
+    const frame = serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result });
+    sockets[slot]?.send(frame.toString());
+    listCalls++;
+    if (result.rowsUnchanged) {
+      unchangedReplies++;
+    }
     return result;
   }
   for (let index = 0; index < warmCalls; index++) {
@@ -346,9 +533,13 @@ try {
   }
   // Only selected rows are materialized. Let their optional empty-transcript
   // backfill acknowledge null before recording the stable warm response.
-  const pendingBackfill = new Set(
-    Array.from({ length: pageSize }, (_, index) => keyFor(sessions - 1 - index)),
-  );
+  const selectedPage = await list(0, false);
+  const pendingBackfill = new Set(selectedPage.sessions.map((row) => row.key));
+  if (values.surge) {
+    for (const key of hotKeys) {
+      pendingBackfill.add(key);
+    }
+  }
   const backfillDeadline = Date.now() + 120_000;
   while (pendingBackfill.size) {
     // Keep admitting the live page while optional transcript facts settle.
@@ -393,11 +584,13 @@ try {
       rows.reduce((count, row) => count + (row.backgroundProcessCount ?? 0), 0),
       backgroundProcesses,
     );
-    assert.equal(rows[0]?.key, keyFor(sessions - 1));
-    assert.equal(
-      rows[0]?.sharingRole,
-      index % profiles.length === (sessions - 1) % profiles.length ? "owner" : "viewer",
-    );
+    if (!values.surge) {
+      assert.equal(rows[0]?.key, keyFor(sessions - 1));
+      assert.equal(
+        rows[0]?.sharingRole,
+        index % profiles.length === (sessions - 1) % profiles.length ? "owner" : "viewer",
+      );
+    }
     golden.push(createHash("sha256").update(JSON.stringify(rows)).digest("hex"));
     packedGolden.push(packedDigest(result));
   }
@@ -451,8 +644,91 @@ try {
     const latencies: number[] = [];
     marker("heap-start", profilePath);
     loop.reset();
+    sessionRowChurnProbe.begin("surge", true);
+    longestSyncMs = 0;
+    longestSyncCpuMs = 0;
+    cpuAtLongestSyncMs = 0;
+    listCalls = 0;
+    unchangedReplies = 0;
+    receivedSequences.fill(-1);
+    eventDigests = Array.from({ length: clients }, () => createHash("sha256"));
+    let fixtureNow = 1_800_000_000_000 + Math.floor(((repeat - 1) * operations * 1000) / 470);
+    if (values.surge) {
+      Date.now = () => fixtureNow;
+    }
+    let eventFrames = 0;
+    const eventKinds = { delta: 0, activity: 0, model: 0, child: 0 };
     start = performance.now();
     for (let index = 0; index < operations; index++) {
+      if (values.surge) {
+        // Synthetic mix: 60% chat deltas, 20% activity, 10% model, 10% child run updates.
+        // Eight live children plus their parents exercise sixteen active sessions.
+        fixtureNow =
+          1_800_000_000_000 + Math.floor((((repeat - 1) * operations + index) * 1000) / 470);
+        const mutationAt = performance.now();
+        const mutationCpu = process.threadCpuUsage();
+        const slot = index % hotKeys.length;
+        const key = hotKeys[slot]!;
+        const kind = index % 10;
+        if (kind < 6) {
+          eventKinds.delta++;
+        } else if (kind < 8) {
+          eventKinds.activity++;
+          sessionChanges.emit({ sessionKey: key, agentId: "main", scope: "automation" });
+        } else if (kind === 8) {
+          eventKinds.model++;
+          recordAgentRunModel(`surge-${slot}`, {
+            provider: "fixture",
+            model: `model-${Math.floor(index / 40) % 2}`,
+          });
+        } else {
+          eventKinds.child++;
+          registerAgentRunContext(`surge-${slot}`, {
+            sessionKey: key,
+            sessionId: `sidebar-${slot * 150 + 1}`,
+            agentId: "main",
+            projectSessionActive: !getAgentRunContext(`surge-${slot}`)?.projectSessionActive,
+          });
+        }
+        recordSyncSlice(mutationAt, mutationCpu);
+        await withPreparedEventRow(projection, { key, agentId: "main" }, (read, ancestors) => {
+          assert(read);
+          const publication = prepareSessionRowPublication(projection!, Date.now(), read);
+          for (const [recipientIndex, client] of recipients.entries()) {
+            const presentation = publication(client).getPresentation();
+            const row = presentation.snapshot({ key, agentId: "main" }).row;
+            const parents = ancestors?.map((record) => presentation.present(record));
+            sockets[recipientIndex]!.send(
+              serializeGatewayFrame({
+                type: "event",
+                event: kind < 6 ? "session.message" : "sessions.changed",
+                payload: {
+                  session: row,
+                  ancestorSessions: parents,
+                  sequence: index,
+                  ...(kind < 6
+                    ? { message: { role: "assistant", content: `Synthetic delta ${index}` } }
+                    : {}),
+                },
+              }).toString(),
+            );
+            eventFrames++;
+          }
+        });
+        // Subscribers request the current page every 100 ms; events are not reordered.
+        if (index % 47 === 0) {
+          for (let client = 0; client < clients; client++) {
+            await list(client);
+          }
+        }
+        const due = start + ((index + 1) * 1000) / 470;
+        if (due > performance.now()) {
+          await delay(due - performance.now());
+        } else {
+          await nextTurn();
+        }
+        continue;
+      }
       if (values.churn) {
         replaceSessionEntrySync(
           { agentId: "main", sessionKey: keyFor(sessions - 1) },
@@ -481,6 +757,33 @@ try {
       await nextTurn();
     }
     end = performance.now();
+    const surgeBreakdown = Object.fromEntries(
+      Object.entries(sessionRowChurnProbe.snapshot().tasks).map(([name, task]) => [
+        name,
+        {
+          calls: task.calls,
+          mainThreadMsPer1kEvents: (task.cpuMs * 1000) / operations,
+          longestSyncCpuMs: task.maxCpuMs,
+          longestSyncMs: task.durations.reduce(
+            (longest, duration) => Math.max(longest, duration),
+            0,
+          ),
+          exclusiveMs: task.exclusiveMs,
+        },
+      ]),
+    );
+    const measuredLongestSyncMs = longestSyncMs;
+    const measuredLongestSyncCpuMs = longestSyncCpuMs;
+    const measuredCpuAtLongestSyncMs = cpuAtLongestSyncMs;
+    const measuredListCalls = listCalls;
+    const measuredUnchangedReplies = unchangedReplies;
+    if (values.surge) {
+      const deadline = performance.now() + 5000;
+      while (receivedSequences.some((sequence) => sequence !== operations - 1)) {
+        assert(performance.now() < deadline, "WebSocket event delivery did not drain");
+        await delay(1);
+      }
+    }
     marker("heap-stop", profilePath);
     const usedCpu = process.cpuUsage(cpu);
     const usedThread = process.threadCpuUsage(threadCpu);
@@ -554,10 +857,10 @@ try {
       const digest = createHash("sha256")
         .update(JSON.stringify(expandSessionRowFacts(result.sessions, result.sharedFacts)))
         .digest("hex");
-      if (!values.churn) {
+      if (!values.churn && !values.surge) {
         assert.equal(digest, golden[index], "warm recipient facts changed without a publication");
       }
-      if (values.churn) {
+      if (values.churn || values.surge) {
         // Replacing the row changes snapshotAt and can regroup shared facts even after
         // its label is restored. Compare these exact normalized bytes across revisions.
         churnPackedGolden.push(packedDigest(result));
@@ -577,8 +880,9 @@ try {
       ? readGatewayGcTrace(path.resolve(values["gc-log"]), profilePath)
       : undefined;
     const result = {
-      scope:
-        "Real sessions.list owner over persisted synthetic rows; in-process recipients, no sockets or model calls",
+      scope: values.surge
+        ? "Real prepared event/list owners over persisted synthetic rows and loopback WebSockets; no Gateway process or model calls"
+        : "Real sessions.list owner over persisted synthetic rows; in-process recipients, no sockets or model calls",
       mode: values.allocations
         ? "sampled-allocation"
         : traced
@@ -588,6 +892,7 @@ try {
       sourceHash: createHash("sha256").update(ownerSource).digest("hex"),
       sourceHashes: Object.fromEntries(
         [
+          "session-row-child-activity.ts",
           "session-row-presentation.ts",
           "session-list-view-cache.ts",
           "session-utils-list.ts",
@@ -597,6 +902,7 @@ try {
           "session-utils-row.ts",
           "session-row-projection-record.ts",
           "bash-process-observation.ts",
+          "agent-run-registry-state.ts",
         ].map((name) => [
           name,
           createHash("sha256")
@@ -604,7 +910,11 @@ try {
               sources.get(name) ??
                 readFileSync(
                   path.resolve(
-                    name === "bash-process-observation.ts" ? "src/agents" : "src/gateway",
+                    name === "bash-process-observation.ts"
+                      ? "src/agents"
+                      : name === "agent-run-registry-state.ts"
+                        ? "src/infra"
+                        : "src/gateway",
                     name,
                   ),
                   "utf8",
@@ -613,6 +923,19 @@ try {
             .digest("hex"),
         ]),
       ),
+      surge: values.surge
+        ? {
+            eventKinds,
+            eventFrames,
+            targetEventsPerSecond: 470,
+            longestSyncMs: measuredLongestSyncMs,
+            longestSyncCpuMs: measuredLongestSyncCpuMs,
+            cpuAtLongestSyncMs: measuredCpuAtLongestSyncMs,
+            receivedSequences: [...receivedSequences],
+            eventDigests: eventDigests.map((digest) => digest.digest("hex")),
+            breakdown: surgeBreakdown,
+          }
+        : undefined,
       sessions,
       clients,
       identities: profiles.length,
@@ -628,9 +951,9 @@ try {
       repeats,
       churn: values.churn,
       counts: {
-        calls: operations,
-        selectedRows: operations * pageSize,
-        unchangedReplies: values.churn ? undefined : operations,
+        calls: measuredListCalls,
+        selectedRows: measuredListCalls * pageSize,
+        unchangedReplies: measuredUnchangedReplies,
       },
       goldenScope:
         "within-run stability only; includes generated profile IDs and presentation timestamps",
@@ -673,6 +996,24 @@ try {
     }
   }
 } finally {
+  Date.now = actualNow;
+  for (let index = 0; index < 8; index++) {
+    clearAgentRunContext(`surge-${index}`);
+  }
+  for (const socket of [...sockets, ...receivers]) {
+    socket.terminate();
+  }
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
   observer.disconnect();
   loop.disable();
   if (connected) {

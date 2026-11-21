@@ -19,7 +19,7 @@ import {
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
-import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
+import { TemplatePluginIcon, TemplatePluginName } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/sidebar-markdown.css";
 import "../../styles/templates-catalog.css";
@@ -192,7 +192,7 @@ function TemplatePersonality(props: {
 }
 
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
-  const contents = () => props.view.readDetail()!.contents;
+  const contents = createMemo(() => props.view.readDetail()!.contents);
   const automationSummary = createTemplateAutomationSummary();
   // SOUL.md reads as the Template's personality; the page lists no other workspace files.
   const soul = createMemo(() =>
@@ -234,21 +234,30 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.integrations"),
         contents().integrations.map((item) => ({
           name:
-            item.kind === "plugin"
-              ? (props.view.pluginPresentation?.[item.name]?.name ?? item.name)
-              : item.name,
+            item.kind === "plugin" ? (
+              <TemplatePluginName
+                name={item.source === "clawhub" ? item.ref : item.name}
+                presentation={props.view.readPluginPresentation(item)}
+              />
+            ) : (
+              item.name
+            ),
           icon:
             item.kind === "plugin"
-              ? () => <TemplatePluginIcon plugin={props.view.pluginPresentation?.[item.name]} />
+              ? () => (
+                  <TemplatePluginIcon
+                    plugin={props.view.readPluginPresentation(item) ?? undefined}
+                  />
+                )
               : undefined,
           description: item.kind === "plugin" ? undefined : t("tabs.mcp"),
           trailing:
-            item.kind === "plugin" &&
-            item.source === "clawhub" &&
-            props.view.installedPluginPackages.has(`${item.ref}@${item.version}`) ? (
-              <span class="plugin-connection-status" role="status">
-                <Icon name="check" /> {t("templatesCatalog.installed")}
-              </span>
+            item.kind === "plugin" ? (
+              <Show when={props.view.readPluginPresentation(item)?.installed}>
+                <span class="plugin-connection-status" role="status">
+                  <Icon name="check" /> {t("templatesCatalog.installed")}
+                </span>
+              </Show>
             ) : undefined,
           details: (
             <p>
@@ -318,7 +327,12 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 backHref={pathForRoute("templates", view().basePath)}
                 backLabel={t("tabs.templates")}
                 onBack={view().onBack}
-                icon={<TemplateArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
+                icon={
+                  <TemplateArtwork
+                    src={detail() ? detail()?.iconUrl : selected().iconUrl}
+                    packageName={selected().packageName}
+                  />
+                }
                 rail
                 identity={renderPublisherIdentity({
                   // The handle names the publisher; a display name only when it says more.
