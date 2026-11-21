@@ -109,14 +109,12 @@ export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | unde
   return undefined;
 }
 
-export type CompactionContextUsageFact = {
+type CompactionContextUsageFact = {
   barrier: boolean;
   usageTokens?: number;
 };
 
-export function collectCompactionContextUsageFact(
-  message: AgentMessage,
-): CompactionContextUsageFact {
+function collectCompactionContextUsageFact(message: AgentMessage): CompactionContextUsageFact {
   const usage = getAssistantUsage(message);
   return {
     barrier: isUnavailableContextBarrier(message),
@@ -146,7 +144,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 }
 
 /** Readers supply collected scalar facts; array callers estimate only the required tail. */
-export function estimateContextTokensFromFacts(facts: {
+function estimateContextTokensFromFacts(facts: {
   length: number;
   usageAt: (index: number) => CompactionContextUsageFact | undefined;
   estimateAt: (index: number) => number;
@@ -242,7 +240,7 @@ export function prepareCompactionEntries(
   return ok(preparation);
 }
 
-export type CompactionPreparationMessageFact = {
+type CompactionPreparationMessageFact = {
   sourceIndex: number;
   role: AgentMessage["role"];
   tokens: number;

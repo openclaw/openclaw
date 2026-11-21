@@ -332,7 +332,9 @@ describe("session transcript runtime read fence", () => {
       AgentId: scope.agentId,
       SessionKey: scope.sessionKey,
       Timestamp: 3_000,
-      SessionTranscriptContext: { historyLimit: 10 },
+      // A session-generated chat window still reads the running session's own
+      // transcript; flat history skips it because the session replays it.
+      SessionTranscriptContext: { chatWindow: true, historyLimit: 10 },
     };
     let dispatched = false;
     await runPreparedChannelTurn({
@@ -343,7 +345,13 @@ describe("session transcript runtime read fence", () => {
       recordInboundSession: async () => undefined,
       runDispatch: async () => {
         dispatched = true;
-        expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual(["prompt", "prior"]);
+        expect(ctx.ChannelStructuredContext).toMatchObject([
+          {
+            source: "session",
+            type: "chat_window",
+            payload: { messages: [{ body: "prompt" }, { body: "prior" }] },
+          },
+        ]);
         return { queuedFinal: false };
       },
     });

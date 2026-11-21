@@ -1,44 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { resolveChannelConfigActivationFacts } from "./channel-config-activation.js";
+import { configPathAffectsReader, projectConfigReadDependencies } from "./read-dependencies.js";
 import { serializeConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-function projectionConfig({
-  meta: _meta,
-  wizard: _wizard,
-  logging: _logging,
-  diagnostics: _diagnostics,
-  update: _update,
-  telemetry: _telemetry,
-  plugins: _plugins,
-  channels,
-  ui,
-  gateway,
-  talk,
-  ...config
-}: OpenClawConfig) {
-  const { prefs: _prefs, ...uiConfig } = ui ?? {};
-  const { auth, ...gatewayConfig } = gateway ?? {};
-  const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
-  const { realtime, ...talkConfig } = talk ?? {};
-  const { model: _realtimeModel, ...realtimeConfig } = realtime ?? {};
-  // Plugin-derived rows follow completed catalog publications, not config reloads.
-  // Channel transport settings do not affect resident rows. Keep their catalog
-  // inputs, including activation that can admit bundled plugin capabilities.
-  return {
-    ...config,
-    channels: {
-      activation: resolveChannelConfigActivationFacts({ channels }),
-      models: collectConfiguredModelRefs({ channels }),
-    },
-    ui: uiConfig,
-    gateway: { ...gatewayConfig, auth: authConfig },
-    talk: { ...talkConfig, realtime: realtimeConfig },
-  };
-}
-
-function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
+function withoutAgentIdentities(config: ReturnType<typeof projectConfigReadDependencies>) {
   const agents = config.agents;
   const withoutIdentity = <T extends { identity?: unknown }>({
     identity: _identity,
@@ -67,14 +32,14 @@ export function runtimeSessionChangeScope(
     !previous ||
     previous === next ||
     !isDeepStrictEqual(
-      serializeConfigResolutionFacts(previous),
-      serializeConfigResolutionFacts(next),
+      serializeConfigResolutionFacts(previous, (path) => configPathAffectsReader(path, "sessions")),
+      serializeConfigResolutionFacts(next, (path) => configPathAffectsReader(path, "sessions")),
     )
   ) {
     return "config";
   }
-  const before = projectionConfig(previous);
-  const after = projectionConfig(next);
+  const before = projectConfigReadDependencies(previous, "sessions");
+  const after = projectConfigReadDependencies(next, "sessions");
   if (isDeepStrictEqual(before, after)) {
     return "config-presentation";
   }

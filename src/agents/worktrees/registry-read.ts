@@ -271,7 +271,7 @@ export async function readRegistryWorktrees(
   context: OpenClawStateWorkerContext = captureWorktreeRunEndContext(env),
 ): Promise<ManagedWorktreeRecord[]> {
   return (
-    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: options }))
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: { ...options } }))
       ?.value ?? []
   );
 }
@@ -315,7 +315,7 @@ export async function getRegistryWorktreeProvisionedChunk(
   return (
     await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
       type: "worktrees.provisionedChunk",
-      input: params,
+      input: { ...params },
     })
   )?.value;
 }

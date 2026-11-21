@@ -4,6 +4,7 @@ import { assert, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { estimateTokens } from "./compaction.js";
+import { renderConversationEntriesWithinBudget } from "./conversation-serialization.js";
 import {
   assistant,
   custom,
@@ -17,17 +18,14 @@ import {
   collectConversationRangeDescriptors,
   collectFileOperationMessageFact,
   computeFileLists,
-  createConversationEntryCollector,
   createFileOps,
   extractFileOpsFromMessages,
   extractFileOpsFromFacts,
   formatFileOperations,
   mergeSummaryFileOperations,
-  renderConversationEntriesWithinBudget,
   serializeConversation,
   serializeConversationEntry,
   serializeConversationWithinBudget,
-  type ConversationEntryDescriptor,
 } from "./utils.js";
 
 function serializationFixture(): Message[] {
@@ -86,12 +84,9 @@ it("rebases arbitrary source ranges without another payload collection pass", ()
 
 it("renders row descriptors lazily with exact pre-refactor text, gaps and trim counts", () => {
   const messages = serializationFixture();
-  const collect = createConversationEntryCollector();
-  const descriptors: ConversationEntryDescriptor[] = [];
-  for (const [source, message] of messages.entries()) {
-    // Keep only facts: a worker discards this row and every transient text variant.
-    descriptors.push(...collect(message, source).map(({ descriptor }) => descriptor));
-  }
+  const descriptors = collectConversationRangeDescriptors(
+    messages.map((message, source) => collectConversationMessageFact(message, source)),
+  );
   expect(descriptors).toHaveLength(165);
   expect(
     descriptors.filter(({ source }) => source === 1).map(({ partIndex }) => partIndex),

@@ -57,6 +57,11 @@ else
   export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
   export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # The local mock needs a key without enabling public provider discovery.
+  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
+  export OPENCLAW_UPGRADE_SURVIVOR_API_KEY="sk-openclaw-upgrade-survivor"
+fi
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
@@ -1036,7 +1041,7 @@ initialize_state() {
   else
     openclaw_test_state_create "$STATE_HOME_ROOT" minimal
   fi
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$SCENARIO" = "git-release" ]; then
     account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
     if [ -z "$account_home" ]; then
       echo "Could not resolve the current account home" >&2
@@ -1203,9 +1208,13 @@ for (const { durationMs, diagnostics, ...step } of cleanups) {
   assert.deepEqual(step, {
     name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
   }, "second update recovery cleanup did not finish cleanly");
-  assert(Array.isArray(diagnostics) && diagnostics.length === 1 &&
-    typeof diagnostics[0] === "string" &&
-    /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]),
+  // The summary comes first; one line per removed or kept item may follow.
+  // Earlier releases reported one fixed sentence.
+  assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
+    diagnostics.every((line) => typeof line === "string") &&
+    (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
+      (diagnostics.length === 1 &&
+        /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
     "second update omitted its verified recovery cleanup outcome");
 }
 // Advisory guidance is product prose that releases reword; require one, not its text.
@@ -1417,12 +1426,15 @@ write_update_restart_service_env() {
   local dotenv_path="$OPENCLAW_STATE_DIR/.env"
   local tmp_path="$dotenv_path.tmp.$$"
   if [ -f "$dotenv_path" ]; then
-    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)=' "$dotenv_path" >"$tmp_path" || true
+    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL|OPENCLAW_UPGRADE_SURVIVOR_API_KEY)=' "$dotenv_path" >"$tmp_path" || true
   else
     : >"$tmp_path"
   fi
   # Managed restarts resolve auth and fixture routing from service-owned durable env.
   printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    printf 'OPENCLAW_UPGRADE_SURVIVOR_API_KEY=%s\n' "$OPENCLAW_UPGRADE_SURVIVOR_API_KEY" >>"$tmp_path"
+  fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     printf 'OPENCLAW_CLAWHUB_URL=%s\n' "$OPENCLAW_CLAWHUB_URL" >>"$tmp_path"
   fi
@@ -2475,6 +2487,12 @@ phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
+if [ "$SCENARIO" = "git-release" ]; then
+  source scripts/e2e/lib/upgrade-survivor/git-release.sh
+  run_git_release_survivor
+  run_completed="1"
+  exit 0
+fi
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "session-share" ]; then

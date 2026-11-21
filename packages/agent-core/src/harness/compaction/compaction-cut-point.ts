@@ -29,7 +29,7 @@ export function getMessageFromEntryForCompaction(
 export const IMAGE_BLOCK_TOKENS = 2_000;
 const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
-export function countCompactionContentChars(
+function countCompactionContentChars(
   content: string | Array<{ type: string; content?: unknown; text?: string }>,
 ): number {
   const { text, omissionText } = getCompactionContent(content);

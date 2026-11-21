@@ -23,12 +23,16 @@ after any device safe-area inset, including in landscape. Swipes farther inside
 the content stay with that content, such as a 3D viewer’s orbit controls.
 A deliberate edge swipe opens the full drawer while your finger is still down,
 rather than holding a partly clipped sidebar over the conversation. Short drags
-and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+and vertical scrolling leave navigation closed. In the mobile browser, opening
+**Automations**, **Customize**, **Systems**, or **Workboard** from the rail or
+**Pages** keeps the drawer open so you can use that section's list. Tap outside
+the drawer to close it and see the page underneath.
 
 To work directly in a folder on a paired device, select that specific device,
-then choose **Existing folder on** _device_ in the workspace picker. Admins
-pick a folder from that device's folder browser; other operators enter an
-absolute path on that device. The option appears only when the
+then choose **Existing folder on** _device_ in the workspace picker. Browse to
+the folder, or enter its absolute path if browsing is unavailable, then select
+**Use this folder**. The picker shows the folder name; reopen it to change the
+folder. Only admins can browse device folders. The option appears only when the
 connected session host advertises support; **Auto** cannot select an existing
 device folder.
 The session stays bound to that device and displays its folder path. Files stay
@@ -57,6 +61,7 @@ beside **Filter & sort**, and opens New session for the selected agent; in team 
 choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
+Middle-click a search result, or use Cmd+click on Mac or Ctrl+click on Windows and Linux, to open its destination in a new browser tab without closing the palette.
 Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
@@ -131,7 +136,7 @@ native creation controls.
 
 The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
 **Involving me**, and **All owners** stay within the selected agent; changing the
-owner never expands the list to other agents. Sidebar pins and personal sections
+owner never expands the list to other agents. Sidebar pins
 also follow that agent scope without removing their saved references. Choose
 **Show all** in the agent picker to browse across agents. Explicit rail shortcuts
 remain available across agent selections.

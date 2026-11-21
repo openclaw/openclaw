@@ -29,7 +29,7 @@ export type ToolCallInputRepairOptions = {
 
 type ErroredAssistantResultPolicy = "preserve" | "drop";
 
-export type ReplayToolPairingFrame<Message> = {
+type ReplayToolPairingFrame<Message> = {
   startIndex: number;
   endIndex: number;
   assistant: Message;
@@ -54,7 +54,7 @@ type ToolUseResultPairingOptions = Omit<
   pairing?: ReturnType<typeof classifyToolUseResultPairing>;
 };
 
-export function collectFollowingToolResultsWithAdapter<Message, Block>(
+function collectFollowingToolResultsWithAdapter<Message, Block>(
   messages: readonly Message[],
   index: number,
   adapter: ToolReplayAdapter<Message, Block>,
@@ -276,7 +276,7 @@ export function sanitizeToolUseResultPairingForModel(
   });
 }
 
-export function repairToolUseResultPairingWithAdapter<Message, Block>(
+function repairToolUseResultPairingWithAdapter<Message, Block>(
   messages: Message[],
   adapter: ToolReplayAdapter<Message, Block>,
   options?: ToolUseResultPairingAdapterOptions<Message>,

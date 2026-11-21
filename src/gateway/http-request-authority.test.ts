@@ -4,16 +4,22 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureHttpRequestAuthority } from "./http-request-authority.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
-it.each([false, true])(
-  "fences HTTP authority on role assignment changes only with enforcement: %s",
-  (enabled) => {
+it.each(["absent", "catalog-only", "default"] as const)(
+  "fences HTTP authority on role assignment changes only with a default: %s",
+  (roles) => {
     const cfg: OpenClawConfig = {
       gateway: {
         auth: { mode: "token", token: "test-secret" },
-        roles: {
-          ...(enabled ? { default: "guest" } : {}),
-          definitions: { guest: { sessions: { others: "none" }, agents: [], scopes: [] } },
-        },
+        ...(roles !== "absent"
+          ? {
+              roles: {
+                ...(roles === "default" ? { default: "guest" } : {}),
+                definitions: {
+                  guest: { sessions: { others: "none" as const }, agents: [], scopes: [] },
+                },
+              },
+            }
+          : {}),
       },
     };
     const isCurrent = captureHttpRequestAuthority({
@@ -24,6 +30,6 @@ it.each([false, true])(
     });
     expect(isCurrent()).toBe(true);
     invalidateOperatorRolePolicy("another-profile");
-    expect(isCurrent()).toBe(!enabled);
+    expect(isCurrent()).toBe(roles !== "default");
   },
 );

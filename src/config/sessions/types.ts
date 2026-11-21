@@ -730,6 +730,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Running root-session resume only; accepted queued input owns its own durable row. */
   resumeAfterRestart?: {
+    /** A direct chat turn in a visible spawned session, not its original delegated run. */
+    directChat?: true;
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
     operatorSource?: QueuedOperatorRecoverySource;
     /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */

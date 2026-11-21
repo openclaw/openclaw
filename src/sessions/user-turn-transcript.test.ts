@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
@@ -28,6 +28,7 @@ import {
   GatewayOperatorAccessUnavailableError,
 } from "../infra/operator-authority-error.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import type { UserTurnInput } from "./user-turn-input.types.js";
 import {
   readPendingUserTurnTranscriptAdmission,
   readUserTurnRequesterOrigin,
@@ -37,7 +38,6 @@ import {
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
-  type UserTurnInput,
 } from "./user-turn-transcript.js";
 import {
   isUserMessage,
@@ -612,6 +612,32 @@ describe("user turn transcript persistence", () => {
         },
       };
       expect(recorder.getPersistedMessage?.()).toMatchObject(expected);
+      await expectStored(target, expected);
+    });
+
+    it("stamps steering confirmed before the runtime commit", async () => {
+      const target = makeTarget();
+      const input = {
+        text: "tighten the answer",
+        idempotencyKey: "confirm-before-commit:user",
+        sender: { id: "operator-1", name: "Operator" },
+      };
+      const recorder = record(input, target);
+      // Steering resolves its message at enqueue, before acceptance names the target run.
+      await recorder.resolveMessage();
+      await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
+      const persisted = await persistUserTurnTranscript({ ...target, input });
+      expect(persisted?.message["__openclaw"]?.steerTargetRunId).toBeUndefined();
+      recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
+
+      const expected = {
+        __openclaw: {
+          senderId: "operator-1",
+          senderName: "Operator",
+          steerTargetRunId: "active-run",
+        },
+      };
+      await vi.waitFor(() => expect(recorder.getPersistedMessage?.()).toMatchObject(expected));
       await expectStored(target, expected);
     });
 

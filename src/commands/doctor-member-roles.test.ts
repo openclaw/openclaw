@@ -21,8 +21,8 @@ import { stateTest } from "../plugin-state/plugin-state-fixtures.test-support.js
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { ensureOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 
 const { spawnCommand } = vi.hoisted(() => ({ spawnCommand: vi.fn() }));
 // mock-isolation: Only container engine I/O is synthetic; local storage and config writes stay real.
@@ -36,6 +36,13 @@ vi.mock("../process/exec.js", async (importOriginal) => {
         : actual.spawnCommand(...args),
   };
 });
+// mock-isolation: the shared sandbox contribution also repairs images; a role requiring a
+// sandbox would otherwise inspect and build the real host's Docker image during this suite.
+const maybeRepairSandboxImages = vi.hoisted(() => vi.fn(async () => [] as string[]));
+vi.mock("./doctor-sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-sandbox.js")>()),
+  maybeRepairSandboxImages,
+}));
 const it = stateTest("doctor-member-roles");
 beforeEach(() => {
   spawnCommand.mockReset().mockRejectedValue(new Error("synthetic engine unavailable"));
@@ -147,7 +154,7 @@ const clawStore = () =>
 it("reads member roles from a monolithic claw record", async ({ state }) => {
   state.applyEnv();
   await clawStore().register("current", claw({ alice: "retired" }));
-  expect(await readDoctorMemberRoles()).toEqual(new Map([["alice", "retired"]]));
+  expect(await readDoctorMemberRoles(cfg())).toEqual(new Map([["alice", "retired"]]));
 });
 
 it("reports incomplete local membership instead of passing silently", async ({ state }) => {
@@ -189,7 +196,7 @@ for (const key of ["members", "members:1"]) {
     for (const value of [null, [], 42, "not a member collection"]) {
       await writeStoredClaw(claw({ alice: "undefined-role" }));
       await clawStore().register(key, value);
-      await expect(readDoctorMemberRoles()).rejects.toThrow(
+      await expect(readDoctorMemberRoles(cfg())).rejects.toThrow(
         "OpenClaw ID claw storage has an invalid member collection",
       );
       expect(await detect(cfg())).toEqual([
@@ -290,6 +297,26 @@ for (const who of ["member", "default"]) {
     expect(await detect(config)).toEqual([]);
   });
 }
+it("warns when a required-sandbox member's image is missing", async ({ state }) => {
+  state.applyEnv();
+  await writeStoredClaw(claw({ alice: "guest" }));
+  spawnCommand.mockImplementation(async (argv: string[]) => ({
+    failed: argv.includes("inspect"),
+    isCanceled: false,
+    exitCode: argv.includes("inspect") ? 1 : 0,
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.from(argv.includes("inspect") ? "Error: No such image" : ""),
+  }));
+  expect(await detect(cfg())).toEqual([
+    expect.objectContaining({
+      requirement: "sandbox-image-missing",
+      message: expect.stringMatching(/alice.*openclaw-sandbox:trixie-slim is missing/),
+      fixHint: expect.stringContaining("openclaw doctor --fix"),
+      target: "guest",
+    }),
+  ]);
+});
+
 it("does not warn for unused required roles or an unprobed non-container backend", async ({
   state,
 }) => {
@@ -304,16 +331,24 @@ it("does not warn for unused required roles or an unprobed non-container backend
   expect(spawnCommand).not.toHaveBeenCalled();
 });
 
-it("warns about stored assignments only when the named default is absent", async ({ state }) => {
+it("warns for inactive non-member assignments but not catalog-enforced members", async ({
+  state,
+}) => {
   state.applyEnv();
-  const profile = ensureProfileForEmail("alice@example.test");
+  const profile = ensureOpenClawIdUserProfile({ accountId: "alice" }, {});
   setUserProfileRole(profile.id, "viewer");
+  await writeStoredClaw(claw({ alice: "viewer" }));
   await closeOpenClawStateDatabaseAsync();
   expect(await detect(cfg(false))).toEqual([
     expect.objectContaining({
       requirement: "assignments-inactive",
-      message: expect.stringMatching(/enforcement is off.*assignments have no effect/),
+      message: expect.stringContaining("1 profile(s)"),
     }),
+  ]);
+  expect(await detect(cfg())).toEqual([]);
+  await writeStoredClaw(claw({}));
+  expect(await detect(cfg())).toEqual([
+    expect.objectContaining({ requirement: "assignments-inactive" }),
   ]);
   const config = cfg(false);
   config.gateway!.roles!.default = "viewer";
@@ -377,5 +412,72 @@ for (const accepted of [false, true]) {
         },
       },
     });
+  });
+}
+
+for (const accepted of [false, true]) {
+  it(`repairs only Access allowlist membership after consent=${accepted}`, async ({ state }) => {
+    state.applyEnv();
+    const config = { ...cfg(), plugins: { allow: ["browser"] } };
+    await state.writeConfig(config);
+    const original = `// preserve on decline\n${await fs.readFile(state.configPath, "utf8")}`;
+    await fs.writeFile(state.configPath, original);
+    const snapshot = await readConfigFileSnapshot({ observe: false });
+    const ctx = createDoctorHealthFlowContext({
+      cfg: config,
+      env: state.env,
+      configPath: state.configPath,
+      prompter: createDoctorPrompterFixture(accepted),
+      configResult: { confirmedConfigSource: { path: snapshot.path, hash: snapshot.hash! } },
+    });
+    const check = contribution();
+    const access = check.healthChecks.find(({ id }) => id === "core/doctor/openclaw-id-access");
+    expect(access, "Access diagnostic is registered in Doctor").toBeDefined();
+    expect(await access!.detect({ mode: "doctor", cfg: config, runtime: ctx.runtime })).toEqual([
+      expect.objectContaining({
+        requirement: "allowlist",
+        message: expect.stringContaining("Access page stays off"),
+      }),
+    ]);
+    await check.run(ctx);
+    expect(ctx.prompter.confirmAutoFix).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringMatching(/openclaw-id-access.*plugins.allow.*JSON.*comments/),
+        initialValue: false,
+      }),
+    );
+    if (!accepted) {
+      expect(ctx.cfg).toBe(config);
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
+    } else {
+      expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
+      const saved = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+      expect(saved.plugins).toEqual({ allow: ["browser", "openclaw-id-access"] });
+      expect(saved.gateway).toEqual(config.gateway);
+    }
+  });
+}
+
+for (const policy of [
+  { deny: ["openclaw-id-access"] },
+  { entries: { "openclaw-id-access": { enabled: false } } },
+  { enabled: false },
+]) {
+  it(`Doctor warns but never offers to override explicit Access policy ${JSON.stringify(policy)}`, async ({
+    state,
+  }) => {
+    state.applyEnv();
+    const config = { ...cfg(), plugins: { allow: ["browser"], ...policy } };
+    const ctx = createDoctorHealthFlowContext({
+      cfg: config,
+      env: state.env,
+      prompter: createDoctorPrompterFixture(true),
+    });
+    await contribution().run(ctx);
+    // The suite never reaches the host's real image check or build.
+    expect(maybeRepairSandboxImages).toHaveBeenCalled();
+    expect(ctx.prompter.confirmAutoFix).not.toHaveBeenCalled();
+    expect(ctx.cfg).toBe(config);
+    expect(ctx.configResult.pendingChangePanels).toBeUndefined();
   });
 }

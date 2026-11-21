@@ -203,20 +203,25 @@ fixed target and does not move if upstream `main` advances during the countdown.
 
 An update can finish while it still owes
 [plugin convergence](/cli/update/how-updates-run#owed-steps), for example when
-npm was unreachable. With automatic updates on, the Gateway retries that step
-for you. At the next hourly check, when the registry's current release for the
-channel is the installed version, the Gateway announces a campaign for that same
-version. The campaign uses the same idle wait, countdown, hard deadline, and
-**Hold 1 h** as a normal update. It runs `openclaw update` for the installed
-version, which converges plugins again and settles the step when convergence
-completes. The core is not reinstalled.
+plugin sync threw before it changed any plugin. With automatic updates on, the
+Gateway retries that step for you. At the first eligible hourly check, or the
+first eligible window of a configured schedule, when the registry's current
+release for the channel is the installed version, the Gateway announces a
+campaign for that same version.
+The campaign uses the same idle wait, countdown, hard deadline, and **Hold 1 h**
+as a normal update. A held retry resumes when the hold ends, even outside the
+schedule window. It runs `openclaw update` for the installed version, which
+converges plugins again and settles the step when convergence completes. The
+core is not reinstalled.
 
 This applies only to `stable` and `beta` package installs with a managed
-Gateway service. It waits at least an hour after the automatic update that
-installed the version, and while any update is running. Just before it applies,
+Gateway service. It waits at least an hour after the recorded start of the
+automatic update that installed the version, counted in elapsed time even when
+schedule windows are closer together, and while any update is running. Just before it applies,
 the Gateway checks again that the step is still owed and that no update is
 running. If you settle the step first, for example with `openclaw update repair`,
-the campaign ends without an update.
+the campaign ends without an update. A newer release replaces a pending or held
+retry.
 
 Each owed step gets one automatic retry per version. If the retry fails or still
 owes the step, the Gateway does not retry it again; `openclaw update status`
@@ -231,6 +236,14 @@ automatic updates, or use either opt-out below.
 Every failed apply ends the campaign so the UI does not remain on
 **Updating…**. Failures after a managed-service handoff starts are also recorded
 in the restart sentinel and surface after the Gateway returns.
+
+When automatic runs for the same target keep failing the same way, the Gateway
+backs off instead of retrying every hour. Two identical activation failures
+(Doctor, post-update verification, or Gateway startup on the new version) pause
+automatic updates for that target. Other identical failures, such as a refusal
+before anything changed, retry after 1 hour, then 2, 4, 8, and 16 hours, and then
+once a day. The Gateway log names the next attempt time. A new release, a
+successful update, or a manual `openclaw update` resets the backoff.
 
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.

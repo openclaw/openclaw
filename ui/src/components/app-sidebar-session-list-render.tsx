@@ -24,7 +24,6 @@ import type {
 } from "./app-sidebar-session-render-types.ts";
 import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
-import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 function RosterLoadMore(props: {
@@ -254,7 +253,6 @@ export function renderSessionListFrame(
       {renderSessionListError(host())}
       {bodyFirst ? body : undefined}
       <PinnedSessionSection host={host()} />
-      <PersonalSessionGroups host={host()} />
       {bodyFirst ? undefined : body}
     </section>
   );

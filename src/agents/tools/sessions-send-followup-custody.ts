@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -94,7 +95,11 @@ export async function prepareSessionsSendFollowup(params: {
     }
     assertInvocation?.();
     for (const target of [
-      { agentId: params.requesterAgentId, sessionKey: params.requesterSessionKey },
+      {
+        agentId: params.requesterAgentId,
+        sessionKey: params.requesterSessionKey,
+        followLifecycle: true,
+      },
       { agentId: params.targetAgentId, sessionKey: params.targetSessionKey },
     ]) {
       facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
@@ -135,6 +140,7 @@ export async function prepareSessionsSendFollowup(params: {
                     profile?.role ?? null,
                     currentConfig,
                     profile?.githubLogin ?? null,
+                    operatorRoleSubject(profile),
                   ),
             aliases: new Set(profile?.aliases ?? []),
           },

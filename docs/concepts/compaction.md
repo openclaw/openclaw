@@ -403,6 +403,9 @@ worker or process restarts. An independent event-count limit can still shorten
 unusually dense histories.
 If the previous turn exceeds the cap, the loader keeps its newest affordable
 atomic frames rather than starting the next turn with only the new prompt.
+When a retry reloads history in the middle of a turn whose tool results exceed
+the cap, the loader keeps the request that opened the turn in front of those
+frames, so the retry still sees its task.
 
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Older context can therefore remain

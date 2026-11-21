@@ -43,6 +43,8 @@ type SnapshotInventory = {
 const assertCurrent = () =>
   requestGitWorkerEffect<"worktree.assert-current">({ type: "worktree.assert-current", input: {} });
 
+const isOwnedScratch = (entry: Buffer) => /^\.openclaw\/tmp(?:\/|$)/u.test(entry.toString("utf8"));
+
 async function listCollapsedOtherPaths(checkoutPath: string, ignored: boolean): Promise<Buffer[]> {
   // --directory collapses whole untracked/ignored trees to one entry each, so the
   // Git output stays bounded by top-level entries instead of every dependency file.
@@ -64,6 +66,10 @@ async function walkCollapsedPaths(
   options: { visitFile?: (entry: Buffer) => Promise<void>; skip?: ReadonlySet<string> },
 ): Promise<boolean> {
   const visitDirectory = async (relative: Buffer): Promise<boolean> => {
+    // Disposable scratch is neither snapshot content nor a user repository.
+    if (isOwnedScratch(relative)) {
+      return false;
+    }
     if (
       await rawPathExists(
         checkoutPathFromGitBytes(checkoutPath, Buffer.concat([relative, Buffer.from("/.git")])),
@@ -141,6 +147,9 @@ async function walkCollapsedPaths(
     return false;
   };
   for (const entry of entries) {
+    if (isOwnedScratch(entry)) {
+      continue;
+    }
     if (entry.at(-1) === 47) {
       if (await visitDirectory(entry.subarray(0, -1))) {
         return true;
@@ -200,7 +209,12 @@ async function inspectOtherPaths(
     }
   }
   const ignored = await listCollapsedOtherPaths(checkoutPath, true);
-  if (await containsGitMarker(checkoutPath, [...untracked, ...ignored])) {
+  if (
+    await containsGitMarker(
+      checkoutPath,
+      [...untracked, ...ignored].filter((entry) => !isOwnedScratch(entry)),
+    )
+  ) {
     return true;
   }
   const ignoredKeys = new Set(

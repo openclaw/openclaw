@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
+import { renderConversationEntriesWithinBudget } from "../../../packages/agent-core/src/harness/compaction/conversation-serialization.js";
 import {
   collectConversationMessageFact,
   collectConversationRangeDescriptors,
-  renderConversationEntriesWithinBudget,
   serializeConversationEntry,
   serializeConversationWithinBudget,
   type ConversationMessageFact,
@@ -687,6 +687,33 @@ it.for(["header", "compaction"] as const)(
     expect(acquisition.acquiredBytes).toBe(0);
   },
 );
+
+it("keeps escaped legacy IDs distinct from SQLite replacement strings", async ({ scope }) => {
+  const escaped = storedMessage("\ud800", null, "user", "Escaped ID.");
+  const replacement = storedMessage(
+    "\ufffd\ufffd\ufffd",
+    "\ud800",
+    "assistant",
+    "Literal replacement ID.",
+  );
+  await seedImportedTranscript(scope, [
+    { type: "session", version: 3, id: scope.sessionId },
+    escaped,
+    replacement,
+  ]);
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  expect(
+    database.db
+      .prepare("SELECT COUNT(*) AS count FROM transcript_event_identities WHERE session_id = ?")
+      .get(scope.sessionId),
+  ).toEqual({ count: 0 });
+  expect(historyEvent(scope, "\ud800", { currentOnly: true, maxBytes: 1024 })?.event).toEqual(
+    escaped,
+  );
+  expect(
+    historyEvent(scope, "\ufffd\ufffd\ufffd", { currentOnly: true, maxBytes: 1024 })?.event,
+  ).toEqual(replacement);
+});
 
 it("selects imported headers and retention anchors before later indexed duplicates", async ({
   scope,

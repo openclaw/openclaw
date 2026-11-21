@@ -472,6 +472,26 @@ it.each([
   await dispatch(batch, async () => expect(consume(batch)).toBeDefined());
 });
 
+it("continues the cohort authority on its last partition after an earlier one settles", async () => {
+  const batch = await capture("original", 2);
+  // The earlier partition is an ordinary settle turn: it neither borrows nor consumes the owner.
+  const early = requesterCron.captureRequesterContinuationCaller({
+    ...requester,
+    requesterSessionId: "requester-session",
+    batch: batch.slice(0, 1),
+    rearmGeneration: undefined,
+    runId: "early",
+    isCurrent: () => true,
+  });
+  await early.run(async () => expect(consume(batch, "early")).toBeUndefined());
+  await updateBatch(batch, ([entry]) => {
+    entry!.requesterSettleWake = undefined;
+  });
+  requesterCron.revokeRequesterCronAuthorityBatch(batch.slice(0, 1), 1);
+  const last = batch.slice(1);
+  await dispatch(last, async () => expect(consume(last)?.isCurrent()).toBe(true));
+});
+
 it("admits the owned cohort, not arbitrary messages, with one stopped child", async () => {
   const batch = await capture("original", 2);
   await updateBatch(batch, ([entry]) => {
