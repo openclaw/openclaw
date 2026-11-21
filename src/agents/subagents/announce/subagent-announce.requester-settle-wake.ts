@@ -365,8 +365,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     // Delivered children remain in yield cohorts; the admitted marker owns whether
     // the requester may deliver its final under the conversation's reply policy.
-    const { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker } =
+    const { privateRows, parentOnly, requesterBinding, admissionMarker, ...policy } =
       resolveRequesterSettlePolicy(completionRows, requesterYieldedAfterDelivery, selectedState);
+    // While siblings still work, the requester may stay silent and wait for them.
+    const requireVisibleReply = policy.requireVisibleReply && pendingMembers.length === 0;
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
       : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
@@ -438,7 +440,11 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       requesterSessionId: requesterEntry.sessionId,
       requesterAgentId,
       batch: settledBatch,
-      rearmGeneration: state.requesterYieldBatch ? state.rearmGeneration : undefined,
+      // Like a followup, the yield's automation authority continues on the last partition.
+      rearmGeneration:
+        state.requesterYieldBatch && pendingMembers.length === 0
+          ? state.rearmGeneration
+          : undefined,
       runId: directIdempotencyKey,
       isCurrent: isSourceSessionEffectsAllowed,
       deliveryRoute: normalizeDeliveryContext(params.requesterOrigin),
