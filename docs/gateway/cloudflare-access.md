@@ -214,7 +214,8 @@ signing keys. This is off by default and existing configurations keep working un
   from `<issuer>/cdn-cgi/access/certs` when it first needs them. It fetches them again on the
   first request after they are ten minutes old, or when an assertion names a key it has not
   seen, but at most once every 30 seconds. A successful response with usable RSA keys
-  replaces the previous set. If a fetch fails or returns no usable RSA keys, the last good
+  (2048-bit or larger, the minimum RS256 permits per RFC 7518) replaces the previous set.
+  If a fetch fails or returns no usable RSA keys, the last good
   set remains usable for up to 24 hours from its last successful fetch. The Gateway logs
   a warning the first time it uses that set at least one hour after fetching it.
 - `audience` is the Application Audience (AUD) tag from the Access application's overview page.

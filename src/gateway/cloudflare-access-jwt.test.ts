@@ -88,6 +88,14 @@ describe("Cloudflare Access signing-key cache", () => {
         return Response.json({ keys: [{ ...jwk, n }] });
       },
     ],
+    [
+      "weak-rsa-key",
+      () => {
+        // RS256 requires at least 2048-bit keys (RFC 7518 §3.3).
+        const weak = generateKeyPairSync("rsa", { modulusLength: 1024 });
+        return Response.json({ keys: [{ ...weak.publicKey.export({ format: "jwk" }), kid }] });
+      },
+    ],
   ] as const)(
     "preserves last-good keys and backoff after a %s certs response",
     async (kind, refresh) => {

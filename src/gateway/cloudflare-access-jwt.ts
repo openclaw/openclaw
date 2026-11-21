@@ -55,9 +55,10 @@ async function fetchKeySet(issuer: string): Promise<KeySet> {
         const key = createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" });
         const { modulusLength = 0, publicExponent = 0n } = key.asymmetricKeyDetails ?? {};
         const modulus = BigInt(`0x${Buffer.from(jwk.n, "base64url").toString("hex")}`);
-        // Node can import RSA parameters that cannot verify an RS256 signature.
+        // Node can import RSA parameters that cannot verify an RS256 signature, and
+        // RFC 7518 §3.3 requires RS256 keys to be at least 2048 bits.
         if (
-          modulusLength >= 512 &&
+          modulusLength >= 2048 &&
           modulus % 2n === 1n &&
           publicExponent >= 3n &&
           publicExponent % 2n === 1n &&
