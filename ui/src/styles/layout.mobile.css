@@ -797,10 +797,10 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-width: 200px;
   }
 
-  .session-details-panel,
+  /* The Sessions drawer owns the inline inset for its headings, fields, and facts. */
   .session-details-panel__hero,
   .session-details-section {
-    padding: 12px;
+    padding-block: var(--space-3);
   }
 
   .session-details-panel__title {

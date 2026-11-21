@@ -360,6 +360,8 @@ export {
   ToolsEffectiveParamsSchema,
   ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
+  SkillsCategoriesParamsSchema,
+  SkillsCategoriesResultSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,

@@ -9,6 +9,8 @@ import { installMockGateway, waitForControlUiRoute } from "../test-helpers/contr
 import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { observe } from "./desktop-panel.test-support.ts";
+import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -162,6 +164,54 @@ suite.define(() => {
       );
     },
   );
+  it("shows the full Actual desktop size on a phone", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        const gateway = await installSystemsGateway(page, 0, {
+          "environments.list": {
+            environments: [
+              { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
+              {
+                id: "worker-one",
+                type: "worker",
+                label: "Cloud worker",
+                status: "available",
+                desktop: true,
+              },
+            ],
+          },
+          "desktop.observe": observe("sizing"),
+        });
+        await page.goto(new URL("systems", suite.server.baseUrl).href);
+        const picker = page.locator(".systems-mobile-picker");
+        await picker.waitFor();
+        await installScriptedRfbServer(page);
+        await picker.selectOption("worker-one");
+        expect((await gateway.waitForRequest("desktop.observe")).params).toMatchObject({
+          control: false,
+        });
+        await page.getByText("View only", { exact: true }).waitFor();
+        const sizing = page.getByRole("combobox", { name: "Desktop size" });
+        await sizing.selectOption("actual");
+        const remaining = await sizing.evaluate(async (select: HTMLSelectElement) => {
+          await document.fonts.ready;
+          const style = getComputedStyle(select);
+          const context = document.createElement("canvas").getContext("2d")!;
+          context.font = style.font;
+          const label = context.measureText(select.selectedOptions[0]!.label).width;
+          return (
+            select.clientWidth -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight) -
+            label
+          );
+        });
+        expect(remaining, "selected label fits before the chevron").toBeGreaterThanOrEqual(0);
+      },
+    );
+  });
+
   it.each([390, 1280])(
     "keeps one useful Systems recovery message while reconnecting at %ipx",
     async (width) => {

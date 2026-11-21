@@ -871,9 +871,10 @@
       "title"
       "actions";
     align-items: center;
-  }
-  .dashboards-header .hub-page-header__actions {
-    justify-self: stretch;
+
+    .hub-page-header__actions {
+      justify-self: stretch;
+    }
   }
   .dashboards-header .dashboards-search {
     flex: 1;
