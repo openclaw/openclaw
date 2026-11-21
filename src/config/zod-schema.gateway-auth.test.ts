@@ -353,7 +353,7 @@ test("validates invited tools as exact core names only with an invitation ceilin
   for (const invitedTools of [
     [],
     ["read"],
-    ["read", "message", "exec"],
+    ["read", "web_fetch", "exec"],
     ["tool_search", "tool_describe", "dispatch_action"],
     [" read ", "read"],
   ]) {
@@ -372,6 +372,24 @@ test("validates invited tools as exact core names only with an invitation ceilin
     ["memory_search"],
     ["plugin_tool"],
     ["mcp:server:read"],
+    ...[
+      "gateway",
+      "openclaw",
+      "automations",
+      "message",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "sessions_send",
+      "sessions_spawn",
+      "sessions_list",
+      "sessions",
+      "secrets",
+      "plugins",
+      "nodes",
+      "computer",
+      "github_publish",
+    ].map((name) => [name]),
   ]) {
     expect(OpenClawSchema.safeParse(config({ ...sessions, invitedTools })).success).toBe(false);
   }

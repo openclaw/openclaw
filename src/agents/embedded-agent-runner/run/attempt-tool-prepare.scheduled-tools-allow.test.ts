@@ -606,7 +606,7 @@ it("removes participation-excluded tools from construction and deferred dispatch
 });
 
 it.each(
-  [[], ["read", "sessions_list", "sessions_history"]].map((tools) => ({
+  [[], ["read", "sessions_list", "web_fetch"]].map((tools) => ({
     tools,
   })),
 )(
@@ -619,9 +619,9 @@ it.each(
         senderIsOwner: true,
         participationCeiling: { kind: "send", profileId: "guest", sessionKey, tools },
       },
-      { ...baseConfig, agents: { entries: { main: { tools: { deny: ["sessions_history"] } } } } },
+      { ...baseConfig, agents: { entries: { main: { tools: { deny: ["web_fetch"] } } } } },
     );
-    expect(run.callable).toEqual(tools.filter((name) => name !== "sessions_history").toSorted());
+    expect(run.callable).toEqual(tools.filter((name) => name === "read").toSorted());
     expect(run.listed).toEqual(run.callable);
     expect(run.catalogNames).toEqual(run.callable);
   },

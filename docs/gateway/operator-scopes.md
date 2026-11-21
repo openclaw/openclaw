@@ -451,9 +451,10 @@ Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the particip
 tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
 `read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `web_search`,
 `web_fetch`, `tool_search`, `tool_describe`, and `dispatch_action`. An empty list
-permits no tools. You can narrow the list or add other core tools such as
-`sessions_list`; the result still intersects the agent's tool policy and every
-tool's own authorization checks. Listing a tool does not make an unavailable or
+permits no tools. Only these session-contained names are accepted; the result
+still intersects the agent's tool policy and every tool's own authorization checks.
+Cross-session controls, messaging, Gateway/configuration tools and `sessions_spawn`
+are not eligible. Retained inputs also discard names outside this supported surface. Listing a tool does not make an unavailable or
 agent-denied tool available.
 
 Use exact names, not groups or wildcards. Unknown names, plugin-owned tools
