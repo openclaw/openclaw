@@ -466,6 +466,27 @@ function nativeRequest(
 }
 
 describe("GPT-Live browser session lifecycle", () => {
+  it("reports an OAuth offer rejection without forwarding the provider body", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new Response("private provider detail", { status: 403 }),
+    );
+    const { realtime, runAgentConsult } = makeBroker({ fetchImpl });
+    const reservation = await reserve(realtime, {
+      ...nativeRequest(runAgentConsult),
+      model: "gpt-live-1.1-codex",
+    });
+    const response = await post(realtime, {
+      token: reservation.clientSecret,
+      body: AUDIO_ONLY_SDP,
+    });
+
+    expect(response.res.statusCode).toBe(502);
+    expect(response.readBody()).toBe(
+      "OpenAI GPT-Live could not start with ChatGPT sign-in (HTTP 403). Check your ChatGPT voice access or select a Platform API model with a key.",
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("keeps broker registration independent of cold SDK host composition", async () => {
     expect(
       await findSourceImportBackedges("extensions/openai/realtime-quicksilver-session-owner.ts", [
@@ -588,19 +609,23 @@ describe("GPT-Live browser session lifecycle", () => {
     await expect(reserveOwner("native-owner")).resolves.toHaveProperty("transport", "webrtc");
   });
 
-  it("reports readiness and fences callbacks with negotiated control", async () => {
+  it("sends the explicit Live 1.1 selector and fences native control callbacks", async () => {
     const socket = new FakeSocket("manual");
-    const { realtime, runAgentConsult } = makeBroker({ socketFactory: () => socket });
+    const fetchImpl = vi.fn<typeof fetch>(async () => createCallResponse());
+    const { realtime, runAgentConsult } = makeBroker({ fetchImpl, socketFactory: () => socket });
     const bindBridge = vi.fn();
     const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
     const onReady = vi.fn();
     const onTranscript = vi.fn();
     const onEvent = vi.fn();
     const onClose = vi.fn();
-    const request = nativeRequest(runAgentConsult, {
-      ownerConnId: "native-control-owner",
-      gatewayControl: { bindBridge, bindControl, onReady, onTranscript, onEvent, onClose },
-    });
+    const request = {
+      ...nativeRequest(runAgentConsult, {
+        ownerConnId: "native-control-owner",
+        gatewayControl: { bindBridge, bindControl, onReady, onTranscript, onEvent, onClose },
+      }),
+      model: "gpt-live-1.1-codex",
+    };
     const reservation = await reserve(realtime, request);
     const { response, handling } = startOffer(realtime, {
       token: reservation.clientSecret,
@@ -614,6 +639,20 @@ describe("GPT-Live browser session lifecycle", () => {
     socket.emit("open");
     await handling;
     expect(response.res.statusCode).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(requestTarget(url)).toBe(
+      "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+    );
+    expect(init?.headers).toMatchObject({
+      Authorization: "Bearer synthetic-oauth",
+      "Content-Type": "application/json",
+    });
+    assert(typeof init?.body === "string", "Expected initial call JSON");
+    expect(JSON.parse(init.body)).toMatchObject({
+      sdp: AUDIO_ONLY_SDP,
+      session: { model: "gpt-live-1.1-codex", audio: { output: { voice: "cove" } } },
+    });
     expect(onReady).toHaveBeenCalledOnce();
     expect(bindBridge).not.toHaveBeenCalled();
     const control = bindControl.mock.calls[0]?.[0];

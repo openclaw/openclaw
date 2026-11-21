@@ -616,7 +616,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     } catch (error) {
       const publicSessionError =
         isOpenAIGptLiveModel(offer.request.model) || (offer.request.gaSideband && session)
-          ? new Error(projectOpenAIQuicksilverErrorMessage("transport"))
+          ? new Error(projectOpenAIQuicksilverErrorMessage("transport", error))
           : error instanceof Error
             ? error
             : new Error("OpenAI realtime session failed");
