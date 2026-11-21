@@ -16,6 +16,7 @@ struct ChatComposerTextViewIOSTests {
         #expect(textView.textContainerInset == .zero)
         #expect(textView.textContainer.lineFragmentPadding == 0)
         #expect(textView.accessibilityIdentifier == "chat-message-input")
+        #expect(textView.accessibilityLabel == "Message")
     }
 
     @Test func `return insertion respects caret and selection`() {
