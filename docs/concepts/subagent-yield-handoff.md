@@ -42,6 +42,8 @@ ownership, then the handoff result resumes the conversation.
 Completion inputs already committed to the requester transcript remain consumed
 when its announcing turn produces no reply; they are not recorded as failed child
 deliveries or replayed. Results not yet consumed remain owed to the requester.
+A descendant whose delivery has settled cannot hold a later completion behind
+unfinished cleanup. Session deletion still waits for that cleanup.
 This does not claim that a channel received an answer: ambiguous outbound delivery
 keeps its separate outcome, and private child input stays private.
 

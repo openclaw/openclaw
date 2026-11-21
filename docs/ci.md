@@ -609,8 +609,11 @@ An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.
 
 Full Release Validation's exact-target UI job retains the current three native
-shards for both runtimes. Historical compatibility targets keep their original
-unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budgets).
+shards for both runtimes. Default Node compatibility targets whose own CI workflow
+already advertises native UI sharding use three partitions of their original
+package command, retaining file isolation, test deadlines, worker defaults, and
+complete discovery. Unknown targets and explicit runtime overrides retain the
+unsharded compatibility route; see [UI job budgets](/ci/scope-and-routing/job-budgets).
 
 Set the repository variable `OPENCLAW_RELEASE_RUNNER_GROUP` to reserve a runner
 group for Full Release Validation and its artifact, validation, and reusable

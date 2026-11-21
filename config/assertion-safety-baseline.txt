@@ -630,7 +630,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	5
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
-extensions/qa-lab/src/providers/mock-openai/server.ts	4
+extensions/qa-lab/src/providers/mock-openai/server.ts	3
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1
@@ -1846,7 +1846,6 @@ src/infra/npm-managed-root.ts	3
 src/infra/openclaw-root.ts	1
 src/infra/outbound/agent-delivery.ts	2
 src/infra/outbound/deliver-channel.ts	3
-src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-storage.ts	3
 src/infra/outbound/message-account-selection.ts	1
@@ -2246,7 +2245,6 @@ src/tui/tui.ts	2
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	1
 src/utils/string-readers.ts	2
-src/utils/usage-format.ts	1
 src/version.ts	4
 src/web-fetch/runtime.ts	2
 src/web-search/runtime.ts	1
