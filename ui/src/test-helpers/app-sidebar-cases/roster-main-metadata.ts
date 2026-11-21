@@ -28,11 +28,11 @@ describe("AppSidebar main-chat metadata", () => {
     // to loading flags or to any visible session row. Only the card text differs.
     sidebar.shouldPublishSessionData();
     expect(sidebar.shouldPublishSessionData()).toBe(false);
+    const working = settled.cards.find((card) => card.id === "working")!;
+    const replied = { ...working, assistantPreview: "The notes are ready." };
     vi.spyOn(store, "snapshot", "get").mockReturnValue({
       ...settled,
-      cards: settled.cards.map((card) =>
-        card.id === "working" ? { ...card, assistantPreview: "The notes are ready." } : card,
-      ),
+      cards: settled.cards.map((card) => (card === working ? replied : card)),
     });
     sidebar.sessionData.requestSessionDataUpdate();
     await vi.waitFor(() => expect(preview()?.textContent).toBe("The notes are ready."));
