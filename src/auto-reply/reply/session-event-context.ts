@@ -243,7 +243,8 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.automationAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin" ||
+    : options.source === "exec" ||
+        options.source === "plugin" ||
         options.source === "tool_handoff" ||
         options.source === "restart" ||
         // A scheduler turn about a job (not its run) acts for the job's restored operator source.

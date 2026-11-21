@@ -21,6 +21,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   /** Stable checkout owner, independent of a command's selected working directory. */
   scratchRoot?: string;
   hasCronTool?: boolean;
+  /** Host-resolved owner decision of the turn starting this command. */
+  senderIsOwner?: boolean;
   mode?: ExecMode;
   bypassHostApprovalFloors?: boolean;
   trigger?: string;
