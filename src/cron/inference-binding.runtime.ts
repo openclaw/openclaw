@@ -14,7 +14,6 @@ import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selectio
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
-import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
@@ -211,13 +210,7 @@ export async function captureCronInferenceBinding(params: {
       harnessAuthBootstrap: harness.harness?.authBootstrap,
     }).attempts;
     if (attempt?.kind !== "profile") {
-      // A configured key keeps the job unbound, the same rule its runs follow.
-      const source = attempt?.plan.credentialSource;
-      if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
-        throw new Error(
-          "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
-        );
-      }
+      // Credentials that are not a stored account keep the job unbound; its runs select live.
       return undefined;
     }
     selection = {

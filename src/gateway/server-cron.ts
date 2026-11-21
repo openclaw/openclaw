@@ -75,7 +75,6 @@ import {
   runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
 import { createGatewayCronHeartbeatSummary } from "./server-cron-heartbeat-summary.js";
-import { createCronInferenceMigrationDiagnostic } from "./server-cron-inference.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -344,7 +343,6 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
-    describeJobLoadWarning: createCronInferenceMigrationDiagnostic(getRuntimeConfig),
     hostExecutionDisabled,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),

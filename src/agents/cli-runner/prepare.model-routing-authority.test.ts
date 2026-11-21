@@ -118,7 +118,7 @@ describe("CLI model-routing receipt authority", () => {
   });
 
   it.each(["native", "selected", "automatic"] as const)(
-    "keeps scheduled CLI credentials under their recorded owner (%s)",
+    "keeps a native-only scheduled CLI run on its native login (%s)",
     async (kind) => {
       const agentDir = path.join(fixture.session.dir, "credential-owner");
       const profileId = "test-cli:current";
@@ -149,13 +149,9 @@ describe("CLI model-routing receipt authority", () => {
         nativeAuthOnly: true,
         ...(kind === "selected" ? { authProfileId: profileId } : {}),
       });
-      if (kind === "native") {
-        expect((await prepared).effectiveAuthProfileId).toBeUndefined();
-        expect(prepareExecution).toHaveBeenCalledOnce();
-      } else {
-        await expect(prepared).rejects.toThrow("Automation has no recorded inference account");
-        expect(prepareExecution).not.toHaveBeenCalled();
-      }
+      // A native-only run forwards no stored account, whatever the backend would select.
+      expect((await prepared).effectiveAuthProfileId).toBeUndefined();
+      expect(prepareExecution).toHaveBeenCalledOnce();
     },
   );
 
