@@ -2,10 +2,12 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { frames } from "../../../scripts/lib/control-ui-interaction-navigation.ts";
 import { createReport, createSkill } from "../pages/skills/view.test-support.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Skills category discovery" });
@@ -13,6 +15,7 @@ const viewport = { width: 1280, height: 900 };
 const taxonomy = [
   { slug: "research", label: "Research", icon: "search" },
   { slug: "development", label: "Development", icon: "wrench" },
+  ...Array.from({ length: 12 }, (_, i) => ({ slug: "topic-" + i, label: "More topics " + i })),
 ];
 function listing(displayName: string, summary: string, category?: string) {
   const slug = displayName.toLowerCase().replaceAll(" ", "-");
@@ -27,11 +30,7 @@ function listing(displayName: string, summary: string, category?: string) {
     installRef: `@fieldnotes/${slug}`,
   };
 }
-const index = listing(
-  "Release Digest",
-  "Turn release notes into a short weekly digest.",
-  "development",
-);
+const index = listing("Release Digest", "Summarize the week's release notes.", "development");
 const notebook = listing("Field Notebook", "Collect citations and notes in one place.", "research");
 const handoff = listing("Team Handoff", "Prepare a concise handoff for a teammate.");
 const overview = [
@@ -57,11 +56,7 @@ function openCatalog(page: Page) {
       "skills.status": createReport([installed]),
       "skills.search": { results: overview },
       "skills.detail": {
-        skill: {
-          ...ledger,
-          createdAt: 1,
-          updatedAt: 2,
-        },
+        skill: { ...ledger, createdAt: 1, updatedAt: 2 },
         owner: { handle: "fieldnotes" },
       },
     },
@@ -81,12 +76,10 @@ async function capture(page: Page, name: string, title: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  const frame = await takeControlUiScreenshotFrame(
-    page,
-    page.locator(".skill-discovery"),
-    [row(page, title)],
-    { animations: "disabled" },
-  );
+  const surface = page.locator(".skill-discovery");
+  const frame = await takeControlUiScreenshotFrame(page, surface, [row(page, title)], {
+    animations: "disabled",
+  });
   await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
 }
 
@@ -97,13 +90,32 @@ suite.define(() => {
   for (const [size, dimensions] of [
     ["desktop", viewport],
     ["narrow", { width: 390, height: 844 }],
+    ["phone", { width: 400, height: 900 }],
+    ["tablet", { width: 820, height: 900 }],
   ] as const) {
     it(`groups the overview from one unfiltered page without horizontal overflow (${size})`, () =>
       suite.withPage({ viewport: dimensions, locale: "en-US" }, async ({ page }) => {
         const gateway = await openCatalog(page);
-        await page.goto(suite.server.baseUrl + "skills");
+        await page.goto(suite.server.baseUrl + "plugins");
+        await gateway.deferNext("skills.categories");
+        if (dimensions.width <= 900) {
+          await button(page, "Expand sidebar").click();
+        }
+        await page.getByRole("link", { name: "Skills", exact: true }).click();
+        await expectSearch(gateway, { limit: 20 });
+        await page.locator(".skill-installed-shelf").waitFor();
+        await page.getByRole("status", { name: "Searching…" }).waitFor();
+        expect(await row(page, notebook.displayName).isVisible()).toBe(false);
+        const shifts = await observeLayoutShifts(page);
+        await gateway.resolveDeferred("skills.categories");
         await row(page, notebook.displayName).waitFor();
-        await button(page, "Research").waitFor();
+        await frames(page);
+        // Include recent-input entries: fast navigation must not mask directory-arrival shifts.
+        expect(await shifts.evaluate((probe) => probe.read().entries)).toEqual([]);
+        await shifts.dispose();
+        const research = button(page, "Research");
+        await research.waitFor();
+        expect(await research.evaluate((chip) => chip.scrollWidth <= chip.clientWidth)).toBe(true);
         await capture(page, `overview-${size}`, notebook.displayName);
 
         for (const [section, skill] of [
@@ -112,28 +124,20 @@ suite.define(() => {
           ["ClawHub", handoff],
         ] as const) {
           const group = shelf(page, section);
-          expect(await group.getByRole("heading", { name: skill.displayName }).isVisible()).toBe(
-            true,
-          );
-          expect(await group.getByRole("button", { name: "View all" }).count()).toBe(
-            section === "ClawHub" ? 0 : 1,
-          );
+          await group.getByRole("heading", { name: skill.displayName, exact: true }).waitFor();
+          const actions = group.getByRole("button", { name: "View all", exact: true });
+          expect(await actions.count()).toBe(section === "ClawHub" ? 0 : 1);
         }
-        expect((await gateway.getRequests("skills.search")).map((r) => r.params)).toEqual([
-          { limit: 20 },
-        ]);
+        expect(await gateway.getRequests("skills.search")).toHaveLength(1);
         expect(await gateway.getRequests("skills.categories")).toHaveLength(1);
-        const overflow = await page
-          .locator("[data-catalog-section] :is(h2, article, button)")
-          .evaluateAll((elements) =>
-            elements
-              .filter((el) => {
-                const { left, right } = el.getBoundingClientRect();
-                return left < -1 || right > document.documentElement.clientWidth + 1;
-              })
-              .map((el) => el.textContent),
-          );
-        expect(overflow).toEqual([]);
+        const content = page.locator("[data-catalog-section] :is(h2, article, button)");
+        const fits = await content.evaluateAll((elements) =>
+          elements.every((el) => {
+            const { left, right } = el.getBoundingClientRect();
+            return left >= -1 && right <= document.documentElement.clientWidth + 1;
+          }),
+        );
+        expect(fits).toBe(true);
       }));
   }
 
@@ -159,12 +163,9 @@ suite.define(() => {
       await gateway.deferNext("skills.search", next);
       await more.click();
       await expectSearch(gateway, next);
-      await gateway.rejectDeferred(
-        "skills.search",
-        { code: "UNAVAILABLE", message: "Next page unavailable" },
-        { match: next },
-      );
-      const error = page.getByRole("alert").filter({ hasText: "Next page unavailable" });
+      const failure = { code: "UNAVAILABLE", message: "Next page unavailable" };
+      await gateway.rejectDeferred("skills.search", failure, { match: next });
+      const error = page.getByRole("alert").filter({ hasText: failure.message });
       await error.waitFor();
       expect(await row(page, atlas.displayName).isVisible()).toBe(true);
       await gateway.setMethodResponse("skills.search", { results: [ledger] });
@@ -174,9 +175,8 @@ suite.define(() => {
       expect(await row(page, atlas.displayName).isVisible()).toBe(true);
       expect(await more.count()).toBe(0);
       await button(page, "Open Source Ledger details").click();
-      expect((await gateway.waitForRequest("skills.detail")).params).toEqual({
-        slug: ledger.installRef,
-      });
+      const detail = await gateway.waitForRequest("skills.detail");
+      expect(detail.params).toEqual({ slug: ledger.installRef });
       await row(page, ledger.displayName).waitFor();
       expect(await gateway.getRequests("skills.install")).toHaveLength(0);
     }));
@@ -212,11 +212,8 @@ suite.define(() => {
       await gateway.setMethodResponse("skills.search", { results: overview });
       await button(page, "All").click();
       await row(page, index.displayName).waitFor();
-      await gateway.resolveDeferred(
-        "skills.search",
-        { results: [ledger], nextCursor: "retired" },
-        { match: scoped },
-      );
+      const retired = { results: [ledger], nextCursor: "retired" };
+      await gateway.resolveDeferred("skills.search", retired, { match: scoped });
       await button(page, "Installed").click();
       await button(page, "Open Daily Brief details").waitFor();
       expect(await row(page, index.displayName).count()).toBe(0);

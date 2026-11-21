@@ -35,7 +35,7 @@ import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js"
 import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
-import { preparePublicationReaderAdmission } from "../../publication-reader.js";
+import { preparePublicationTransportAdmission } from "../../publication-reader.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
@@ -56,7 +56,9 @@ import { prepareOpenClawIdMemberConnect } from "./connect-openclaw-id-member-gra
 import {
   resolveLocalPairingApproval,
   resolvePairingApprovalPlan,
+  resolveTrustedProxyDeviceGrantScopes,
 } from "./connect-pairing-approval-plan.js";
+import { rejectPublicationTransportAdmission } from "./connect-publication-transport.js";
 import type {
   AuthenticatedGatewayConnect,
   DeviceAuthorizedGatewayConnect,
@@ -67,14 +69,14 @@ export async function authorizeGatewayConnectDevice(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): Promise<DeviceAuthorizedGatewayConnect | undefined> {
-  // Reserved service-reader admission precedes delegation and human-owner fallback.
-  let publicationReader;
+  // Reserved service-transport admission precedes delegation and human-owner fallback.
+  let publicationTransport;
   try {
-    publicationReader = await preparePublicationReaderAdmission({
+    publicationTransport = await preparePublicationTransportAdmission({
       role: state.role,
       authMethod: state.authMethod,
       scopes: state.scopes,
-      requestedScopes: state.publicationReadScopes ?? context.connectParams.scopes ?? [],
+      requestedScopes: state.publicationTransportScopes ?? context.connectParams.scopes ?? [],
       deviceId: state.device?.id,
       publicKey: state.devicePublicKey,
       token: context.connectParams.auth?.deviceToken ?? context.connectParams.auth?.token,
@@ -85,17 +87,14 @@ export async function authorizeGatewayConnectDevice(
         state.remoteIngressPrincipal,
       ),
     });
-  } catch {
-    const message = "publication reader requires an exact singleton paired device token";
-    context.markHandshakeFailure("publication-reader-denied");
-    context.sendHandshakeErrorResponse(ErrorCodes.FORBIDDEN, message);
-    context.handler.close(1008, message);
+  } catch (error) {
+    rejectPublicationTransportAdmission(context, error);
     return undefined;
   }
-  if (publicationReader) {
+  if (publicationTransport) {
     return {
       ...state,
-      publicationReader,
+      publicationTransport,
       handoffBootstrapProfile: null,
       deviceToken: null,
       bootstrapDeviceTokens: [],
@@ -258,6 +257,25 @@ export async function authorizeGatewayConnectDevice(
         connectionScopeCap: (capped: string[]) =>
           applyConnectionScopeCap({ role, scopes: capped, upgradeReq: context.handler.upgradeReq }),
       };
+      if (
+        reason === "scope-upgrade" &&
+        configSnapshot.gateway?.auth?.trustedProxy?.narrowToDeviceGrant === true
+      ) {
+        // Last await before the decision: the live row, not the pre-connect snapshot.
+        const grantScopes = resolveTrustedProxyDeviceGrantScopes({
+          state,
+          hasBrowserOriginHeader,
+          pairedDevice: await getPairedDevice(device.id),
+          devicePublicKey,
+          scopes,
+        });
+        const capped = grantScopes ? pairingPlanParams.connectionScopeCap(grantScopes) : [];
+        if (capped.length > 0) {
+          scopes = capped;
+          connectParams.scopes = scopes;
+          return true;
+        }
+      }
       const plan = await resolvePairingApprovalPlan(pairingPlanParams);
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
       if (

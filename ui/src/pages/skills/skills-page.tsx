@@ -170,14 +170,15 @@ export function SkillsPage(props: SkillsPageProps) {
       ? gateway.client
       : null,
   );
-  const readCategories = createMemo<SkillCategoryDirectory | null>(
-    () => {
-      detailEpoch();
-      const client = categoryClient();
-      return client ? loadSkillCategories(client) : { categories: [] };
-    },
-    { loadingValue: null },
-  );
+  const categoryDirectory = createMemo(() => {
+    detailEpoch();
+    const client = categoryClient();
+    // Each registry starts with unknown grouping, without holding route and search admission.
+    return createDeferred<SkillCategoryDirectory | null>(
+      () => (client ? loadSkillCategories(client) : { categories: [] }),
+      { loadingValue: null },
+    );
+  });
   const detailRef = createMemo(() => skills.read().clawhubDetailRef);
   const detailSnapshot = createMemo(() => skills.read().clawhubDetail);
   const detailError = createMemo(() => skills.read().clawhubDetailError);
@@ -608,8 +609,8 @@ export function SkillsPage(props: SkillsPageProps) {
             readClawHubDetail={readClawHubDetail}
             readClawHubVerdicts={readClawHubVerdicts}
             readClawHubSearch={search.read}
-            readCategories={readCategories}
-            onRetryCategories={() => void refresh(readCategories)}
+            readCategories={() => categoryDirectory()()}
+            onRetryCategories={() => void refresh(categoryDirectory())}
             onCategoryChange={selectCategory}
             hasNextPage={Boolean(search.nextCursor())}
             onLoadMore={loadNextPage}

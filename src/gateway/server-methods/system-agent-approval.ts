@@ -31,6 +31,7 @@ import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-t
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import {
+  bindApprovalRequesterMetadata,
   broadcastApprovalResolvedEvent,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
@@ -316,6 +317,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
         `system-agent:${randomUUID()}`,
       );
+      bindApprovalRequesterMetadata({ record, caller: callerIdentity });
       const completion =
         createDeferredCore<NonNullable<Awaited<ReturnType<typeof applyDecision>>>>();
       const pendingApproval = {

@@ -269,6 +269,61 @@ describe("automatic campaign handoff failure", () => {
     );
   });
 
+  it.each([
+    { failures: 1, wait: 0 },
+    { failures: 2, wait: 2 },
+    { failures: 5, wait: 16 },
+    { failures: 6, wait: 24 },
+  ])(
+    "waits $wait h after $failures identical pre-mutation refusals",
+    async ({ failures, wait }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const hour = 60 * 60 * 1000;
+        const failedAt = Date.UTC(2026, 10, 21);
+        vi.setSystemTime(failedAt - failures * hour);
+        // A manual run older than the streak does not reset it.
+        finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+        for (let index = 0; index < failures; index += 1) {
+          vi.setSystemTime(failedAt - (failures - 1 - index) * hour);
+          const { runId } = createUpdateRun({
+            trigger: "campaign",
+            target: { channel: "beta", kind: "package", version: "2.0.0-beta.1" },
+          });
+          finishUpdateRun(runId, { status: "failed", reason: "managed-service-stop-failed" });
+        }
+        const log = { info: vi.fn() };
+        const runAuto = vi.fn<AutoUpdateRunner>(async () => ({
+          status: "failed",
+          message: "Gateway process changed during maintenance drain.",
+          result: updateResult({ reason: "managed-service-stop-failed" }),
+        }));
+        const attempt = async (atMs: number, version = "2.0.0-beta.1") => {
+          vi.setSystemTime(atMs);
+          const campaign = createApplyingCampaign(version);
+          try {
+            await runBetaCampaign({ version, log, campaign, runAuto });
+          } finally {
+            campaign.clear();
+          }
+          return runAuto.mock.calls.length;
+        };
+        if (wait > 0) {
+          await expect(attempt(failedAt + wait * hour - 60_000)).resolves.toBe(0);
+          expect(log.info).toHaveBeenCalledWith(
+            expect.stringContaining(`deferred after ${failures} identical failures`),
+            expect.objectContaining({ reason: "managed-service-stop-failed" }),
+          );
+        }
+        await expect(attempt(failedAt + wait * hour + 60_000)).resolves.toBe(1);
+        // A new candidate is not held by the previous target's streak.
+        await expect(attempt(failedAt + wait * hour + 60_000, "2.0.0-beta.2")).resolves.toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("does not clear a replacement campaign after sentinel settlement", async () => {
     const campaign = createApplyingCampaign();
     const persisted = createDeferred();

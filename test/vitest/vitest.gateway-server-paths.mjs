@@ -703,6 +703,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.chat-attachment-recovery.product.test.ts",
   "src/gateway/server.chat-membership-authority.product.test.ts",
   "src/gateway/server.chat-workspace-readiness.product.test.ts",
+  "src/gateway/session-restart-resume.visible-chat.product.test.ts",
   "src/gateway/session-restart-resume.workspace.test.ts",
   "src/gateway/server.chat-queued-followup-operator-authority.product.test.ts",
   "src/gateway/server-chat.retired-projection.test.ts",

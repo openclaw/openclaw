@@ -372,31 +372,48 @@ it.each([
 
 const descendantCleanupFailure = "service child cleanup did not complete before its hard deadline";
 
+const unconfirmedCleanupNote = expect.stringContaining("OpenClaw could not confirm");
+
 it.each([
-  { exitCode: 0, status: "completed", reported: "@1\n\nOpenClaw could not confirm" },
+  // A foreground result reports the note as a warning; the output stays the command's own.
+  { exitCode: 0, status: "completed", backgrounded: false, aggregated: "@1" },
   {
     exitCode: 3,
     status: "completed",
-    reported: "(Command exited with code 3)\n\nOpenClaw could not confirm",
+    backgrounded: false,
+    aggregated: "@1\n\n(Command exited with code 3)",
   },
-  { exitCode: 127, status: "failed", reported: descendantCleanupFailure },
+  // A backgrounded command returned its result already; its log and follow-up carry the note.
+  { exitCode: 0, status: "completed", backgrounded: true, aggregated: unconfirmedCleanupNote },
+  {
+    exitCode: 127,
+    status: "failed",
+    backgrounded: false,
+    aggregated: expect.stringContaining(descendantCleanupFailure),
+  },
 ])(
-  "keeps the observed exit when descendant cleanup is unconfirmed (exitCode=$exitCode)",
-  async ({ exitCode, status, reported }) => {
+  "keeps the observed exit when descendant cleanup is unconfirmed (exitCode=$exitCode, backgrounded=$backgrounded)",
+  async ({ exitCode, status, backgrounded, aggregated }) => {
     const cleanupScope = createAgentCleanupScope();
+    const settled = createDeferred();
     queueRun(async () => createRunExit({ exitCode }), "@1\n", {
       waitForExtinction: async () => {
+        await settled.promise;
         throw new Error(descendantCleanupFailure);
       },
     });
+    const warnings: string[] = [];
     await cleanupScope.run(async () => {
-      const run = await runTestExecProcess({ command: "tmux new -d" });
-      await expect(run.promise).resolves.toMatchObject({
-        status,
-        exitCode,
-        aggregated: expect.stringContaining(reported),
-      });
+      const run = await runTestExecProcess({ command: "tmux new -d", warnings });
+      if (backgrounded) {
+        markBackgrounded(run.session);
+      }
+      settled.resolve();
+      await expect(run.promise).resolves.toMatchObject({ status, exitCode, aggregated });
+      const warned = status === "completed" && !backgrounded;
+      expect(warnings).toEqual(warned ? [unconfirmedCleanupNote] : []);
       expect(run.session.aggregated).toContain("@1");
+      expect(run.session.aggregated.includes("OpenClaw could not confirm")).toBe(backgrounded);
       expect(run.session.cleanupUncertain || run.session.finalizationFailed).toBe(true);
     });
     expect(cleanupScope.outcome).toBe("uncertain");

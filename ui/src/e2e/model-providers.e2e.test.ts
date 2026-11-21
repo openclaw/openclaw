@@ -263,6 +263,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         catalogModel("ß-provider", "test-model", "Test Model"),
       ],
       methodResponses: {
+        // The agent's chosen model keeps setup out of the way of provider access.
+        "config.get": sourceConfigSnapshot(
+          { agents: { defaults: { model: "openai/gpt-5.5" } } },
+          "configured-providers",
+        ),
         "models.authStatus": {
           ts: NOW,
           providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
