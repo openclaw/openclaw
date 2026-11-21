@@ -3,9 +3,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { classifyDoctorMaintenanceRefusal } from "../../commands/doctor-maintenance-inspection.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
+import { UpdatePreMutationError } from "./shared.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({ doctor: vi.fn() }));
@@ -140,6 +144,35 @@ it.each([
     expect(fs.existsSync(filename)).toBe(false);
   }
 });
+
+it.each(["data-risk refusal", "uncertain child"] as const)(
+  "keeps a target Doctor %s on its pre-activation route",
+  async (failure) => {
+    const uncertain = new CommandProcessCleanupError({ cause: new Error("child still running") });
+    mocks.doctor.mockRejectedValue(
+      failure === "uncertain child"
+        ? uncertain
+        : new DoctorMaintenanceRefusalError("Invalid config", {
+            kind: "data-at-risk",
+            reason: "incomplete-migration",
+          }),
+    );
+    const outcome = expect(initialize()).rejects;
+    if (failure === "uncertain child") {
+      // Process cleanup uncertainty keeps its own error; it is not an initialization refusal.
+      await outcome.toBe(uncertain);
+    } else {
+      // Nothing is installed yet, so the refusal must not become a recorded data risk.
+      await outcome.toSatisfy(
+        (error) =>
+          error instanceof UpdatePreMutationError &&
+          error.reason === "target-state-initialization" &&
+          error.message.includes("Invalid config") &&
+          classifyDoctorMaintenanceRefusal(error).kind !== "data-at-risk",
+      );
+    }
+  },
+);
 
 it("does not start Doctor when executor authority expires during schema inspection", async () => {
   let current = true;

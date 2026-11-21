@@ -992,12 +992,12 @@ describe("Git checkout execution", () => {
         "head-mismatch": "target-sha-mismatch",
         "ui-missing": "ui-assets-missing",
       }[failure],
-      recovery: {
-        serviceRestartSafe: false,
-        reason: "state-migration-started",
-        dataAtRisk:
-          failure === "doctor-data-at-risk" ? "unreadable-state" : "state-migrated-no-rollback",
-      },
+    });
+    // Only the Doctor's typed verdict is evidence; the CLI compares state for other failures.
+    expect(result.recovery).toEqual({
+      serviceRestartSafe: false,
+      reason: "state-migration-started",
+      ...(failure === "doctor-data-at-risk" ? { dataAtRisk: "unreadable-state" } : {}),
     });
     expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
     expect(await fs.readFile(stateFile, "utf8")).toBe("migrated state");

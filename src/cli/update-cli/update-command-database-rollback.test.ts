@@ -419,16 +419,18 @@ it.each([
                 observePluginCohort();
               },
               runGitDoctor: async (root, results) => {
-                const step = await runPackageUpdateDoctor({
-                  ...params,
-                  root,
-                  results,
-                  managedServiceEnv: params.getManagedServiceEnv(),
-                });
-                if (scenario === "git-edited") {
-                  await fs.appendFile(path.join(root, "package.json"), "\n");
+                try {
+                  return await runPackageUpdateDoctor({
+                    ...params,
+                    root,
+                    results,
+                    managedServiceEnv: params.getManagedServiceEnv(),
+                  });
+                } finally {
+                  if (scenario === "git-edited") {
+                    await fs.appendFile(path.join(root, "package.json"), "\n");
+                  }
                 }
-                return step;
               },
             },
           }),
@@ -540,21 +542,24 @@ it.each([
               service = undefined;
             }
           },
-          postVerifyStep: async (root) => {
-            const step = await runPackageUpdateDoctor({ ...params, root });
-            if (scenario === "config-refused") {
-              await writeJson(serviceEnv.OPENCLAW_CONFIG_PATH!, {
-                ...config,
-                gateway: { ...config.gateway, port },
-              });
-            }
-            if (scenario === "post-migration-write" || scenario === "schema-neutral-write") {
-              for (const file of files) {
-                using db = new DatabaseSync(file);
-                db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-migration')");
+          postVerifyStep: async (root, results) => {
+            try {
+              // The failing Doctor reports its own data-risk verdict; the swap keeps it as a failed step.
+              return await runPackageUpdateDoctor({ ...params, root, results });
+            } finally {
+              if (scenario === "config-refused") {
+                await writeJson(serviceEnv.OPENCLAW_CONFIG_PATH!, {
+                  ...config,
+                  gateway: { ...config.gateway, port },
+                });
+              }
+              if (scenario === "post-migration-write" || scenario === "schema-neutral-write") {
+                for (const file of files) {
+                  using db = new DatabaseSync(file);
+                  db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-migration')");
+                }
               }
             }
-            return step;
           },
         });
         assert(swap.postVerifyStep, JSON.stringify(swap.step));

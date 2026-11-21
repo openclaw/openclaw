@@ -27,6 +27,7 @@ import { VERSION } from "../../version.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { createReadinessRollbackFixture } from "./update-command-readiness-rollback.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import * as serviceRecovery from "./update-command-service-recovery.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
 type FreshProcess =
@@ -34,7 +35,7 @@ type FreshProcess =
 type Restart = typeof import("./update-command-service.js").maybeRestartService;
 type VerifyGateway = typeof import("./update-command-verification.js").verifyUpdatedGateway;
 
-async function createGitRollbackFixture(base: string) {
+async function createGitRollbackFixture(base: string, doctorExitCode = 0) {
   isolateGitIdentity();
   const remote = path.join(base, "remote");
   const root = path.join(base, "checkout");
@@ -97,16 +98,18 @@ async function createGitRollbackFixture(base: string) {
         command: "fixture doctor",
         cwd,
         durationMs: 0,
-        exitCode: 0,
+        exitCode: doctorExitCode,
       }),
       onTransaction: (retained) => {
         transaction = retained;
       },
     },
   });
-  expect(result.status).toBe("ok");
-  expect(result.after?.sha).toBe(beforeSha);
-  expect(result.after?.buildId).toBe("candidate-build");
+  expect(result.status).toBe(doctorExitCode === 0 ? "ok" : "error");
+  if (doctorExitCode === 0) {
+    expect(result.after?.sha).toBe(beforeSha);
+    expect(result.after?.buildId).toBe("candidate-build");
+  }
   if (!transaction) {
     throw new Error("Git activation did not retain its runtime for finalization recovery");
   }
@@ -117,7 +120,11 @@ export function registerDoctorRestorationRollbackTests(
   harness: {
     freshProcess: { mockImplementationOnce: (implementation: FreshProcess) => unknown };
     stopCandidate: { mockResolvedValueOnce: (result: PreManagedServiceStop) => unknown };
-    restartCandidate: { mockImplementationOnce: (implementation: Restart) => unknown };
+    restartCandidate: {
+      mockImplementationOnce: (implementation: Restart) => unknown;
+      mockImplementation: (implementation: Restart) => unknown;
+    };
+    readRuntime: Mock<() => Promise<{ status: string; pid?: number }>>;
     verifyGateway: { mockImplementation: (implementation: VerifyGateway) => unknown };
     gatewayCommand: Mock<
       typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
@@ -427,6 +434,138 @@ export function registerDoctorRestorationRollbackTests(
         expect(report.markdown).toContain("openclaw gateway status --deep");
       }
       expect(await fs.readFile(configPath, "utf8")).toBe(configRaw);
+    },
+  );
+
+  it.each(["restorable", "operator-edited", "unsafe-without-doctor"] as const)(
+    "records no data risk when a Git checkout's Doctor fails without changing state (%s)",
+    async (checkout) => {
+      const base = makeTempDir("update-git-doctor-failed-");
+      const fixture = await createGitRollbackFixture(base, 1);
+      const root = fixture.root;
+      if (checkout === "unsafe-without-doctor") {
+        // Negative control: an unsafe verdict that does not involve a started Doctor.
+        fixture.result.recovery = {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+        };
+      }
+      if (checkout !== "restorable") {
+        // A tracked edit after activation makes the retained checkout rollback refuse.
+        await fs.writeFile(path.join(root, "local-commit.txt"), "operator edit\n");
+      }
+      const readSchemas = stateSchemas.readUpdateStateSchemaVersions;
+      vi.spyOn(stateSchemas, "readUpdateStateSchemaVersions").mockImplementation((params) =>
+        readSchemas(params.root === root ? { ...params, root: undefined } : params),
+      );
+      const stateDir = path.join(base, "state");
+      await fs.mkdir(stateDir);
+      const configPath = path.join(stateDir, "openclaw.json");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      };
+      await fs.writeFile(configPath, "{}\n");
+      const configSnapshot = await createConfigIO({
+        env,
+        observe: false,
+        pluginValidation: "core-only",
+      }).readConfigFileSnapshot();
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const before: PreManagedServiceStop = {
+        stopped: true,
+        inspected: true,
+        runtimeInspected: true,
+        running: true,
+        serviceEnv: env,
+        serviceIdentity: { version: VERSION, buildId: "previous-build" },
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root,
+          fingerprint: "fixture",
+          refreshDefinition: false,
+          requiresInstallRootRefresh: false,
+        },
+      };
+      harness.stopCandidate.mockResolvedValueOnce(before);
+      harness.readRuntime.mockResolvedValue({ status: "stopped" });
+      const finalRestart = vi
+        .spyOn(serviceRecovery, "maybeRestartServiceAfterFailedMutableUpdate")
+        .mockResolvedValue("failed");
+      const started: Array<string | null> = [];
+      harness.restartCandidate.mockImplementation(async (params) => {
+        started.push(await readBuiltGatewayBuildId(root));
+        recordUpdateRunVerification(
+          run.runId,
+          { serviceRunning: true, runningVersion: VERSION, runningBuildId: "previous-build" },
+          { env },
+        );
+        params.onVerified?.(Date.now());
+        return "ok";
+      });
+      harness.verifyGateway.mockImplementation(async ({ result }) => {
+        const running = started.length > 0;
+        result.verification = { serviceRunning: running, readyz: running, versionMatch: running };
+        return running ? { ok: true, summary: "healthy" } : { ok: false, summary: "stopped" };
+      });
+      const failure = await finishUpdate({
+        mutationStarted: true,
+        result: fixture.result,
+        root,
+        packageTransaction: fixture.transaction,
+        schemaVersions: await stateSchemas.readUpdateStateSchemaVersions({
+          stateDir,
+          config: {},
+          env,
+        }),
+        previousVerified: true,
+        installKindChanged: false,
+        configSnapshot,
+        requestedChannel: null,
+        storedChannel: "dev",
+        channel: "dev",
+        downgradeRisk: false,
+        shouldRestart: true,
+        preManagedServiceStop: before,
+        preUpdatePluginInstallRecords: {},
+        updateStepTimeoutMs: 1000,
+        opts: { json: true, run },
+        startedAt: Date.now(),
+        controlPlaneUpdateSentinelMeta: null,
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(UpdateCommandFailure);
+      const recorded = getUpdateRun(run.runId, { env });
+      const risk = (recovery: UpdateRunResult["recovery"] | null | undefined) =>
+        recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined;
+      expect(risk((failure as UpdateCommandFailure).result.recovery)).toBeUndefined();
+      expect(risk(recorded?.verification.recovery)).toBeUndefined();
+      expect(recorded?.steps.map((step) => step.step)).not.toContain("finalize:data-at-risk");
+      expect(recorded?.origin.nextAction ?? "").not.toContain("data at risk");
+      if (checkout === "restorable") {
+        // State was verified unchanged, so the previous checkout and Gateway come back.
+        expect(started).toEqual(["previous-build"]);
+        expect(recorded?.status).toBe("rolled-back");
+        expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(fixture.result.before?.sha);
+        return;
+      }
+      expect(started).toEqual([]);
+      if (checkout === "unsafe-without-doctor") {
+        // Final recovery still restarts the stopped service for other unsafe verdicts.
+        expect(finalRestart).toHaveBeenCalledOnce();
+        expect(finalRestart).toHaveBeenCalledWith(expect.objectContaining({ finalRecovery: true }));
+        return;
+      }
+      // The candidate's Doctor failed and its checkout stays: nothing may start it.
+      expect(finalRestart).not.toHaveBeenCalled();
+      expect(recorded?.verification.recovery).toMatchObject({
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+      });
+      expect(recorded?.origin.nextAction).toContain("openclaw update repair");
     },
   );
 }
