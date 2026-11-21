@@ -11,10 +11,7 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  buildOutboundSessionContext,
-  sendDurableMessageBatch,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeMessagePresentation,
@@ -23,6 +20,7 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
+import { resolveTelegramActionDelivery } from "./action-delivery-context.js";
 import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import {
   normalizeTelegramDeliveryPin,
@@ -125,6 +123,7 @@ export async function handleTelegramAction(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     sessionKey?: string | null;
+    agentId?: string | null;
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
     deliveryRetryOwner?: ChannelMessageActionContext["deliveryRetryOwner"];
@@ -439,18 +438,10 @@ export async function handleTelegramAction(
       ...(pin ? { delivery: { pin } } : {}),
       ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
     };
-    const mediaAccess =
-      options?.mediaAccess ??
-      (options?.mediaLocalRoots || options?.mediaReadFile
-        ? {
-            ...(options.mediaLocalRoots ? { localRoots: options.mediaLocalRoots } : {}),
-            ...(options.mediaReadFile ? { readFile: options.mediaReadFile } : {}),
-          }
-        : undefined);
-    const outboundSession = buildOutboundSessionContext({
+    const { mediaAccess, outboundSession } = resolveTelegramActionDelivery({
       cfg,
-      sessionKey: options?.sessionKey,
-      requesterAccountId: accountId,
+      options,
+      accountId,
     });
     const durableResult = await sendDurableMessageBatch({
       cfg,

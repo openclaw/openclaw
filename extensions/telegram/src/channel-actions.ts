@@ -287,6 +287,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         mediaLocalRoots: ctx.mediaLocalRoots,
         mediaReadFile: ctx.mediaReadFile,
         sessionKey: ctx.sessionKey,
+        agentId: ctx.agentId,
         inboundEventKind: ctx.inboundEventKind,
         gatewayClientScopes: ctx.gatewayClientScopes,
         deliveryRetryOwner: ctx.deliveryRetryOwner,
