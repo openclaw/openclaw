@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withTransport } from "./crabline-transport.test-support.js";
+import { telegramApi, withTransport } from "./crabline-transport.test-support.js";
 
 describe("Crabline provider-native inbound message identity", () => {
   it.each([
@@ -51,6 +51,36 @@ describe("Crabline provider-native inbound message identity", () => {
         undefined,
         busState,
       );
+    });
+  });
+
+  it("replies to a Telegram bot send by the message_id Crabline assigned it", async () => {
+    await withTransport("telegram", async (transport) => {
+      const conversation = { id: "100001", kind: "direct" as const };
+      const { post } = telegramApi(transport);
+      await post("sendMessage", { chat_id: conversation.id, text: "first answer" });
+      await post("sendMessage", { chat_id: conversation.id, text: "second answer" });
+      const first = await transport.waitForOutbound({
+        conversation,
+        textIncludes: "first answer",
+        timeoutMs: 1_000,
+      });
+      await transport.sendInbound({
+        conversation,
+        senderId: conversation.id,
+        text: "follow-up",
+        replyToId: first.id,
+      });
+      await expect(post("getUpdates", {})).resolves.toMatchObject({
+        result: [
+          {
+            message: {
+              reply_to_message: { from: { is_bot: true }, text: "first answer" },
+              text: "follow-up",
+            },
+          },
+        ],
+      });
     });
   });
 });

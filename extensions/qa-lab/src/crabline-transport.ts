@@ -31,6 +31,7 @@ import {
 } from "./crabline-provider-targets.js";
 import { cleanupCrablineResources } from "./crabline-resource-cleanup.js";
 import { createCrablineSlackIngress } from "./crabline-slack-ingress.js";
+import { createCrablineTelegramReplies } from "./crabline-telegram-replies.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
 import {
   createQaTransportStateMethods,
@@ -145,6 +146,8 @@ export async function createQaCrablineTransportAdapter(params: {
     const telegramSnapshotMessages = new WeakMap<QaBusMessage, { id: string; deleted?: true }>();
     const outboundEvents: QaTransportOutboundEvent[] = [];
     const discordTargets = new Map<string, QaCrablineTarget>();
+    const telegramReplies =
+      adapter.channel === "telegram" ? createCrablineTelegramReplies() : undefined;
     const discordReplies = await startCrablineDiscordReplies({
       adapter,
       state: baseState,
@@ -228,6 +231,7 @@ export async function createQaCrablineTransportAdapter(params: {
     const resetTransport = () => {
       targetByProviderTarget.clear();
       telegramMessageByProviderId.clear();
+      telegramReplies?.reset();
       pendingTelegramMessagesByChat.clear();
       outboundEvents.length = 0;
       discordTargets.clear();
@@ -323,11 +327,16 @@ export async function createQaCrablineTransportAdapter(params: {
           if (telegramLifecycle?.kind === "sent") {
             telegramSnapshotMessages.set(telegramLifecycle.message, { id: message.id });
           }
+          telegramReplies?.observeSend(event, message.id);
         }
       },
       async addInboundMessage(input: QaBusInboundMessageInput) {
+        const providerInput = createCrablineProviderInboundInput(adapter, input);
         const providerInbound = adapter.createInbound({
-          input: createCrablineProviderInboundInput(adapter, input),
+          input:
+            telegramReplies && input.replyToId
+              ? { ...providerInput, replyToId: telegramReplies.resolve(input.replyToId) }
+              : providerInput,
         });
         const receive = async (signal?: AbortSignal) => {
           const { response, release } = await fetchWithSsrFGuard({
