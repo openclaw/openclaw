@@ -24,6 +24,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import * as nodeRunCommand from "./invoke-run-command.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 import type { SkillBinsProvider } from "./runtime-skill-bins.js";
@@ -355,6 +356,70 @@ describe("node host invoke", () => {
     expect(await list(selected.path)).toMatchObject({
       path: selected.path,
       entries: [{ name: "child", path: path.join(selected.path, "child") }],
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "skips directories and non-executable files in system.which",
+    async () => {
+      const shadowDir = tempDirs.make("openclaw-node-which-shadow-");
+      const binDir = tempDirs.make("openclaw-node-which-bin-");
+      fs.mkdirSync(path.join(shadowDir, "probe"));
+      fs.writeFileSync(path.join(shadowDir, "plain"), "data");
+      for (const name of ["probe", "plain"]) {
+        fs.writeFileSync(path.join(binDir, name), "#!/bin/sh\n");
+        fs.chmodSync(path.join(binDir, name), 0o755);
+      }
+
+      const link = path.join(binDir, "linked");
+      fs.symlinkSync(path.join(binDir, "probe"), link);
+      await withEnvAsync({ PATH: [shadowDir, binDir].join(path.delimiter) }, async () => {
+        const { result } = await invokeCommand("system.which", {
+          bins: [" probe ", "plain", "linked", "missing", "../probe", "dir\\probe", null, 1],
+        });
+        expect(result.ok).toBe(true);
+        expect(JSON.parse(result.payloadJSON ?? "{}")).toEqual({
+          bins: {
+            probe: path.join(binDir, "probe"),
+            plain: path.join(binDir, "plain"),
+            linked: link,
+          },
+        });
+        fs.unlinkSync(path.join(binDir, "probe"));
+        fs.writeFileSync(path.join(binDir, "missing"), "", { mode: 0o755 });
+        const updated = await invokeCommand("system.which", {
+          bins: ["probe", "linked", "missing"],
+        });
+        expect(updated.result.ok).toBe(true);
+        expect(JSON.parse(updated.result.payloadJSON ?? "{}")).toEqual({
+          bins: { missing: path.join(binDir, "missing") },
+        });
+      });
+    },
+  );
+
+  it("finds Windows executables named with their extension in system.which", async () => {
+    const shadowDir = tempDirs.make("openclaw-node-which-win-shadow-");
+    const binDir = tempDirs.make("openclaw-node-which-win-");
+    fs.mkdirSync(path.join(shadowDir, "probe.exe"));
+    for (const name of ["probe.exe", "version.1.exe", "bare"]) {
+      fs.writeFileSync(path.join(binDir, name), "");
+    }
+
+    const { result } = await withMockedPlatform("win32", async () =>
+      withEnvAsync(
+        { PATH: [shadowDir, binDir].join(path.delimiter), PATHEXT: ".EXE;.CMD;.BAT;.COM" },
+        async () =>
+          await invokeCommand("system.which", {
+            bins: ["probe", "probe.exe", "version.1", "bare"],
+          }),
+      ),
+    );
+
+    const probe = path.join(binDir, "probe.exe");
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(result.payloadJSON ?? "{}")).toEqual({
+      bins: { probe, "probe.exe": probe, "version.1": path.join(binDir, "version.1.exe") },
     });
   });
 
