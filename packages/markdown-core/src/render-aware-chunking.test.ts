@@ -81,6 +81,20 @@ it("splits at exact rendered budgets while retaining source and formatting", () 
   }
 });
 
+it("breaks before a link label or angle token that does not fit", () => {
+  const cases: [MarkdownIR, number, string[]][] = [
+    [
+      plainIR("alpha beta gamma delta tail", [], [link(11, 22)]),
+      18,
+      ["alpha beta ", "gamma delta tail"],
+    ],
+    [plainIR("alpha beta <@U1|gamma delta> tail"), 25, ["alpha beta ", "<@U1|gamma delta> tail"]],
+  ];
+  for (const [ir, limit, expected] of cases) {
+    expect(sourceTexts(renderChunks(ir, limit, plainText)), ir.text).toEqual(expected);
+  }
+});
+
 it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
   "keeps internal code whitespace away from message edges: %s",
   (first) => {
