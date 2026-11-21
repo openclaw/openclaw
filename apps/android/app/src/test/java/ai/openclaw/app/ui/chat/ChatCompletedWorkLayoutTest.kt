@@ -21,10 +21,12 @@ import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.IdlingResource
@@ -40,6 +42,7 @@ import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -47,6 +50,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -94,6 +98,7 @@ class ChatCompletedWorkLayoutTest {
   private var previousRuntime: NodeRuntime? = null
   private var restoreAnimatorScale: (() -> Unit)? = null
   private val chatVisible = mutableStateOf(true)
+  private val layoutDirection = mutableStateOf(LayoutDirection.Ltr)
 
   @Volatile private var historyResponse = HISTORY
 
@@ -176,15 +181,17 @@ class ChatCompletedWorkLayoutTest {
       ClawDesignTheme {
         Box(Modifier.size(width = 360.dp, height = 800.dp).background(ClawTheme.colors.canvas).clipToBounds()) {
           if (chatVisible.value) {
-            ChatScreen(
-              viewModel = model,
-              talkActive = false,
-              showSidebarButton = true,
-              onOpenSidebar = {},
-              onToggleTalk = {},
-              onOpenDashboard = {},
-              onOpenGatewaySettings = {},
-            )
+            CompositionLocalProvider(LocalLayoutDirection provides layoutDirection.value) {
+              ChatScreen(
+                viewModel = model,
+                talkActive = false,
+                showSidebarButton = true,
+                onOpenSidebar = {},
+                onToggleTalk = {},
+                onOpenDashboard = {},
+                onOpenGatewaySettings = {},
+              )
+            }
           }
         }
       }
@@ -195,6 +202,53 @@ class ChatCompletedWorkLayoutTest {
         model.chatSessionKey.value == SESSION && !model.chatHistoryLoading.value &&
           model.chatHealthOk.value && model.chatMessages.value.size == 5 && runtime.chat.pendingRunCount.value == 0
       }
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "en-rUS-w360dp-h800dp-mdpi")
+  fun voiceTranscriptAndExpandedToolGuidesFollowLayoutDirection() {
+    val voice =
+      Json
+        .parseToJsonElement(
+          """{"role":"user","content":"📝 \"Check the garden plan.\"","timestamp":1783555000000,
+            "__openclaw":{"id":"voice-guide","media":[{"kind":"audio","contentType":"audio/mp4","transcribed":true}]}}""",
+        ).jsonObject
+    showToolResults(listOf(voice, toolResult("read-guide", "read", "Garden plan ready.", false)))
+    val group = composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction())
+    group.performClick()
+    for (direction in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+      composeRule.runOnIdle { layoutDirection.value = direction }
+      val transcript = composeRule.onNodeWithTag("chat-voice-transcript", useUnmergedTree = true).assertIsDisplayed().getUnclippedBoundsInRoot()
+      val header = group.assertIsDisplayed().getUnclippedBoundsInRoot()
+      val tool = composeRule.onNode(hasText("Read") and hasClickAction()).assertIsDisplayed().getUnclippedBoundsInRoot()
+      val pixels = composeRule.onRoot().captureToImage().asAndroidBitmap()
+      val rtl = direction == LayoutDirection.Rtl
+
+      fun assertStartBar(
+        label: String,
+        left: Float,
+        right: Float,
+        top: Float,
+      ) {
+        val start = if (rtl) right.toInt() - 1 else left.toInt()
+        val end = if (rtl) left.toInt() else right.toInt() - 1
+        val inside = start + if (rtl) -4 else 4
+        // Sample the empty top padding, away from text and icons, on the mdpi fixture.
+        for (y in top.toInt() + 1..top.toInt() + 3) {
+          val background = pixels.getPixel(inside, y)
+          assertions.checkSucceeds { assertTrue("$label has a start bar in $direction", pixels.getPixel(start, y) != background) }
+          assertions.checkSucceeds { assertEquals("$label has no end bar in $direction", background, pixels.getPixel(end, y)) }
+        }
+      }
+
+      assertStartBar("Voice transcript", transcript.left.value, transcript.right.value, transcript.top.value)
+      assertStartBar(
+        "Tool activity",
+        header.left.value + if (rtl) 0f else 7f,
+        header.right.value - if (rtl) 7f else 0f,
+        tool.top.value,
+      )
     }
   }
 
