@@ -83,29 +83,35 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
 
 describe("standalone plugin file startup intent", () => {
   const warning = "standalone plugin file has a manifest without activation.onStartup";
+  const enabled = { entries: { "tool-policy": { enabled: true } } };
 
   it.each([
+    { name: "enabled, manifest omits onStartup", plugins: enabled, warns: true },
     {
-      name: "enabled, manifest omits onStartup",
-      activation: undefined,
-      enabled: true,
+      name: "allowlisted, manifest omits onStartup",
+      plugins: { allow: ["tool-policy"] },
       warns: true,
     },
     {
       name: "enabled, onStartup false",
+      plugins: enabled,
       activation: { onStartup: false },
-      enabled: true,
       warns: false,
     },
-    { name: "not enabled", activation: undefined, enabled: false, warns: false },
-  ])("$name: warns $warns", ({ activation, enabled, warns }) => {
+    {
+      name: "entry disabled",
+      plugins: { entries: { "tool-policy": { enabled: false } } },
+      warns: false,
+    },
+    { name: "plugins disabled", plugins: { ...enabled, enabled: false }, warns: false },
+    { name: "denied", plugins: { ...enabled, deny: ["tool-policy"] }, warns: false },
+    { name: "allowlist excludes it", plugins: { ...enabled, allow: ["other"] }, warns: false },
+  ])("$name: warns $warns", ({ plugins, activation, warns }) => {
     const file = candidate("config", activation ? { activation } : {}, "tool-policy");
     fs.writeFileSync(file.source, "export default { register() {} };", "utf-8");
 
     const registry = loadPluginManifestRegistryCore({
-      config: {
-        plugins: { load: { paths: [file.source] }, entries: { "tool-policy": { enabled } } },
-      },
+      config: { plugins: { ...plugins, load: { paths: [file.source] } } },
       candidates: [file],
     });
 

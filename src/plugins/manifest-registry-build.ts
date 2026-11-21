@@ -80,6 +80,19 @@ function rejectCaseFoldedIdCollisions(
   return records.filter((record) => !rejected.has(record));
 }
 
+// Plugins that policy keeps inactive get no metadata advice they could act on.
+function isInactiveByPolicy(
+  policyId: string,
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>,
+): boolean {
+  return (
+    normalized?.enabled === false ||
+    normalized?.entries[policyId]?.enabled === false ||
+    normalized?.deny.includes(policyId) === true ||
+    Boolean(normalized?.allow.length && !normalized.allow.includes(policyId))
+  );
+}
+
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -88,14 +101,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
   }
-  const policyId = normalizePluginPolicyId(params.record.id);
-  const configuredEntry = params.normalized?.entries[policyId];
-  if (
-    params.normalized?.enabled === false ||
-    configuredEntry?.enabled === false ||
-    params.normalized?.deny.includes(policyId) ||
-    (params.normalized?.allow.length && !params.normalized.allow.includes(policyId))
-  ) {
+  if (isInactiveByPolicy(normalizePluginPolicyId(params.record.id), params.normalized)) {
     return;
   }
   const declaredChannels = params.record.channels
@@ -121,7 +127,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
 }
 
 // A manifestless load.paths file starts with the Gateway; a manifest beside it replaces that
-// intent, so an enabled hook-only file whose manifest omits onStartup silently stops loading.
+// intent, so an enabled file whose manifest omits onStartup starts only through another trigger.
 function pushStandaloneFileStartupIntentDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -130,12 +136,12 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
 }): void {
   const { record, normalized } = params;
   const policyId = normalizePluginPolicyId(record.id);
-  const enabled = normalized?.entries[policyId]?.enabled;
   if (
     record.origin !== "config" ||
     record.activation?.onStartup !== undefined ||
     !params.explicitConfiguredFileSources.has(path.resolve(record.source)) ||
-    !(enabled === true || (enabled !== false && normalized?.allow.includes(policyId)))
+    isInactiveByPolicy(policyId, normalized) ||
+    (normalized?.entries[policyId]?.enabled !== true && !normalized?.allow.includes(policyId))
   ) {
     return;
   }
@@ -144,7 +150,7 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
     pluginId: sanitizeForLog(record.id),
     source: sanitizeForLog(record.manifestPath),
     message:
-      "standalone plugin file has a manifest without activation.onStartup, so it no longer starts with the Gateway and loads only when a declared activation trigger matches (registering hooks is not one); set activation.onStartup to true to start it with the Gateway, or false to keep it lazy",
+      "standalone plugin file has a manifest without activation.onStartup, so it starts with the Gateway only when another declared activation trigger matches (registering hooks is not one); set activation.onStartup to true to keep starting it with the Gateway, or false to keep it lazy",
   });
 }
 
