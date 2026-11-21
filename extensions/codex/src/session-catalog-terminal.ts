@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -12,9 +13,13 @@ import type {
   OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
-import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
+import {
+  resolveCodexAppServerLocalHomeDir,
+  resolveCodexAppServerUserHomeDir,
+} from "./app-server/auth-start-options.js";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
+import { publishCodexCatalogTerminalExit } from "./session-catalog-events.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import {
@@ -51,19 +56,22 @@ export function createCodexTerminalStartNodeHostCommand(): OpenClawPluginNodeHos
         throw new Error("Codex CLI is unavailable; install codex on this node and reconnect");
       }
       // A fresh native CLI owns its account and configuration, not a Gateway agent home.
-      return JSON.stringify(
-        await runNodePtyCommand(
-          {
-            file: resolution.executable,
-            args: params.initialMessage !== undefined ? ["--", params.initialMessage] : [],
-            cwd: params.cwd,
-            requiredCwd: true,
-            cols: params.cols,
-            rows: params.rows,
-          },
-          io,
-        ),
+      const codexHome = process.env.CODEX_HOME
+        ? path.resolve(params.cwd, process.env.CODEX_HOME)
+        : resolveCodexAppServerUserHomeDir();
+      const result = await runNodePtyCommand(
+        {
+          file: resolution.executable,
+          args: params.initialMessage !== undefined ? ["--", params.initialMessage] : [],
+          cwd: params.cwd,
+          requiredCwd: true,
+          cols: params.cols,
+          rows: params.rows,
+        },
+        io,
       );
+      publishCodexCatalogTerminalExit(codexHome);
+      return JSON.stringify(result);
     },
   };
 }
