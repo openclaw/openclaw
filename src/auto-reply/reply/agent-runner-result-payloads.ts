@@ -4,7 +4,6 @@ import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -63,6 +62,7 @@ import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
+  canCompleteMessagingToolDuplicate,
   resolveAutomationReplyState,
   retainAutomationReasoningWithFinal,
 } from "./automation-reply-payloads.js";
@@ -187,14 +187,6 @@ export async function prepareReplyAgentPayloads(state: {
   const committedMessagingToolSourceReplyDelivery =
     hasCommittedSourceReplyDeliveryEvidence(runResult);
   const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
-  // A terminal payload can confirm an earlier progress send as its final answer.
-  // Explicit delivery custody and unfinished/failed turns remain authoritative.
-  const canCompleteFromMessagingToolDuplicate =
-    runResult.sourceReplyDeliveryState === undefined &&
-    (resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) === undefined ||
-      (successfulTerminal &&
-        !pendingContinuation &&
-        followupRun.run.sourceReplyDeliveryMode !== "message_tool_only"));
   const visibleOutboundDelivery = hasVisibleOutboundDeliveryEvidence(runResult);
   const successfulSideEffectDelivery =
     successfulSourceReplyDelivery ||
@@ -226,16 +218,22 @@ export async function prepareReplyAgentPayloads(state: {
   if (replyOperationRunState) {
     replyOperationRunState.replyCompletion = completion;
   }
-  const onDeliveredTerminalDuplicate = canCompleteFromMessagingToolDuplicate
-    ? () => {
-        if (completion.outcome !== "blocked") {
-          completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");
-          if (replyOperationRunState) {
-            replyOperationRunState.replyCompletion = completion;
-          }
-        }
+  const onDeliveredTerminalDuplicate = () => {
+    if (
+      canCompleteMessagingToolDuplicate({
+        result: runResult,
+        completion,
+        successfulTerminal,
+        pendingContinuation,
+        sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode,
+      })
+    ) {
+      completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");
+      if (replyOperationRunState) {
+        replyOperationRunState.replyCompletion = completion;
       }
-    : undefined;
+    }
+  };
   // Compaction notices are progress, not a terminal reply. Dispatcher-backed
   // delivery settles after this run returns, so it cannot prove turn completion here.
   const shouldDeliverTerminalFailure = Boolean(

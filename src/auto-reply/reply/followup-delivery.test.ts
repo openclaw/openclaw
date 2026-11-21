@@ -106,7 +106,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     {
       state: "missing",
       routed: true,
-      outcome: "missing",
+      outcome: "deduped",
       text: "Completed.",
       sourceReplyFinal: undefined,
     },
@@ -118,7 +118,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       sourceReplyFinal: undefined,
     },
     { state: undefined, routed: true, outcome: "deduped", text: "Done", sourceReplyFinal: false },
-    { state: "missing", routed: true, outcome: "missing", text: "Done", sourceReplyFinal: false },
+    { state: "missing", routed: true, outcome: "deduped", text: "Done", sourceReplyFinal: false },
     { state: undefined, routed: false, outcome: "reply", text: "Done", sourceReplyFinal: false },
     { state: undefined, routed: true, outcome: "deduped", text: "✅", sourceReplyFinal: false },
     {
@@ -145,6 +145,61 @@ describe("resolveFollowupDeliveryDecision", () => {
             ? { kind: "deliver", payloads: [{ text }] }
             : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
       );
+    },
+  );
+
+  it.each([
+    "pending",
+    "observer-pending",
+    "legacy-observer-pending",
+    "silent",
+    "observer-error",
+    "failed",
+    "blocked",
+    "continuation",
+    "tool-only",
+  ] as const)(
+    "does not settle a duplicate while %s retains completion authority",
+    async (condition) => {
+      const text = "Completed.";
+      const turn = createTurn();
+      const execution = createSettledExecution(text);
+      execution.outcome.result.sourceReplyDeliveryState =
+        condition === "pending"
+          ? "pending"
+          : condition === "legacy-observer-pending"
+            ? undefined
+            : "missing";
+      execution.outcome.result.messagingToolSentTargets = [{ ...progressTarget, text }];
+      if (condition === "silent") {
+        execution.outcome.result.meta.terminalReply = { disposition: "silent" };
+      }
+      if (condition === "failed") {
+        execution.outcome.status = "failed";
+      }
+      if (condition === "blocked") {
+        execution.outcome.result.meta.error = { kind: "hook_block", message: "Blocked." };
+      }
+      if (condition === "continuation") {
+        execution.outcome.result.meta.continuationPending = true;
+      }
+      if (condition === "tool-only") {
+        turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+      }
+      const onObservedReplyDelivery = vi.fn();
+      const resolveReplyDelivery =
+        condition === "observer-error"
+          ? async () => {
+              throw new Error("Observer unavailable");
+            }
+          : ["observer-pending", "legacy-observer-pending"].includes(condition)
+            ? async () => "pending" as const
+            : undefined;
+      await decide(turn, execution, createAccounting([{ text }]), {
+        onObservedReplyDelivery,
+        resolveReplyDelivery,
+      });
+      expect(onObservedReplyDelivery).not.toHaveBeenCalled();
     },
   );
 
