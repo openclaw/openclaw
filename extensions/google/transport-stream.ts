@@ -59,11 +59,14 @@ import {
 } from "./thinking-api.js";
 import { collectGoogleTransportApiKeys } from "./transport-api-keys.js";
 import {
+  finalizeGoogleContinuationRequest,
+  type prepareGoogleContinuation,
+} from "./transport-continuation.js";
+import {
   assertGoogleRequestSize,
   replaceGooglePartWithText,
   serializeGoogleRequest,
 } from "./transport-request-body.js";
-import { prepareGoogleContinuation } from "./transport-continuation.js";
 import { hasGoogleFirstResponseActivity, parseGoogleSseChunks } from "./transport-stream-sse.js";
 import type {
   CanonicalGoogleTransportApi,
@@ -462,12 +465,35 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
       });
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider);
+        const clawRouterRequestUrl =
+          kind === "google-generative-ai" && model.provider === "clawrouter"
+            ? `${normalizeGoogleApiBaseUrl(model.baseUrl)}/${resolveGoogleModelPath(model.id)}:streamGenerateContent?alt=sse`
+            : undefined;
+        const routedContinuation =
+          clawRouterRequestUrl !== undefined &&
+          new URL(clawRouterRequestUrl).pathname.includes("/v1/native/google-gemini/");
+        let continuation: ReturnType<typeof prepareGoogleContinuation> | undefined;
+        let continuationHeaders: Record<string, string> | undefined;
         const providerContext = supportsGoogleNativeVideo(model)
           ? await resolveProviderContext(context, options)
           : context;
         const videoSlots: GoogleVideoSlots = new Map();
         let params = buildGoogleGenerativeAiParams(model, providerContext, options, videoSlots);
-        const finalJson = prepareFinalModelRequestJson(options);
+        const finalJson = prepareFinalModelRequestJson(
+          options,
+          routedContinuation
+            ? (payload) => {
+                const finalized = finalizeGoogleContinuationRequest(payload, {
+                  model: canonicalModel,
+                  url: clawRouterRequestUrl,
+                  headers: continuationHeaders,
+                  options,
+                });
+                continuation = finalized.continuation;
+                return finalized.request;
+              }
+            : undefined,
+        );
         const nextParams = await applyProviderPayloadHook(options, params, canonicalModel);
         params = nextParams as GoogleGenerateContentRequest;
         const trustedVideoSlots: Record<string, unknown>[] = [];
@@ -499,14 +525,11 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           const origin = resolveGoogleVertexBaseOrigin(model, decodeURIComponent(location));
           requestUrl = `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;
         } else {
-          const baseUrl = normalizeGoogleApiBaseUrl(model.baseUrl);
-          requestUrl = `${baseUrl}/${resolveGoogleModelPath(model.id)}:streamGenerateContent?alt=sse`;
+          requestUrl =
+            clawRouterRequestUrl ??
+            `${normalizeGoogleApiBaseUrl(model.baseUrl)}/${resolveGoogleModelPath(model.id)}:streamGenerateContent?alt=sse`;
         }
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
-        const routedContinuation =
-          kind === "google-generative-ai" &&
-          model.provider === "clawrouter" &&
-          new URL(requestUrl).pathname.includes("/v1/native/google-gemini/");
         // Continuation receipts require every terminal error to survive through HTTP EOF.
         const guardedFetch = routedContinuation
           ? buildGuardedModelFetch(canonicalModel, undefined, { sanitizeSse: false })
@@ -514,7 +537,6 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         if (options?.googleContinuation && !routedContinuation) {
           throw new Error("Google continuation requires the original ClawRouter native route");
         }
-        let continuation: ReturnType<typeof prepareGoogleContinuation> | undefined;
         const openSse = async (apiKeyForRequest: string | undefined) => {
           const optionHeaders = options?.headers;
           let requestHeaders: ModelRequestHeaders;
@@ -559,22 +581,13 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               accept: "text/event-stream",
             };
           }
-          let request = params;
+          const request = params;
           const headers = omitNullRequestHeaders(requestHeaders) ?? {};
           if (routedContinuation) {
             if ("continuationToken" in request || "continuation_token" in request) {
               throw new Error("Google continuation requires a completed response receipt");
             }
-            continuation = prepareGoogleContinuation({
-              model: canonicalModel,
-              url: requestUrl,
-              headers,
-              options,
-              requestBody: serializeGoogleRequest(request, trustedVideoSlots),
-            });
-            if (continuation.token) {
-              request = { ...request, continuationToken: continuation.token };
-            }
+            continuationHeaders = headers;
           }
           const requestContext = {
             model,

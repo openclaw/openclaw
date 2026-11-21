@@ -74,7 +74,8 @@ describe("actual routed Google continuation transport", () => {
     expect(receipt.id).toBe(token);
     const firstCall = guardedFetch.mock.calls[0];
     assert(firstCall);
-    const original = JSON.parse(firstCall[1].body);
+    const original: unknown = await new Request(firstCall[0], firstCall[1]).json();
+    assert(original && typeof original === "object" && !Array.isArray(original));
     guardedFetch.mockResolvedValueOnce(response(frame(stopped)));
     const result = await (
       await start({
@@ -91,7 +92,10 @@ describe("actual routed Google continuation transport", () => {
     expect(url).toBe(
       "https://router.example/v1/native/google-gemini/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse",
     );
-    expect(JSON.parse(request.body)).toEqual({ ...original, continuationToken: token });
+    expect(await new Request(url, request).json()).toEqual({
+      ...original,
+      continuationToken: token,
+    });
     expect(new Headers(request.headers).get("authorization")).toBe("Bearer synthetic-proxy-key");
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("synthetic-proxy-key");
   });

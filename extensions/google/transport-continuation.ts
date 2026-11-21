@@ -1,10 +1,46 @@
 import { createHash } from "node:crypto";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import type { GoogleStreamChunk } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { assertGoogleRequestSize } from "./transport-request-body.js";
 import type { GoogleContinuationOptions } from "./transport-stream-types.js";
 
 const REPLAY_TYPE = "google.generate_content.continuation";
 const MAX_TOKEN_BYTES = 16 * 1024;
+
+/** Bind post-policy generation input before adding the transport-owned replay token. */
+export function finalizeGoogleContinuationRequest(
+  payload: unknown,
+  params: Omit<Parameters<typeof prepareGoogleContinuation>[0], "requestBody" | "headers"> & {
+    headers: Record<string, string> | undefined;
+  },
+) {
+  if (!params.headers) {
+    throw new Error("Google continuation request headers are unavailable");
+  }
+  if (!isRecord(payload) || "continuationToken" in payload || "continuation_token" in payload) {
+    throw new Error("Google continuation requires token-free final generation input");
+  }
+  const requestBody = JSON.stringify(payload);
+  if (requestBody === undefined) {
+    throw new Error("Google continuation requires token-free final generation input");
+  }
+  const request: unknown = JSON.parse(requestBody);
+  if (!isRecord(request) || "continuationToken" in request || "continuation_token" in request) {
+    throw new Error("Google continuation requires token-free final generation input");
+  }
+  const continuation = prepareGoogleContinuation({
+    ...params,
+    headers: params.headers,
+    requestBody,
+  });
+  if (continuation.token) {
+    request.continuationToken = continuation.token;
+  }
+  // Policy has finished: reject oversize wire input without dropping more media.
+  assertGoogleRequestSize(Buffer.byteLength(JSON.stringify(request), "utf8"));
+  return { request, continuation };
+}
 
 function isToken(value: unknown): value is string {
   return (
