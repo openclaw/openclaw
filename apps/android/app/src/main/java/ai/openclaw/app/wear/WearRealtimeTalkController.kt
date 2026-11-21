@@ -449,7 +449,7 @@ internal class WearRealtimeTalkController(
   ) {
     synchronized(lifecycleStateLock) {
       if (!isCurrent(owner, activeSessionId)) return
-      val text = obj["text"].asStringOrNull()?.takeIf(String::isNotBlank) ?: return
+      val text = obj["text"].asStringOrNull()?.takeIf(String::isNotEmpty) ?: return
       val final = obj["final"].asBooleanOrNull() == true
       val role =
         when (obj["role"].asStringOrNull()) {
@@ -457,7 +457,7 @@ internal class WearRealtimeTalkController(
           "assistant" -> WearRealtimeTalkRole.ASSISTANT
           else -> return
         }
-      upsertConversation(role, text, final)
+      upsertConversation(role, text, final, snapshot = obj["textMode"].asStringOrNull() == "snapshot")
       if (role == WearRealtimeTalkRole.USER && final) {
         updateActiveState(ActiveTalkState.Thinking)
       }
@@ -665,19 +665,28 @@ internal class WearRealtimeTalkController(
     role: WearRealtimeTalkRole,
     text: String,
     final: Boolean,
+    snapshot: Boolean,
   ) {
     val entries = conversation.toMutableList()
     val entryId = streamingEntryIds[role] ?: UUID.randomUUID().toString()
     val index = entries.indexOfFirst { entry -> entry.id == entryId }
+    val previous = entries.getOrNull(index)
+    val append = !final && !snapshot
+    val mergedText = if (append) previous?.text.orEmpty() + text else text
+
+    // Relay deltas extend the retained text; a snapshot or final transcript replaces it.
+    // Once the retention budget drops text, deltas cannot make that reply complete again.
+    val fullTextAvailable =
+      (!append || previous?.fullTextAvailable != false) && mergedText.length <= WearReplyText.MAX_TEXT_LENGTH
     val entry =
       WearRealtimeTalkEntry(
         id = entryId,
         role = role,
-        text = if (text.length <= WearReplyText.MAX_TEXT_LENGTH) text else WearReplyText.preview(text),
+        text = if (fullTextAvailable) mergedText else WearReplyText.preview(mergedText),
         streaming = !final,
-        textTruncated = text.length > WearReplyText.MAX_TEXT_LENGTH,
-        fullTextAvailable = text.length <= WearReplyText.MAX_TEXT_LENGTH,
-        textRevision = (entries.getOrNull(index)?.textRevision ?: 0L) + 1L,
+        textTruncated = !fullTextAvailable,
+        fullTextAvailable = fullTextAvailable,
+        textRevision = (previous?.textRevision ?: 0L) + 1L,
       )
     if (index >= 0) {
       entries[index] = entry
