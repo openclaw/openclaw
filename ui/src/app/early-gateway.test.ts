@@ -9,7 +9,12 @@ import {
   useNodeFakeTimers,
   wsInstances,
 } from "../api/gateway-socket.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../lib/sessions/session-capability.test-support.ts";
 import type { startControlUi } from "../main.runtime.ts";
+import { chatHistoryRequestParams } from "../pages/chat/chat-history-request-params.ts";
 import {
   discardPrewarmedChatSnapshot,
   peekPrewarmedChatSnapshot,
@@ -288,6 +293,80 @@ async function connectWarmGateway() {
   await vi.advanceTimersByTimeAsync(0);
   return socket;
 }
+
+it.each(["cold", "before", "after"])(
+  "starts inline history before transferring it to the ready foreground consumer (%s cache)",
+  async (cache) => {
+    saveSettings({ ...loadSettings(), chatInlineCommands: true });
+    window.history.replaceState({}, "", "/chat/main/warm");
+    const warm = cache === "cold" ? undefined : prepareWarmSnapshot();
+    const initial = warm?.initial ?? prepareApplicationStartup();
+    early ??= startEarlyApplicationGateway(initial);
+    if (!early?.credentials) {
+      throw new Error("Expected an early Gateway connection");
+    }
+    if (cache === "before") {
+      await warm!.resolve();
+    }
+    const socket = await connectWarmGateway();
+    if (cache === "after") {
+      await warm!.resolve();
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual([
+      "connect",
+      "sessions.messages.subscribe",
+    ]);
+
+    const { transport } = early;
+    const h = createGatewayHarness(transport.client);
+    const sessions = createTestSessionCapability(h.gateway);
+    expect(
+      transport.adopt({
+        url: initial.settings.gatewayUrl,
+        token: initial.settings.token,
+        onEvent: h.emitEvent,
+      }),
+    ).toBe(transport.client);
+    const {
+      sessionKey: _key,
+      agentId: _agent,
+      ...initialHistory
+    } = chatHistoryRequestParams(
+      "chat.startup",
+      "agent:main:warm",
+      undefined,
+      warm ? "warm-cursor" : undefined,
+      [],
+      warm ? { stateRevision: { commands: "commands-1" }, commands: [] } : undefined,
+    );
+    const pending = sessions.subscribeMessages("agent:main:warm", {
+      includeLiveToolOutput: true,
+      initialHistory,
+    });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    const subscriptions = socket.sent
+      .map((frame) => JSON.parse(frame))
+      .filter((frame) => frame.method === "sessions.messages.subscribe");
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0].params).toMatchObject({
+      key: "agent:main:warm",
+      includeLiveToolOutput: true,
+      initialHistory,
+    });
+    const receipt = { ok: true, payload: { messages: [{ role: "user", content: "Question" }] } };
+    socket.emitMessage({
+      type: "res",
+      id: subscriptions[0].id,
+      ok: true,
+      payload: { key: "agent:main:warm", initialHistory: receipt },
+    });
+    expect((await pending).initialHistory).toEqual(receipt);
+    expect(wsInstances).toHaveLength(1);
+  },
+);
 
 it.each(["before", "after"])(
   "requests warm cursor history prepared %s hello before mounting the pane",

@@ -29,7 +29,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("defers hidden transcripts, retains revealed content, and cancels a closed pane's mount", async () => {
+it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestoring) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const clock = createFrameClock();
   vi.stubGlobal("requestAnimationFrame", clock.request);
@@ -176,11 +176,12 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
   const warmYield = Promise.withResolvers<void>();
   vi.stubGlobal("scheduler", { yield: () => warmYield.promise });
-  const warm = mountPane("mount-held-warm", true);
+  const warm = mountPane("mount-held-warm", isRestoring);
   const warmComposer = warm.getByRole("textbox");
   expect(warm.container.querySelector('.chat-thread[role="log"]')).toBeNull();
   expect(warm.container.querySelector(".chat-conversation-loading")).toBeNull();
   warm.update({ chat: { ...warm.chat, messages: latest.messages } });
+  document.documentElement.setAttribute("data-openclaw-warm-frame", "fallback");
   warmYield.resolve();
   await warmYield.promise;
   flush();
@@ -191,12 +192,18 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   expect(warm.container.textContent).not.toContain("Initial history");
   warm.unmount();
 
+  document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
   const closedWarmYield = Promise.withResolvers<void>();
   vi.stubGlobal("scheduler", { yield: () => closedWarmYield.promise });
-  const closedWarm = mountPane("mount-closed-warm", true);
+  const closedWarm = mountPane("mount-closed-warm", isRestoring);
   closedWarm.unmount();
   closedWarmYield.resolve();
   await closedWarmYield.promise;
   flush();
   expect(closedWarm.chat.transcript.renderedSessionKey).toBeNull();
+
+  const warmCreated = mountPane("mount-held-created", isRestoring, true);
+  expect(warmCreated.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
+  expect(warmCreated.container.querySelector(".chat-conversation-loading")).toBeNull();
+  warmCreated.unmount();
 });

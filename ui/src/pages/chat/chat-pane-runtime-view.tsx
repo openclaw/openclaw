@@ -153,7 +153,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     }
     const prepare = async () => {
       await pendingSnapshot;
-      if (runtime.context.theme.settings.chatInlineCommands) {
+      if (!disposed && runtime.context.theme.settings.chatInlineCommands) {
         preparedInlineCommands = await inlineCommandPresentation();
       }
     };
