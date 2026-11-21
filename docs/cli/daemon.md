@@ -30,7 +30,7 @@ openclaw daemon uninstall
 | `uninstall` | `--json`                                                                                                       |
 | `start`     | `--json`                                                                                                       |
 | `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)                 |
-| `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                                          |
+| `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--preserve-definition`, `--json`                 |
 
 `--json` is accepted before or after every subcommand (for example, `daemon --json status` and `daemon status --json`).
 
@@ -40,6 +40,7 @@ openclaw daemon uninstall
 - Node is the primary, default, and recommended service runtime. Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `install --runtime bun`.
 - `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` normally uses the service manager directly. On Windows, commands launched from a Gateway service automatically use the [safe restart path](/cli/gateway#restart-the-gateway). Explicit lifecycle controls retain their behavior. `--force` is the immediate override.
 - `restart --safe --skip-deferral`: bypasses only the active-work deferral gate. Shutdown may still wait for pending replies to drain before the Gateway process exits. Requires `--safe`.
+- Use `restart --preserve-definition` to restart an inspectable native service without automatically rewriting its definition. The health check uses the installed launcher's port. See [Gateway service lifecycle](/cli/gateway/service) for requirements and platform behavior.
 
 ## Notes
 
