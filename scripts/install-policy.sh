@@ -313,12 +313,41 @@ resolve_git_openclaw_ref() {
     local requested="${OPENCLAW_VERSION:-latest}"
     local resolved_version=""
 
+    # --beta must steer the git ref the same way it steers the npm and Bun engine
+    # channels, or a git install silently builds the stable release (or main)
+    # despite the user asking for the beta channel.
+    if [[ "${USE_BETA:-0}" == "1" && ( -z "$requested" || "$requested" == "latest" ) ]]; then
+        requested=beta
+    fi
+
     case "$requested" in
         ""|latest|next|beta)
             resolved_version="$(installer_npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+            # Some npm variants print "undefined"/"null" for a missing dist-tag
+            # (resolve_beta_version guards the same); treat those as unresolved.
+            if [[ "$resolved_version" == "undefined" || "$resolved_version" == "null" ]]; then
+                resolved_version=""
+            fi
+            if [[ -z "$resolved_version" && "$requested" == "beta" ]]; then
+                # Documented channel contract: --beta is "beta if available,
+                # else latest" — the same fallback the npm and Bun engine
+                # channels apply. Never hand checkout the literal "beta": no
+                # such git ref exists, so the install would fail outright.
+                resolved_version="$(installer_npm view "openclaw" "dist-tags.latest" 2>/dev/null || true)"
+                if [[ "$resolved_version" == "undefined" || "$resolved_version" == "null" ]]; then
+                    resolved_version=""
+                fi
+                if [[ -n "$resolved_version" ]]; then
+                    printf 'Warning: could not resolve the beta release tag; falling back to the latest stable release.\n' >&2
+                fi
+            fi
             if [[ -n "$resolved_version" ]]; then
                 echo "v${resolved_version}"
-            elif [[ -z "$requested" || "$requested" == "latest" ]]; then
+            elif [[ -z "$requested" || "$requested" == "latest" || "$requested" == "beta" ]]; then
+                # npm is not installed yet (or the registry lookup failed): a
+                # git install has no release tag to pin. Surface that instead of
+                # silently checking out unreleased main.
+                printf 'Warning: could not resolve the %s release tag (npm registry lookup failed); falling back to the main branch.\n' "${requested:-latest}" >&2
                 echo "main"
             else
                 echo "$requested"
