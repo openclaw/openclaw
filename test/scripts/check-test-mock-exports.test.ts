@@ -1,10 +1,14 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-test-mock-exports.mts";
 import { scanClosedMockFactories } from "../../scripts/lib/mock-factory-scan.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import {
+  buildCmdExeCommandLine,
+  resolveWindowsCmdExePath,
+} from "../../scripts/windows-cmd-helpers.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
@@ -19,6 +23,97 @@ function git(cwd: string, ...args: string[]) {
 }
 
 describe("first-party mock export ratchet", () => {
+  it("prunes through the package CLI in a code-only checkout with qualified real tooling", () => {
+    const root = temporary.make("openclaw-mock-exports-cli-");
+    const owner = path.resolve(import.meta.dirname, "../..");
+    const manifestPath = path.join(root, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(path.join(owner, "package.json"), "utf8"));
+    const command = manifest.scripts["check:test-mock-exports"];
+    const ownerBaseline = path.join(owner, "config/test-mock-exports-baseline.txt");
+    const originalBaseline = fs.readFileSync(ownerBaseline);
+    const originalManifest = fs.readFileSync(path.join(owner, "package.json"));
+    // Copy actual local implementations: links would bootstrap from the installed owner.
+    for (const directory of ["scripts", "test/vitest"]) {
+      fs.cpSync(path.join(owner, directory), path.join(root, directory), { recursive: true });
+    }
+    fs.mkdirSync(path.join(root, "src"));
+    fs.mkdirSync(path.join(root, "config"));
+    fs.writeFileSync(path.join(root, ".gitignore"), "scripts/\ntest/vitest/\n");
+    Object.assign(manifest, { name: "example", exports: { "./value": "./src/value.ts" } });
+    const writeManifest = () => fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeManifest();
+    fs.writeFileSync(path.join(root, "src/value.ts"), "export const read = () => 1;\n");
+    const file = path.join(root, "test/obsolete.test.ts");
+    const obsolete = 'vi.mock("example/value", () => ({ obsolete: vi.fn() }));\n';
+    const retained = 'vi.mock("example/value", () => ({ read: vi.fn() }));\n';
+    fs.writeFileSync(file, obsolete);
+    fs.writeFileSync(path.join(root, "test/retained.test.ts"), retained);
+    git(root, "init");
+    git(
+      root,
+      "remote",
+      "add",
+      "origin",
+      execFileSync("git", ["remote", "get-url", "origin"], { cwd: owner, encoding: "utf8" }).trim(),
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-m", "initial factories");
+    const env: NodeJS.ProcessEnv = { ...createNestedGitEnv(), OPENCLAW_PR_TOOLING_ROOT: owner };
+    for (const key of [
+      "NODE_OPTIONS",
+      "NODE_PATH",
+      "PNPM_CONFIG_MODULES_DIR",
+      "pnpm_config_modules_dir",
+      "npm_config_modules_dir",
+      "OPENCLAW_PR_GIT",
+    ]) {
+      delete env[key];
+    }
+    const run = (...forwarded: string[]) => {
+      const args = ["run", "check:test-mock-exports", "--base", "HEAD", ...forwarded];
+      const windows = process.platform === "win32";
+      return spawnSync(
+        windows ? resolveWindowsCmdExePath(env) : "pnpm",
+        windows ? ["/d", "/s", "/c", buildCmdExeCommandLine("pnpm.cmd", args)] : args,
+        { cwd: root, env, encoding: "utf8", windowsVerbatimArguments: windows },
+      );
+    };
+    const initialized = run("--prune");
+    expect(initialized, initialized.stderr).toMatchObject({ status: 0 });
+    const baseline = path.join(root, "config/test-mock-exports-baseline.txt");
+    const entries = () =>
+      fs
+        .readFileSync(baseline, "utf8")
+        .split("\n")
+        .filter((line) => line.startsWith("["));
+    const approved = entries();
+    expect(approved).toHaveLength(2);
+    git(root, "add", ".");
+    git(root, "commit", "-m", "approved factories");
+    fs.rmSync(file);
+    manifest.scripts["check:test-mock-exports"] =
+      "node --import ./scripts/tsx.mjs scripts/check-test-mock-exports.mts";
+    writeManifest();
+    const red = run("--prune");
+    expect(red.status).toBe(1);
+    expect(red.stderr).toContain("Repository dependencies are missing");
+    expect(entries()).toEqual(approved);
+    manifest.scripts["check:test-mock-exports"] = command;
+    writeManifest();
+    const green = run("--prune");
+    expect(green, green.stderr).toMatchObject({ status: 0 });
+    expect(entries()).toEqual(
+      approved.filter((entry) => JSON.parse(entry)[0] === "test/retained.test.ts"),
+    );
+    expect(entries()).toHaveLength(1);
+    const guard = run();
+    expect(guard, guard.stderr).toMatchObject({ status: 0 });
+    expect(guard.stdout).toContain("1 grandfathered factories");
+    expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
+    expect(fs.readFileSync(ownerBaseline)).toEqual(originalBaseline);
+    expect(fs.readFileSync(path.join(owner, "package.json"))).toEqual(originalManifest);
+  });
+
   it("distinguishes real module pass-through, isolation, and closed or unproven factories", () => {
     const cases: [string, number][] = [
       ...[
