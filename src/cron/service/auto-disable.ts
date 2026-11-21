@@ -1,5 +1,5 @@
-// The only scheduler writer of `enabled = false` (auto-disable.ratchet.test.ts). A job off
-// without `state.autoDisabled` was turned off by its owner, finished, or predates the record.
+// The scheduler's writer of recorded stops. A job off without `state.autoDisabled` was turned
+// off by its owner, finished, or predates the record.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import type { CronFailureNotificationDetail, CronJob, CronJobState } from "../types.js";
@@ -11,14 +11,13 @@ type CronAutoDisabled = NonNullable<CronJobState["autoDisabled"]>;
 type CronStopNotice = {
   failureNotificationDetail?: CronFailureNotificationDetail;
   cause?: string;
+  gone?: CronAutoDisabled["gone"];
   /** The conversation that is gone cannot take the notice; its agent gets it instead. */
   unavailableSessionKey?: string;
 };
 
 /** A stop requested through a job update by Gateway code outside the scheduler loop. */
-export type CronAutoDisableRequest =
-  | { reason: "completed" }
-  | (CronStopNotice & { reason: "source-unavailable" });
+export type CronAutoDisableRequest = CronStopNotice & { reason: "source-unavailable" };
 
 /** `completed` is silent and unrecorded: the job did what it was for. */
 type CronStop =
@@ -99,6 +98,7 @@ export function autoDisableCronJob(job: CronJob, stop: CronStop): boolean {
       stop.reason === "schedule-errors"
         ? job.state.scheduleErrorCount || 1
         : (job.state.consecutiveErrors ?? 0),
+    ...(stop.reason === "source-unavailable" && stop.gone ? { gone: stop.gone } : {}),
   };
   job.state.autoDisabled = autoDisabled;
   stop.state.deps.log.warn(

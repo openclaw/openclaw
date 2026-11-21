@@ -202,8 +202,5 @@ export async function consumeDrainedExit(
   precondition: Parameters<CronService["updateWithPrecondition"]>[2],
   commitGuard: () => void,
 ): Promise<void> {
-  await cron.updateWithPrecondition(jobId, {}, precondition, {
-    commitGuard,
-    autoDisable: { reason: "completed" },
-  });
+  await cron.updateWithPrecondition(jobId, { enabled: false }, precondition, { commitGuard });
 }

@@ -254,13 +254,11 @@ export function planCronJobMutation(
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
       if (options.autoDisable) {
-        const stop = options.autoDisable;
-        autoDisableCronJob(
-          nextJob,
-          stop.reason === "completed"
-            ? stop
-            : { ...stop, state: policy, deferredNotifications: plan.notifications },
-        );
+        autoDisableCronJob(nextJob, {
+          ...options.autoDisable,
+          state: policy,
+          deferredNotifications: plan.notifications,
+        });
       }
       if (options.bindSourceConversation) {
         assertCronBindApplies(previousJob, options.bindSourceConversation);
@@ -360,6 +358,7 @@ export function planCronJobMutation(
       autoDisableCronJob(nextJob, {
         reason: "source-unavailable",
         cause: "Its owner changed, so it needs fresh authority from the new owner.",
+        gone: "owner",
         state: policy,
         deferredNotifications: plan.notifications,
       });

@@ -424,6 +424,8 @@ const CronAutoDisabledSchema = closedObject({
   ]),
   atMs: CronDateTimestampMsSchema,
   consecutiveErrors: Type.Integer({ minimum: 0 }),
+  /** What a source-unavailable stop lost, so the user is told what to restore. */
+  gone: Type.Optional(stringLiteralUnion(["conversation", "owner", "access", "plugin"])),
 });
 
 const CronJobRuntimeFeedbackProperties = {

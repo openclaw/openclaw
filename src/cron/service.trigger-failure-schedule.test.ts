@@ -166,7 +166,11 @@ describe("a scheduled trigger script that throws", () => {
       const job = h.cron.getJob(h.job.id)!;
       expect(job.enabled).toBe(false);
       expect(job.state.nextRunAtMs).toBeUndefined();
-      expect(job.state.autoDisabled).toMatchObject({ reason: "source-unavailable", atMs: dueAtMs });
+      expect(job.state.autoDisabled).toMatchObject({
+        reason: "source-unavailable",
+        atMs: dueAtMs,
+        gone: "access",
+      });
       const notices = h.enqueueSessionEvent.mock.calls.map(([text]) => text);
       expect(notices).toEqual([expect.stringContaining("is turned off")]);
       expect(notices[0]).toContain("access of the person who created it was refused");

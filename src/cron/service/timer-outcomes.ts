@@ -3,6 +3,7 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
+import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
@@ -293,6 +294,11 @@ export function applyJobResult(
         reason: "source-unavailable",
         state,
         cause: result.error,
+        gone: result.parentUnavailable
+          ? "conversation"
+          : isPluginCommandCronJob(job)
+            ? "plugin"
+            : "access",
         unavailableSessionKey: result.parentUnavailable?.parentSessionKey,
         deferredNotifications: opts.replay ? [] : opts.deferredNotifications,
       });

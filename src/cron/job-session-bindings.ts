@@ -167,6 +167,7 @@ export async function disableCronJobsBoundToSessions(params: {
         autoDisable: {
           reason: "source-unavailable",
           cause: `Its conversation \`${parentSessionKey}\` was archived.`,
+          gone: "conversation",
           unavailableSessionKey: parentSessionKey,
         },
       });

@@ -21,7 +21,9 @@ export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }
   const outcome = () => {
     const stopped = props.job.state.autoDisabled;
     if (stopped) {
-      return t(`cron.attention.resume.${stopped.reason}`);
+      return stopped.gone
+        ? t(`cron.attention.goneResume.${stopped.gone}`)
+        : t(`cron.attention.resume.${stopped.reason}`);
     }
     if (isCronJobRunning(props.job)) {
       return t("cron.attention.running");
@@ -37,11 +39,13 @@ export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }
         <span class="cron-failure-details__dot" aria-hidden="true" />
         <span class="cron-failure-details__copy">
           <strong>
-            {props.job.state.autoDisabled
-              ? t(`cron.attention.stopped.${props.job.state.autoDisabled.reason}`, {
-                  count: String(props.job.state.autoDisabled.consecutiveErrors),
-                })
-              : t("cron.attention.title")}
+            {props.job.state.autoDisabled?.gone
+              ? t(`cron.attention.gone.${props.job.state.autoDisabled.gone}`)
+              : props.job.state.autoDisabled
+                ? t(`cron.attention.stopped.${props.job.state.autoDisabled.reason}`, {
+                    count: String(props.job.state.autoDisabled.consecutiveErrors),
+                  })
+                : t("cron.attention.title")}
           </strong>
           <span class="cron-failure-details__outcome">
             {" · "}

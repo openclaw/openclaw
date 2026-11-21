@@ -34,6 +34,27 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   expect(warning?.textContent).not.toContain("Paused");
 });
 
+it("names what a source-unavailable stop lost and how to restore it", async () => {
+  const job = createJob("archived", {
+    enabled: false,
+    state: {
+      autoDisabled: {
+        reason: "source-unavailable",
+        atMs: 10,
+        consecutiveErrors: 0,
+        gone: "conversation",
+      },
+      lastRunStatus: "error",
+    },
+  });
+  const container = await renderView({ editingJob: job, detailTab: "history" });
+  const warning = container.querySelector(".cron-failure-details")?.textContent;
+  expect(warning).toContain(
+    "Turned off because the conversation it runs in was archived or deleted",
+  );
+  expect(warning).toContain("Restore the conversation or move the automation to another one");
+});
+
 it("does not flag a manually paused historical error as an active failure", async () => {
   const job = createJob("paused", {
     enabled: false,

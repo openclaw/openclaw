@@ -103,11 +103,24 @@ const enCron = {
         "source-unavailable": "Turned off because something it needs is no longer available",
         failed: "One-time run failed",
       },
+      gone: {
+        conversation: "Turned off because the conversation it runs in was archived or deleted",
+        owner: "Turned off because its owner changed",
+        access: "Turned off because the access of the person who created it was refused",
+        plugin: "Turned off because the plugin that runs it was replaced or removed",
+      },
       resume: {
         "consecutive-failures": "Fix the cause, then switch Active back on to resume.",
         "schedule-errors": "Correct the schedule, then switch Active back on to resume.",
         "source-unavailable": "Restore what it needs, then switch Active back on to resume.",
         failed: "It will not try again. Use Run now to try again.",
+      },
+      goneResume: {
+        conversation:
+          "Restore the conversation or move the automation to another one, then switch Active back on.",
+        owner: "Ask the new owner to switch Active back on.",
+        access: "Ask the person who created it to switch Active back on.",
+        plugin: "Enable the plugin again, then switch Active back on.",
       },
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
