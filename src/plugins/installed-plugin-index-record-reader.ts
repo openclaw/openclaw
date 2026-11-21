@@ -12,7 +12,10 @@ import {
   type PluginInstallRecordMapState,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { tryReadJsonObjectSync as readJsonObjectFileSync } from "../infra/json-files.js";
+import {
+  tryReadJson5ObjectSync,
+  tryReadJsonObjectSync as readJsonObjectFileSync,
+} from "../infra/json-files.js";
 import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -70,7 +73,7 @@ function hasPackagePluginMetadata(manifest: Record<string, unknown>): boolean {
 }
 
 function readManifestPluginId(packageDir: string): string | undefined {
-  const manifest = readJsonObjectFileSync(path.join(packageDir, "openclaw.plugin.json"));
+  const manifest = tryReadJson5ObjectSync(path.join(packageDir, "openclaw.plugin.json"));
   const id = typeof manifest?.id === "string" ? manifest.id.trim() : "";
   return id || undefined;
 }
@@ -250,14 +253,12 @@ function emitManagedNpmRecoveryFallbackWarning(params: {
 
 function buildRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
+  candidates: readonly RecoveredManagedNpmInstallCandidate[],
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
   const records = createPluginInstallRecordMap<PluginInstallRecord>();
-  const candidatesByPluginId = groupPluginRecords(
-    listRecoveredManagedNpmInstallCandidates(options),
-    (candidate) => candidate.pluginId,
-  );
+  const candidatesByPluginId = groupPluginRecords(candidates, (candidate) => candidate.pluginId);
   for (const [pluginId, candidates] of candidatesByPluginId) {
     // The install ledger is the active-generation authority. Directory order,
     // version, and recency may only break ties when that authority is absent.
@@ -424,14 +425,49 @@ function mergeRecoveredManagedNpmRecord(params: {
   return params.persisted ?? params.recovered;
 }
 
+/**
+ * A released strict reader could persist an install record keyed by the npm
+ * package name when it could not read a JSON5 manifest id. Rekey such records
+ * to the recovered manifest id (retaining the record value and its metadata)
+ * so the manifest-id path regains the active-path authority and persisted
+ * metadata that the recovery merge otherwise would discard.
+ */
+function rekeyPersistedManagedNpmInstallRecords(
+  persisted: Record<string, PluginInstallRecord> | null,
+  candidates: readonly RecoveredManagedNpmInstallCandidate[],
+): Record<string, PluginInstallRecord> | null {
+  if (!persisted) {
+    return null;
+  }
+  const rekeyed = copyPluginInstallRecordMap(persisted);
+  for (const candidate of candidates) {
+    if (getPluginInstallRecordMapEntry(rekeyed, candidate.pluginId)) {
+      continue;
+    }
+    for (const [persistedId, persistedRecord] of Object.entries(rekeyed)) {
+      if (
+        persistedId !== candidate.pluginId &&
+        recordsShareInstallPath(persistedRecord, candidate.installRecord)
+      ) {
+        setPluginInstallRecordMapEntry(rekeyed, candidate.pluginId, persistedRecord);
+        delete rekeyed[persistedId];
+        break;
+      }
+    }
+  }
+  return rekeyed;
+}
+
 /** Merges persisted records with managed npm installs recovered from the current root. */
 function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
-  const recovered = buildRecoveredManagedNpmInstallRecords(persisted, options);
-  const merged = copyPluginInstallRecordMap(persisted ?? undefined);
+  const candidates = listRecoveredManagedNpmInstallCandidates(options);
+  const rekeyed = rekeyPersistedManagedNpmInstallRecords(persisted, candidates);
+  const recovered = buildRecoveredManagedNpmInstallRecords(rekeyed, candidates, options);
+  const merged = copyPluginInstallRecordMap(rekeyed ?? undefined);
   for (const [pluginId, record] of Object.entries(recovered)) {
     setPluginInstallRecordMapEntry(
       merged,
