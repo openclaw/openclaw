@@ -104,6 +104,9 @@ In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `do
 
 - Sync metadata is written to `.openclaw-sync/source.json` in the publish repo.
 - Source repo secret: `OPENCLAW_DOCS_SYNC_TOKEN`
+- Source sync prepares and validates one immutable candidate, then opens a PR in `openclaw/docs`. It reports publication only after a normal squash merge and verification of the merged content and source metadata.
+- The target must enforce strict `Publication merge admission` status checks from the GitHub Actions App, reject non-fast-forward updates, and have no bypass actors. An administrator owns activation and verifies any bypass fields hidden from the source token. The source token never posts this status.
+- A pending check, moved target base, unresolved mirror PR, or orphan `automation/docs-mirror/` branch holds publication with a recovery URL. Inspect and resolve that candidate before retrying; the publisher neither rewrites nor deletes it. A moved base needs fresh source validation, not a manual rebase of the prepared candidate.
 - Publish repo secret: `OPENCLAW_DOCS_I18N_OPENAI_API_KEY`
 - If locale output looks stale, check the `Translate All` workflow in `openclaw/docs` first.
 

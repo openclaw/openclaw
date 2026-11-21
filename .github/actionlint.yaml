@@ -92,3 +92,6 @@ paths:
   .github/workflows/ci-check-routine-testbox.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/docs-sync-publish.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
