@@ -2,7 +2,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeOptionalAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
-import type { CronJob, CronMessageChannel } from "../types.js";
+import type { CronDelivery, CronJob, CronMessageChannel } from "../types.js";
 
 export type CronNotificationRouting = { defaultAgentId?: string };
 
@@ -18,7 +18,7 @@ export function captureCronNotificationRouting(
 
 export type CronNotificationJob = Pick<
   CronJob,
-  "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "wakeMode"
+  "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "wakeMode" | "owner"
 > & {
   state: Pick<
     CronJob["state"],
@@ -33,6 +33,7 @@ export function cronNotificationJob(job: CronJob): CronNotificationJob {
     agentId: job.agentId,
     sessionTarget: job.sessionTarget,
     sessionKey: job.sessionKey,
+    owner: job.owner ? { ...job.owner } : undefined,
     wakeMode: job.wakeMode,
     state: {
       lastRunAtMs: job.state.lastRunAtMs,
@@ -46,14 +47,23 @@ export function resolveCronNotificationQueueOwner(
   job: CronNotificationJob,
   kind: CronNotificationIntent["kind"],
 ) {
-  const sessionKey = kind === "failure-alert" ? resolveCronDeliverySessionKey(job) : job.sessionKey;
+  const owner = kind === "auto-disabled" ? job.owner : undefined;
+  const ownerSessionKey = owner?.sessionKey?.trim() || undefined;
+  const sessionKey =
+    kind === "failure-alert"
+      ? resolveCronDeliverySessionKey(job)
+      : (ownerSessionKey ?? job.sessionKey);
   const agentId =
+    normalizeOptionalAgentId(owner?.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(ownerSessionKey)?.agentId) ??
     normalizeOptionalAgentId(job.agentId) ??
     normalizeOptionalAgentId(parseAgentSessionKey(sessionKey)?.agentId);
   return { agentId, sessionKey };
 }
 
 type CronFailureAlertRoute = {
+  target?: CronDelivery["target"];
+  directPolicy?: CronDelivery["directPolicy"];
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";
@@ -82,7 +92,7 @@ export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
       kind: "failure-repair";
       job: CronNotificationJob;
       text: string;
-      fallback?: CronFailureAlertNotification;
+      fallback: CronFailureAlertNotification;
     }
   | CronFailureAlertNotification
 );

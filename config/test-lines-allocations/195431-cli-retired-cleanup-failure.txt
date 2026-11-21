@@ -1,0 +1,3 @@
+# CLI live-session registry regression: after a retired session cleanup fails, a later turn
+# starts a replacement instead of repeating the stale failure for the life of the process.
+2

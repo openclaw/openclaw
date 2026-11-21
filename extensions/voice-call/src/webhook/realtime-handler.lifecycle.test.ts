@@ -130,6 +130,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     const { handler } = createCarrierLifecycleHarness(() => createBridge(vi.fn()));
 
     handler.issueStreamSession({
+      providerName: "twilio",
       callId: "call-never-connected",
       from: "+15550001111",
       to: "+15550002222",
@@ -478,7 +479,9 @@ describe("RealtimeCallHandler lifecycle", () => {
       if (managerSettlement) {
         expect(handler.close()).toBe(closing);
       }
-      const session = managerSettlement ? handler.issueStreamSession() : undefined;
+      const session = managerSettlement
+        ? handler.issueStreamSession({ providerName: "twilio", callId: "CA-shutdown-pending" })
+        : undefined;
       let settled = false;
       const completion = closing
         .catch((error: unknown) => error)

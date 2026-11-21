@@ -25,7 +25,8 @@
           "keywordSearch": "关键词搜索 (无嵌入向量)",
           "openSettings": "打开设置",
           "retry": "重试",
-          "refresh": "刷新状态"
+          "refresh": "刷新状态",
+          "unavailable": "记忆功能不可用"
         },
         "schedule": {
           "title": "睡眠计划",
@@ -135,7 +136,8 @@
           "keywordSearch": "關鍵字搜尋 (無嵌入向量)",
           "openSettings": "開啟設定",
           "retry": "重試",
-          "refresh": "重新整理狀態"
+          "refresh": "重新整理狀態",
+          "unavailable": "記憶功能無法使用"
         },
         "schedule": {
           "title": "睡眠排程",
@@ -245,7 +247,8 @@
           "keywordSearch": "busca por palavras-chave (sem embeddings)",
           "openSettings": "Abrir Configurações",
           "retry": "Tentar novamente",
-          "refresh": "Atualizar status"
+          "refresh": "Atualizar status",
+          "unavailable": "A memória está indisponível"
         },
         "schedule": {
           "title": "Programação de sono",
@@ -355,7 +358,8 @@
           "keywordSearch": "Stichwortsuche (ohne Einbettungen)",
           "openSettings": "Einstellungen öffnen",
           "retry": "Erneut versuchen",
-          "refresh": "Status aktualisieren"
+          "refresh": "Status aktualisieren",
+          "unavailable": "Erinnerungen sind nicht verfügbar"
         },
         "schedule": {
           "title": "Schlafplan",
@@ -465,7 +469,8 @@
           "keywordSearch": "búsqueda por palabras clave (sin representaciones vectoriales)",
           "openSettings": "Abrir Configuración",
           "retry": "Reintentar",
-          "refresh": "Actualizar estado"
+          "refresh": "Actualizar estado",
+          "unavailable": "La memoria no está disponible"
         },
         "schedule": {
           "title": "Horario de sueño",
@@ -575,7 +580,8 @@
           "keywordSearch": "キーワード検索 (埋め込みなし)",
           "openSettings": "設定を開く",
           "retry": "再試行",
-          "refresh": "状態を更新"
+          "refresh": "状態を更新",
+          "unavailable": "メモリは利用できません"
         },
         "schedule": {
           "title": "スリープスケジュール",
@@ -685,7 +691,8 @@
           "keywordSearch": "키워드 검색 (임베딩 없음)",
           "openSettings": "설정 열기",
           "retry": "다시 시도",
-          "refresh": "상태 새로고침"
+          "refresh": "상태 새로고침",
+          "unavailable": "메모리를 사용할 수 없습니다"
         },
         "schedule": {
           "title": "수면 일정",
@@ -795,7 +802,8 @@
           "keywordSearch": "recherche par mots-clés (sans plongements vectoriels)",
           "openSettings": "Ouvrir les Paramètres",
           "retry": "Réessayer",
-          "refresh": "Actualiser l’état"
+          "refresh": "Actualiser l’état",
+          "unavailable": "La mémoire n’est pas disponible"
         },
         "schedule": {
           "title": "Horaires de sommeil",
@@ -905,7 +913,8 @@
           "keywordSearch": "कीवर्ड खोज (एम्बेडिंग के बिना)",
           "openSettings": "सेटिंग्स खोलें",
           "retry": "फिर से प्रयास करें",
-          "refresh": "स्थिति रीफ़्रेश करें"
+          "refresh": "स्थिति रीफ़्रेश करें",
+          "unavailable": "मेमोरी उपलब्ध नहीं है"
         },
         "schedule": {
           "title": "नींद की समय-सारणी",
@@ -1015,7 +1024,8 @@
           "keywordSearch": "بحث بالكلمات المفتاحية (بدون تضمينات)",
           "openSettings": "فتح الإعدادات",
           "retry": "إعادة المحاولة",
-          "refresh": "تحديث الحالة"
+          "refresh": "تحديث الحالة",
+          "unavailable": "الذاكرة غير متاحة"
         },
         "schedule": {
           "title": "جدول النوم",
@@ -1125,7 +1135,8 @@
           "keywordSearch": "ricerca per parole chiave (senza embedding)",
           "openSettings": "Apri Impostazioni",
           "retry": "Riprova",
-          "refresh": "Aggiorna stato"
+          "refresh": "Aggiorna stato",
+          "unavailable": "La memoria non è disponibile"
         },
         "schedule": {
           "title": "Orario del sonno",
@@ -1235,7 +1246,8 @@
           "keywordSearch": "anahtar kelime araması (vektör gömmeleri yok)",
           "openSettings": "Ayarlar'ı aç",
           "retry": "Yeniden dene",
-          "refresh": "Durumu yenile"
+          "refresh": "Durumu yenile",
+          "unavailable": "Bellek kullanılamıyor"
         },
         "schedule": {
           "title": "Uyku programı",
@@ -1345,7 +1357,8 @@
           "keywordSearch": "пошук за ключовими словами (без ембедингів)",
           "openSettings": "Відкрити налаштування",
           "retry": "Повторити спробу",
-          "refresh": "Оновити стан"
+          "refresh": "Оновити стан",
+          "unavailable": "Пам’ять недоступна"
         },
         "schedule": {
           "title": "Розклад сну",
@@ -1455,7 +1468,8 @@
           "keywordSearch": "pencarian kata kunci (tanpa penyematan)",
           "openSettings": "Buka Pengaturan",
           "retry": "Coba lagi",
-          "refresh": "Segarkan status"
+          "refresh": "Segarkan status",
+          "unavailable": "Memori tidak tersedia"
         },
         "schedule": {
           "title": "Jadwal tidur",
@@ -1565,7 +1579,8 @@
           "keywordSearch": "wyszukiwanie według słów kluczowych (bez osadzeń wektorowych)",
           "openSettings": "Otwórz Ustawienia",
           "retry": "Ponów próbę",
-          "refresh": "Odśwież stan"
+          "refresh": "Odśwież stan",
+          "unavailable": "Pamięć jest niedostępna"
         },
         "schedule": {
           "title": "Harmonogram snu",
@@ -1675,7 +1690,8 @@
           "keywordSearch": "การค้นหาด้วยคำสำคัญ (ไม่มีเวกเตอร์ฝังตัว)",
           "openSettings": "เปิดการตั้งค่า",
           "retry": "ลองอีกครั้ง",
-          "refresh": "รีเฟรชสถานะ"
+          "refresh": "รีเฟรชสถานะ",
+          "unavailable": "ไม่สามารถใช้งานหน่วยความจำได้"
         },
         "schedule": {
           "title": "ตารางเวลานอน",
@@ -1785,7 +1801,8 @@
           "keywordSearch": "tìm kiếm theo từ khóa (không có vectơ nhúng)",
           "openSettings": "Mở Cài đặt",
           "retry": "Thử lại",
-          "refresh": "Làm mới trạng thái"
+          "refresh": "Làm mới trạng thái",
+          "unavailable": "Bộ nhớ không khả dụng"
         },
         "schedule": {
           "title": "Lịch ngủ",
@@ -1895,7 +1912,8 @@
           "keywordSearch": "zoeken op trefwoorden (zonder embeddings)",
           "openSettings": "Instellingen openen",
           "retry": "Opnieuw proberen",
-          "refresh": "Status vernieuwen"
+          "refresh": "Status vernieuwen",
+          "unavailable": "Geheugen is niet beschikbaar"
         },
         "schedule": {
           "title": "Slaapschema",
@@ -2005,7 +2023,8 @@
           "keywordSearch": "جستجوی کلیدواژه‌ای (بدون بردارهای تعبیه)",
           "openSettings": "باز کردن تنظیمات",
           "retry": "تلاش مجدد",
-          "refresh": "تازه‌سازی وضعیت"
+          "refresh": "تازه‌سازی وضعیت",
+          "unavailable": "حافظه در دسترس نیست"
         },
         "schedule": {
           "title": "برنامهٔ خواب",
@@ -2115,7 +2134,8 @@
           "keywordSearch": "поиск по ключевым словам (без эмбеддингов)",
           "openSettings": "Открыть настройки",
           "retry": "Повторить",
-          "refresh": "Обновить статус"
+          "refresh": "Обновить статус",
+          "unavailable": "Память недоступна"
         },
         "schedule": {
           "title": "Расписание сна",
@@ -2247,7 +2267,8 @@
           "keywordSearch": "nyckelordssökning (utan inbäddningar)",
           "openSettings": "Öppna inställningar",
           "retry": "Försök igen",
-          "refresh": "Uppdatera status"
+          "refresh": "Uppdatera status",
+          "unavailable": "Minnet är inte tillgängligt"
         },
         "schedule": {
           "title": "Sömnschema",
@@ -2357,7 +2378,8 @@
           "keywordSearch": "cerca per paraules clau (sense incrustacions vectorials)",
           "openSettings": "Obre Configuració",
           "retry": "Torna-ho a provar",
-          "refresh": "Actualitza l'estat"
+          "refresh": "Actualitza l'estat",
+          "unavailable": "La memòria no està disponible"
         },
         "schedule": {
           "title": "Programació del son",

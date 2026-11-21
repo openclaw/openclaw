@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { WorkboardToast } from "../../components/toast.tsx";
@@ -141,6 +141,7 @@ export function WorkboardView(
   const state = workboardViewState(() => props);
   const view = createMemo(() => {
     const current = state();
+    const cardsKnown = current.loaded || current.cards.length > 0;
     const agentOptions = buildAgentFilterOptions(props.agentsList, current.cards);
     const boardOptions = buildBoardFilterOptions(
       current.boards,
@@ -194,16 +195,19 @@ export function WorkboardView(
       value: priority,
       label: formatPriorityLabel(priority),
       icon: () => <PriorityIcon priority={priority} />,
-      count: priorityCards.filter((card) => card.priority === priority).length,
+      count: cardsKnown
+        ? priorityCards.filter((card) => card.priority === priority).length
+        : undefined,
     }));
     const attentionCards = cardsForFilters("attention");
     const attentionOptions = (["stale", "missingProof"] as const).map((key) => ({
       value: key,
       label: t(key === "stale" ? "workboard.filterStale" : "workboard.filterMissingProof"),
       title: t(key === "stale" ? "workboard.filterStaleHint" : "workboard.filterMissingProofHint"),
-      count: attentionCards.filter((card) =>
-        workboardCardMatchesHealthKey(card, key, props.sessions),
-      ).length,
+      count: cardsKnown
+        ? attentionCards.filter((card) => workboardCardMatchesHealthKey(card, key, props.sessions))
+            .length
+        : undefined,
     }));
     const agentFilterOptions: WorkboardSelectOption[] = agentOptions.map((option) => ({
       value: option.id,
@@ -310,7 +314,8 @@ export function WorkboardView(
       boardOptions,
       activeBoardFilter,
       filtered,
-      statusCards: cardsForFilters("status"),
+      cardsKnown,
+      statusCards: cardsKnown ? cardsForFilters("status") : null,
       visibleError,
       selectedCards,
       byStatus,
@@ -376,10 +381,7 @@ export function WorkboardView(
                     {t("workboard.newBoard")}
                   </button>
                 ) : null}
-                <span
-                  class="workboard-refresh-control"
-                  title={view().refreshStatus || t("common.refresh")}
-                >
+                <span class="workboard-refresh-control" title={view().refreshStatus || undefined}>
                   <button
                     class={[
                       "btn btn--icon btn--ghost workboard-refresh",
@@ -619,26 +621,28 @@ export function WorkboardView(
                 </button>
               </div>
             ) : null}
-            {(view().filtered.length === 0 && view().activeFiltering) ||
-            view().visibleStatuses.length === 0 ? (
-              <div class="workboard-empty-state" role="status">
-                <strong>{t("workboard.emptyFilteredTitle")}</strong>
-                <span>{t("workboard.emptyFilteredHint")}</span>
-                {view().hasActiveFilters ? (
-                  <button class="btn" type="button" onClick={clearFilters}>
-                    {t("workboard.clearFilters")}
-                  </button>
-                ) : null}
-              </div>
-            ) : (
-              <WorkboardColumns
-                workboard={props}
-                statuses={view().visibleStatuses}
-                byStatus={view().byStatus}
-                cardRefs={cardRefs}
-                menuCardId={selectedMenuCardId()}
-              />
-            )}
+            <Show when={view().cardsKnown}>
+              {(view().filtered.length === 0 && view().activeFiltering) ||
+              view().visibleStatuses.length === 0 ? (
+                <div class="workboard-empty-state" role="status">
+                  <strong>{t("workboard.emptyFilteredTitle")}</strong>
+                  <span>{t("workboard.emptyFilteredHint")}</span>
+                  {view().hasActiveFilters ? (
+                    <button class="btn" type="button" onClick={clearFilters}>
+                      {t("workboard.clearFilters")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <WorkboardColumns
+                  workboard={props}
+                  statuses={view().visibleStatuses}
+                  byStatus={view().byStatus}
+                  cardRefs={cardRefs}
+                  menuCardId={selectedMenuCardId()}
+                />
+              )}
+            </Show>
             {menu}
           </div>
           <WorkboardToast

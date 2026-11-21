@@ -20,11 +20,14 @@ import {
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
-import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import { splitMediaOutput } from "../../../../src/media/parse-output.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
+import { readTemplatePluginInstallNotice } from "../../../../src/shared/template-install-notice.js";
 import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
+import { AutomationCreationCardBlock } from "./automation-creation-card.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
+import { getMessageDerivations, readMessageDerivations } from "./message-derivations.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import {
   resolveMessageSender,
@@ -396,11 +399,9 @@ function resolveDeliveryReplyTarget(
       : null;
 }
 
-const normalizedMessages = new WeakMap<object, NormalizedMessage>();
-
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const original = asOptionalRecord(message);
-  const cached = original && normalizedMessages.get(original);
+  const cached = original && readMessageDerivations(original)?.normalized;
   if (cached) {
     return cached;
   }
@@ -433,7 +434,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
     audioAsVoice = delivery?.audioAsVoice === true;
     const extracted = extractCanvasShortcodes(text);
-    const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
+    // Leave Markdown images to the renderer; only lift explicit MEDIA directives here.
+    const parsed = splitMediaOutput(extracted.text, { extractAudioDirectives: false });
     const parts: MessageContentItem[] = [];
     const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
@@ -518,9 +520,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         return [image];
       }
       const type = item.type;
+      if (type === "automation_creation_card") {
+        return isAssistantMessage && value instanceof AutomationCreationCardBlock ? [value] : [];
+      }
       if (type === "plugin_view") {
         const inline = isAssistantMessage ? readPluginInlineViewBlock(item) : undefined;
         return inline ? [inline] : [];
+      }
+      if (type === "template_plugin_install") {
+        const receipt = isAssistantMessage ? readTemplatePluginInstallNotice(item) : undefined;
+        return receipt ? [receipt] : [];
       }
       if (type === "clawhub") {
         const recommendation = isAssistantMessage ? readClawHubRecommendation(item) : null;
@@ -621,7 +630,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   // Retained and live messages are immutable snapshots. Missing timestamps
   // still resolve against the current clock on each call.
   if (original && asFiniteNumber(m.timestamp) !== undefined) {
-    normalizedMessages.set(original, normalized);
+    getMessageDerivations(original).normalized = normalized;
   }
   return normalized;
 }

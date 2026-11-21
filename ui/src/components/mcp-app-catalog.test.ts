@@ -145,6 +145,29 @@ function mountCatalog(context: unknown, initial: Parameters<typeof McpAppCatalog
 }
 
 describe("app launch catalog", () => {
+  it("limits the empty message to the current catalog when conversation apps exist", async () => {
+    const request = vi.fn(async () => ({
+      servers: [
+        {
+          ...result.servers[0]!,
+          entrypoints: result.servers[0]!.entrypoints.filter(
+            (entry) => entry.entrypoint.type === "thread",
+          ),
+        },
+      ],
+    }));
+    const { context } = discoveryContext(request);
+    const catalog = mountCatalog(context, { sessionKey: "agent:main:one" });
+    await waitForSolid(() =>
+      expect(catalog.element.textContent).toContain("No apps to open here."),
+    );
+    expect(catalog.element.querySelector(".mcp-app-catalog__entry")).toBeNull();
+    catalog.update({ surface: "thread" });
+    await waitForSolid(() => expect(catalog.element.querySelector("button")).not.toBeNull());
+    catalog.element.querySelector<HTMLButtonElement>("button")!.click();
+    await waitForSolid(() => expect(catalog.element.textContent).toContain("Parts tray"));
+    expect(catalog.element.textContent).not.toContain("No apps to open here.");
+  });
   it("targets the agent named by a session key", async () => {
     const request = vi.fn(async () => ({ servers: [], onboarding: [] }));
     const { context } = discoveryContext(request);
@@ -687,78 +710,80 @@ describe("app launch catalog", () => {
     await waitForSolid(() => expect(apps.textContent).toContain("Library"));
   });
 
-  it.each([false])(
-    "prepares global discovery only for a missing session (exists: %s)",
-    async (exists) => {
-      let admitted = exists;
-      const createResult = vi.fn(async () => {
-        admitted = true;
-        return { key: "agent:main:main" };
-      });
-      const request = vi.fn(async () => {
-        if (!admitted) {
-          throw new Error("The requested session is unavailable; open an existing session first.");
-        }
-        return result;
-      });
-      const configChanged = new Set<(event: { event: string }) => void>();
-      const describeSession = vi.fn(async () => ({
-        session: exists ? { key: "agent:main:main" } : null,
-      }));
-      // SAFETY: The fixture supplies the capabilities exercised by Apps and discovery.
-      const context = {
-        gateway: {
-          snapshot: {
-            sessionKey: "agent:main:main",
-            client: { request },
-            phase: "connected",
-            hello: gatewayHelloForMethods(["mcp.app.discover"]),
-          },
-          connectionRevision: 1,
-          connection: { gatewayUrl: "ws://gateway.example.test" },
-          subscribe: () => () => {},
-          subscribeEvents: (listener: (event: { event: string }) => void) => {
-            configChanged.add(listener);
-            return () => configChanged.delete(listener);
-          },
+  it("prepares a missing session before opening a dedicated app route", async () => {
+    let admitted = false;
+    const createResult = vi.fn(async () => {
+      admitted = true;
+      return { key: "agent:main:main" };
+    });
+    const request = vi.fn(async () => {
+      if (!admitted) {
+        throw new Error("The requested session is unavailable; open an existing session first.");
+      }
+      return result;
+    });
+    const configChanged = new Set<(event: { event: string }) => void>();
+    const describeSession = vi.fn(async () => ({
+      session: null,
+    }));
+    // SAFETY: The fixture supplies the capabilities exercised by Apps and discovery.
+    const context = {
+      gateway: {
+        snapshot: {
+          sessionKey: "agent:main:main",
+          client: { request },
+          phase: "connected",
+          hello: gatewayHelloForMethods(["mcp.app.discover"]),
         },
-        sessions: {
-          createResult,
-          state: { error: null },
-          describe: describeSession,
+        connectionRevision: 1,
+        connection: { gatewayUrl: "ws://gateway.example.test" },
+        subscribe: () => () => {},
+        subscribeEvents: (listener: (event: { event: string }) => void) => {
+          configChanged.add(listener);
+          return () => configChanged.delete(listener);
         },
-        agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-      } as unknown as ApplicationContext;
-      const { container: element } = mountSolid(() => createComponent(AppsPage, {}), {
+      },
+      sessions: {
+        createResult,
+        state: { error: null },
+        describe: describeSession,
+      },
+      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+    } as unknown as ApplicationContext;
+    const { container: element } = mountSolid(
+      () => createComponent(AppsPage, { appSearch: "?server=parts&tool=library" }),
+      {
         wrapper: createSolidApplicationContextProvider(context).wrapper,
-      });
-      flush();
-      await waitForSolid(() => expect(element.textContent).toContain("Library"));
-      if (exists) {
-        expect(createResult).not.toHaveBeenCalled();
-      } else {
-        expect(createResult).toHaveBeenCalledExactlyOnceWith(
-          { key: "agent:main:main", agentId: "main" },
-          { reconciliation: "background", signal: expect.any(AbortSignal) },
-        );
-      }
-      expect(request).toHaveBeenCalledWith("mcp.app.discover", {
+      },
+    );
+    flush();
+    await waitForSolid(() =>
+      expect(element.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
         sessionKey: "agent:main:main",
-        agentId: "main",
-      });
-      expect(element.querySelector('[role="alert"]')).toBeNull();
-      for (const listener of configChanged) {
-        listener({ event: "config.changed" });
-      }
-      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-      expect(describeSession).toHaveBeenCalledExactlyOnceWith({
-        key: "agent:main:main",
-        agentId: "main",
-      });
-      expect(createResult).toHaveBeenCalledTimes(exists ? 0 : 1);
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
+        serverName: "parts",
+        entrypoint: { resourceUri: "ui://parts/library" },
+      }),
+    );
+    expect(createResult).toHaveBeenCalledExactlyOnceWith(
+      { key: "agent:main:main", agentId: "main" },
+      { reconciliation: "background", signal: expect.any(AbortSignal) },
+    );
+    expect(request).toHaveBeenCalledWith("mcp.app.discover", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+    for (const listener of configChanged) {
+      listener({ event: "config.changed" });
+    }
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(describeSession).toHaveBeenCalledExactlyOnceWith({
+      key: "agent:main:main",
+      agentId: "main",
+    });
+    expect(createResult).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
   it.each(["unchanged", "session changed", "ignored agent prop"] as const)(
     "onboards once without crypto.randomUUID and respects the current target (%s)",
     async (target) => {

@@ -5,12 +5,10 @@ import {
   readErrorName,
 } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-  type MentionInboxItem,
-  type MentionsListResult,
+import type {
+  ErrorShape,
+  MentionInboxItem,
+  MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -21,8 +19,6 @@ import {
   sessionChangeScopeAffectsStoredRows,
   sessionChanges,
 } from "../sessions/session-row-changes.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
@@ -31,7 +27,11 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createHumanMentionPolicy, humanMentionDisplayLabel } from "./human-mention-policy.js";
-import { mentionInboxUnavailable } from "./mention-inbox-presentation.js";
+import {
+  deprecatedMentionInboxError,
+  mentionInboxUnavailable,
+  publishMentionDeliveryFailure,
+} from "./mention-inbox-presentation.js";
 import {
   createMentionProjection,
   createMentionMutationProjection,
@@ -43,6 +43,7 @@ import {
   type InboxState,
   type StoredMention,
 } from "./mention-inbox-projection.js";
+import { createMentionInboxQueue } from "./mention-inbox-queue.js";
 import {
   createMentionInputRecorder,
   prepareCommittedMentionInput,
@@ -65,7 +66,6 @@ const log = createSubsystemLogger("gateway/mentions");
 export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   const scheduler = params.scheduler.scope();
   const context = captureOpenClawStateWorkerContext();
-  const acceptedWork = new AsyncWorkScope();
   let state = createMentionProjection({ head: { revision: -1, nextSequence: 0 }, sources: [] });
   const { readTarget, prepareTarget, prepareTargets, invalidateTargets } = createMentionTargetCache(
     {
@@ -78,7 +78,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     readSessionTarget: (sessionKey, agentId) =>
       readTarget(mentionTargetKey(sessionKey, agentId))?.target ?? null,
   });
-  let tail: Promise<void> = Promise.resolve();
+  const work = createMentionInboxQueue({
+    assertActive,
+    assertCurrent: () => context.admission.assertCurrent(),
+  });
+  const { enqueue } = work;
   let closing = false;
   let needsSynchronization = true;
   let sessionRevision = 0;
@@ -110,26 +114,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       throw new Error("Mention Inbox is closed");
     }
     context.admission.assertCurrent();
-  }
-
-  async function enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    assertActive();
-    // Scheduler cancellation closes admission; accepted work retains its own settlement scope.
-    // Post-commit work must not borrow the completed input writer's custody.
-    const pending = runInDetachedAsyncContext(() =>
-      acceptedWork.track(() =>
-        tail.then(() => {
-          context.admission.assertCurrent();
-          return operation();
-        }),
-      ),
-    );
-    // Failed work must not poison later FIFO operations.
-    tail = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await pending;
   }
 
   async function synchronize(): Promise<boolean> {
@@ -251,6 +235,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       agentId: resolved.target.agentId,
       sessionKey: resolved.target.canonicalKey,
       entry: resolved.target.entry,
+      membership: resolved.target.membership,
     };
     const recipient = policy.recipientProfile(item.recipientProfileId, target, cfg);
     const sender = policy.readProfile(senderProfileId);
@@ -359,11 +344,8 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   function scheduleExpiry(): void {
-    if (
-      closing ||
-      scheduler.signal.aborted ||
-      (state.processed.size === 0 && refreshRetryAt === 0)
-    ) {
+    const idle = state.processed.size === 0 && refreshRetryAt === 0;
+    if (closing || scheduler.signal.aborted || idle) {
       return;
     }
     scheduler.schedule({
@@ -468,16 +450,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       : result;
   }
 
-  function legacyError(
-    method: "list" | "dismiss" | "recordCommittedInput" | "invalidate",
-  ): ErrorShape {
-    warnMentionInboxDeprecation(method);
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `mentionInbox.${method} is unavailable; await mentionInbox.${method}Async instead.`,
-    );
-  }
-
   function dismissItems(draft: InboxState, client: GatewayClient | null, ids: readonly string[]) {
     const current = readView(client, params.getRuntimeConfig(), false, draft);
     if (current.ok) {
@@ -534,8 +506,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   async function dispose(): Promise<void> {
     closing = true;
-    await tail;
-    await acceptedWork.drain();
+    await work.drain();
     scheduler.beginClose();
     stopProfiles();
     stopSessions();
@@ -563,7 +534,10 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   void refresh();
 
-  function recordCommittedInputAsync(committedInput: MentionCommittedInput): Promise<void> {
+  function recordCommittedInputAsync(
+    committedInput: MentionCommittedInput,
+    client?: GatewayClient | null,
+  ): Promise<void> {
     const input = {
       ...committedInput,
       recipientProfileIds: [...committedInput.recipientProfileIds],
@@ -585,16 +559,13 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         agentId,
       });
       try {
-        await policy.recordCommittedInvolvementAsync(input, prepared);
+        await policy.recordCommittedInvolvementAsync(input, prepared, client);
         const committed = await mutate<StoredMention[]>(
           (draft, guards, bounds) =>
-            applyCommittedInput(
-              input,
-              draft,
-              guards,
-              bounds,
-              () => prepared.readCurrent(params.getRuntimeConfig()).target,
-            ),
+            applyCommittedInput(input, draft, guards, bounds, () => {
+              const { target, membership } = prepared.readCurrent(params.getRuntimeConfig());
+              return target && { ...target, membership };
+            }),
           () => input.recipientProfileIds.map((id) => policy.readProfile(id)?.profileId ?? id),
         );
         context.admission.assertCurrent();
@@ -604,12 +575,17 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } finally {
         prepared.release();
       }
-    }).catch(() => {
+    }).catch((error: unknown) => {
+      if (client) {
+        const connections = policy.senderConnectionIds(client, input.senderProfileId);
+        throw publishMentionDeliveryFailure(params, input, connections, error);
+      }
       log.warn("Mention delivery could not be completed; the posted message is unchanged.");
     });
   }
 
   return {
+    prepareInvitation: policy.prepareInvitation,
     async mentionable(client, input, publish, displayIds) {
       try {
         // A committed profile change can invalidate preparation before this continuation runs.
@@ -656,23 +632,30 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         return mentionInboxUnavailable(log);
       }
     },
-    list: () => err(legacyError("list")),
-    dismiss: () => err(legacyError("dismiss")),
+    list: () => err(deprecatedMentionInboxError("list")),
+    dismiss: () => err(deprecatedMentionInboxError("dismiss")),
     async listAsync(client, publish) {
-      let failure: Result<never, ErrorShape> | undefined;
       try {
-        await enqueue(async () => {
-          const changed = await maintain();
-          await prepareTargets();
-          if (changed) {
-            publishConnectedViews();
-          }
-          scheduleExpiry();
-        });
+        await work.read(
+          async () => {
+            const changed = await maintain();
+            if (changed) {
+              await refreshConnectedViews();
+            }
+            scheduleExpiry();
+            return changed;
+          },
+          async () => {
+            const viewer = policy.identify(client, params.getRuntimeConfig());
+            if (viewer.ok) {
+              await prepareTargets(state.itemsByProfile.get(viewer.value.profile.profileId) ?? []);
+            }
+          },
+        );
       } catch {
-        failure = mentionInboxUnavailable(log);
+        return publish(mentionInboxUnavailable(log));
       }
-      publish(failure ?? readResponse(client));
+      return publish(readResponse(client));
     },
     async dismissAsync(client, ids, publish) {
       let failure: Result<never, ErrorShape> | undefined;
@@ -735,7 +718,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     },
     recordCommittedInputAsync,
     invalidate(): never {
-      throw new Error(legacyError("invalidate").message);
+      throw new Error(deprecatedMentionInboxError("invalidate").message);
     },
     invalidateAsync,
     dispose,

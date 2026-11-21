@@ -11,6 +11,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import * as confirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -112,16 +113,14 @@ describe("delivery-queue confirmed transcript recovery", () => {
             session: { agentId: "main", key: "agent:main:background-job" },
             sessionGeneration:
               state === "stale-generation" || state === "other-generation"
-                ? {
+                ? chatRef({
                     agentId: "main",
                     storePath: path.join(stateDir, "agent-sessions.json"),
                     sessionKey:
                       state === "stale-generation"
                         ? "agent:main:telegram:group:-100123"
                         : "agent:main:background-job",
-                    sessionId: "old-session",
-                    lifecycleRevision: "old-revision",
-                  }
+                  })
                 : undefined,
             preparedBatch: {
               schemaVersion: 1,
@@ -232,9 +231,12 @@ describe("delivery-queue confirmed transcript recovery", () => {
         const result = await recover();
         const confirmed = state !== "unresolved" && state !== "rejected";
         const projected =
-          state === "sent" || state === "reconciled" || state === "other-generation";
+          state === "sent" ||
+          state === "reconciled" ||
+          state === "other-generation" ||
+          state === "stale-generation";
         expect(result).toMatchObject(confirmed ? { recovered: 1 } : { failed: 1 });
-        if (confirmed && !projected && state !== "stale-generation") {
+        if (confirmed && !projected) {
           expect(log.warn).toHaveBeenCalledOnce();
         }
         expect(deliver).not.toHaveBeenCalled();

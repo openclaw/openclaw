@@ -227,7 +227,7 @@ describe("Gateway GitHub publication", () => {
       draft: false,
     });
     for (const [, options] of mocks.runCommand.mock.calls) {
-      expect(options?.env).toMatchObject(
+      expect(options?.preparedEnv ?? options?.env).toMatchObject(
         appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
       );
     }

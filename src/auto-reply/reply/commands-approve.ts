@@ -329,12 +329,12 @@ export async function handleApproveCommandFromContext(
           return blocked;
         }
         return commandReply(
-          "That approval is no longer available. Check the request in the Control UI.",
+          "That approval is no longer available. Check the request in the OpenClaw app.",
         );
       }
       log.warn(`Approval submission failed: ${formatErrorMessage(error)}`);
       return commandReply(
-        "⚠️ Couldn't confirm that approval. Check the request in the Control UI before trying again.",
+        "⚠️ Couldn't confirm that approval. Check the request in the OpenClaw app before trying again.",
       );
     }
   }

@@ -81,7 +81,7 @@ export const CloudWorkersConfigSchema = z
     }),
     desktop: z.boolean().optional().register(configUiMetadata, {
       label: "Cloud Worker Desktop (Labs)",
-      help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",
+      help: "Enables the experimental worker.desktop.observe surface and web app Desktop panel for desktop-capable cloud worker environments.",
     }),
     preparedPool: z
       .strictObject({

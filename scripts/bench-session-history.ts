@@ -257,6 +257,8 @@ async function closeBenchmarkState(stateDir: string): Promise<void> {
 
 async function worker(stateDir: string, profile: Profile, operation: Operation) {
   const scope = scopeFor(stateDir, profile);
+  const { captureRuntimeConfigAsyncReader } = await import("../src/config/io.js");
+  await captureRuntimeConfigAsyncReader()();
   const importStarted = performance.now();
   const [history, projection, historyQueries] = await Promise.all([
     import("../src/config/sessions/session-accessor.sqlite-history-events.js"),
@@ -305,7 +307,7 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
     return { returned: result.events.length, total: result.totalMessages };
   };
   try {
-    // A fresh child has no history/module/statement cache; the OS page cache is not flushed.
+    // Runtime config preparation and imports precede this first read; OS caches are not flushed.
     const firstRead = await measure(read);
     for (let index = 0; index < 5; index += 1) {
       await read();
@@ -314,6 +316,8 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
     for (let index = 0; index < samples; index += 1) {
       timings.push(await measure(read));
     }
+    const warmElapsedMs = timings.reduce((total, sample) => total + sample.wallMs, 0);
+    const warmCpuMs = timings.reduce((total, sample) => total + sample.cpuMs, 0);
     const traced = await trace(read);
     const database = openOpenClawAgentDatabase({ agentId: "main", env: scope.env });
     const queries = traced.queries.map(({ bindings, ...record }) => {
@@ -325,7 +329,7 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
         timings.map((sample) => sample[metric]),
         percent,
       );
-    console.log(
+    process.stdout.write(
       JSON.stringify({
         profile,
         operation,
@@ -333,6 +337,9 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
         firstRead,
         warm: {
           samples,
+          elapsedMs: warmElapsedMs,
+          cpuMs: warmCpuMs,
+          readsPerSecond: samples / (warmElapsedMs / 1000),
           p50Ms: timingPercentile("wallMs", 50),
           p95Ms: timingPercentile("wallMs", 95),
           cpuP50Ms: timingPercentile("cpuMs", 50),
@@ -351,8 +358,8 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
 
 async function main() {
   if (values.help) {
-    console.log(
-      "Usage: node --import tsx scripts/bench-session-history.ts [--profile small,long,sparse,markers,reset,branch,sparse-branch,trailing] [--operation recent|page|gateway-tail] [--samples 30] [--analyze] [--output report.json]\nReports a fresh-process first read and warm p50/p95, CPU, RSS, heap deltas, and separate SQL/JSON tracing. Fixtures are synthetic and automatically removed; OS caches are not flushed.",
+    process.stdout.write(
+      "Usage: node --import tsx scripts/bench-session-history.ts [--profile small,long,sparse,markers,reset,branch,sparse-branch,trailing] [--operation recent|page|gateway-tail] [--samples 30] [--analyze] [--output report.json]\nReports a fresh-process first read after runtime config preparation and imports, warm measured elapsed/CPU totals and reads per second, warm p50/p95, RSS, heap deltas, and separate SQL/JSON tracing. Fixtures are synthetic and automatically removed; OS caches are not flushed.\n",
     );
     return;
   }
@@ -382,6 +389,16 @@ async function main() {
   const { waitForSessionTranscriptIndexReconcilesInStateDir } =
     await import("../src/config/sessions/session-transcript-reconcile.js");
   const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");
+  // Each measurement still starts a fresh process, but its source transforms can
+  // be reused. Keep tsx away from the shared host cache and retire this cache
+  // with the synthetic state; the tooling preload disables shared caching.
+  const workerEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    TMPDIR: stateDir,
+    TMP: stateDir,
+    TEMP: stateDir,
+  };
+  delete workerEnv.TSX_DISABLE_CACHE;
   const results: unknown[] = [];
   try {
     for (const name of selected) {
@@ -412,7 +429,7 @@ async function main() {
             "--samples",
             String(samples),
           ],
-          { env: process.env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+          { env: workerEnv, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
         );
         if (child.status !== 0) {
           throw new Error(child.stderr || child.stdout || String(child.error));
@@ -428,7 +445,7 @@ async function main() {
       platform: `${process.platform}-${process.arch}`,
       cpus: os.cpus()[0]?.model,
       methodology:
-        "Fresh-process first read excludes module import and includes database open. OS caches are not flushed. Warm samples exclude setup and tracing. Heap deltas are uncollected observations, not allocation totals. Trace counts rows delivered to JS, not rows scanned inside SQLite.",
+        "Fresh-process first read excludes runtime config preparation and module import and includes database open; this is not whole-process startup time. OS caches are not flushed. Source workers may reuse an invocation-private TypeScript transform cache. Warm elapsed and CPU totals sum only measured reads; reads per second uses measured elapsed time. Warm samples exclude setup and tracing. Heap deltas are uncollected observations, not allocation totals. Trace counts rows delivered to JS, not rows scanned inside SQLite.",
       profiles,
       analyzed: values.analyze ?? false,
       results,
@@ -437,11 +454,15 @@ async function main() {
     if (values.output) {
       fs.writeFileSync(path.resolve(values.output), output);
     }
-    console.log(output);
+    process.stdout.write(output);
   } finally {
     await closeBenchmarkState(stateDir);
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 }
 
-await main();
+const { withConsoleLogsRoutedToStderrForJson } = await import("../src/cli/json-output-mode.js");
+await withConsoleLogsRoutedToStderrForJson([], main, {
+  machineOutput: true,
+  retainRoutingUntilProcessExit: true,
+});

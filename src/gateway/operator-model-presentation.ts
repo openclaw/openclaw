@@ -30,6 +30,7 @@ import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
 import { SerializedJsonArray } from "./serialized-json.js";
@@ -150,10 +151,13 @@ export function projectOperatorModelRead<
     // Access-only metadata filtering must not decode and re-encode unchanged history.
     ...(result.messages && presentation.restrictsModels
       ? {
-          messages: (result.messages instanceof SerializedJsonArray
-            ? result.messages.materialize()
-            : result.messages
-          ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
+          messages:
+            result.messages instanceof SerializedJsonArray && result.kind !== "delta"
+              ? result.messages.mapIndexedRows(presentation.message)
+              : (result.messages instanceof SerializedJsonArray
+                  ? result.messages.materialize()
+                  : result.messages
+                ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
         }
       : {}),
     ...(Object.hasOwn(result, "message") ? { message: presentation.message(result.message) } : {}),
@@ -183,10 +187,17 @@ export function prepareOperatorModelPresentation(params: {
     policy: role.modelPolicy,
     manifestPlugins,
   });
+  const clientScopes = client?.connect.scopes ?? [];
+  // Internal adapters may hold broader RPC scopes than the original requester.
+  const scopes = intersectOperatorScopes(
+    client?.internal?.operatorRunAuthority?.scopes ?? clientScopes,
+    intersectOperatorScopes(clientScopes, role.scopes),
+  );
   return prepareOperatorModelPolicyPresentation({
     cfg,
     policy,
     rolePolicy: role,
+    scopes,
     metadataSnapshot,
   });
 }
@@ -196,9 +207,11 @@ export function prepareOperatorModelPolicyPresentation(params: {
   cfg: OpenClawConfig;
   policy?: PreparedOperatorModelPolicy;
   rolePolicy?: Pick<NonNullable<AdmittedRunOperatorAuthority["rolePolicy"]>, "accessPrograms">;
+  scopes?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot | null;
 }) {
   const { cfg, policy, rolePolicy, metadataSnapshot } = params;
+  const accessPolicy = { rolePolicy, scopes: params.scopes ?? [] };
   if (!policy && !rolePolicy) {
     return undefined;
   }
@@ -209,7 +222,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
           ...entry,
           availableAccessPrograms: {
             cyber: entry.availableAccessPrograms.cyber.filter((program) =>
-              isOperatorAccessProgramAllowed(rolePolicy, program),
+              isOperatorAccessProgramAllowed(accessPolicy, program),
             ),
           },
         }
@@ -227,7 +240,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
       const harness = entry.agentRuntime && harnesses.get(entry.agentRuntime.id);
       return resolveAgentHarnessOperatorPolicyError(harness || undefined, {
         modelPolicy: policy,
-        rolePolicy,
+        ...accessPolicy,
       })
         ? { ...projected, available: false, unavailableReason: "unsupported-runtime" }
         : projected;
@@ -345,12 +358,16 @@ export function prepareOperatorModelPolicyPresentation(params: {
       const session = asOptionalRecord(envelope.session);
       // Delta copies were budgeted before the last readiness await. Recheck all three
       // concrete disclosure sites at publication; removing fields only shrinks that budget.
+      const projected = projectSession(envelope);
+      const projectedSession = session ? projectSession(session) : session;
+      const message = projectMessage(envelope.message);
+      if (projected === envelope && projectedSession === session && message === envelope.message) {
+        return value;
+      }
       return {
-        ...projectSession(envelope),
-        ...(session ? { session: projectSession(session) } : {}),
-        ...(Object.hasOwn(envelope, "message")
-          ? { message: projectMessage(envelope.message) }
-          : {}),
+        ...projected,
+        ...(session ? { session: projectedSession } : {}),
+        ...(Object.hasOwn(envelope, "message") ? { message } : {}),
       };
     },
     forAgent(agentId: string, catalog: ModelCatalogEntry[] = []) {
@@ -522,6 +539,8 @@ export function prepareOperatorModelPolicyPresentation(params: {
             thinkingLevels: _levels,
             thinkingOptions: _options,
             thinkingDefault: _thinking,
+            // Resolved from the hidden model's params; the policy model has its own default.
+            thinkingInheritedDefault: _inheritedThinking,
             ...identity
           } = row;
           const defaults = projectDefaults({

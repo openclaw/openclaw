@@ -11,6 +11,10 @@ import {
   configHealthReadOperations,
   patchConfigHealthEntryInDatabase,
 } from "../../config/io.health-state.kernel.js";
+import {
+  finishLocalWorkspaceSweepInDatabase,
+  requestLocalWorkspaceSweepInDatabase,
+} from "../../gateway/worker-environments/local-workspace-cas.kernel.js";
 import { isMissingPluginStateTableError } from "../../plugin-state/plugin-state-store.database.js";
 import { DebugProxyCaptureKernel } from "../../proxy-capture/store.kernel.js";
 import {
@@ -140,6 +144,20 @@ it.skipIf(!connection)(
         expect(
           remote.query("SELECT count(*) AS count FROM outbound_message_progress").rows,
         ).toEqual([{ count: 1 }]);
+
+        // Both first admission and repeated demand retain the two-sweep preparation grace.
+        const pendingSweep = remote.prepare(
+          "SELECT value_json FROM config_machine_state WHERE state_key = 'workspace.manifest.pendingSweepEpoch'",
+        );
+        requestLocalWorkspaceSweepInDatabase(remote, 0);
+        requestLocalWorkspaceSweepInDatabase(remote, 0);
+        expect(pendingSweep.get()?.value_json).toBe("2");
+        finishLocalWorkspaceSweepInDatabase(remote, 1);
+        expect(pendingSweep.get()?.value_json).toBe("2");
+        finishLocalWorkspaceSweepInDatabase(remote, 2);
+        expect(pendingSweep.get()?.value_json).toBe("0");
+        requestLocalWorkspaceSweepInDatabase(remote, 2);
+        expect(pendingSweep.get()?.value_json).toBe("4");
 
         const configPath = "/synthetic/openclaw.json";
         const patchHealth = patchConfigHealthEntryInDatabase.bind(null, remote, configPath);

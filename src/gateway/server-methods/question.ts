@@ -23,10 +23,12 @@ import {
   listSecretStoreEntries,
   SecretStoreValidationError,
 } from "../../secrets/store/secret-store.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
 import { QuestionManager, type QuestionObservation } from "../question-manager.js";
 import {
+  prepareQuestionProducer,
   withQuestionSessionAccess,
   withPreparedQuestionSessions,
   type PreparedQuestionSession,
@@ -143,6 +145,7 @@ export function createQuestionHandlers(
       authority.assertCurrent();
       const narrow = usesOwnRunQuestionAccess(client);
       let sessionAccess: QuestionSessionAccess | undefined;
+      let producer: Awaited<ReturnType<typeof prepareQuestionProducer>>;
       let accepted = false;
       const requiresSharing = () =>
         !isGatewayAdmin(client) && hasOperatorBoundary(client, context.getRuntimeConfig());
@@ -177,6 +180,7 @@ export function createQuestionHandlers(
         requester && validateAuthority
           ? () => {
               try {
+                producer?.authority.assertCurrent();
                 operatorAuthority?.assertCurrent();
                 sessionAccess?.assertSourceCurrent();
                 return validateAuthority(requester);
@@ -208,6 +212,9 @@ export function createQuestionHandlers(
         };
       }
       try {
+        // Every question is a retained producer, including secret and sessionless prompts.
+        // Admission failures must not enter the optional session-facts fallback below.
+        producer = await prepareQuestionProducer(options);
         const questions = await normalizeQuestions(request, authority.assertCurrent);
         if (narrow && operatorAuthority) {
           assertAdmittedRunOperatorAuthority(operatorAuthority);
@@ -244,6 +251,7 @@ export function createQuestionHandlers(
               })
             : undefined;
         const create = (prepared?: PreparedQuestionSession) => {
+          producer?.authority.assertCurrent();
           if (sessionKey && requiresSharing()) {
             const authorizationError = prepared?.authorizeMutation(client);
             if (!prepared?.target || authorizationError) {
@@ -274,7 +282,7 @@ export function createQuestionHandlers(
             expectedRecord?: QuestionRecord,
           ) => {
             const scoped =
-              sessionKey && context.getRuntimeConfig().gateway?.roles
+              sessionKey && isNamedOperatorRoleEnforcementEnabled(context.getRuntimeConfig())
                 ? {
                     sessionKeys: [sessionKey],
                     ...(requestedSession?.ok ? { agentId: requestedSession.agentId } : {}),
@@ -313,6 +321,10 @@ export function createQuestionHandlers(
             ...(request.runId ? { runId: request.runId } : {}),
             timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
             isRequesterActive,
+            requesterLifetime: producer && {
+              signal: producer.authority.signal,
+              release: producer.release,
+            },
             sessionAccess,
             requesterRun: requester?.operationalRunInstance,
             registerHumanInputWait:
@@ -393,6 +405,7 @@ export function createQuestionHandlers(
               },
               {
                 assertCurrent: authority.assertCurrent,
+                operatorAuthority: producer?.authority,
               },
             );
           } catch (error) {
@@ -425,6 +438,7 @@ export function createQuestionHandlers(
       } finally {
         if (!accepted) {
           sessionAccess?.release();
+          producer?.release();
         }
       }
     },

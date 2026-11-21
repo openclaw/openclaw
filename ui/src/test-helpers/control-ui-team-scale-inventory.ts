@@ -8,6 +8,7 @@ import type {
 } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixture.ts";
+import { createTeamScaleChildActivity } from "./control-ui-team-scale-child-activity.ts";
 import { compactCronJobFixture } from "./cron.ts";
 
 export const TEAM_SCALE_COUNTS = {
@@ -51,12 +52,14 @@ export function createTeamScaleSessionInventory({
   directSelectedSession = false,
   archivedSession = false,
   sidebarPersistentChildren = false,
+  detailsSubagentActivity,
 }: {
   now: number;
   offRosterSession?: boolean;
   directSelectedSession?: boolean;
   archivedSession?: boolean;
   sidebarPersistentChildren?: boolean;
+  detailsSubagentActivity?: number;
   people: ControlUiMockPresenceUser[];
   counts: Record<
     | "sessions"
@@ -218,7 +221,7 @@ export function createTeamScaleSessionInventory({
       })),
     })),
   }));
-  return {
+  const inventory = {
     catalogs,
     sessions,
     pinnedRows,
@@ -228,6 +231,8 @@ export function createTeamScaleSessionInventory({
       ? { parentKey: persistentParent.key, childKeys: persistentParent.childSessions! }
       : undefined,
   };
+  sessions.push(...createTeamScaleChildActivity(pinnedRows[0]!, now, detailsSubagentActivity));
+  return inventory;
 }
 
 export function createTeamScaleCronInventory(

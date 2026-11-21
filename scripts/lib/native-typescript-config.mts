@@ -12,8 +12,17 @@ export function readNativeTypeScriptConfig(options: {
   readFile?: (file: string) => string | undefined;
   assertInput?: (file: string) => string;
 }) {
+  using reader = createNativeTypeScriptConfigReader(options);
+  return reader.read(options.configFileName);
+}
+
+/** Reuse the compiler within one synchronous config-reading batch. */
+export function createNativeTypeScriptConfigReader(options: {
+  cwd: string;
+  readFile?: (file: string) => string | undefined;
+  assertInput?: (file: string) => string;
+}) {
   const cwd = path.resolve(options.cwd);
-  const configFileName = path.resolve(cwd, options.configFileName);
   const contents = new Map<string, string>();
   const readFile = options.readFile ?? ((file: string) => fs.readFileSync(file, "utf8"));
   const view = options.assertInput
@@ -71,36 +80,44 @@ export function readNativeTypeScriptConfig(options: {
       },
     },
   });
-  try {
-    const parsed = api.parseConfigFile(configFileName);
-    assertValid();
-    const syntax = api.readConfigFile(configFileName);
-    assertValid();
-    const configFiles = [...contents.keys()].toSorted();
-    let diagnostics: readonly Diagnostic[] = parsed.errors;
-    if (syntax.error) {
-      // Parsed options omit root JSON syntax errors; readConfigFile reports only
-      // the first. Open a project only for the complete malformed-config report.
-      parsing = false;
-      const snapshot = api.createSnapshot({ openProjects: [configFileName], ensurePrograms: true });
+  const read = (file: string) => {
+    const configFileName = path.resolve(cwd, file);
+    contents.clear();
+    readFailure = undefined;
+    parsing = true;
+    try {
+      const parsed = api.parseConfigFile(configFileName);
       assertValid();
-      const project = snapshot.getConfiguredProject(configFileName);
-      if (!project) {
-        throw new Error(`Native TypeScript did not open config ${configFileName}`);
+      const syntax = api.readConfigFile(configFileName);
+      assertValid();
+      const configFiles = [...contents.keys()].toSorted();
+      let diagnostics: readonly Diagnostic[] = parsed.errors;
+      if (syntax.error) {
+        // Parsed options omit root JSON syntax errors; readConfigFile reports only
+        // the first. Open a project only for the complete malformed-config report.
+        parsing = false;
+        const snapshot = api.createSnapshot({
+          openProjects: [configFileName],
+          ensurePrograms: true,
+        });
+        assertValid();
+        const project = snapshot.getConfiguredProject(configFileName);
+        if (!project) {
+          throw new Error(`Native TypeScript did not open config ${configFileName}`);
+        }
+        diagnostics = project.program.getConfigFileParsingDiagnostics();
+        assertValid();
       }
-      diagnostics = project.program.getConfigFileParsingDiagnostics();
+      if (diagnostics.length) {
+        throw new Error(
+          `Invalid TypeScript config ${configFileName}:\n${formatNativeTypeScriptDiagnostics(diagnostics)}`,
+        );
+      }
+      return { ...parsed, configFiles };
+    } catch (error) {
       assertValid();
+      throw error;
     }
-    if (diagnostics.length) {
-      throw new Error(
-        `Invalid TypeScript config ${configFileName}:\n${formatNativeTypeScriptDiagnostics(diagnostics)}`,
-      );
-    }
-    return { ...parsed, configFiles };
-  } catch (error) {
-    assertValid();
-    throw error;
-  } finally {
-    api.close();
-  }
+  };
+  return { read, [Symbol.dispose]: () => api.close() };
 }

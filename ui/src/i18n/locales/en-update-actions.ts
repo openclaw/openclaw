@@ -6,9 +6,18 @@ import { en } from "./en.ts";
 const enUpdateActions = {
   updates: {
     adminRequired: "You need admin access to change update settings or start an update.",
+    adminRequiredTooltip: "Admin access required.",
     refreshUnreachable: "Couldn't reach the server",
     refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
+    // A campaign without a target restarts the Gateway to finish an earlier update's plugins.
+    // Only lazy update views format it, so this copy stays out of the boot catalog.
+    finishing: {
+      countdown: "Restarting in {time} to finish plugin updates",
+      waitingForIdle: "Waiting for active work · restarting in {time} to finish plugin updates",
+      held: "Restart held · resumes in {time}",
+      applying: "Finishing plugin updates…",
+    },
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
     run: {
@@ -18,6 +27,8 @@ const enUpdateActions = {
       details: "Step details",
       noDetails: "No step details recorded yet.",
       verification: "Verification checks",
+      recordedVerification: "Verification at the time of the update",
+      servingTarget: "The Gateway is now serving the update target.",
       report: "Update report",
       restarting: "Gateway restarting…",
       reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",
@@ -63,7 +74,7 @@ const enUpdateActions = {
         install: "Installing dependencies",
         update: "Installing OpenClaw",
         build: "Building OpenClaw",
-        buildUi: "Building the Control UI",
+        buildUi: "Building the web app",
         doctor: "Checking configuration and data",
       },
     },
@@ -77,7 +88,7 @@ const enUpdateActions = {
       macMessage:
         "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
       impact:
-        "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
+        "Running sessions are interrupted and this page disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
       versionsBehind: "Installed {installed} · {available}",
       macAction: "Update Mac app and restart",
@@ -94,17 +105,16 @@ const enUpdateActions = {
       checkFailed: "Couldn’t check for updates. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
+      finishingTitle: "Finishing update",
       availableBadge: "Available",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary:
         "Couldn’t apply the selected revision to this checkout. Review the update details.",
       blockedWaiting: "Blocked · waiting for active work · {target}",
-      waitingForIdle: en.updates.sidebar.waitingForIdle,
     },
     dialog: {
-      disconnected:
-        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
+      reconnecting: "Reconnecting…",
       restarting:
         "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
       checkStatus: "Check status",
@@ -113,19 +123,16 @@ const enUpdateActions = {
       statusNotRefreshed: "Couldn’t refresh update status. Check your connection and try again.",
       checkStatusDisconnected: "Reconnect to the Gateway to check status or retry the update.",
       retryUpdate: "Retry update",
-      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
+      starting: "Starting update…",
       notStarted:
         "The update request went unanswered. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     },
     channel: en.updates.channel,
     installKind: en.updates.installKind,
     page: en.updates.page,
-    coalescedRestart: en.updates.coalescedRestart,
     error: en.updates.error,
     checkError: en.updates.checkError,
     status: en.updates.status,
-    verificationFailedWithIdentity: en.updates.verificationFailedWithIdentity,
-    handoffTimeout: en.updates.handoffTimeout,
     outcomeUnknown: en.updates.outcomeUnknown,
     triage: {
       hostHint: en.updates.triage.hostHint,
@@ -146,9 +153,6 @@ const enUpdateActions = {
     },
     failureReasons: en.updates.failureReasons,
     failedAtStep: en.updates.failedAtStep,
-    succeededVersion: en.updates.succeededVersion,
-    succeededCommit: en.updates.succeededCommit,
-    succeeded: en.updates.succeeded,
   },
   chat: {
     updating: "Updating…",
@@ -172,18 +176,22 @@ export const registerUpdateActionsEnglish = Object.assign(
       triage,
       report,
       adminRequired,
+      adminRequiredTooltip,
       refreshUnreachable,
       refreshBlocked,
       holdOneHour,
       reviewUpdate,
+      finishing,
     } = enUpdateActions.updates;
     const { phase, ...runLabels } = run;
     Object.assign(en.updates, {
       adminRequired,
+      adminRequiredTooltip,
       refreshUnreachable,
       refreshBlocked,
       holdOneHour,
       reviewUpdate,
+      finishing,
     });
     Object.assign(en.updates.run, runLabels);
     Object.assign(en.updates.run.phase, phase);

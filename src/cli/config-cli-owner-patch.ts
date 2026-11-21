@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import type { ReadConfigFileSnapshotWithPluginMetadataResult } from "../config/io.types.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
@@ -5,14 +6,61 @@ import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { collectBaseArrayPaths, formatConfigPatchPath } from "../config/patch-replace-paths.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveIdentityPathViaExistingAncestorSync as identity } from "../infra/boundary-path.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { resolveIdentityPathViaExistingAncestorSync as identity } from "../infra/path-existence.js";
 import { isPlainObject } from "../infra/plain-object.js";
 import { shortenHomePath } from "../utils.js";
 import type { OwnerRequest } from "./local-state-owner.js";
 
 // Matches the config.patch request schema.
 const MAX_REPLACE_PATHS = 256;
+const CONFIG_APPLY_CONFIRM_TIMEOUT_MS = 2_000;
+const CONFIG_APPLY_CONFIRM_INTERVAL_MS = 250;
+
+async function confirmSavedConfig(requestOwner: OwnerRequest, error: unknown): Promise<boolean> {
+  const { isGatewayClientRequestError } = await import("../gateway/call.js");
+  const reply = error instanceof Error ? error.cause : undefined;
+  // The existing failed-apply reply identifies this case. Other saved-write
+  // replies can carry a required restart or an intentionally deferred apply.
+  if (
+    !isGatewayClientRequestError(reply) ||
+    reply.gatewayCode !== "UNAVAILABLE" ||
+    !reply.message.startsWith(
+      "config.patch persisted but was not applied to the active Gateway (failed);",
+    ) ||
+    !isPlainObject(reply.details) ||
+    !isPlainObject(reply.details.persistedConfig)
+  ) {
+    return false;
+  }
+  const { hash } = reply.details.persistedConfig;
+  if (typeof hash !== "string" || !hash) {
+    return false;
+  }
+  const signal = AbortSignal.timeout(CONFIG_APPLY_CONFIRM_TIMEOUT_MS);
+  try {
+    while (!signal.aborted) {
+      const revision = await requestOwner<{
+        hash?: unknown;
+        configRevisionHash?: unknown;
+        appliedConfigHash?: unknown;
+      }>("config.get", {}, { signal });
+      if (
+        !signal.aborted &&
+        revision.hash === hash &&
+        typeof revision.configRevisionHash === "string" &&
+        revision.configRevisionHash &&
+        revision.configRevisionHash === revision.appliedConfigHash
+      ) {
+        return true;
+      }
+      await delay(CONFIG_APPLY_CONFIRM_INTERVAL_MS, undefined, { signal });
+    }
+  } catch {
+    // Keep the original write error when confirmation fails or times out.
+  }
+  return false;
+}
 
 // Arrays the patch replaces, or removes with a deleted or replaced subtree, are explicit intent.
 function collectReplacePaths(patch: unknown, base: unknown, parentPath?: string): string[] {
@@ -124,7 +172,7 @@ function buildConfigOwnerPatch(
 /**
  * Bind a routed config change to the file the running Gateway writes. The change is prepared
  * from this command's own read; the returned commit sends it as one config.patch against the
- * owner's revision and returns the restart hint, if any.
+ * owner's revision and returns the restart hint, if any, plus the owner's billing-route warnings.
  */
 export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.ProcessEnv) {
   const current = await requestOwner<{ hash?: unknown; path?: unknown }>("config.get", {});
@@ -141,12 +189,31 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
     await readConfigSnapshotForEngineSelection();
   }
   return async (change: { previous: OpenClawConfig; next: OpenClawConfig }) => {
-    const result = await requestOwner<{ restart?: unknown; restartPending?: unknown }>(
-      "config.patch",
-      buildConfigOwnerPatch(change, current.hash),
+    const result = await requestOwner<{
+      restart?: unknown;
+      restartPending?: unknown;
+      billingRouteWarnings?: unknown;
+      warnings?: unknown;
+    }>("config.patch", buildConfigOwnerPatch(change, current.hash)).catch(
+      async (error: unknown) => {
+        if (!(await confirmSavedConfig(requestOwner, error))) {
+          throw error;
+        }
+        return null;
+      },
     );
-    return result.restart || result.restartPending
-      ? "The Gateway is restarting to apply it."
-      : undefined;
+    if (result === null) {
+      return { hint: "The Gateway applied the change.", warnings: [] };
+    }
+    return {
+      hint:
+        result.restart || result.restartPending
+          ? "The Gateway is restarting to apply it."
+          : undefined,
+      // Older Gateways omit the field; the owner computed it against its own credentials.
+      warnings: [result.billingRouteWarnings, result.warnings].flatMap((warnings) =>
+        Array.isArray(warnings) ? warnings.filter((warning) => typeof warning === "string") : [],
+      ),
+    };
   };
 }

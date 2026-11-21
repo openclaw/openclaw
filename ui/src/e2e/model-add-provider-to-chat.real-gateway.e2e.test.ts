@@ -112,6 +112,9 @@ suite.define(() => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
         await page.locator('[data-model-readiness="model-required"]').waitFor();
+        expect(await page.locator(".page-subtitle").first().textContent()).toContain(
+          "Global model defaults and provider access for your agents.",
+        );
 
         let clicks = 0;
         const started = Date.now();
@@ -119,9 +122,13 @@ suite.define(() => {
         clicks++;
         const picker = page.getByRole("dialog", { name: "Add an account" });
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent Tokenhub" }).click();
+        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         clicks++;
         const form = page.getByRole("dialog", { name: "Add provider" });
+        // A provider with config still shows its display name, not its config id.
+        expect((await form.locator(".oc-dialog__title").textContent())?.trim()).toBe(
+          "Tencent TokenHub",
+        );
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-first-provider");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
         clicks++;

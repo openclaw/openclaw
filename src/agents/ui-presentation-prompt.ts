@@ -20,17 +20,17 @@ export function buildUiPresentationPrompt(params: {
       : undefined;
   const lines = [
     screenToolName &&
-      `\`${screenToolName}\`: For the agent Browser panel specifically, use \`${screenToolName}(action="browser_show")\`; browser_hide hides it. For an app preview, use portal_show with its portalId, not browser_show. A generic "side panel" request needs the intended content, not an automatic Browser panel. sidebar_show/sidebar_hide control the session list; terminal_show/terminal_hide control Terminal. Set dock="right" or "bottom" when requested. Do not create or expand a dashboard to open a panel.`,
+      `\`${screenToolName}\`: \`${screenToolName}(action="browser_show")\`/\`browser_hide\` for agent Browser only (app previews use \`portal_show(portalId)\`, generic "side panel" needs intended content); \`sidebar_show|hide\`, \`terminal_show|hide\`, optional \`dock="right"|"bottom"\`. Never create/expand a dashboard to open a panel.`,
     clawHubMessageToolName &&
-      `\`${clawHubMessageToolName}\`: Tools/skills first. For explicit plugin/skill search/install or missing capability, use ClawHub: \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\`. Skip routine tasks, tool errors, permissions. Omit channel/target. Trust result status.`,
+      `\`${clawHubMessageToolName}\`: tools/skills first. For explicit plugin/skill search/install or missing capability, use \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\` (omit channel/target; skip for routine tasks/errors/permissions).`,
     showWidgetToolName &&
-      `\`${showWidgetToolName}\`: author widgets using this turn's schema. pin=true saves to the dashboard; status=pinned means the widget is on the session dashboard. Follow result.presentation when present. Inline availability is per turn, including after restart.`,
+      `\`${showWidgetToolName}\`: use a widget when a visual helps (dashboards/charts/trackers/checklists/timers/choices) instead of text tables or chart images; use this turn's schema, \`pin=true\` saves to dashboard, follow \`result.presentation\`. Inline availability is per turn.`,
     dashboardToolName &&
-      `\`${dashboardToolName}\`: layout/plugin widgets, not HTML authoring; never for opening a browser side panel. For a saved widget, use action="focus_tab" with its tabId.${showWidgetToolName ? "" : " Custom authoring is unavailable this turn, not unsupported by dashboards."}`,
+      `\`${dashboardToolName}\`: layout/plugin widgets only (not HTML authoring or browser side panels); \`action="focus_tab"\` with \`tabId\` for saved widgets.${showWidgetToolName ? "" : " Custom authoring is unavailable this turn, not unsupported."}`,
     portalToolName &&
-      `\`${portalToolName}\`: Open the app port on the correct environment (environmentId for an attachment; omit for a conversation-bound tool/current host), then start it there with PORT and PUBLIC_URL=publicUrl. Read exposure: loopback-only is local to the Gateway host; non-loopback is not proof of remote access. Keep URLs unchanged and bearer URLs private; publicUrl is not a launch link.${screenToolName ? ` Then use \`${screenToolName}(action="portal_show", portalId="<returned id>")\` to request the app side panel.` : " No screen tool is exposed this turn; do not claim to open a side panel. Direct the viewer to Control UI → Portals instead."} Verify app rendering from the requesting viewer; a worker/Gateway fetch or browser test is not delivery proof. Report blocked or unverified results; panel dispatch/transport alone is not app-rendering proof.`,
+      `\`${portalToolName}\`: allocate port on the target environment (\`environmentId\` if attached, else omit), start app with \`PORT\` and \`PUBLIC_URL=publicUrl\`. Keep URLs unchanged and bearer URLs private (\`publicUrl\` != launch link; loopback-only is Gateway-local, non-loopback != remote-access proof).${screenToolName ? ` Open via \`${screenToolName}(action="portal_show", portalId="<id>")\`.` : " No `screen` tool this turn—direct viewer to Control UI → Portals."} Verify rendering from the requesting viewer (worker/Gateway fetch or panel dispatch != delivery proof); report blocked/unverified results.`,
     (showWidgetToolName || dashboardToolName) &&
-      "Inspect widgets in their chat/dashboard frame; do not open hosting URLs as browser pages. Verify the delivered interaction or say unverified.",
+      "Inspect widgets in their chat/dashboard frame (not hosting URLs as browser pages); verify interaction or say unverified.",
   ].filter(Boolean);
   return lines.length > 0 ? ["## UI Presentation", ...lines].join("\n") : "";
 }

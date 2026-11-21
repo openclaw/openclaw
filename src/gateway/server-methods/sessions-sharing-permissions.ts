@@ -12,6 +12,7 @@ import {
   readResidentUserProfileRevision,
 } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
 import {
@@ -45,6 +46,7 @@ export function projectSessionMemberPermissions(params: {
       profileId: string;
       role: string | null;
       githubLogin: string | null;
+      openclawIdAccountIds?: readonly string[];
       aliases: Set<string>;
     }
   >();
@@ -60,6 +62,7 @@ export function projectSessionMemberPermissions(params: {
         profileId: current.id,
         role: current.role ?? null,
         githubLogin: current.githubLogin ?? null,
+        openclawIdAccountIds: current.openclawIdAccountIds,
         aliases: new Set<string>(),
       };
       profiles.set(current.id, profile);
@@ -83,6 +86,7 @@ export function projectSessionMemberPermissions(params: {
       profile.role,
       params.cfg,
       profile.githubLogin ?? null,
+      operatorRoleSubject(profile),
     );
     // With no named policy, the profile has no configured scope ceiling. A device can still be narrower.
     const scopes = policy?.scopes ?? ["operator.read", "operator.write"];

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
@@ -10,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { captureGatewayRootWorkReleaseObserver } from "../process/gateway-work-admission.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -28,7 +30,15 @@ import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-test("guest dictation crosses the real WebSocket authorization boundary", async () => {
+test("guest dictation crosses the real WebSocket authorization boundary", async ({
+  onTestFailed,
+}) => {
+  const started = performance.now();
+  const phases: string[] = [];
+  const mark = (phase: string) =>
+    phases.push(`${Math.round(performance.now() - started)}ms ${phase}`);
+  onTestFailed(() => console.error("[guest-dictation-phase]", phases.join(" -> ")));
+  mark("setup");
   const origin = "https://control.example.com";
   const auth: GatewayAuthConfig = {
     mode: "trusted-proxy",
@@ -93,7 +103,9 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
   });
   setTestPluginRegistry(registry);
   const identityDir = tempDirs.make("openclaw-guest-dictation-");
+  mark("gateway-start");
   await withGatewayServer(async ({ port }) => {
+    mark("session-setup");
     const ownKey = "agent:main:guest-dictation-websocket";
     const otherKey = "agent:main:other-dictation-websocket";
     for (const [sessionKey, owner] of [
@@ -111,6 +123,7 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
         },
       );
     }
+    mark("primary-connect");
     const ws = await openWs(port, {
       origin,
       "x-forwarded-for": "203.0.113.7",
@@ -137,30 +150,31 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
           ]),
         },
       });
-      let catalogResponse: unknown;
-      try {
-        await vi.waitFor(
-          async () => {
-            const catalog = await rpcReq(ws, "talk.catalog", { sessionKey: ownKey });
-            catalogResponse = catalog;
-            expect(catalog.ok).toBe(true);
-            expect(catalog.payload).toEqual({
-              modes: ["transcription"],
-              transports: ["gateway-relay"],
-              brains: ["none"],
-              transcription: { ready: true, providers: [] },
-              realtime: { ready: false, providers: [] },
-              speech: { ready: false, providers: [] },
-            });
-          },
-          { timeout: 5000 },
-        );
-      } catch (error) {
-        throw new Error(
-          `Dictation catalog did not become ready: ${JSON.stringify(catalogResponse)}`,
-          { cause: error },
-        );
-      }
+      const catalogReleased = Promise.withResolvers<"settled" | "reset">();
+      configure = async () => {
+        const observe = expectDefined(captureGatewayRootWorkReleaseObserver(), "catalog root");
+        observe(catalogReleased.resolve);
+        return true;
+      };
+      mark("catalog-refresh");
+      expect(await rpcReq(ws, "talk.catalog", { sessionKey: ownKey })).toMatchObject({
+        ok: false,
+        error: { details: { reason: "talk-catalog-warming" } },
+      });
+      mark("catalog-root-release");
+      expect(await catalogReleased.promise).toBe("settled");
+      mark("dictation");
+      configure = undefined;
+      const catalog = await rpcReq(ws, "talk.catalog", { sessionKey: ownKey });
+      expect(catalog.ok).toBe(true);
+      expect(catalog.payload).toEqual({
+        modes: ["transcription"],
+        transports: ["gateway-relay"],
+        brains: ["none"],
+        transcription: { ready: true, providers: [] },
+        realtime: { ready: false, providers: [] },
+        speech: { ready: false, providers: [] },
+      });
       expect((await rpcReq(ws, "talk.config", {})).ok).toBe(false);
       expect(
         (await rpcReq(ws, "talk.session.create", { sessionKey: otherKey, mode: "transcription" }))
@@ -232,6 +246,7 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
         configuring.resolve();
         return configured.promise;
       };
+      mark("provider-configure");
       const pendingStartup = start();
       await configuring.promise;
       await replaceSession(other.id);
@@ -242,6 +257,7 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
       await replaceSession(guest.id);
 
       // Session access does not grant access to another connection's relay.
+      mark("foreign-connection");
       const foreign = await openWs(port, {
         origin,
         "x-forwarded-for": "203.0.113.8",
@@ -297,6 +313,7 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
           connecting.resolve();
           return connected.promise;
         };
+        mark("provider-connect");
         const delayed = await start();
         expect(delayed.ok).toBe(true);
         await connecting.promise;
@@ -320,6 +337,7 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
         connect = undefined;
         await replaceSession(guest.id);
 
+        mark("transcript-revocation");
         transcribeImmediately = false;
         const transcribing = await start();
         expect(transcribing.ok).toBe(true);
@@ -355,6 +373,7 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
       } finally {
         ws.off("message", collect);
       }
+      mark("role-revocation");
       const revoked = await rpcReq(ws, "talk.session.create", {
         sessionKey: ownKey,
         mode: "transcription",
@@ -370,5 +389,6 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
     } finally {
       ws.terminate();
     }
+    mark("gateway-close");
   });
 }, 30_000);

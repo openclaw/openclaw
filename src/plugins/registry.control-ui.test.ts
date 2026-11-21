@@ -84,6 +84,12 @@ describe("plugin registry Control UI descriptors", () => {
     expectDescriptor("workboard", descriptor);
   });
 
+  it("preserves Settings placement through descriptor admission", () => {
+    const { register, expectDescriptor } = fixture();
+    register({ ...tab, placement: "settings" });
+    expectDescriptor("reports", { ...tab, placement: "settings" });
+  });
+
   it("diagnoses UI declaration drift without rejecting registration", () => {
     const { registry, register, expectDescriptor } = fixture();
     register(

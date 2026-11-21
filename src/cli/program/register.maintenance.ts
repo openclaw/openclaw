@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
@@ -7,7 +7,7 @@ import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { formatDocsHelp } from "../help-format.js";
-import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { exitCliAfterOutput, requestOneShotSettledExitWatchdog } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { installCliDoctorSignalExitHandlers } from "../signal-exit-barrier.js";
 import type { ProgramContext } from "./context.js";
@@ -50,6 +50,12 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
+    .addOption(
+      new Option(
+        "--state-upgrade-live-state-dir <path>",
+        "Internal state-upgrade publication destination",
+      ).hideHelp(),
+    )
     .option(
       "--client-credentials",
       "Prepare local client credentials and runtime intent (requires --repair --non-interactive)",
@@ -108,6 +114,7 @@ export function registerMaintenanceCommands(
     .action(async (opts, command) => {
       if (hasCliProcessScope()) {
         installCliDoctorSignalExitHandlers();
+        requestOneShotSettledExitWatchdog();
       }
       if (
         typeof opts.stateSqlite === "string" &&
@@ -257,7 +264,11 @@ export function registerMaintenanceCommands(
           await doctorCommand(
             defaultRuntime,
             {
+              watchExitAfterComplete: hasCliProcessScope(),
               ...(modelReplacements.length ? { modelReplacements } : {}),
+              ...(typeof opts.stateUpgradeLiveStateDir === "string"
+                ? { stateUpgradeLiveStateDir: opts.stateUpgradeLiveStateDir }
+                : {}),
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
               repair: Boolean(opts.repair) || Boolean(opts.fix),
@@ -338,21 +349,17 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
-      return await runCommandWithRuntime(
-        defaultRuntime,
-        async () => {
-          const { triageCommand } = await import("../../commands/triage.js");
-          await triageCommand(defaultRuntime, {
-            json: opts.json === true,
-            noExport: opts.export === false,
-            run: opts.run === true,
-            ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
-            ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
-            ...(agent ? { agent } : {}),
-          });
-        },
-        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
-      );
+      return await runCommandWithRuntime(defaultRuntime, async () => {
+        const { triageCommand } = await import("../../commands/triage.js");
+        await triageCommand(defaultRuntime, {
+          json: opts.json === true,
+          noExport: opts.export === false,
+          run: opts.run === true,
+          ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
+          ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
+          ...(agent ? { agent } : {}),
+        });
+      });
     });
 
   program

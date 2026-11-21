@@ -27,15 +27,6 @@ const iosButtonFocus = `document.addEventListener("mousedown", (event) => {
 
 const touch = { hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } };
 
-// Taps the centre of a locator's box with the touchscreen.
-async function tap(page: Page, locator: ReturnType<Page["locator"]>): Promise<void> {
-  const box = await locator.boundingBox();
-  if (!box) {
-    throw new Error("tap target has no layout box");
-  }
-  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
-}
-
 // Opens the composer model picker by touch and waits for the OpenAI provider toggle.
 async function openPickerByTouch(page: Page) {
   await installMockGateway(page, {
@@ -50,22 +41,21 @@ async function openPickerByTouch(page: Page) {
   await trigger.waitFor({ state: "visible" });
   await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
   await waitForLayoutSettled(page, ".agent-chat__input [data-chat-model-select]");
-  await tap(page, trigger);
-  const toggle = picker.locator(
-    '[data-chat-model-provider="openai"] [data-chat-model-provider-toggle]',
-  );
+  await trigger.tap();
+  const toggle = picker.locator('[data-chat-model-provider-toggle="openai"]');
   await toggle.waitFor({ state: "visible" });
   return { picker, toggle };
 }
 
 suite.define(() => {
-  it("expands a provider on touch when the tapped button does not take focus", async () => {
+  it("selects a provider on touch when the tapped button does not take focus", async () => {
     await suite.withPage(touch, async ({ page }) => {
       await page.addInitScript({ content: iosButtonFocus });
       const { picker, toggle } = await openPickerByTouch(page);
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      await tap(page, toggle);
-      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(await toggle.getAttribute("aria-selected")).toBe("false");
+      await toggle.tap();
+      expect(await toggle.evaluate((element) => document.activeElement === element)).toBe(false);
+      await expect.poll(() => toggle.getAttribute("aria-selected")).toBe("true");
       expect(await picker.getAttribute("open")).not.toBeNull();
     });
   });

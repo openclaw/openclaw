@@ -36,6 +36,10 @@ export function projectControllerDiagnosticActivity(
   if (!state.current) {
     return {};
   }
+  let admission: DiagnosticSessionActivitySnapshot["admission"];
+  for (const wait of state.waits) {
+    admission ??= wait.admission;
+  }
   const oldestTool = state.tools.reduce<SessionWatchdogSnapshot["tools"][number] | undefined>(
     (oldest, tool) => (!oldest || tool.startedAtMs < oldest.startedAtMs ? tool : oldest),
     undefined,
@@ -66,6 +70,7 @@ export function projectControllerDiagnosticActivity(
       : undefined,
     lastProgressAgeMs: Math.max(0, now - state.semanticProgressAtMs),
     lastProgressReason: state.lastProgressReason,
+    admission,
     activeToolName: oldestTool?.toolName,
     activeToolCallId: oldestTool?.toolCallId,
     activeToolAgeMs: oldestTool ? Math.max(0, now - oldestTool.startedAtMs) : undefined,

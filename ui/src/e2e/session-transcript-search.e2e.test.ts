@@ -67,9 +67,9 @@ function searchHit(session: string, snippet: string, role = "assistant", score =
 
 async function openSearch(browserPage: Page) {
   await browserPage.goto(`${suite.server.baseUrl}sessions`);
-  const search = browserPage.getByRole("search", { name: "Search transcripts" });
-  await search.getByRole("button", { name: "Search transcripts" }).click();
-  return { search, input: search.getByRole("searchbox", { name: "Search session transcripts" }) };
+  const search = browserPage.getByRole("search", { name: "Search chats" });
+  await search.getByRole("button", { name: "Search chats" }).click();
+  return { search, input: search.getByRole("searchbox", { name: "Search chats" }) };
 }
 
 async function captureUiProof(fileName: string) {
@@ -297,7 +297,7 @@ suite.define(() => {
     });
 
     const { search, input } = await openSearch(page);
-    const submit = search.getByRole("button", { name: "Search transcripts" });
+    const submit = search.getByRole("button", { name: "Search chats" });
     const empty = page.getByText("No messages match your search.", { exact: true });
     const indexing = page.getByText("Results may be incomplete. Search again shortly.");
     const retry = page.getByRole("button", { name: "Retry" });

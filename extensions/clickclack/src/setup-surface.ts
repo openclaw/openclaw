@@ -9,7 +9,7 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { listClickClackAccountIds, resolveClickClackAccount } from "./accounts.js";
+import { listClickClackAccountIds, resolveClickClackAccountMetadata } from "./accounts.js";
 import {
   applyClickClackCredentialConfig,
   applyClickClackSetupConfigPatch,
@@ -48,7 +48,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       (accountId ? [accountId] : listClickClackAccountIds(cfg as CoreConfig)).some(
         (resolvedAccountId) =>
           isClickClackSetupConfigured(
-            resolveClickClackAccount({
+            resolveClickClackAccountMetadata({
               cfg: cfg as CoreConfig,
               accountId: resolvedAccountId,
             }),
@@ -65,7 +65,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
     ],
     shouldShow: ({ cfg, accountId }) =>
       !isClickClackSetupConfigured(
-        resolveClickClackAccount({
+        resolveClickClackAccountMetadata({
           cfg: cfg as CoreConfig,
           accountId,
         }),
@@ -84,7 +84,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       inputPrompt: t("wizard.clickclack.botTokenInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       resolveAccount: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveClickClackAccountMetadata({ cfg: cfg as CoreConfig, accountId }),
       hasConfiguredValue: hasConfiguredClickClackCredential,
       resolvedValue: (account) => account.token || undefined,
       envValue: ({ accountId }) =>
@@ -105,7 +105,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       configKey: "baseUrl",
       message: t("wizard.clickclack.baseUrlPrompt"),
       resolveAccount: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveClickClackAccountMetadata({ cfg: cfg as CoreConfig, accountId }),
       currentValue: (account) => account.baseUrl || undefined,
       includeInitialValue: true,
       validate: (value) =>
@@ -126,9 +126,11 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       helpTitle: t("wizard.clickclack.workspacePrompt"),
       helpLines: [t("wizard.clickclack.workspaceHelp")],
       currentValue: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).workspace || undefined,
+        resolveClickClackAccountMetadata({ cfg: cfg as CoreConfig, accountId }).workspace ||
+        undefined,
       initialValue: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).workspace || undefined,
+        resolveClickClackAccountMetadata({ cfg: cfg as CoreConfig, accountId }).workspace ||
+        undefined,
       validate: ({ value }) => (value.trim() ? undefined : "Required"),
       normalizeValue: ({ value }) => value.trim(),
       applySet: async ({ cfg, accountId, value }) =>

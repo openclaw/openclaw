@@ -100,7 +100,7 @@ export type PluginControlUiDescriptor = {
   linkReader?: ControlUiLinkReaderMetadata;
   label: string;
   description?: string;
-  /** Bundled plugins may claim their matching native route as `route:<pluginId>`. */
+  /** `settings` places a tab in Settings instead of Pages. Bundled plugins may claim their matching native route as `route:<pluginId>`. */
   placement?: string;
   /** Optional single-segment Control UI address for a tab; does not register an HTTP route. */
   slug?: string;

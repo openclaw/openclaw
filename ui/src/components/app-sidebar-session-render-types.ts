@@ -157,8 +157,7 @@ export type SessionCatalogRenderSnapshot = {
   mainKey: string;
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
-  liveRows: readonly GatewaySessionRow[];
-  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
+  projectedRows: ReadonlyMap<string, SidebarRecentSession>;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
 };
@@ -225,6 +224,7 @@ declare module "@solidjs/web" {
         Properties<ContributionsElement> & {
           "prop:agentId"?: ContributionsElement["agentId"];
           "prop:navigationMenus"?: ContributionsElement["navigationMenus"];
+          "prop:composer"?: ContributionsElement["composer"];
         };
     }
   }

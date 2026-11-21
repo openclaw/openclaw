@@ -135,8 +135,9 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       "plugins.list": inventory([calendarPlugin]),
     });
     await page.goto(`${server.baseUrl}settings/plugins/calendar-plus#lifecycle`);
-    const toggle = page.getByRole("button", {
-      name: "Disable Calendar Plus",
+    const toggle = page.getByRole("switch", {
+      name: "Calendar Plus",
+      checked: true,
       exact: true,
     });
     await toggle.waitFor();
@@ -162,7 +163,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       },
     });
     await page.goto(`${server.baseUrl}settings/plugins`);
-    const error = page.locator(".plugins-settings-error");
+    const error = page.locator(".callout.danger");
     await error.getByText("Plugin inventory unavailable", { exact: true }).waitFor();
     const requests = (await gateway.getRequests("plugins.list")).length;
     await gateway.setMethodResponse("plugins.list", inventory([calendarPlugin]));
