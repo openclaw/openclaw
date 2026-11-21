@@ -106,6 +106,8 @@ Both providers are configured from a single API key. Setup registers both automa
 
 Both catalogs are static (no `/models` discovery call) and support OpenAI-compatible streamed usage accounting. Tool schemas for both providers automatically drop `minLength`, `maxLength`, `minItems`, `maxItems`, `minContains`, and `maxContains` keywords, since the Volcengine tool-call API rejects them.
 
+A custom `openai-responses` model on an Ark host (`ark.*.volces.com` or `ark.*.bytepluses.com`) replays tool calls and reasoning items with `status: "completed"` when they have none, which Ark requires. Other custom Responses hosts still have replayed `status` stripped.
+
 ## Text-to-speech
 
 Volcengine TTS uses the BytePlus Seed Speech HTTP API (`voice.ap-southeast-1.bytepluses.com`) and is configured separately from the OpenAI-compatible Doubao model API key. In the BytePlus console, open Seed Speech > Settings > API Keys, copy the API key, then set:
