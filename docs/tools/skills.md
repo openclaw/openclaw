@@ -937,7 +937,8 @@ instructions. Cloud worker turns use the Gateway's admitted skill catalog for
 search and reads, with the same turn-lifetime checks. If a request fails, the
 Code Mode bridge reports a bounded, redacted cause.
 `await skills.list(offset)` returns up to 20 directory entries;
-the default offset is 0. Codex receives the OpenClaw tools through its dynamic
+the default offset is 0. If the current run restricts a skill operation, that call returns `{ gated: true, message }` with guidance.
+Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget
 instead of returning partial instructions as a successful read.
