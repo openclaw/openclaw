@@ -469,8 +469,9 @@ export async function runCliFallbackCandidate(
               : undefined,
             scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             config: params.runtimeConfig,
+            // The runner writes no reply row for a room event, only its hidden usage row.
             persistAssistantTranscript:
-              turn.followupRun.currentInboundEventKind !== "room_event" &&
+              turn.followupRun.currentInboundEventKind === "room_event" ||
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
             storePath: turn.storePath,
             // Carry the runner-owned facts instead of inferring from this shared
