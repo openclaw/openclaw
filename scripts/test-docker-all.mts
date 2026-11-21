@@ -7,6 +7,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
@@ -1595,10 +1596,24 @@ async function runLane(
       // Normal admission stays closed. Finalization follows successful execution
       // cleanup and retains the same process/log custody and later-signal handling.
       const settle = `source ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/lib/docker-e2e-container.sh"))} && docker_e2e_settle_container_cidfile ${shellQuote(env.DOCKER_E2E_CONTAINER_CIDFILE!)}`;
-      const destination = await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
       await activeChildrenShutdownPromise;
+      const finalizerDeadline = Date.now() + 30_000;
+      const settled = await runOwnedShellCommand({
+        command: settle,
+        env,
+        label: `${name}-settlement`,
+        logFile,
+        timeoutMs: 30_000,
+        timeoutKillGraceMs: 1_000,
+      });
+      publicationStatus = settled.status;
+      assert.equal(settled.status, 0, "Installed producer settlement failed");
+      // Publication storage cannot prevent the independent producer close join.
+      const destination = await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
+      const remaining = finalizerDeadline - Date.now();
+      assert(remaining > 0, "Installed finalizer exhausted its deadline");
       const publication = await runOwnedShellCommand({
-        command: `${settle} && exec ${[
+        command: `exec ${[
           process.execPath,
           "--import",
           path.join(HARNESS_ROOT_DIR, "scripts/tsx.mjs"),
@@ -1610,6 +1625,7 @@ async function runLane(
           retirementCuts[recoveryIndex] ?? "",
           String(result.timedOut),
           packageSha256 ?? "",
+          result.signal ?? "",
         ]
           .map(shellQuote)
           .join(" ")}`,
@@ -1617,12 +1633,12 @@ async function runLane(
         label: `${name}-diagnostics`,
         logFile,
         captureUpgradeFailure: env.GITHUB_ACTIONS === "true",
-        timeoutMs: 30_000,
+        timeoutMs: remaining,
         timeoutKillGraceMs: 1_000,
       });
       publicationStatus = publication.status;
     } catch (cause) {
-      publicationStatus = null;
+      if (publicationStatus === 0) publicationStatus = null;
       publicationError = { cause };
     }
     if (publicationStatus !== 0) {
@@ -1901,9 +1917,7 @@ function printUpgradeFailureMetadata(bytes: Buffer | undefined) {
     failure.exitStatus < 0 ||
     failure.exitStatus > 255 ||
     (failure.signal !== null &&
-      failure.signal !== "SIGHUP" &&
-      failure.signal !== "SIGINT" &&
-      failure.signal !== "SIGTERM")
+      (typeof failure.signal !== "string" || !Object.hasOwn(osConstants.signals, failure.signal)))
   ) {
     return;
   }

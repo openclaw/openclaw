@@ -9,7 +9,6 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { hasUnjoinedWork, runManagedCommand } from "../../../lib/managed-child-process.mts";
-import { packFirstHopUpdateFixture } from "../update-first-hop-package-fixtures.mjs";
 import {
   fileDigest,
   installedRecoveryEvidenceMode,
@@ -128,6 +127,7 @@ async function main() {
     console.log(`[installed-terminal] ${name}`);
     const buffers = [[], []];
     const sizes = [0, 0];
+    const ended = [false, false];
     const outputFds = ["out", "err"].map((suffix) =>
       openInstalledRecoveryEvidence(path.join(artifacts, `${name}.${suffix}`)),
     );
@@ -156,11 +156,15 @@ async function main() {
           });
           for (const [index, stream] of [child.stdout, child.stderr].entries()) {
             assert(stream);
+            stream.once("end", () => {
+              ended[index] = true;
+            });
             stream.on("data", (chunk) => {
               try {
                 sizes[index] += chunk.length;
                 assert(sizes[index] <= maxOutput, `${name}: output budget exceeded`);
-                fs.writeSync(outputFds[index], chunk);
+                // Complete short fd writes before including the chunk in the receipt.
+                fs.writeFileSync(outputFds[index], chunk);
                 buffers[index].push(Buffer.from(chunk));
               } catch (error) {
                 outputError ??= error;
@@ -172,19 +176,22 @@ async function main() {
       });
       assert(!outputError, String(outputError));
       assert.deepEqual(receipt.exit, { code: result, signal: null });
+      assert(ended.every(Boolean), `${name}: output streams did not end`);
       receipt.status = "completed";
       receipt.exitCode = result;
       receipt.treeJoined = true;
     } catch (error) {
       unjoined ||= hasUnjoinedWork(error);
       receipt.status = "failed";
-      receipt.error = String(error);
+      receipt.error = String(outputError ?? error);
+      if (outputError && outputError !== error) receipt.commandError = String(error);
       receipt.treeJoined = !hasUnjoinedWork(error);
-      throw error;
+      throw outputError ?? error;
     } finally {
       outputFds.forEach((fd) => fs.closeSync(fd));
       receipt.elapsedMs = Date.now() - receipt.startedAt;
       receipt.outputBytes = sizes;
+      receipt.outputEnded = ended;
       receipt.outputSha256 = buffers.map((chunks) =>
         createHash("sha256").update(Buffer.concat(chunks)).digest("hex"),
       );
@@ -194,6 +201,7 @@ async function main() {
       receipt.outputComplete =
         receipt.status === "completed" &&
         !outputError &&
+        ended.every(Boolean) &&
         sizes.every((size, index) => size === receipt.capturedOutputBytes[index]);
       save();
       console.error(`[installed-terminal] command-outcome ${JSON.stringify(receipt)}`);
@@ -311,7 +319,7 @@ async function main() {
       runId: success.response.terminalRunId,
       parentPid: handoff.pid,
       workerPid: handoff.child,
-      before: handoff.request.params.schemaVersions,
+      handoffDatabases: canonicalStores,
       candidate: success.candidate,
       agent: success.agent,
       predecessorLateOpens: lateOpens,
@@ -588,10 +596,11 @@ async function main() {
       };
       save();
     } catch (error) {
+      record.status = "failed";
       record.cleanup = { ...record.cleanup, status: "held", error: String(error) };
       record.oracleError = validationError && String(validationError);
       save();
-      throw error;
+      throw validationError ?? error;
     }
     if (validationError) {
       record.status = "failed";
@@ -679,12 +688,24 @@ async function main() {
       retainHeartbeat(name, tarball, path.join(directory, "package"), identity);
       return identity;
     } finally {
-      fs.rmSync(directory, { recursive: true });
+      if (!unjoined) fs.rmSync(directory, { recursive: true });
     }
   }
   try {
     candidate = path.join(runtime, "candidate.tgz");
-    summary.fixture = packFirstHopUpdateFixture(sourcePackage, candidate, 1);
+    const packedFixture = await run(
+      "candidate-first-hop",
+      process.execPath,
+      [
+        fileURLToPath(new URL("../update-first-hop-package-fixtures.mjs", import.meta.url)),
+        "first-hop-tarball",
+        sourcePackage,
+        candidate,
+        "1",
+      ],
+      { PATH: process.env.PATH },
+    );
+    summary.fixture = JSON.parse(packedFixture.stdout);
     summary.candidateSha256 = fileDigest(candidate);
     const unpacked = path.join(runtime, "identity");
     fs.mkdirSync(unpacked);
@@ -785,8 +806,14 @@ async function main() {
     summary.unjoined = unjoined;
     summary.runtime = runtime;
     if (summary.status === "passed" && !unjoined) {
-      fs.rmSync(runtime, { recursive: true });
-      summary.runtimeRemoved = true;
+      try {
+        fs.rmSync(runtime, { recursive: true });
+        summary.runtimeRemoved = true;
+      } catch (error) {
+        summary.status = "failed";
+        summary.cleanupError = String(error);
+        process.exitCode = 1;
+      }
     }
     save();
     try {

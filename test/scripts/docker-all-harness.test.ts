@@ -1401,7 +1401,7 @@ describe("Docker scheduler trusted harness execution", () => {
       "setup-failure",
       "incomplete-success",
     ].map((mode) => ({ name: "package-installed-recovery-partial-previous", mode })),
-    ...["timeout", "signal", "incomplete-success"].map((mode) => ({
+    ...["timeout", "signal", "native-signal", "incomplete-success"].map((mode) => ({
       name: "installed-terminal",
       mode,
     })),
@@ -1417,7 +1417,10 @@ describe("Docker scheduler trusted harness execution", () => {
     const privateRootFile = path.join(fixture.root, "private-root");
     const secret = "sk-installedRecoveryDiagnosticSecret1234567890";
     const cancelled = mode.startsWith("signal");
-    const timedOut = !cancelled && mode !== "incomplete-success";
+    const timedOut = !cancelled && mode !== "incomplete-success" && mode !== "native-signal";
+    const publishedFailure =
+      mode.startsWith("timeout") || mode === "signal" || mode === "native-signal";
+    const observedSignal = mode === "native-signal" ? "SIGUSR2" : "SIGTERM";
     const assertJoined = `
         const pid = Number(fs.readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
         assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
@@ -1487,6 +1490,7 @@ describe("Docker scheduler trusted harness execution", () => {
         `
         }
         if (${cancelled}) process.kill(process.ppid, 'SIGTERM');
+        if (${JSON.stringify(mode)} === 'native-signal') process.kill(process.pid, 'SIGUSR2');
         if (${JSON.stringify(mode)} !== 'incomplete-success') setInterval(() => {}, 1000);
         ${terminal ? "})().catch(error => { console.error(error); process.exitCode = 1; });" : ""}
       `,
@@ -1534,7 +1538,7 @@ describe("Docker scheduler trusted harness execution", () => {
     expect(lane.publicationStatus).toBe(
       mode === "setup-failure"
         ? null
-        : mode.startsWith("timeout") || mode === "signal"
+        : publishedFailure
           ? 0
           : mode === "publisher-failure"
             ? 23
@@ -1546,9 +1550,9 @@ describe("Docker scheduler trusted harness execution", () => {
       .split("\n")
       .filter((line) => line.startsWith("::error title=Upgrade survivor failure::"));
     expect(annotations).toEqual(
-      mode.startsWith("timeout") || mode === "signal"
+      publishedFailure
         ? [
-            `::error title=Upgrade survivor failure::phase=${terminal ? "installed-terminal" : "installed-recovery"}${timedOut ? "-timeout" : ""}; exitStatus=128; signal=none`,
+            `::error title=Upgrade survivor failure::phase=${terminal ? "installed-terminal" : "installed-recovery"}${timedOut ? "-timeout" : ""}; exitStatus=128; signal=${terminal ? observedSignal : "none"}`,
           ]
         : [],
     );
@@ -1560,7 +1564,7 @@ describe("Docker scheduler trusted harness execution", () => {
     if (mode === "signal-publisher") {
       expect(isProcessAlive(Number(readFileSync(publisherPidFile, "utf8")))).toBe(false);
     }
-    if (mode.startsWith("timeout") || mode === "signal") {
+    if (publishedFailure) {
       const directory = readdirSync(logDir).find((entry) =>
         entry.startsWith(`${name}-diagnostics-`),
       )!;
@@ -1576,6 +1580,7 @@ describe("Docker scheduler trusted harness execution", () => {
           outcome: "failed",
           exitStatus: 128,
           packageSha256: fixture.sha256,
+          signal: observedSignal,
           host: { processGroupJoined: true, producerSettled: true, timedOut },
           export: { status: "unavailable" },
         });
@@ -1612,7 +1617,12 @@ describe("Docker scheduler trusted harness execution", () => {
   });
 
   posixIt.for(
-    ["wrapper-cleanup-failure", "timeout", "daemon-query-failure"].flatMap((mode) =>
+    [
+      "wrapper-cleanup-failure",
+      "timeout",
+      "daemon-query-failure",
+      "publication-directory-failure",
+    ].flatMap((mode) =>
       ["package-installed-recovery-partial-previous", "installed-terminal"].map((name) => ({
         mode,
         name,
@@ -1680,6 +1690,24 @@ if (args[0] === 'rm') {
         );
         chmodSync(path.join(bin, "docker"), 0o755);
         const catalog = path.join(fixture.harness, "scripts/lib/docker-e2e-scenarios.mts");
+        if (mode === "publication-directory-failure") {
+          const scheduler = path.join(fixture.harness, "scripts/test-docker-all.mts");
+          writeFileSync(
+            scheduler,
+            readFileSync(scheduler, "utf8").replace(
+              "const SCRIPT_ROOT_DIR =",
+              `const nativeMkdtemp = fs.promises.mkdtemp;
+             fs.promises.mkdtemp = async (...args) => {
+               if (String(args[0]).endsWith(${JSON.stringify(`${name}-diagnostics-`)})) {
+                 assert.throws(() => process.kill(${producer.pid}, 0), { code: 'ESRCH' });
+                 throw Object.assign(new Error('fixture storage failure'), { code: 'ENOSPC' });
+               }
+               return nativeMkdtemp(...args);
+             };
+             const SCRIPT_ROOT_DIR =`,
+            ),
+          );
+        }
         const marker = path.join(fixture.root, "recovery-producer-owner.cjs");
         writeFileSync(
           marker,
@@ -1744,8 +1772,16 @@ fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence
             expect(
               lane.publicationStatus,
               readFileSync(path.join(fixture.root, "logs", `${name}.log`), "utf8"),
-            ).toBe(mode === "daemon-query-failure" ? 1 : 0);
-            expect(existsSync(published)).toBe(mode !== "daemon-query-failure");
+            ).toBe(
+              mode === "daemon-query-failure"
+                ? 1
+                : mode === "publication-directory-failure"
+                  ? null
+                  : 0,
+            );
+            expect(existsSync(published)).toBe(
+              !["daemon-query-failure", "publication-directory-failure"].includes(mode),
+            );
             if (mode !== "daemon-query-failure") {
               expect(isProcessAlive(producer.pid!)).toBe(false);
             }
