@@ -43,6 +43,18 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
+## Appearance
+
+Open **Settings → Device → Appearance** and choose **System**, **Light**, or
+**Dark**. System is the default. This preference stays on this device and works
+offline without Gateway admin access.
+
+Embedded Dashboard pages, including Automations and connected Settings, use
+native-aligned colors and sans-serif typography and follow the device appearance.
+Web Dashboard theme, accent, and font selections remain saved separately; opening
+a page in the iOS app does not change those selections. The web Appearance page
+still edits web preferences, not the app’s device appearance.
+
 ## Chat text size
 
 Chat uses a 13.5-point base text size for a denser transcript. It still follows
