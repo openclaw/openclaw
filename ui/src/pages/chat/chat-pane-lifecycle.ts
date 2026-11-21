@@ -4,6 +4,7 @@ import type {
   SessionTypingEvent,
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -15,7 +16,6 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation-event.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { focusComposerInput } from "../../lib/composer-input.ts";
-import { isConversationConfigChange } from "../../lib/config-change.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -482,11 +482,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           }
         }
         if (state) {
-          if (isConversationConfigChange(event)) {
+          const configChanged = isConversationConfigChange(event);
+          if (configChanged) {
             this.invalidateSessionSharing(undefined);
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
           }
-          if (isConversationConfigChange(event) || event.event === "agent.identity.changed") {
+          if (configChanged || event.event === "agent.identity.changed") {
             chatAvatars.invalidateChatAvatarCache(state);
             void chatAvatars.refreshChatAvatar(state);
             void chatAvatars.refreshSenderAgentAvatars(state);

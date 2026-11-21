@@ -2594,7 +2594,6 @@
 ["src/cli/daemon-cli/status.print.test.ts","../../gateway/control-ui-links.js","da5ca3e8334ad4752fd7e53e8980118d95e75767a211be4b36fc1ff1a6e9eeee",1]
 ["src/cli/daemon-cli/status.print.test.ts","../../infra/wsl.js","50389fbb59a740f8c362decc1e57326d836d1f522712be8c595a6bf692519545",1]
 ["src/cli/daemon-cli/status.print.test.ts","../../runtime.js","224e9d1ff456ffcab24eb3365af87ea68b59590fd2cb045b1da75dba5a38e945",1]
-["src/cli/daemon-cli/status.print.test.ts","./status.gather.js","f8350307663279369b4cccb1dff6326e174a84aa64aae31ff479ee0573d11179",1]
 ["src/cli/daemon-cli/status.projection.test.ts","./status.runtime-intent.js","6267377346a4054a7de0cde9b22a41d7cadd39ac5f48065427cca97b4841f47a",1]
 ["src/cli/daemon-cli/status.test.ts","../../../packages/terminal-core/src/theme.js","77653f9f8507aa15984eb29ebfda667a6dbf7596636709466624270477b63d67",1]
 ["src/cli/daemon-cli/status.test.ts","../../infra/update-check-package-target.js","7a93fb81cb3c1efde0d3e1b5fa73dfffd81b59d9926068af4e0962452c7a15b7",1]
