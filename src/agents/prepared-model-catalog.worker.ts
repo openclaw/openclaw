@@ -13,7 +13,7 @@ import {
   captureRemoteModelCatalogStartupSnapshot,
   withRemoteModelCatalogSnapshot,
 } from "../model-catalog/remote-overlay.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -110,7 +110,10 @@ async function prepareWorkerGeneration(
     restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
   // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
-  const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
+  const normalizedConfig = normalizePluginsConfigWithResolverCore(
+    value.input.config.plugins,
+    metadata.normalizePluginId,
+  );
   const basePluginIds =
     pluginIds ??
     metadata.plugins

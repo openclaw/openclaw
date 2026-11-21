@@ -3,6 +3,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
+import type { NormalizePluginId } from "./config-normalization-shared.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginModuleLoaderRecovery } from "./plugin-instance.types.js";
@@ -82,6 +83,8 @@ export type PluginLoadOptions = {
   expectedSourceDigests?: Readonly<Record<string, string>>;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
+  /** Prepared alias identity shared by selection, normalization, and registration. */
+  normalizePluginId?: NormalizePluginId;
   /** Exact lifecycle inventory supplied by a prepared load owner. */
   metadataSnapshot?: PluginMetadataSnapshot;
   manifestRegistry?: PluginManifestRegistry;

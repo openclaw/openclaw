@@ -1,7 +1,11 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getTrackedWorkerPoolSnapshot } from "../infra/worker-cpu.js";
+import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
+import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import {
   createPluginCache,
   getPluginMetadataSnapshotCache,
@@ -13,12 +17,15 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
+import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   catalogEntry,
   catalogInput,
   createCatalogFixture,
   makeCatalogAgentFacts,
   PROVIDER_ID,
+  DISCOVERED_HARNESS_ID,
+  writeFixturePlugin,
   writeFixtureFiles,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
@@ -215,4 +222,125 @@ it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog
       await retirePluginCache(cache);
     }
   }
+});
+
+const script = "prepared-model-catalog.worker.js";
+const catalogPools = () =>
+  getTrackedWorkerPoolSnapshot().workerPools.filter((pool) => pool.script === script);
+
+describe("prepared worker alias-policy admission", () => {
+  // Exercise real worker admission, registration, and retained-generation refresh with authored aliases.
+  it.each([
+    { policy: "enabled alias entry", included: true },
+    { policy: "alias deny", included: false },
+    { policy: "disabled alias entry", included: false },
+  ])(
+    "admitted worker respects $policy across retained-generation refresh",
+    async ({ policy, included }) => {
+      const fixture = await createCatalogFixture(makeTempDir, 0);
+      const alias = " " + DISCOVERED_HARNESS_ID.toUpperCase() + " ";
+      const config: OpenClawConfig = {
+        ...fixture.config,
+        plugins: {
+          ...fixture.config.plugins,
+          allow: [PROVIDER_ID],
+          ...(policy === "alias deny" ? { deny: [alias] } : {}),
+          entries: { [alias]: { enabled: policy !== "disabled alias entry" } },
+        },
+      };
+      const cache = createPluginCache();
+      const retirement = new AbortController();
+      retireAfterTest(() => retirement.abort());
+      const receipts: unknown[] = [];
+      const taskEvents = channel("openclaw.worker.task");
+      const observe = (message: unknown) => {
+        if (
+          message &&
+          typeof message === "object" &&
+          "worker" in message &&
+          message.worker === script
+        ) {
+          receipts.push(message);
+        }
+      };
+      taskEvents.subscribe(observe);
+      try {
+        await withPluginCache(cache, async () => {
+          expect(catalogPools()).toEqual([]);
+          const metadata = loadPluginMetadataSnapshot({
+            config,
+            env: fixture.env,
+            workspaceDir: fixture.workspaceDir,
+            allowCurrent: false,
+          });
+          expect(metadata.normalizePluginId(alias)).toBe(PROVIDER_ID);
+          const plugin = metadata.byPluginId.get(PROVIDER_ID);
+          if (!plugin) {
+            throw new Error("real fixture manifest missing");
+          }
+          // Base admission and later loader scope growth must agree with discovery policy.
+          expect(
+            isManifestPluginAvailableForControlPlane({
+              snapshot: metadata,
+              plugin,
+              config,
+              normalizedConfig: normalizePluginsConfigWithResolverCore(
+                config.plugins,
+                metadata.normalizePluginId,
+              ),
+              env: fixture.env,
+            }),
+          ).toBe(included);
+          const worker = createPreparedModelCatalogWorker({
+            agentFacts: makeCatalogAgentFacts(catalogInput({ ...fixture, config })),
+            pluginMetadataSnapshot: metadata,
+            isCurrent: () => !retirement.signal.aborted,
+            retirementSignal: retirement.signal,
+          });
+          const first = await worker.loadCatalog();
+          const firstRows = new Set(
+            first.modelCatalog.entries
+              .filter((entry) => entry.provider === PROVIDER_ID)
+              .map((entry) => entry.id),
+          );
+          expect(firstRows.has("plugin-generation-v1")).toBe(included);
+          expect(firstRows.has("plugin-generation-v2")).toBe(false);
+          expect(fs.existsSync(fixture.marker)).toBe(included);
+          expect(fs.existsSync(path.join(fixture.root, "runtime-artifact-paths.txt"))).toBe(
+            included,
+          );
+          expect(receipts).toHaveLength(1);
+          expect(receipts[0]).toMatchObject({ worker: script, outcome: "ok" });
+          const firstPools = catalogPools();
+          expect(firstPools).toHaveLength(1);
+          expect(firstPools[0]?.workerCount).toBe(1);
+          // This source change must not silently replace the prepared worker generation.
+          writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
+          const second = await worker.loadCatalog(undefined, undefined, true);
+          const secondRows = new Set(
+            second.modelCatalog.entries
+              .filter((entry) => entry.provider === PROVIDER_ID)
+              .map((entry) => entry.id),
+          );
+          expect(secondRows.has("plugin-generation-v1")).toBe(included);
+          expect(secondRows.has("plugin-generation-v2")).toBe(false);
+          expect(fs.existsSync(fixture.marker)).toBe(included);
+          expect(fs.existsSync(path.join(fixture.root, "runtime-artifact-paths.txt"))).toBe(
+            included,
+          );
+          if (included) {
+            expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
+          }
+          expect(receipts).toHaveLength(2);
+          expect(receipts[1]).toMatchObject({ worker: script, outcome: "ok" });
+          expect(catalogPools()).toEqual(firstPools);
+        });
+      } finally {
+        retirement.abort();
+        await retirePluginCache(cache);
+        await waitForWorkers();
+        taskEvents.unsubscribe(observe);
+      }
+    },
+  );
 });

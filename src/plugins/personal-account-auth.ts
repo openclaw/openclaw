@@ -17,6 +17,7 @@ export function listPersonalAccountAuthChoices(config: OpenClawConfig) {
       pluginIds: choices.map((choice) => choice.pluginId),
       registry: metadataSnapshot.index,
       manifestRegistry: metadataSnapshot.manifestRegistry,
+      normalizePluginId: metadataSnapshot.normalizePluginId,
       includeUntrustedWorkspacePlugins: false,
     }),
   );
