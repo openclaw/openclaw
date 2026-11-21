@@ -14,20 +14,7 @@ type HandshakeSnapshot = Exclude<OperatorRunRecoverySnapshot, { sourceIngress: "
 type AuthMethod = HandshakeSnapshot["authPolicy"]["authMethod"];
 type Ingress = HandshakeSnapshot["sourceIngress"];
 // resolveConnectAuthState uses the WS auth surface for every WS client, including internal clients.
-const ingresses = {
-  token: ["control-ui", "internal"],
-  password: ["control-ui", "internal"],
-  "device-token": ["control-ui", "internal"],
-  tailscale: ["control-ui", "internal"],
-  "trusted-proxy": ["control-ui", "internal"],
-} as const satisfies Record<AuthMethod, readonly Ingress[]>;
-const sourceIngresses = { "control-ui": true, internal: true, principal: true } satisfies Record<
-  OperatorRunRecoverySnapshot["sourceIngress"],
-  true
->;
-type WsKind = {
-  [Method in AuthMethod]: `${Method}:${(typeof ingresses)[Method][number]}`;
-}[AuthMethod];
+type WsKind = `${AuthMethod}:${Ingress}`;
 type Kind =
   | WsKind
   | `fallback:${Ingress}`
@@ -36,7 +23,7 @@ type Kind =
   | "ocid-owner"
   | "ocid-member"
   | "plugin-grant"
-  | Exclude<keyof typeof sourceIngresses, Ingress>
+  | Exclude<OperatorRunRecoverySnapshot["sourceIngress"], Ingress>
   | LiveAdmissionKind
   | Exclude<QueuedOperatorRecoverySource["kind"], "gateway" | "unavailable">;
 const rows: Record<Kind, Row> = {

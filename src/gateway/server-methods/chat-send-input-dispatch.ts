@@ -230,7 +230,6 @@ export async function handleChatSendWithStorage(
           client,
           context,
           sessionMutationAuthorization,
-          sessionMutationCommitGuard,
         })
       : undefined;
     const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;

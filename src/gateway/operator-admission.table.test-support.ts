@@ -254,7 +254,14 @@ export class AdmissionFixture {
         aborted: true,
       });
       c.releaseRecovered.resolve();
-      expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
+      if (c.row.credential === "channel") {
+        const claim = c.original?.controllerInput?.claim;
+        assert(claim);
+        await c.wait(claim.settlement.promise);
+        expect(claim.abortController.signal.aborted).toBe(true);
+      } else {
+        expect(await c.wait(c.terminal(running).promise)).toBe("aborted");
+      }
     } else {
       if (c.scenario === "after-start") {
         await revoke();

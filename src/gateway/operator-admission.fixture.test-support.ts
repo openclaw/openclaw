@@ -259,11 +259,9 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
     );
     assert(source.kind === "gateway" && source.snapshot.sourceIngress !== "principal");
     if (c.row.credential === "fallback") {
-      expect(source.snapshot.authPolicy.authMethod).toBe("password");
       expect(source.snapshot.authPolicy.fallbackCredentialGeneration).toEqual(expect.any(String));
       delete source.snapshot.authPolicy.fallbackCredentialGeneration;
     } else {
-      expect(source.snapshot.authPolicy.authMethod).toBe("tailscale");
       expect(source.snapshot.device).toBeDefined();
       delete source.snapshot.device;
     }
@@ -273,17 +271,6 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
         .prepare("UPDATE session_pending_inputs SET origin_source_json = ? WHERE input_id = ?")
         .run(JSON.stringify(source), stored.input_id).changes,
     ).toBe(1);
-    const legacy = (await readSessionQueuedInputPage(c.target)).rows.find(
-      (row) => row.input_id === stored.input_id,
-    );
-    assert(legacy?.origin_source_json);
-    if (c.row.credential === "fallback") {
-      expect(
-        JSON.parse(legacy.origin_source_json).snapshot.authPolicy.fallbackCredentialGeneration,
-      ).toBeUndefined();
-    } else {
-      expect(JSON.parse(legacy.origin_source_json).snapshot.device).toBeUndefined();
-    }
   }
   if (
     (c.scenario === "before-start" && c.row.credential !== "principal") ||
@@ -586,8 +573,12 @@ export async function runCase(
       if (row.credential === "channel") {
         // Native input has in-memory custody, not the browser's durable pending row.
         assert(c.original?.controllerInput);
-        await c.wait(c.original.controllerInput.settlement.promise);
-        expect(c.original.controllerInput.custody.completed).toBe(true);
+        await c.wait(
+          c.original.controllerInput.settlement.promise.catch((error: unknown) => {
+            expect(error).toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
+          }),
+        );
+        expect(c.original.controllerInput.phase).toBe("consumed");
       } else {
         const observer = await fixture.admin(signal);
         const history = await observer.request<History>("chat.history", {

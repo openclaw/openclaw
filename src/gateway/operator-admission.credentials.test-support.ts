@@ -4,7 +4,12 @@ import type { IncomingMessage } from "node:http";
 import https from "node:https";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { assert, expect, vi } from "vitest";
-import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
+import {
+  fingerprint,
+  formatIrohEndpointKey,
+  ROOT_EPOCH,
+  signStatement,
+} from "../../packages/openclaw-id-protocol/src/index.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { expectOwnerGated } from "../agents/agent-tools.turn-authority.test-support.js";
 import * as attemptTools from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
@@ -32,7 +37,7 @@ import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
-import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { linkedClaw, nowSeconds } from "./openclaw-id/openclaw-id.test-support.js";
 import {
   setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
@@ -626,12 +631,26 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
       expect(await removePairedDevice(c.identity.deviceId)).not.toBeNull();
       return;
     case "ocid-owner":
-    case "ocid-member":
+    case "ocid-member": {
       assert(c.claw);
+      const state = await c.claw.authority.load();
+      assert(state?.authority);
       expect(
         await c.claw.authority.submit(
           c.row.credential === "ocid-owner"
-            ? await c.claw.sign({ op: "revoke_device", peer_key: c.claw.w1 }, c.claw.root)
+            ? await signStatement(
+                "Revocation",
+                {
+                  claw_id: c.claw.clawId,
+                  seq: state.authority.seq + 1,
+                  target_fp: await fingerprint(c.claw.cert.body.device_pub),
+                  target_kind: "owner_device",
+                  reason: "lost",
+                  root_epoch: ROOT_EPOCH,
+                  issued_at: nowSeconds(),
+                },
+                c.claw.root,
+              )
             : await c.claw.sign({ op: "remove", account_id: c.id }),
           "tunnel",
         ),
@@ -640,6 +659,7 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
       expect(c.claw.authority.currentPeer(c.peerKey)).toBeUndefined();
       setOpenClawIdTunnelPrincipalLookup(c.claw.authority.currentPeer.bind(c.claw.authority));
       return;
+    }
     case "principal":
       c.consentCurrent = false;
       c.consent.abort(new DOMException("Original consent revoked", "AbortError"));
