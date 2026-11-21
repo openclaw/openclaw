@@ -50,6 +50,10 @@ const MAX_CONSECUTIVE_PREVIEW_FAILURES = 3;
 // the first verbose commentary). The delete is scheduled DETACHED so the turn is
 // never stalled waiting on the dwell.
 const MIN_PREVIEW_DWELL_MS = 4_000;
+// Cleanup is detached from stream teardown, so keep one bounded retry target
+// when Telegram rejects the first delete. A later clear can retry it without
+// allowing a persistent outage to generate unbounded traffic.
+const MAX_DETACHED_DELETE_ATTEMPTS = 2;
 
 export type TelegramDraftStream = ReturnType<typeof createTelegramDraftStream>;
 
@@ -159,6 +163,16 @@ export function createTelegramDraftStream(params: {
   // Repositioned previews stay visible until a replacement message is accepted;
   // deleting them on a timer alone can leave the chat with no reply at all.
   let supersededPreviews: Array<{ messageId: number; visibleSinceMs?: number }> = [];
+  const pendingDetachedDeletes = new Map<
+    number,
+    {
+      visibleSinceMs?: number;
+      minDelayMs: number;
+      attempts: number;
+      scheduled: boolean;
+      inFlight: boolean;
+    }
+  >();
   // Unfinished previews are superseded by the next update: under flood pressure the
   // account limiter skips them so final replies keep Telegram's budget. Only the
   // Bot API calls are marked; cleanup and observation keep normal priority.
@@ -631,32 +645,79 @@ export function createTelegramDraftStream(params: {
     visibleSince: number | undefined,
     minDelayMs = 0,
   ) => {
+    const existing = pendingDetachedDeletes.get(messageId);
+    if (existing) {
+      if (existing.scheduled || existing.inFlight) {
+        return;
+      }
+      existing.visibleSinceMs = visibleSince ?? existing.visibleSinceMs;
+      existing.minDelayMs = Math.max(existing.minDelayMs, minDelayMs);
+    } else {
+      pendingDetachedDeletes.set(messageId, {
+        visibleSinceMs: visibleSince,
+        minDelayMs,
+        attempts: 0,
+        scheduled: false,
+        inFlight: false,
+      });
+    }
+    const pending = pendingDetachedDeletes.get(messageId)!;
+    pending.scheduled = true;
     const runDelete = async () => {
+      const current = pendingDetachedDeletes.get(messageId);
+      if (current !== pending) {
+        return;
+      }
+      pending.scheduled = false;
+      pending.inFlight = true;
+      pending.attempts += 1;
+      let failed = false;
       try {
         const deleted = await params.api.deleteMessage(chatId, messageId);
         if (!deleted) {
+          failed = true;
           params.warn?.(
             `telegram stream preview cleanup was not confirmed (chat=${chatId}, message=${messageId})`,
           );
-          return;
-        }
-        if (replyTargetState.kind === "retained" && replyTargetState.messageId === messageId) {
-          replyTargetState = { kind: "available" };
+        } else {
+          pendingDetachedDeletes.delete(messageId);
+          if (replyTargetState.kind === "retained" && replyTargetState.messageId === messageId) {
+            replyTargetState = { kind: "available" };
+          }
         }
       } catch (err) {
+        failed = true;
         params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+      } finally {
+        pending.inFlight = false;
+        if (failed && pending.attempts >= MAX_DETACHED_DELETE_ATTEMPTS) {
+          pendingDetachedDeletes.delete(messageId);
+          params.warn?.(
+            `telegram stream preview cleanup abandoned after ${pending.attempts} attempts (chat=${chatId}, message=${messageId})`,
+          );
+        }
       }
     };
     const elapsedMs =
-      typeof visibleSince === "number" ? Date.now() - visibleSince : MIN_PREVIEW_DWELL_MS;
+      typeof pending.visibleSinceMs === "number"
+        ? Date.now() - pending.visibleSinceMs
+        : MIN_PREVIEW_DWELL_MS;
     const remainingDwellMs = Math.max(0, MIN_PREVIEW_DWELL_MS - elapsedMs);
-    const delayMs = Math.max(remainingDwellMs, minDelayMs);
+    const delayMs = Math.max(remainingDwellMs, pending.minDelayMs);
     if (delayMs <= 0) {
       void runDelete();
     } else {
       setTimeout(() => {
         void runDelete();
       }, delayMs);
+    }
+  };
+
+  const retryPendingDetachedDeletes = () => {
+    for (const [messageId, pending] of pendingDetachedDeletes) {
+      if (!pending.scheduled && !pending.inFlight) {
+        scheduleDetachedDelete(messageId, pending.visibleSinceMs, pending.minDelayMs);
+      }
     }
   };
 
@@ -675,6 +736,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const clear = async () => {
+    retryPendingDetachedDeletes();
     retireSupersededPreviews();
     const visibleSince = streamVisibleSinceMs;
     const messageId = await takeMessageIdAfterStop({
@@ -691,6 +753,7 @@ export function createTelegramDraftStream(params: {
     if (typeof messageId === "number" && Number.isFinite(messageId)) {
       scheduleDetachedDelete(messageId, visibleSince);
     }
+    retryPendingDetachedDeletes();
     await Promise.all(pendingProviderObservations);
   };
 
