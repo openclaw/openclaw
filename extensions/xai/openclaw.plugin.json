@@ -3,6 +3,7 @@
   "name": "xAI (Grok)",
   "description": "xAI provider for Grok models, Grok web and X search, code execution, speech, and media generation.",
   "categories": ["models"],
+  "reload": { "turnHandover": true },
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
