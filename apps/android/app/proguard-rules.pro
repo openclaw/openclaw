@@ -8,6 +8,10 @@
 -keep class * extends com.sun.jna.* { *; }
 -keepclassmembers class * extends com.sun.jna.* { public *; }
 -keep interface ai.openclaw.app.gateway.CloudflareSodiumLibrary { *; }
+# JNI resolves this class/method by name; UniFFI/JNA reflect over generated callbacks
+# and structure fields. Preserve the generated binding package, not app adapters.
+-keep class ai.openclaw.iroh.** { *; }
+-keep interface ai.openclaw.iroh.** { *; }
 -dontwarn javax.naming.**
 -dontwarn lombok.Generated
 -dontwarn org.slf4j.impl.StaticLoggerBinder
