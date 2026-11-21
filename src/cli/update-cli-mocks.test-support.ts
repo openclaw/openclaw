@@ -284,11 +284,6 @@ vi.mock("../config/config.js", async () => {
   return createUpdateConfigMock();
 });
 
-vi.mock("../config/gateway-port.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/gateway-port.js")>()),
-  resolveGatewayPort: (await import("../config/config.js")).resolveGatewayPort,
-}));
-
 vi.mock("../config/io.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/io.js")>();
   const mocked = await import("../config/config.js");
