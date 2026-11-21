@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
+import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/mutation-lineage.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
@@ -19,6 +20,7 @@ import {
   readPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStateRaw,
+  writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -323,19 +325,59 @@ describe("secrets apply", () => {
       { tokenRef: OPENAI_API_KEY_ENV_REF },
     ],
     [
-      "removes malformed ref residue",
+      "preserves credentials without a valid replacement ref",
       "api_key",
       { key: "sk-openai-plaintext", keyRef: "secretref-managed" }, // pragma: allowlist secret
-      {},
+      { key: "sk-openai-plaintext" }, // pragma: allowlist secret
     ],
   ] as const)("provider scrub %s", async (_name, type, fields, remaining) => {
-    await writeProfiles({ "openai:default": { type, provider: "openai", ...fields } });
+    // Seed persisted residue directly; normal writes strip inline values beside refs.
+    writePersistedAuthProfileStoreRaw(
+      createAuthProfileStoreFixture({ "openai:default": { type, provider: "openai", ...fields } }),
+      fixture.agentDir,
+    );
     await apply(scrubPlan());
     expect((await readAuthStore(fixture)).profiles["openai:default"]).toEqual({
       type,
       provider: "openai",
       ...remaining,
     });
+  });
+
+  it("preserves another agent's credential and fresh authorization during provider migration", async () => {
+    const otherDir = path.join(fixture.stateDir, "agents", "other", "agent");
+    const otherProfile = apiKey("fake-other-account-key");
+    await writeAgentStore(otherDir, { "openai:default": otherProfile });
+    await writeConfig({
+      agents: { ownership: "explicit", entries: { main: {}, other: {} } },
+      models: { providers: { openai: createOpenAiProviderConfig() } },
+    });
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget(), createAuthTarget()],
+      options: SCRUB_OPTIONS,
+    });
+    const result = await apply(plan);
+    expect((await readAuthStore(fixture)).profiles["openai:default"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      keyRef: OPENAI_API_KEY_ENV_REF,
+    });
+    const authorization = await captureAuthProfileAuthorization({
+      profileId: "openai:default",
+      agentDir: otherDir,
+      assertCurrent() {},
+    });
+    try {
+      expect(authorization.assertCurrent).not.toThrow();
+      expect(
+        (await readAuthStore({ ...fixture, agentDir: otherDir })).profiles["openai:default"],
+      ).toEqual(otherProfile);
+      expect(result.warnings).toEqual([expect.stringContaining('Auth profile "openai:default"')]);
+      expect(result.warnings[0]).toContain(otherDir);
+      expect(result.warnings[0]).toContain("explicit auth-profile target");
+    } finally {
+      authorization.dispose();
+    }
   });
 
   it("keeps shared and implicit agent writes inside the explicitly routed state root", async () => {
@@ -374,7 +416,7 @@ describe("secrets apply", () => {
     expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual({
       version: 1,
       profiles: {
-        "openai:target-shared": { type: "api_key", provider: "openai" },
+        "openai:target-shared": apiKey("sk-target-shared"),
       },
     });
     expect(readPersistedAuthProfileStoreRaw(ambientMainDir)).toMatchObject({
