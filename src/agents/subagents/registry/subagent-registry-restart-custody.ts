@@ -15,9 +15,11 @@
 // root was inferred or resumed for the delegate. While its row still binds a requester that
 // restart completion recovery admits, its one outcome says the lineage is missing and the
 // election's outcome unknown, once, through its return mode. Otherwise the row records why no
-// binding survived and its outcome is suspended, unresolved rather than closed: nothing is sent
-// or retried, and the sweeper discards it with a warning when suspended-delivery retention ends.
-// Only a delegate its requester had asked to stop closes as intentional non-delivery (above).
+// binding survived and its outcome is suspended, unresolved rather than closed: no notice goes
+// out and no delivery is attempted or retried. Like every suspended outcome it stays listed for a
+// session at the recorded requester key, and when suspended-delivery retention ends the sweeper
+// discards it with a warning and that session's expiry notice. Only a delegate its requester had
+// asked to stop closes as intentional non-delivery (above).
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -239,8 +241,8 @@ async function recordMissingContinuationLineage(): Promise<SubagentRunRecord[]> 
         if (lineage.unresolved) {
           // Nothing binds a recipient: no notice is broadcast, and none is sent to a guessed one.
           // A missing binding is not a requester's election, so the outcome is suspended rather
-          // than closed: retries stop, the row stays inspectable, and the sweeper discards it with
-          // a warning when suspended-delivery retention ends. No transport ran, so no disposition.
+          // than closed: retries stop and the row stays inspectable until the sweeper discards it
+          // when suspended-delivery retention ends. No transport ran, so no disposition.
           Object.assign(ensureDeliveryState(entry), {
             status: "suspended",
             suspendedAt: recordedAt,

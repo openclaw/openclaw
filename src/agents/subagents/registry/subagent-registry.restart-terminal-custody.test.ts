@@ -24,9 +24,10 @@
 //    on upstream #201970's root walk): no root is inferred or resumed for it. While its row still
 //    binds its requester, its one outcome says "lineage missing; election outcome unknown", once,
 //    through its return mode. Without that binding it is recorded unresolved and its outcome
-//    suspended, not closed: nothing is sent or retried, and the sweeper discards it with a warning
-//    when suspended-delivery retention ends. Only an existing terminal policy, its requester's
-//    election to stop it, closes it as intentional non-delivery.
+//    suspended, not closed: no notice and no delivery attempt or retry. When suspended-delivery
+//    retention ends, the sweeper discards it with a warning and the expiry notice of a session at
+//    the recorded requester key. Only an existing terminal policy, its requester's election to
+//    stop it, closes it as intentional non-delivery.
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { childOutcomeText, gracefulStopStatus, parent, recordRequesterMessages, resolveGateway, restartInterruptedStatus, useRestartCustodyWorld } from "./subagent-registry.restart-custody.test-support.js";
@@ -792,7 +793,7 @@ const UNBOUND = [
 ] as const;
 
 it.each(UNBOUND)(
-  "7: with no requester binding left ($reason), a missing child session entry is recorded unresolved and its outcome suspended, not closed: no notice, no root resume, no retry, a warned discard when retention ends",
+  "7: with no requester binding left ($reason), a missing child session entry is recorded unresolved and its outcome suspended, not closed: no notice, no root resume, no retry; a warned discard with its expiry notice when retention ends",
   async ({ reason, requester, writesParent }) => {
     if (writesParent) {
       await writeParentSession();
