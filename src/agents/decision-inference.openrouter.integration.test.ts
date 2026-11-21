@@ -176,8 +176,14 @@ it.each([
             id: "FIXTURE_AUTH",
           };
         }
+        const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY, new URL(origin).hostname]
+          .filter(Boolean)
+          .join(",");
         await withEnvAsync(
           harness.decisionEnv(root, {
+            // Keep the owned loopback fixture direct without changing external proxy routing.
+            NO_PROXY: noProxy,
+            no_proxy: noProxy,
             ...state.envVars,
             OPENROUTER_API_KEY: undefined,
           }),
