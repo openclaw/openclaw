@@ -14,7 +14,9 @@ const settle = (pending: Promise<unknown>) => pending.then(yieldToDashboard);
 function fakeElement() {
   const classes = new Set(["hidden"]);
   const listeners = new Map<string, () => unknown>();
+  const children: unknown[] = [];
   return {
+    children,
     className: "",
     classList: {
       contains: (name: string) => classes.has(name),
@@ -34,9 +36,13 @@ function fakeElement() {
       assert.ok(listener);
       return listener();
     },
-    append() {},
+    append(...nodes: unknown[]) {
+      children.push(...nodes);
+    },
     removeAttribute() {},
-    replaceChildren() {},
+    replaceChildren() {
+      children.length = 0;
+    },
     setAttribute() {},
   };
 }
@@ -113,6 +119,45 @@ test("automatic setup failure returns to Gateway choices with the native error",
   assert.equal(h.hidden("#welcome-screen"), true);
   assert.equal(h.called("install_cli"), false);
   assert.equal(h.called("connect_remote_gateway"), false);
+});
+
+test("discovered gateway connect failure shows the native reason until the next attempt", async () => {
+  const reason = "The discovered gateway does not have a safe resolved address.";
+  // A non-TLS LAN gateway that advertises direct transport: the card is enabled, but the native
+  // connect check rejects it when it also resolves to a public address.
+  const discovery = Promise.resolve([
+    { name: "lan", host: "gw.local", port: 18789, tls: false, directReachable: true },
+  ]);
+  const connects = [createDeferred(), createDeferred()];
+  let attempt = 0;
+  const h = await mountDashboard("", undefined, undefined, (command) => {
+    if (command === "discover_gateways") {
+      return discovery;
+    }
+    if (command === "connect_discovered_gateway") {
+      return connects[attempt++].promise;
+    }
+    return Promise.resolve({ phase: "connected" });
+  });
+  await settle(discovery);
+  const [card] = h.element("#gateway-list").children as Array<ReturnType<typeof fakeElement>>;
+  assert.ok(card);
+  assert.equal(card.disabled, false);
+
+  card.click();
+  connects[0].reject(reason);
+  await settle(connects[0].promise.catch(() => {}));
+  assert.equal(h.text("#discovery-status"), "CONNECT FAILED");
+  assert.equal(h.text("#discovery-feedback"), reason);
+  assert.equal(h.hidden("#discovery-feedback"), false);
+  assert.equal(card.disabled, false);
+
+  card.click();
+  assert.equal(h.hidden("#discovery-feedback"), true);
+  connects[1].resolve();
+  await settle(connects[1].promise);
+  assert.equal(h.text("#discovery-status"), "WINDOW OPENED");
+  assert.equal(h.hidden("#discovery-feedback"), true);
 });
 
 test("missing CLI mode offers installation without retrying bootstrap", async () => {
