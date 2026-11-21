@@ -315,6 +315,17 @@ describe("workboard tools", () => {
     );
   });
 
+  it("rejects 21 distinct parents at the create tool boundary", async () => {
+    const store = createWorkboardSqliteTestStore();
+    await expect(
+      executeTool(toolSet(store), "create", {
+        title: "Too many parents",
+        parents: Array.from({ length: 21 }, (_, index) => "parent-" + index),
+      }),
+    ).rejects.toThrow("parents supports at most 20 entries.");
+    expect(await store.list()).toEqual([]);
+  });
+
   it("returns an actionable tool input error when claiming a blocked dependent card", async () => {
     const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Completed parent", status: "done" });
