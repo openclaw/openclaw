@@ -202,7 +202,7 @@ export function openSessionWorkspaceFile(
 }
 
 /** Turns settled transcript file links that `openSessionWorkspaceFile` cannot open into text. */
-export function checkSessionWorkspaceFileLinks(
+function checkSessionWorkspaceFileLinks(
   state: SessionWorkspaceHost,
   links: HTMLElement[],
   scope: string,
@@ -217,7 +217,7 @@ export function checkSessionWorkspaceFileLinks(
 }
 
 /** Resolve a chat reference without moving the original attachment's history ownership. */
-export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
+function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
   if (!isManagedOutgoingMediaSource(href)) {
     return false;
   }
