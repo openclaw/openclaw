@@ -1,7 +1,6 @@
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import { resolveRunEntryCliRuntime } from "../../agents/embedded-agent-runner/run-entry-runtime.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
@@ -16,11 +15,9 @@ import { revokeMessageActionTurnCapability } from "../../gateway/message-action-
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
-import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
-import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
 import {
   invalidateTurnCompactionContext,
@@ -35,6 +32,7 @@ import type {
   AgentFallbackCycleParams,
 } from "./agent-runner-fallback-cycle.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
+import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
 import {
   buildModelResolveContext,
   mintReplyMessageActionTurnCapability,
@@ -124,25 +122,16 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     provider: string,
     model: string,
     sessionRuntimeOverride: string | undefined,
-  ) => {
-    const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
-    const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
-    const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
+  ) =>
+    resolveReplyCandidateRuntime({
+      run: params.effectiveRun,
       config: params.runtimeConfig,
+      provider,
+      model,
+      sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
+      sessionRuntimeOverride,
+      authProfileId: scheduledAuthProfileId(provider),
     });
-    return {
-      candidateRun,
-      ...resolveRunEntryCliRuntime({
-        config: params.runtimeConfig,
-        provider,
-        model,
-        agentId: turn.followupRun.run.agentId,
-        authProfileId: scheduledAuthProfileId(provider) ?? selectedAuthProfile.authProfileId,
-        sessionRuntimeOverride,
-        pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
-      }),
-    };
-  };
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       preparedRunAdmission: params.preparedRunAdmission,

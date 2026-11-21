@@ -18,6 +18,8 @@ import {
   sendMessageWhatsApp,
   type OpenClawConfig,
 } from "./channel-react-action.runtime.js";
+import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
+import { toWhatsappJid } from "./targets-runtime.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -183,6 +185,9 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     readStringParam(params.params, "messageId", { required: true });
   }
   const messageId = String(messageIdRaw);
+  const chatJid = explicitTarget ?? readStringParam(params.params, "to", { required: true });
+  const { accountId } = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
+  const cached = lookupInboundMessageMetaForTarget(accountId, toWhatsappJid(chatJid), messageId);
   const explicitMessageId = readStringOrNumberParam(params.params, "messageId");
   const emoji = readStringParam(params.params, "emoji", { allowEmpty: true });
   const remove = typeof params.params.remove === "boolean" ? params.params.remove : undefined;
@@ -200,15 +205,13 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
   return await handleWhatsAppAction(
     {
       action: "react",
-      chatJid:
-        readWhatsAppActionChatJid(params) ??
-        readStringParam(params.params, "to", { required: true }),
+      chatJid,
       messageId,
       emoji,
       remove,
-      participant: explicitParticipant ?? inferredParticipant,
+      participant: explicitParticipant ?? cached?.participant ?? inferredParticipant,
       accountId: params.accountId ?? undefined,
-      fromMe: typeof params.params.fromMe === "boolean" ? params.params.fromMe : undefined,
+      fromMe: typeof params.params.fromMe === "boolean" ? params.params.fromMe : cached?.fromMe,
     },
     params.cfg,
   );

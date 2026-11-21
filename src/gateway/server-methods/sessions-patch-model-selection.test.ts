@@ -16,11 +16,9 @@ import {
   clearFollowupQueue,
   getExistingFollowupQueue,
 } from "../../auto-reply/reply/queue/state.js";
-import {
-  prepareReplyAgentTurn,
-  type AdmittedFollowupTurn,
-} from "../../auto-reply/reply/reply-agent-turn-preparation.js";
+import { prepareReplyAgentTurn } from "../../auto-reply/reply/reply-agent-turn-preparation.js";
 import * as replyAdmission from "../../auto-reply/reply/reply-turn-admission.js";
+import type { AdmittedFollowupTurn } from "../../auto-reply/reply/reply-turn-admission.types.js";
 import { createTypingController } from "../../auto-reply/reply/typing.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {

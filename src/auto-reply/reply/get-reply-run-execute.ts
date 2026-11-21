@@ -122,6 +122,7 @@ export async function executePreparedReplyRun(
     extraSystemPromptParts,
     extraSystemPromptTurnContext,
     sourceConversationContextByMode,
+    assessedConversationContextByMode,
     sourceConversationContextPromptOffset,
     extraSystemPromptStatic,
     cliSessionBindingFacts,
@@ -133,6 +134,7 @@ export async function executePreparedReplyRun(
     shouldInjectGroupIntro,
     typingMode,
     terminalReplyExpectation,
+    groupParticipation,
   } = context;
   const {
     ctx,
@@ -422,6 +424,14 @@ export async function executePreparedReplyRun(
   }
   const followupRun = {
     createChannelCronAuthority,
+    ...(groupParticipation && !hasInboundAudio(sessionCtx)
+      ? {
+          groupParticipation: {
+            ...groupParticipation,
+            promptComponentByMode: assessedConversationContextByMode,
+          },
+        }
+      : {}),
     prompt: queuedBody,
     readAdmissionConfig,
     sourceTurnId: resolveReplySourceTurnId({
@@ -655,14 +665,14 @@ export async function executePreparedReplyRun(
   if (command.senderIsOwner && channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
   }
-  if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin) {
+  if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin || groupParticipation) {
     const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
-      origin: sourceReplyDeliveryRuntimeOptions.sourceReplyDeliveryModeOrigin,
+      origin: sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin ?? "stable_policy",
       initialMode: sourceReplyDeliveryMode ?? "automatic",
       projections: [followupRun.run, ...(opts ? [opts] : [])],
       promptComponentByMode: sourceConversationContextByMode,
       promptComponentOffset: sourceConversationContextPromptOffset,
-      onModeResolved: sourceReplyDeliveryRuntimeOptions.onSourceReplyDeliveryModeResolved,
+      onModeResolved: sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved,
     });
     bindSourceReplyDeliveryRuntime(followupRun.run, sourceReplyDeliveryRuntime);
   }

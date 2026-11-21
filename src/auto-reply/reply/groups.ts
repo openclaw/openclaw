@@ -1,8 +1,10 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../../channels/registry.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -100,6 +102,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  participationAssessed?: boolean;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
@@ -121,7 +124,9 @@ function buildGroupChatContext(params: {
     );
   }
   lines.push(
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    params.participationAssessed
+      ? "Emoji reactions are welcome when available."
+      : "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
   const channelId = normalizeChatChannelId(provider) ?? provider ?? "";
   const tableMode = getLoadedChannelPluginForRead(channelId)?.messaging?.defaultMarkdownTableMode;
@@ -130,19 +135,25 @@ function buildGroupChatContext(params: {
   lines.push(
     `Write like a human.${tableGuidance} Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.`,
   );
-  lines.push("If addressed to someone else, stay silent unless invited or correcting key facts.");
+  if (!params.participationAssessed) {
+    lines.push("If addressed to someone else, stay silent unless invited or correcting key facts.");
+  }
   if (provider === "discord") {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }
   lines.push(
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
   );
-  if (messageToolOnly) {
+  if (messageToolOnly && !params.participationAssessed) {
     lines.push(
       `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send).`,
     );
   }
-  lines.push(silentReplyGuidance);
+  lines.push(
+    params.participationAssessed
+      ? "Once a reaction or other action has completed the current-source reply according to this turn's delivery contract, no additional text reply is needed."
+      : silentReplyGuidance,
+  );
   return lines.join(" ");
 }
 
@@ -190,10 +201,73 @@ export function buildSourceConversationContext(
 export function buildGroupIntro(params: {
   activation?: PreparedReplyConversation["activation"];
   defaultActivation: "always" | "mention";
+  participationAssessed?: boolean;
 }): string {
   const activation = normalizeGroupActivation(params.activation) ?? params.defaultActivation;
   if (activation === "always") {
-    return "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.";
+    return params.participationAssessed
+      ? "Activation: always-on (you receive every group message). Address the specific sender noted in the message context."
+      : "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.";
   }
   return "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.";
+}
+
+/** Compose delivery and activation guidance in the same turn-owned component. */
+export function buildSourceConversationContexts(params: {
+  sessionCtx: TemplateContext;
+  group?: Pick<Parameters<typeof buildGroupIntro>[0], "activation" | "defaultActivation">;
+  participationEligible: boolean;
+}) {
+  const render = (
+    sourceReplyDeliveryMode: SourceReplyDeliveryMode,
+    participationAssessed = false,
+  ) =>
+    [
+      buildSourceConversationContext({
+        sessionCtx: params.sessionCtx,
+        sourceReplyDeliveryMode,
+        participationAssessed,
+      }),
+      params.group ? buildGroupIntro({ ...params.group, participationAssessed }) : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  return {
+    sourceConversationContextByMode: {
+      automatic: render("automatic"),
+      message_tool_only: render("message_tool_only"),
+    },
+    assessedConversationContextByMode: params.participationEligible
+      ? {
+          automatic: render("automatic", true),
+          message_tool_only: render("message_tool_only", true),
+        }
+      : undefined,
+  };
+}
+
+const ROOM_EVENT_PARTICIPATION_RULE =
+  "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.";
+
+/** Keep optional bot/event participation guidance with its current inbound message. */
+export function buildInboundDeliveryGuidance(params: {
+  sessionCtx: TemplateContext;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  replyExpectation: ReplyExpectation;
+}) {
+  const toolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const optionalBotRequest =
+    params.sessionCtx.InboundEventKind === "user_request" &&
+    toolOnly &&
+    params.sessionCtx.SenderIsBot === true &&
+    params.replyExpectation === "optional";
+  const deliveryDirective =
+    params.sessionCtx.InboundEventKind === "room_event" || optionalBotRequest
+      ? toolOnly
+        ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
+        : ROOM_EVENT_PARTICIPATION_RULE
+      : params.sessionCtx.InboundEventKind === "user_request" && toolOnly
+        ? MESSAGE_TOOL_ONLY_DELIVERY_HINT
+        : undefined;
+  return { optionalBotRequest, deliveryDirective };
 }

@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({

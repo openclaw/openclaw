@@ -116,7 +116,7 @@ export function buildMessagingSection(params: {
           "### message tool",
           "- Use `message` for proactive sends and channel actions (polls, reactions, etc.).",
           groupMessageToolOnly
-            ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private."
+            ? "- Group/channel: stale/joke/light ack/low-value chatter => a reaction may be enough. Needed text reply => `message(action=send)`; final text private."
             : "",
           messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
