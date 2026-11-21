@@ -146,7 +146,7 @@ export function createUsageCostCollectionAccess(params: {
   input: UsageCostWorkerInput;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
   readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
-  yieldRead: (bytes: number, startedAt: number) => Promise<void>;
+  yieldRead: (bytes: number, startedAt: number, kind: "stats") => Promise<void>;
   readCheckpoint?: (marker: SqliteSessionFileMarker) => UsageCostSqliteCheckpoint | undefined;
 }) {
   const { input, target, readStore } = params;
@@ -193,6 +193,15 @@ export function createUsageCostCollectionAccess(params: {
                 getSessionKysely(opened.db)
                   .selectFrom("session_windows")
                   .select(["session_id", "session_key", "transcript_updated_at"])
+                  .$if(operation.kind === "refresh", (query) =>
+                    query.select((eb) =>
+                      eb
+                        .selectFrom("transcript_rewrite_watermarks as rewrite")
+                        .select("rewrite.generation")
+                        .whereRef("rewrite.session_id", "=", "session_windows.session_id")
+                        .as("generation"),
+                    ),
+                  )
                   .where("transcript_updated_at", "is not", null)
                   .$narrowType<{ transcript_updated_at: number }>()
                   // Admit recent transcripts before reading sizes; reports preserve this order.
@@ -204,6 +213,7 @@ export function createUsageCostCollectionAccess(params: {
                   agentId: resolveAgentIdFromSessionKey(row.session_key, opened.agentId),
                   sessionId: row.session_id,
                   updatedAtMs: row.transcript_updated_at,
+                  generation: row.generation,
                 }));
             }),
           { ...database, env },
@@ -282,8 +292,7 @@ export function createUsageCostCollectionAccess(params: {
               sizeBytes += page.bytes - (eventCount === 0 ? 1 : 0);
               eventCount += page.count;
               afterSeq = page.lastSeq;
-              // Scalar-page fallback; the worker uses physical read bytes where available.
-              await params.yieldRead(page.count * 4096, startedAt);
+              await params.yieldRead(page.count * 4096, startedAt, "stats");
             }
           }
           if (!cold) {

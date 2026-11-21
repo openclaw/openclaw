@@ -104,8 +104,10 @@ export function createModelProviders(
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
-    reload: () => supplemental.loadUsage(),
+    // Route readiness gates automatic work; this page only consumes the provider lane.
+    isSessionLoading: () => loaderPending || !routeDataObserved,
+    isProviderLoading: () => supplemental.loading,
+    reload: ({ provider }) => (provider && readAccess ? supplemental.loadUsage() : undefined),
     onIncompleteUsageExhausted: notify,
   });
   const supplemental = new ModelProviderSupplementalLoader(notify, {
@@ -312,6 +314,7 @@ export function createModelProviders(
     if (loaderChanged && !pending) {
       ensureInitialData();
       supplemental.resume();
+      void refreshPolicy.flushPending();
     }
     notify();
   }
@@ -509,7 +512,6 @@ export function createModelProviders(
     }
     const client = gateway.client;
     if (!gateway.connected || !readAccess || !client) {
-      refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
     // Another client's write is outside the selected owner, so reconcile every provider.
