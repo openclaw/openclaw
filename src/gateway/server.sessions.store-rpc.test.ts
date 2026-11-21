@@ -991,7 +991,12 @@ test.each([false, true])(
       { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
     ] as unknown as CronJob[];
     const update = vi.fn(
-      async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
+      async (
+        id: string,
+        _patch: unknown,
+        precondition: (job: CronJob, nowMs: number) => void,
+        _opts?: { autoDisable?: { gone?: string } },
+      ) => {
         const current = jobs.find((candidate) => candidate.id === id);
         if (!current) {
           throw new Error(`cron job not found: ${id}`);
