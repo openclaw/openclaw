@@ -357,6 +357,26 @@ describe("automatic client credential preparation", () => {
     },
   );
 
+  it("prepares ready runtime pins without resolving the PostgreSQL secret", async () => {
+    const fixture = await bootstrap();
+    await fixture.prepare({ config: {} });
+    const config: OpenClawConfig = {
+      database: {
+        families: { state: { engine: "postgres" } },
+        postgres: {
+          connection: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_TEST_MISSING_NATIVE_DSN",
+          },
+          schemaPrefix: "native_ready",
+        },
+      },
+    };
+    await expect(fixture.prepare({ config, prepareRuntimePins: true })).resolves.toBeUndefined();
+    await expectCredentials(fixture);
+  });
+
   it("refuses conflicting runtime intent even when credential preparation already completed", async () => {
     const fixture = await bootstrap();
     const key = "daemon-runtime-pin:" + "b".repeat(64);
