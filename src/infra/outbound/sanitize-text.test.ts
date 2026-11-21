@@ -4,7 +4,7 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
-import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload.js";
+import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload-normalize.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { sanitizeForPlainText } from "./sanitize-text.js";
 

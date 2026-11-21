@@ -18,7 +18,11 @@ import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesyst
 import type { WorktreeFilesystemOptions } from "../../agents/worktrees/filesystem-backend.types.js";
 import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
-import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import {
+  recordWorktreeTemplateProbeFailure,
+  setWorktreePreparationTemplate,
+  timeWorktreePreparationPhase,
+} from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
 import {
   readTemplateManifest,
@@ -374,10 +378,12 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         changed.code === 0 && changed.termination === "exit" && !changed.stdoutTruncatedBytes
           ? changed.stdout.split("\0").filter(Boolean)
           : undefined;
-      if (
-        !changedPaths ||
-        changedPaths.some((entry) => path.posix.basename(entry) === ".gitattributes")
-      ) {
+      if (!changedPaths) {
+        recordWorktreeTemplateProbeFailure("diff-probe-failed", changed);
+        return false;
+      }
+      if (changedPaths.some((entry) => path.posix.basename(entry) === ".gitattributes")) {
+        setWorktreePreparationTemplate(undefined, { refreshRejectReason: "attributes-changed" });
         return false;
       }
       await timeWorktreePreparationPhase("templateClone", () =>

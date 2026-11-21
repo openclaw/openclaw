@@ -6,10 +6,8 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import type { SessionTranscriptWriterFence } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import {
-  captureModelCostPricing,
-  estimateAggregateUsageCostAsync,
-} from "../../../utils/usage-format.js";
+import { captureModelCostPricing } from "../../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../../utils/usage-format.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   buildAgentRunTerminalOutcome,

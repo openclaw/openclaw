@@ -245,14 +245,6 @@ export function resolveLaunchdInspectionWarnings(service: {
   return warnings;
 }
 
-export function normalizeListenerAddress(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^TCP\s+/i, "")
-    .replace(/\s+\(LISTEN\)\s*$/i, "")
-    .trim();
-}
-
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const container = resolveDaemonContainerContext(env);
   if (container) {

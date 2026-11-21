@@ -554,7 +554,7 @@ filename tabs stay in the current chat pane. Files outside the session root
 follow that session's file-tool read boundary and also require permission to
 start a turn in that session. These out-of-root previews are read-only.
 
-In Chat and New session, provider groups retain their expanded or collapsed state when you close and reopen the same model picker. Closing clears the search text without resetting those toggles. Reloading the page initializes the groups from the selected model again.
+In Chat and New session, the model picker reopens on **Favorites** if that was the last tab you chose and it is still available, even if your current model is not starred. Otherwise, the picker opens on the current model’s provider. Closing the picker clears the search text without resetting which provider lists you expanded.
 
 Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
 

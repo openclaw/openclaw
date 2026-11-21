@@ -36,7 +36,7 @@ import {
   collectRuntimeMetadata,
   resolveFollowupReplyDeliveryKey,
 } from "./delivery-context.js";
-import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
+import { runOutsideAdmittedTurnScopes } from "./drain-admission-scope.js";
 import {
   buildCollectTranscriptInput,
   collectQueuedPromptMedia,
@@ -418,7 +418,7 @@ export function rememberFollowupDrainCallback(
       // after the request that triggered the drain has closed its own scope.
       await runWithGatewayDetachedWorkContinuation(
         () =>
-          runOutsideAdmittedGenerationScopes(() => {
+          runOutsideAdmittedTurnScopes(() => {
             entered = true;
             // Consume this request; a kick during execution re-enables dispatch.
             mailbox.dispatchEnabled = false;

@@ -1,9 +1,11 @@
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { PUBLICATION_READ_SCOPE } from "../../operator-scopes.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import {
   isPublicationTransportMethod,
   isPublicationTransportCurrent,
+  PublicationTransportAdmissionError,
 } from "../../publication-reader.js";
 import { MAX_BUFFERED_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -13,6 +15,29 @@ import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
+
+export function rejectPublicationTransportAdmission(
+  context: GatewayConnectPhaseContext,
+  error: unknown,
+): void {
+  const disabled =
+    error instanceof PublicationTransportAdmissionError &&
+    error.failure.reason === "purpose-disabled"
+      ? error.failure
+      : undefined;
+  const message = disabled
+    ? `publication transport is disabled; enable gateway.sessionControl.${
+        disabled.scope === PUBLICATION_READ_SCOPE
+          ? "publicationReadEnabled"
+          : "publicationWriteEnabled"
+      }`
+    : "publication transport requires an exact singleton paired device token";
+  context.markHandshakeFailure(
+    disabled ? "publication-transport-purpose-disabled" : "publication-transport-denied",
+  );
+  context.sendHandshakeErrorResponse(ErrorCodes.FORBIDDEN, message);
+  context.handler.close(1008, message);
+}
 
 /** Closed device lane: no human fallback, presence, UI capabilities, or session snapshot. */
 export async function attachPublicationTransport(
