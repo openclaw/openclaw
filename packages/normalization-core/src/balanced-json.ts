@@ -37,6 +37,11 @@ type JsonContainer = {
 
 type QuoteState = { quoted: boolean; escaped: boolean };
 
+type RecoveryOwners = {
+  stack: JsonOpeningDelimiter[];
+  active: Record<JsonOpeningDelimiter, number>;
+};
+
 /** Only container-owned strings become invalid at a literal newline; prose keeps its quote. */
 function advanceQuotedText(state: QuoteState, char: string | undefined, recover: boolean): boolean {
   if (recover && (char === "\n" || char === "\r")) {
@@ -267,7 +272,7 @@ function extractRecoverableJsonAt(
   opts: BalancedJsonOptions,
   offset: number,
   recovered: JsonSpan[],
-  owners: JsonOpeningDelimiter[],
+  owners: RecoveryOwners,
 ): BalancedJsonFragment | null {
   const openers = opts.openers ?? (["{", "["] as const);
   let start = offset;
@@ -284,13 +289,26 @@ function extractRecoverableJsonAt(
       char === "\r" ||
       (lineStart && (char === " " || char === "\t" || char === "\r"));
     if (quote.quoted) {
-      if (advanceQuotedText(quote, char, owners.length > 0)) epoch += 1;
+      if (advanceQuotedText(quote, char, owners.stack.length > 0)) epoch += 1;
       continue;
     }
     // Preserve original ownership through filtered containers and across returned
     // fragments; output selection must not decide whether a quote is prose.
-    if (char === "{" || char === "[") owners.push(char);
-    else if (char === (owners.at(-1) === "{" ? "}" : "]")) owners.pop();
+    if (char === "{" || char === "[") {
+      owners.stack.push(char);
+      owners.active[char] += 1;
+    } else if (char === "}" || char === "]") {
+      const opener = char === "}" ? "{" : "[";
+      // Closing an ancestor also retires its dangling children. An unmatched
+      // closer leaves ownership intact; counts avoid repeated ancestry scans.
+      if (owners.active[opener] > 0) {
+        let closed: JsonOpeningDelimiter;
+        do {
+          closed = owners.stack.pop()!;
+          owners.active[closed] -= 1;
+        } while (closed !== opener);
+      }
+    }
     if (char === '"') {
       quote.quoted = true;
     } else if (isJsonOpeningDelimiter(char, openers)) {
@@ -340,10 +358,12 @@ export function extractBalancedJsonFragments(
 ): BalancedJsonFragment[] {
   if (opts.strictJson) return extractStrictJsonFragments(raw, opts);
   const fragments: BalancedJsonFragment[] = [];
-  const owners: JsonOpeningDelimiter[] = [];
+  const owners: RecoveryOwners | undefined = opts.recoverAtLineStart
+    ? { stack: [], active: { "{": 0, "[": 0 } }
+    : undefined;
   for (let offset = 0; offset < raw.length;) {
     const recovered: JsonSpan[] = [];
-    const fragment = opts.recoverAtLineStart
+    const fragment = owners
       ? extractRecoverableJsonAt(raw, opts, offset, recovered, owners)
       : extractBalancedJsonAt(raw, opts, offset);
     for (const span of recovered) {
