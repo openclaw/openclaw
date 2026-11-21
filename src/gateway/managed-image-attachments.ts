@@ -891,7 +891,8 @@ export async function createManagedOutgoingMediaBlocks(params: {
   /** Preserve the already-authorized sender/remote-workspace reader for delivered media. */
   mediaAccess?: OutboundMediaAccess;
   continueOnPrepareError?: boolean;
-  onPrepareError?: (error: Error) => void;
+  /** Receives the display-safe error and, for logs only, the value originally thrown. */
+  onPrepareError?: (error: Error, cause: unknown) => void;
   /** Reports each complete source group, including warnings or a failure card. */
   onPrepared?: (item: PreparedOutgoingMedia, blocks: readonly ManagedMediaBlock[]) => void;
   assertCurrent?: () => void;
@@ -1143,7 +1144,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
               mimeType: item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),
             }),
           );
-          params.onPrepareError?.(sanitizedError);
+          params.onPrepareError?.(sanitizedError, error);
           params.onPrepared?.(item, blocks.slice(groupStart));
           continue;
         }
