@@ -126,6 +126,12 @@ function commandFixture(groups: string[] = ["Team"]) {
   return {
     config,
     commands,
+    listWithLinks: async () =>
+      JSON.parse(
+        await commands
+          .find((command) => command.command === "openclaw.sessions.list-with-links.v1")!
+          .handle("{}"),
+      ) as { sessions: Array<SessionCatalogSession & { originalPath?: string }> },
     list: async (params: Record<string, unknown> = {}) =>
       JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
     read: async (threadId: string, params: Record<string, unknown> = {}) =>
@@ -576,3 +582,21 @@ describe("session-share receiver identity integration", () => {
     });
   });
 });
+
+it("adds source paths only to the optional command while keeping selection and read-only authority", () =>
+  withCommands(async ({ list, listWithLinks }) => {
+    await writeSession("shared");
+    await writeSession("private", { category: "Private" });
+    const plain = await list();
+    const linked = await listWithLinks();
+    expect(plain.sessions).toHaveLength(1);
+    expect(plain.sessions[0]).not.toHaveProperty("originalPath");
+    expect(linked.sessions).toHaveLength(1);
+    expect(linked.sessions[0]).toMatchObject({
+      threadId: "agent:main:shared",
+      originalPath: "/chat/main/shared",
+      canContinue: false,
+      canArchive: false,
+      canOpenTerminal: false,
+    });
+  }));

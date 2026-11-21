@@ -63,6 +63,8 @@ export async function resolveSlackConversationInfo(params: {
   channelId: string;
   teamId?: string;
   operation?: "read" | "write";
+  /** Caller-selected credential; defaults to the account's token for the operation. */
+  token?: string;
   requireFreshName?: boolean;
   assertDirectAdapterHandoff?: () => void;
 }): Promise<SlackConversationInfo> {
@@ -73,7 +75,7 @@ export async function resolveSlackConversationInfo(params: {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
   const operation = params.operation ?? "read";
-  const token = resolveSlackOperationToken(account, operation);
+  const token = params.token ?? resolveSlackOperationToken(account, operation);
   const userToken = normalizeOptionalString(account.userToken);
   const credentialRole = token ? (token === userToken ? "user" : "bot") : "none";
   const credentialFingerprint = token ? createSlackTokenCacheKey(token) : "none";

@@ -50,7 +50,8 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     state = await createOpenClawTestState({ scenario: "minimal", prefix: "mixed-port-" });
     await state.writeConfig({
       database: { engine: "sqlite", postgres: { connection: fixtures.connection! } },
-      plugins: { entries: { workboard: { enabled: false } } },
+      memory: { search: { enabled: false } },
+      plugins: { entries: { workboard: { enabled: false } }, slots: { memory: "memory-core" } },
     });
     workboard = state.statePath("plugins", "workboard", "workboard.sqlite");
     shared = state.statePath("state", "openclaw.sqlite");
@@ -173,11 +174,16 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
             [other]: { engine: "postgres" },
           },
         });
-        await port({ family, to: "sqlite" });
+        const reversed = await port({ family, to: "sqlite" });
         expect(hash(otherPath)).toBe(untouched);
         expect(readBackupEngine(selectedPath).engine).toBe("sqlite");
         expect(config().database?.families).toEqual({ [other]: { engine: "postgres" } });
         if (family === "agent") {
+          for (const completed of [result, reversed]) {
+            expect("memoryRebuilds" in completed && completed.memoryRebuilds).toEqual([
+              { agentId: "main", path: agent, status: "disabled" },
+            ]);
+          }
           using db = openNodeSqliteDatabase(agent, { readOnly: true });
           expect(
             db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),

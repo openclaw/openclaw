@@ -48,6 +48,10 @@ import { buildLaunchAgentEnvironmentWrapper } from "../../src/daemon/launchd-env
 import { buildLaunchAgentPlist } from "../../src/daemon/launchd-plist.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
+import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
 } from "./update-compat-chunks.test-support.js";
@@ -244,11 +248,11 @@ function fetchFixtureMain(checkout: string, remote: string) {
 function writeFixtureGitBin(root: string, origin: string) {
   const binDir = path.join(root, "bin");
   const gitShim = path.join(binDir, "git");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const realGit = resolveGitOutsideFixtures();
   mkdirSync(binDir);
   writeFileSync(
     gitShim,
-    `#!/bin/sh\nif [ "$3" = "fetch" ]; then\n  exec "${realGit}" -C "$2" fetch "${origin}" "main:refs/remotes/origin/main"\nfi\nexec "${realGit}" "$@"\n`,
+    `#!/bin/sh\n${gitPathShimShellPrelude()}\nif [ "$3" = "fetch" ]; then\n  exec "${realGit}" -C "$2" fetch "${origin}" "main:refs/remotes/origin/main"\nfi\nexec "${realGit}" "$@"\n`,
   );
   chmodSync(gitShim, 0o755);
   return binDir;

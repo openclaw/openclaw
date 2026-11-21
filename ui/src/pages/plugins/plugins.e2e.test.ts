@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { pauseVirtualClock, reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import {
   captureScreenshot,
@@ -15,6 +16,7 @@ import {
   localCalendarDisabled,
   localOnlyDiscoveryPlugin,
   matrixConfigSchema,
+  matrixDetail,
   matrixDiscoveryPlugin,
   matrixEnabled,
   matrixNeedsSetup,
@@ -65,6 +67,158 @@ function setInstalled(
 describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
+
+  it("keeps known catalog identity visible while details load, fail, and retry", async () => {
+    const name = "Shopify AI Toolkit";
+    const summary = "Search Shopify developer docs, explore APIs, and build storefronts.";
+    const id = "ch_" + Buffer.from("@shopify/ai-toolkit").toString("base64url");
+    const plugin = {
+      ...matrixDiscoveryPlugin,
+      id,
+      catalog: {
+        ...matrixDiscoveryPlugin.catalog,
+        name,
+        summary,
+        author: "shopify",
+        imageUrl: "https://example.test/shopify-toolkit.svg",
+      },
+    };
+    const result = {
+      plugin,
+      detail: {
+        origin: "clawhub",
+        packageName: "@shopify/ai-toolkit",
+        author: { handle: "shopify", displayName: "Shopify", official: true },
+        topics: [],
+        configuration: [],
+        mcpServers: [],
+        versions: [],
+        skills: [{ name: "Shopify developer docs" }],
+        readme: "# Build with Shopify\n\nUse Shopify developer tools from OpenClaw.",
+      },
+    };
+    const { page, gateway } = await setup({
+      "plugins.catalog.browse": {
+        cases: [
+          { match: { query: "shopify" }, response: { items: [plugin] } },
+          { match: { intent: "all", pageSize: 100 }, response: discoveryResult },
+        ],
+      },
+    });
+    await page.emulateMedia({ colorScheme: "dark" });
+    let iconRequests = 0;
+    await page.route("**/__openclaw__/catalog-icon/**", async (route) => {
+      if (!decodeURIComponent(route.request().url()).endsWith("/shopify-toolkit.svg")) {
+        await route.abort();
+        return;
+      }
+      iconRequests++;
+      await route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><path fill="#95bf47" d="M15 22h34l5 32H10z"/><path fill="none" stroke="#537826" stroke-width="4" d="M24 25v-9a8 8 0 0 1 16 0v9"/><path fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" d="M37 32c-3-3-10-3-10 3 0 4 10 3 10 8 0 5-6 6-12 3"/></svg>',
+      });
+    });
+    await page.goto(server.baseUrl + "plugins");
+    await role(page, "searchbox", "Search plugins").fill("shopify");
+    const row = page.locator('[data-plugin-id="' + id + '"]');
+    await role(row, "link", name).waitFor();
+    await expect
+      .poll(() => row.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth))
+      .toBeGreaterThan(0);
+
+    const before = await gateway.deferNext("plugins.catalog.get", { id });
+    await role(row, "link", name).click();
+    await gateway.waitForRequest("plugins.catalog.get", { after: before, match: { id } });
+    await page.mouse.move(2, 2);
+    const detail = page.locator(".plugin-catalog-detail");
+    const heading = detail.getByRole("heading", { name, level: 1 });
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const dir = createControlUiE2eArtifactDir("catalog-detail-pending");
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        detail,
+        [detail.locator(".plugin-catalog-detail__hero")],
+        { animations: "disabled" },
+      );
+      await writeFile(path.join(dir, "catalog-detail-pending.png"), frame.png);
+    }
+    await heading.waitFor({ timeout: 2_000 });
+    const headingNode = await heading.elementHandle();
+    const icon = detail.locator(".plugin-catalog-detail__icon img");
+    const iconSrc = await icon.getAttribute("src");
+    expect(iconSrc).toMatch(/^blob:/u);
+    expect(await role(detail, "navigation", "Breadcrumb").getByText(name).count()).toBe(1);
+    expect(await text(detail, summary).count()).toBe(1);
+    expect(await role(detail, "link", "@shopify").count()).toBe(1);
+    expect(await detail.locator(".plugin-official-badge").count()).toBe(1);
+    expect(await detail.locator(".plugin-metadata__loading").count()).toBe(1);
+    expect(await role(detail, "button", "Install").count()).toBe(0);
+
+    await gateway.rejectDeferred("plugins.catalog.get", {
+      code: "UNAVAILABLE",
+      message: "Catalog details temporarily unavailable",
+    });
+    const error = detail.getByRole("alert");
+    await text(error, "Catalog details temporarily unavailable").waitFor();
+    expect(await heading.isVisible()).toBe(true);
+    expect(await detail.locator(".plugin-metadata__loading").count()).toBe(0);
+
+    const retry = await gateway.deferNext("plugins.catalog.get", { id });
+    await role(error, "button", "Try again").click();
+    await gateway.waitForRequest("plugins.catalog.get", { after: retry, match: { id } });
+    await detail.locator(".plugin-metadata__loading").waitFor();
+    expect(await heading.isVisible()).toBe(true);
+    await gateway.resolveDeferred("plugins.catalog.get", result);
+    await detail.getByRole("heading", { name: "Build with Shopify" }).waitFor();
+    await role(detail, "button", "Install").waitFor();
+    expect(await text(detail, "Shopify").count()).toBe(1);
+    expect(await heading.evaluate((node, previous) => node === previous, headingNode)).toBe(true);
+    expect(await icon.getAttribute("src")).toBe(iconSrc);
+    expect(iconRequests).toBe(1);
+
+    await role(detail, "link", "Plugins").click();
+    expect(await role(page, "searchbox", "Search plugins").inputValue()).toBe("shopify");
+    await role(row, "link", name).waitFor();
+  });
+
+  it("does not reuse another plugin's identity on a fast catalog switch or cold deep link", async () => {
+    const method = "plugins.catalog.get";
+    const first = { id: matrixDiscoveryPlugin.id };
+    const second = { id: localOnlyDiscoveryPlugin.id };
+    const { page, gateway } = await setup({}, { heldMethods: [method] });
+    const detail = page.locator(".plugin-catalog-detail");
+    const matrix = detail.getByRole("heading", { name: "Matrix", level: 1 });
+    const calendar = detail.getByRole("heading", { name: "Local Calendar", level: 1 });
+
+    await page.goto(server.baseUrl + "plugins");
+    const firstRow = page.locator('[data-plugin-id="' + first.id + '"]').first();
+    await role(firstRow, "link", "Matrix").click();
+    await gateway.waitForRequest(method, { match: first });
+    await matrix.waitFor();
+    expect(await detail.locator(".plugins-tile--neutral").count()).toBe(1);
+    await role(detail, "link", "Plugins").click();
+    await role(page, "link", "Local Calendar").first().click();
+    await gateway.waitForRequest(method, { match: second });
+    await calendar.waitFor();
+
+    await gateway.resolveDeferred(method, matrixDetail, { match: first });
+    expect(await calendar.isVisible()).toBe(true);
+    expect(await detail.locator(".plugin-metadata__loading").isVisible()).toBe(true);
+    expect(await matrix.count()).toBe(0);
+    await gateway.resolveDeferred(method, undefined, { match: second });
+    await text(detail.locator(".plugin-capabilities"), "Calendar planning").waitFor();
+    expect(await matrix.count()).toBe(0);
+    expect(
+      await detail.getByText("Connect OpenClaw to Matrix rooms and direct messages.").count(),
+    ).toBe(0);
+
+    await page.reload();
+    await gateway.waitForRequest(method, { match: second });
+    await page.locator(".plugin-catalog-detail--loading").waitFor();
+    expect(await calendar.count()).toBe(0);
+    await gateway.resolveDeferred(method, undefined, { match: second });
+    await calendar.waitFor();
+  });
 
   it("explains why Install is disabled while plugin inventory is loading", async () => {
     const { page, gateway } = await setup(
@@ -173,10 +327,24 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   it("renders unified discovery with an unfocused search, category sections, and settings navigation", async () => {
     const context = await newContext();
     const page = await context.newPage();
+    const responses = pluginMethodResponses();
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: {
-        ...pluginMethodResponses(),
+        ...responses,
+        "plugins.catalog.browse": {
+          cases: [
+            {
+              match: { query: "memory" },
+              response: {
+                items: discoveryResult.items.filter(
+                  (plugin) => plugin.catalog.name === "Memory Plus",
+                ),
+              },
+            },
+            ...responses["plugins.catalog.browse"].cases,
+          ],
+        },
       },
     });
 
@@ -198,7 +366,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           .slice(0, 3),
       ).toEqual(["All", "Featured", "Trending"]);
       expect(await catalog.locator(".plugin-catalog-section__header h2").allTextContents()).toEqual(
-        expect.arrayContaining(["Featured", "Trending", "Channels", "Memory"]),
+        expect.arrayContaining(["Featured", "Trending", "Channels", "Scheduling"]),
       );
       expect(await gateway.getRequests("plugins.catalog.browse")).toHaveLength(1);
       expect((await gateway.getRequests("plugins.catalog.browse"))[0]?.params).toEqual({
@@ -212,17 +380,24 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
             (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
           ),
         )
-        .toBe(4);
+        .toBe(2);
       const installedCard = catalog.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').first();
-      await installedCard.waitFor();
-      expect(await installedCard.getByLabel("Disabled", { exact: true }).count()).toBe(1);
-      expect(await installedCard.getByRole("button", { name: /Install/iu }).count()).toBe(0);
+      const featured = catalog.locator('[data-catalog-section="featured"]');
+      await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
+      expect(await featured.locator("h3").first().textContent()).toBe("Memory Plus");
+      expect(await installedCard.getByText("Installed", { exact: true }).isVisible()).toBe(true);
+      expect(await installedCard.getByRole("button").count()).toBe(0);
       const availableCard = catalog
         .locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`)
         .first();
       expect(await availableCard.getByRole("button", { name: /Install/iu }).count()).toBe(1);
       expect(await availableCard.getByText(/downloads/u).count()).toBe(0);
-      await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
+
+      await search.fill("memory");
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "memory" } });
+      await installedCard.waitFor();
+      expect(await installedCard.getByLabel("Disabled", { exact: true }).count()).toBe(1);
+      expect(await installedCard.getByRole("button", { name: /Install/iu }).count()).toBe(0);
 
       await search.fill("matrix");
       await gateway.waitForRequest("plugins.catalog.browse", {
@@ -281,7 +456,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await page.getByText("code-plugin", { exact: true }).count()).toBe(0);
       expect(
         await detailSidebar
-          .getByRole("link", { name: "openclaw/openclaw", exact: true })
+          .getByRole("link", { name: /^openclaw\/\s*openclaw$/u })
           .getAttribute("href"),
       ).toBe("https://github.com/openclaw/openclaw");
       expect(
@@ -334,7 +509,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       plugin: installed,
       restartRequired: false,
     });
-    const enable = role(page, "button", "Enable Matrix");
+    const enable = page.getByRole("switch", { name: "Matrix", checked: false, exact: true });
     await enable.waitFor();
     expect(await enable.getAttribute("aria-disabled")).toBe("true");
     await captureScreenshot(page, "direct-install-needs-settings.png");
@@ -360,7 +535,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       source: "official",
       pluginId: "local-calendar",
     });
-    await role(page, "button", "Enable Local Calendar").waitFor();
+    await page
+      .getByRole("switch", { name: "Local Calendar", checked: false, exact: true })
+      .waitFor();
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("connect")).toHaveLength(connects);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -422,7 +599,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await gateway.waitForRequest("plugins.install");
     await setInstalled(gateway, { ...matrixEnabled, catalogId: matrixDiscoveryPlugin.id });
     await reconnectMockGateway(page, gateway);
-    await role(page, "button", "Disable Matrix").waitFor();
+    await page.getByRole("switch", { name: "Matrix", checked: true, exact: true }).waitFor();
     expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -474,6 +651,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       "Trending",
     ]);
     expect(await sections.first().locator(".plugin-catalog-card").count()).toBe(8);
+    expect(await sections.nth(1).getByRole("link", { name: "Memory Plus" }).count()).toBe(0);
     expect(await sections.first().getByRole("button", { name: "View all" }).count()).toBe(1);
     const matrixCard = explore.locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`).first();
     await matrixCard.waitFor();
@@ -516,7 +694,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     const grid = page.locator(".plugin-catalog-grid").first();
     const columns = () =>
       grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
-    await expect.poll(columns).toBe(2);
+    await expect.poll(columns).toBe(1);
     await page.setViewportSize({ height: 852, width: 393 });
     await expect.poll(columns).toBe(1);
     await expect

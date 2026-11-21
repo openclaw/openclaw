@@ -18,6 +18,10 @@ Session permission modes set one session's filesystem boundary and exec escalati
 
 These tool-visibility and exec rules describe OpenClaw-managed tools. Native harnesses can retain their own tool surface under their permission controls; see [Codex runtime policy](/plugins/codex-harness-runtime).
 
+Whoever runs a tool enforces the mode for it. The Gateway runs OpenClaw's own tools, so it applies the session's boundary to them on every runtime, including OpenClaw tools a CLI backend such as `claude-cli` calls through the Gateway. A runtime enforces the mode for its own native tools when it has a real sandbox for them (Codex maps the mode onto its sandbox and approval policy). Harnesses that run on the Gateway host with their own tools, such as Muse and ACP agents, need **Full access**. A CLI backend's own native tools follow that CLI's permission controls, not the session mode: for example Gemini CLI's file tools, or Claude's own tools in a Claude CLI chat placed on a node.
+
+The mode bounds file tools and selects the exec reviewer. Exec itself is not confined to `sessionRoot`, except on a runtime that sandboxes its commands.
+
 Required workspace roots and sandbox restrictions still constrain file tools in `full` mode. Memory-flush runs expose only `read` and append-only `write`.
 
 Control UI file previews follow this filesystem boundary; opening files outside the session root also requires current permission to start a turn in that session.
@@ -27,6 +31,17 @@ In `workspace` mode, an exec reviewer denial returns a reason to the agent witho
 Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. Node identity checks cover local policy evaluation through dispatch, with a [remote shell-wrapper approval limitation](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands). POSIX login or interactive shell wrappers skip auto-review and require human approval when binding succeeds; existing binding rejections remain denied. Their implicit startup files are outside operand binding.
 
 `full` requires `operator.admin`. The other modes require `operator.write`.
+In an existing session, a noncreator collaborator whose role has
+`sessions.others: "invited"` and who holds a session membership may keep the mode
+unchanged or tighten it: `read-only` < `guarded` < `workspace` < `full`. This
+covers single-session changes, bulk changes, and creation requests that reuse
+an existing key. Creators, administrators, and role-wide teammates keep their
+existing permissions.
+
+Such invitees cannot clear an explicit mode to **Agent default**. Default policy
+can combine settings that do not correspond to one mode, so an invitee can
+change an unset mode only to `read-only`. Changing `sandboxMode`, including
+turning the sandbox off or clearing that override, requires `operator.admin`.
 
 ## Session root and defaults
 
@@ -99,7 +114,9 @@ increase. Delegation and child runs retain their restrictive inherited ceilings.
 When approval is required, runs from messaging channels ask the
 requesting chat for approval: native approval cards where the channel supports
 them, otherwise a `/approve <id> allow-once|deny` reply. Webchat and terminal runs
-decide in the Control UI or apps, which can also decide any chat's approval.
+decide in the Control UI or apps, subject to their approval scopes and reviewer
+bindings. Collaborators using invitation-only session access can review only
+approvals raised by their own authenticated profile's turns.
 Free-text replies such as "yes" never authorize the change.
 The requesting tool waits for the human decision and application outcome. Stopping
 the run cancels its pending approval; approving later cannot revive that run.

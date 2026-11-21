@@ -72,6 +72,10 @@ import type { runReleasePublishPreflight } from "../../scripts/release-publish-p
 import { isShaPinnedReleaseValidationBranch } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimJavaScriptPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const publishWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
@@ -256,10 +260,11 @@ describe("release candidate checklist", () => {
       const toolingTag = `release-publish/${sha.slice(0, 12)}-123`;
       const bin = join(root, "bin");
       mkdirSync(bin);
-      const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+      const realGit = resolveGitOutsideFixtures();
       writeFileSync(
         join(bin, "git"),
         `#!/usr/bin/env node
+${gitPathShimJavaScriptPrelude()}
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 if (args[0] === "ls-remote") process.exit(2);
