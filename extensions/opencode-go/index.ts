@@ -1,6 +1,9 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import {
+  buildOauthProviderAuthResult,
+  resolveOAuthApiKeyMarker,
+} from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -126,10 +129,15 @@ export default defineSingleProviderPluginEntry({
         if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
           return null;
         }
-        const auth = resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
-          PROVIDER_ID,
-          "opencode",
-        ]);
+        // A browser sign-in reaches catalogs only through resolveProviderAuth; API keys,
+        // including the key shared with opencode, keep the existing lookup.
+        const oauth = ctx.resolveProviderAuth(PROVIDER_ID, {
+          oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
+        });
+        const auth =
+          oauth.mode === "oauth" && oauth.discoveryApiKey
+            ? oauth
+            : resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [PROVIDER_ID, "opencode"]);
         if (!auth) {
           return null;
         }
