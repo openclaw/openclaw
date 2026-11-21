@@ -121,7 +121,9 @@ Upgrades from the retired `<state-dir>/mcp-oauth/*.json` store are handled only 
 
 Until shared credentials are available, OpenClaw withholds that server's account tools instead of failing the agent turn. The owner can ask the agent to connect in a direct chat and receive a sign-in link in the same turn, or run `openclaw mcp login <name>` while the Gateway runs. After approval, send another message to use the server; no Gateway restart is needed. Shared sign-in links are not posted in group chats.
 
-If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks for `openclaw mcp login <name>` instead of repeating a refresh that cannot grant new scope. That login starts a new authorization request while keeping the previous token until replacement credentials are saved.
+With the Gateway running, go to **Settings → MCP** as an administrator and select **Sign in** for the configured server. For an eligible plugin-declared server, use **Connect** on the plugin's Settings page.
+
+If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks you to sign in again instead of repeating a refresh that cannot grant new scope. The new authorization request keeps the previous token until replacement credentials are saved.
 
 When a remote MCP service is already backed by a separate OpenClaw refresh-capable auth profile, you can optionally set `oauth.authProfileId`. OpenClaw refreshes either credential source before runtime projection and passes only the current access token to the downstream MCP client.
 
@@ -158,7 +160,7 @@ For per-requester accounts, missing `gateway.publicOrigin` is reported by the si
 
 Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.
 
-The shared operator flow uses the following commands:
+The terminal walkthrough below signs in with shared operator credentials.
 
 <Steps>
   <Step title="Save the server">
@@ -206,7 +208,7 @@ The shared operator flow uses the following commands:
 
   </Step>
   <Step title="Check authorization">
-    Use status or doctor to confirm that tokens are present and do not require additional authorization. If status reports `authorization-required` or doctor asks for additional authorization, run `openclaw mcp login <name>` again.
+    Use status or doctor to confirm that tokens are present and do not require additional authorization. If status reports `authorization-required` or doctor asks for additional authorization, repeat the applicable sign-in flow above.
 
     ```bash
     openclaw mcp status --verbose
@@ -224,7 +226,7 @@ The shared operator flow uses the following commands:
   </Step>
 </Steps>
 
-If the provider rotates tokens or the authorization state gets stuck, run `openclaw mcp logout <name>`, then repeat `login`. `logout` can clear credentials for a saved HTTP server even after `auth: "oauth"` has been removed from config, as long as the server name and URL still identify the credential store entry.
+If the provider rotates tokens or the authorization state gets stuck, run `openclaw mcp logout <name>`, then repeat the applicable sign-in flow. `logout` can clear credentials for a saved HTTP server even after `auth: "oauth"` has been removed from config, as long as the server name and URL still identify the credential store entry.
 
 ## Streamable HTTP transport
 
