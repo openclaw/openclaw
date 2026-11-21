@@ -192,7 +192,7 @@ describe("audit event skill-selection persistence", () => {
       setup.close();
     }
 
-    // The v22 -> v40 jump crosses the client-credentials migration, which
+    // The v22 -> v41 jump crosses the client-credentials migration, which
     // requires backed-up migration custody; the test-support backup stands
     // in for the pre-upgrade backup a real install would have.
     await withStateMigrationBackupForTest(options, async () => {
@@ -200,13 +200,13 @@ describe("audit event skill-selection persistence", () => {
       // Stored settings survive the upgrade untouched, including the release's
       // schema version row and the workspace setting.
       expect(auditDatabase.database.db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: 40,
+        user_version: 41,
       });
       expect(
         auditDatabase.database.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 40 });
+      ).toEqual({ schema_version: 41 });
       expect(
         auditDatabase.database.db
           .prepare(
