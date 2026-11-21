@@ -284,9 +284,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     row: SubagentRunRecord,
     source: SubagentCompletionCustody["authority"],
     requesterRunInstance?: OperationalRunInstanceRef,
-    requesterCompletion: SubagentCompletionCustody["requesterCompletion"] = requesterRunInstance
-      ? { runId: requesterRunInstance.runId }
-      : undefined,
+    requesterCompletion?: SubagentCompletionCustody["requesterCompletion"],
   ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);

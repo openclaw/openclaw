@@ -368,6 +368,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   authority,
                   options.requesterRunInstance ??
                     getGatewayToolCallerIdentity()?.operationalRunInstance,
+                  options.requesterRunInstance
+                    ? { runId: options.requesterRunInstance.runId }
+                    : undefined,
                 );
                 custodyTransferred = true;
               }
