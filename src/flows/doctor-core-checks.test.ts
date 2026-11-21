@@ -101,6 +101,82 @@ describe("CORE_HEALTH_CHECKS", () => {
     ).resolves.toEqual([]);
     expect(mocks.detectUnavailableSkills).not.toHaveBeenCalled();
   });
+  it("does not point missing-binary skills at doctor --fix, which preserves them", async () => {
+    const baseSkill = {
+      name: "bin-tool",
+      description: "test",
+      skillKey: "bin-tool",
+      filePath: "/unused",
+      baseDir: "/unused",
+      source: "workspace",
+      bundled: false,
+      always: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      blockedByAgentFilter: false,
+      eligible: false,
+      platformIncompatible: false,
+      modelVisible: true,
+      userInvocable: true,
+      commandVisible: true,
+      configChecks: [],
+      install: [],
+    };
+    const mixedRequirements = {
+      bins: [],
+      anyBins: ["alpha", "beta"],
+      env: ["API_KEY"],
+      config: [],
+      os: [],
+    };
+    const unavailable = [
+      {
+        ...baseSkill,
+        name: "bin-gap",
+        skillKey: "bin-gap",
+        missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
+        requirements: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
+      },
+      {
+        ...baseSkill,
+        name: "mixed-gap",
+        skillKey: "mixed-gap",
+        missing: mixedRequirements,
+        requirements: mixedRequirements,
+      },
+      {
+        ...baseSkill,
+        name: "env-gap",
+        skillKey: "env-gap",
+        missing: { bins: [], anyBins: [], env: ["API_KEY"], config: [], os: [] },
+        requirements: { bins: [], anyBins: [], env: ["API_KEY"], config: [], os: [] },
+      },
+    ];
+    mocks.detectUnavailableSkills.mockResolvedValue(unavailable);
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/skills-readiness");
+    const findings = await check.detect({
+      ...context({ agents: { entries: { alpha: {} } } }),
+      cwd: "/workspace",
+    });
+    const binFinding = findings.find(
+      (finding) => finding.path === "skills.entries.bin-gap.enabled",
+    );
+    const envFinding = findings.find(
+      (finding) => finding.path === "skills.entries.env-gap.enabled",
+    );
+    const mixedFinding = findings.find(
+      (finding) => finding.path === "skills.entries.mixed-gap.enabled",
+    );
+    expect(mixedFinding?.message).toContain("any bins: alpha, beta; env: API_KEY");
+    expect(mixedFinding?.fixHint).toContain("Satisfy the listed requirements");
+    expect(mixedFinding?.fixHint).toContain("skills.entries.mixed-gap.enabled to false");
+    expect(mixedFinding?.fixHint).not.toContain("doctor --fix");
+    expect(binFinding?.fixHint).toContain("paired node");
+    expect(binFinding?.fixHint).not.toContain("doctor --fix");
+    expect(binFinding?.fixHint).toContain("skills.entries.bin-gap.enabled");
+    expect(binFinding?.fixHint).not.toMatch(/allowlist/);
+    expect(envFinding?.fixHint).toContain("doctor --fix");
+  });
   it("keeps one structured security condition as one health finding", async () => {
     mocks.collectSecurityWarnings.mockResolvedValue([
       {
